@@ -1,0 +1,10 @@
+; /etc/pgbouncer/userlist.txt
+; Format:  "username" "password-or-scram-hash"
+;
+; Simplest (plaintext, fine for a locked-down box on localhost):
+"jointbox" "jointbox123"
+;
+; Better — use the SCRAM hash Postgres already stores, so the plaintext
+; password never sits in this file. Get it with:
+;   sudo -u postgres psql -Atc "SELECT rolname, rolpassword FROM pg_authid WHERE rolname='jointbox';"
+; then paste:  "jointbox" "SCRAM-SHA-256$4096:...."

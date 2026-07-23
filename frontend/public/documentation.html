@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Jointbox — Complete Guide</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="shortcut icon" href="/favicon.svg" />
+<style>
+/* Nova palette, matching the panel. Self-contained so this page works offline
+   and prints cleanly. */
+:root{
+  --bg:#0B0E1A; --surface:#151823; --surface-2:#1B1F2E; --border:#252A3C;
+  --text:#E9EDF5; --muted:#A0AEC0;
+  --g:linear-gradient(135deg,#6C3CE1,#E9408B,#F27121);
+  --ok:#10B981; --warn:#F59E0B; --bad:#EF4444; --info:#00C9FF; --violet:#A78BFA;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);
+  font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
+  font-size:15px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.wrap{display:grid;grid-template-columns:262px 1fr;max-width:1400px;margin:0 auto;min-height:100vh}
+@media(max-width:900px){.wrap{grid-template-columns:1fr}nav{display:none}}
+
+/* nav */
+nav{border-right:1px solid var(--border);padding:28px 20px;position:sticky;top:0;
+  height:100vh;overflow-y:auto;background:var(--surface)}
+nav .brand{display:flex;align-items:center;gap:11px;margin-bottom:22px}
+nav .logo{width:38px;height:38px;border-radius:12px;background:var(--g);display:grid;
+  place-items:center;font-weight:800;font-size:17px;color:#fff;
+  box-shadow:0 6px 20px rgba(233,64,139,.32)}
+nav .brand b{font-size:16px;letter-spacing:-.02em;display:block}
+nav .brand span{display:block;font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.09em}
+nav h4{font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);
+  margin:20px 0 7px;font-weight:700}
+nav a{display:block;padding:6px 11px;border-radius:9px;color:var(--muted);text-decoration:none;
+  font-size:13px;transition:background .16s,color .16s}
+nav a:hover{background:var(--surface-2);color:var(--text)}
+nav::-webkit-scrollbar{width:5px}
+nav::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#6C3CE1,#E9408B);border-radius:9px}
+
+/* content */
+main{padding:44px 52px 80px;max-width:940px}
+@media(max-width:900px){main{padding:28px 20px 60px}}
+h1{font-size:34px;font-weight:800;letter-spacing:-.03em;margin-bottom:8px}
+.lede{font-size:16px;color:var(--muted);margin-bottom:30px}
+h2{font-size:23px;font-weight:700;letter-spacing:-.02em;margin:52px 0 14px;
+  padding-top:22px;border-top:1px solid var(--border);scroll-margin-top:20px}
+h2:first-of-type{border-top:none;padding-top:0;margin-top:34px}
+h3{font-size:16px;font-weight:600;margin:26px 0 9px;color:var(--violet)}
+p{margin-bottom:13px;color:var(--muted)}
+p strong,li strong,td strong{color:var(--text);font-weight:600}
+ul,ol{margin:0 0 15px 22px}
+li{margin-bottom:7px;color:var(--muted)}
+li::marker{color:var(--violet)}
+a{color:var(--info)}
+code{background:var(--surface-2);border:1px solid var(--border);border-radius:5px;
+  padding:1.5px 6px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12.5px;color:#93C5FD}
+pre{background:#0d1017;border:1px solid var(--border);border-radius:13px;padding:16px 18px;
+  overflow-x:auto;margin-bottom:16px}
+pre code{background:none;border:none;padding:0;color:#B9C5DA;font-size:12.5px;line-height:1.75}
+table{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:13.5px}
+th{text-align:left;padding:10px 13px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--muted);border-bottom:1px solid var(--border);font-weight:700}
+td{padding:11px 13px;border-bottom:1px solid var(--border);color:var(--muted);vertical-align:top}
+td:first-child{color:var(--text)}
+tr:last-child td{border-bottom:none}
+
+.note{border-radius:13px;padding:14px 17px;margin:16px 0;font-size:13.5px;line-height:1.7;
+  border:1px solid;background:var(--surface);color:var(--muted)}
+.note b{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px}
+.note.tip{border-color:rgba(0,201,255,.3)}    .note.tip b{color:var(--info)}
+.note.warn{border-color:rgba(245,158,11,.34)} .note.warn b{color:var(--warn)}
+.note.bad{border-color:rgba(239,68,68,.34)}   .note.bad b{color:var(--bad)}
+.note.ok{border-color:rgba(16,185,129,.3)}    .note.ok b{color:var(--ok)}
+
+.hero{background:var(--surface);border:1px solid var(--border);border-radius:18px;
+  padding:22px 26px;margin-bottom:30px;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;opacity:.10;
+  background:radial-gradient(circle at 8% 50%,#6C3CE1,transparent 60%)}
+.hero div{position:relative;font-size:13.5px;color:var(--muted)}
+.hero b{color:var(--text)}
+
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:10.5px;font-weight:700;
+  background:rgba(140,90,255,.16);color:var(--violet);margin-left:7px;vertical-align:middle}
+.flow{background:#0d1017;border:1px solid var(--border);border-radius:13px;padding:20px;
+  margin-bottom:18px;font-family:ui-monospace,monospace;font-size:12px;color:#93C5FD;
+  line-height:1.9;white-space:pre;overflow-x:auto}
+footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--border);
+  font-size:12px;color:var(--muted);line-height:1.9}
+@media print{
+  nav{display:none}.wrap{grid-template-columns:1fr}
+  body{background:#fff;color:#000}h2{page-break-after:avoid}
+  .note,.hero,pre{border-color:#ccc}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <div class="brand">
+    <svg width="38" height="38" viewBox="0 0 100 100" aria-hidden="true" style="flex-shrink:0">
+      <defs><linearGradient id="docG" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#6C3CE1"/><stop offset="0.55" stop-color="#E9408B"/><stop offset="1" stop-color="#F27121"/>
+      </linearGradient></defs>
+      <rect x="4" y="4" width="92" height="92" rx="24" fill="url(#docG)"/>
+      <rect x="4" y="4" width="92" height="46" rx="24" fill="#ffffff" opacity="0.10"/>
+      <rect x="24" y="26" width="34" height="34" rx="11" fill="none" stroke="#fff" stroke-width="6.5" opacity="0.9"/>
+      <rect x="38" y="40" width="26" height="26" rx="10" fill="url(#docG)"/>
+      <rect x="42" y="40" width="34" height="34" rx="11" fill="none" stroke="#fff" stroke-width="6.5"/>
+    </svg>
+    <div><b>Jointbox</b><span>Complete Guide</span></div>
+  </div>
+
+  <h4>Start</h4>
+  <a href="#install">Installation</a>
+  <a href="#setup">Setup order</a>
+  <a href="#layout">Finding your way around</a>
+
+  <h4>Daily work</h4>
+  <a href="#offline">Customer is offline</a>
+  <a href="#renew">Renewing &amp; reactivating</a>
+  <a href="#export">Exporting customers</a>
+  <a href="#staticip">Static public IPs</a>
+  <a href="#fup">Data allowances</a>
+
+  <h4>Network</h4>
+  <a href="#architecture">Architecture</a>
+  <a href="#addressing">Addressing rules</a>
+  <a href="#diagnostics">Diagnostics</a>
+  <a href="#topology">Transmission path</a>
+
+  <h4>Business</h4>
+  <a href="#billing">Billing &amp; resellers</a>
+  <a href="#kyc">CNIC &amp; compliance</a>
+  <a href="#analytics">Analytics</a>
+
+  <h4>Administration</h4>
+  <a href="#security">Security model</a>
+  <a href="#jobs">Scheduled jobs</a>
+  <a href="#trouble">Troubleshooting</a>
+  <a href="#scale">Scale</a>
+</nav>
+
+<main>
+  <h1>Jointbox — Complete Guide</h1>
+  <p class="lede">ISP management: subscribers, RADIUS, billing, reseller hierarchy,
+     network diagnostics and compliance.</p>
+
+  <div class="hero"><div>
+    <b>NestJS</b> backend (:3001) · <b>Next.js</b> frontend (:3000) ·
+    <b>PostgreSQL&nbsp;16</b> · <b>FreeRADIUS&nbsp;3.2</b> · <b>MikroTik RouterOS</b>
+  </div></div>
+
+  <!-- INSTALL -->
+  <h2 id="install">Installation</h2>
+<pre><code>git clone &lt;repo&gt; &amp;&amp; cd "Jointbox panel"
+
+# Backend
+cd backend
+npm install
+cp .env.example .env          # set DATABASE_URL and JWT_SECRET
+npm run db:push               # tables + Prisma client
+npm run start:dev
+
+# Frontend
+cd ../frontend
+npm install
+npm run dev</code></pre>
+
+  <div class="note tip"><b>Two commands, two jobs</b>
+    <code>npm run db:push</code> chains: fix ownership → push schema → regenerate the client.
+    Any schema change needs it. <code>npx prisma generate</code> alone needs <em>no database
+    connection</em> — useful when the database is down and you only need the build to pass.
+  </div>
+
+  <h3>Environment</h3>
+  <table>
+    <tr><th>Variable</th><th>Purpose</th></tr>
+    <tr><td><code>DATABASE_URL</code></td><td>PostgreSQL connection string</td></tr>
+    <tr><td><code>JWT_SECRET</code></td><td>Session signing. <strong>Change it from the default.</strong></td></tr>
+    <tr><td><code>RADIUS_DB_URL</code></td><td>RADIUS database, if separate</td></tr>
+    <tr><td><code>BACKUP_DIR</code></td><td>Nightly dump location (default <code>./backups</code>)</td></tr>
+    <tr><td><code>DB_AUTO_SETUP</code></td><td><code>false</code> disables schema maintenance on boot</td></tr>
+    <tr><td><code>TOPOLOGY_AUTODETECT</code></td><td><code>false</code> disables network path learning</td></tr>
+    <tr><td><code>FUP_ENABLED</code></td><td><code>false</code> disables data-allowance throttling</td></tr>
+  </table>
+
+  <!-- SETUP -->
+  <h2 id="setup">Setup order</h2>
+  <p>Each step depends on the one before it.</p>
+  <ol>
+    <li><strong>Administration → Organization</strong> — your ISP, then franchises and dealers below.</li>
+    <li><strong>Network → NAS / Routers</strong> — each MikroTik with IP, RADIUS secret, and
+        <strong>API username and password</strong>.</li>
+    <li><strong>Network → IP Pools</strong> — names must match the router <strong>exactly</strong>
+        (case-sensitive). The page verifies against the live router and warns on mismatch.</li>
+    <li><strong>Plans &amp; Stock → Packages</strong> — speed, price, duration, optional data
+        allowance and FUP speed.</li>
+    <li><strong>Plans &amp; Stock → Areas</strong> — coverage areas.</li>
+    <li><strong>Subscribers → Add</strong> — the customer can dial in immediately.</li>
+  </ol>
+
+  <h3>Router prerequisites</h3>
+<pre><code>/ip pool add name=pppoe-pool ranges=10.10.10.2-10.10.10.254
+/ppp profile set [find name=default] local-address=10.10.10.1
+/radius add service=ppp address=&lt;panel-ip&gt; secret=&lt;secret&gt;
+/radius incoming set accept=yes port=3799
+/ip service enable api</code></pre>
+
+  <div class="note warn"><b>API access is not optional</b>
+    Without the API username and password the panel cannot read router logs, verify pools, or
+    force a disconnect — three of its most useful abilities.
+  </div>
+
+  <!-- LAYOUT -->
+  <h2 id="layout">Finding your way around</h2>
+  <p>Ten sidebar entries, not thirty. Related screens are grouped into hubs with tabs, so
+     everything for one job sits on one page.</p>
+  <table>
+    <tr><th>Entry</th><th>Contains</th></tr>
+    <tr><td>Dashboard</td><td>Daily overview</td></tr>
+    <tr><td>Subscribers</td><td>Customer list and full profiles</td></tr>
+    <tr><td>Support</td><td>Complaints · Field Jobs · Communication</td></tr>
+    <tr><td>Trace Search</td><td>Find by name, username, phone, IP or CNIC</td></tr>
+    <tr><td>Network</td><td>Live Network · NAS/Routers · IP Pools · Static IPs · Outages</td></tr>
+    <tr><td>Plans &amp; Stock</td><td>Packages · Areas · Inventory</td></tr>
+    <tr><td>Billing</td><td>Accounting · Invoices · Payments · Vouchers · Reseller Pricing</td></tr>
+    <tr><td>Insights</td><td>Segments · Analytics · Reports · Logs</td></tr>
+    <tr><td>KYC &amp; Data Usage</td><td>CNIC verification · fair-usage enforcement</td></tr>
+    <tr><td>Administration</td><td>Organization · Network Tree · Users · Security · Settings</td></tr>
+  </table>
+  <div class="note tip"><b>Top-right corner</b>
+    Your account menu, sign-out, "Act as" and the theme switch are the round avatar — not the
+    sidebar. The header search covers everything.
+  </div>
+
+  <!-- OFFLINE -->
+  <h2 id="offline">A customer says they are offline <span class="pill">Most common task</span></h2>
+  <p>Work down this list. Each step rules out a whole class of cause, and the panel does most of
+     the diagnosis for you. <strong>You should never need to SSH into a router.</strong></p>
+  <ol>
+    <li>Open the subscriber. The header shows Online or Offline with the last disconnect reason
+        in plain language.</li>
+    <li><strong>Router Log tab → Refresh from router.</strong> The panel reads the MikroTik live and
+        states what is wrong — a reconnect loop, a missing pool, rejected authentication — with the fix.</li>
+    <li><strong>RADIUS tab.</strong> Flags two specific faults: conflicting addressing (both a pool
+        and a fixed IP being sent), and no address source at all.</li>
+    <li>If several customers are affected, open <strong>Insights → Analytics</strong>. If one VLAN,
+        area or router is mostly down, it is a network fault, not a customer fault.</li>
+    <li>Still stuck? <strong>Force Sync</strong> on the RADIUS tab rewrites their credentials and
+        profile from scratch.</li>
+  </ol>
+  <div class="note bad"><b>If the log says the pool does not exist</b>
+    The fix is on the MikroTik, not in the panel. Pool names are case-sensitive and must already
+    exist on the router. Check <strong>Network → IP Pools</strong> for the mismatch warning.
+  </div>
+
+  <!-- RENEW -->
+  <h2 id="renew">Renewing and reactivating</h2>
+  <p><strong>Subscribers → Activation / Renewal.</strong> Five modes, because a month is not
+     always the answer.</p>
+  <table>
+    <tr><th>Mode</th><th>Use when</th></tr>
+    <tr><td>Full period</td><td>Normal monthly renewal</td></tr>
+    <tr><td>Set days</td><td>"Give him 5 days" — priced pro-rata</td></tr>
+    <tr><td>Until a date</td><td>Aligning customers to month end, regardless of 28/30/31 days</td></tr>
+    <tr><td>Use balance</td><td>Spend their wallet, grant the days it buys</td></tr>
+    <tr><td>On credit</td><td>"I'll pay Friday" — activates now, records the debt</td></tr>
+  </table>
+  <div class="note tip"><b>Before you take any money</b>
+    A live preview shows days, price and the resulting expiry date. Renewals extend from the
+    existing expiry when it is still in the future, so paying early never costs the customer days.
+    The daily rate divides by the package's own duration, not a flat 30 — a 7-day package at 200
+    is 28.57/day, not 6.67.
+  </div>
+  <div class="note warn"><b>Credit is capped</b>
+    Two unsettled extensions per subscriber. One is a favour; a stack is an unmanaged debt.
+    Overdue credits are flagged daily but service is <em>not</em> cut automatically — that is a
+    commercial decision for you, not a background job.
+  </div>
+
+  <h3>What suspension actually does</h3>
+  <p>Suspension <strong>deletes</strong> the RADIUS credentials and kicks the live session.
+     Removing credentials alone only blocks the <em>next</em> login, which on PPPoE can mean days
+     of free service. Renewal restores them — both the automatic and manual paths re-sync to RADIUS.</p>
+
+  <!-- EXPORT -->
+  <h2 id="export">Exporting a specific group</h2>
+  <p><strong>Subscribers → Export.</strong> Built to answer a question, not dump the table.
+     Filters combine, so you can be as precise as you need.</p>
+  <ol>
+    <li>Pick conditions — package, dealer, area, router, status, expiry window, online now,
+        missing CNIC, date range, free-text search.</li>
+    <li>Watch the live count. It tells you how many match <em>before</em> you download.</li>
+    <li>Choose columns (30 available), then Excel or CSV.</li>
+  </ol>
+  <div class="note tip"><b>Example</b>
+    All 50 Mb customers under one dealer: tick that package, tick that dealer. Nothing else needed.
+  </div>
+  <div class="note warn"><b>Passwords</b>
+    Only the ISP owner can include the Password column. Every export is written to the audit log
+    with who ran it and exactly which columns and filters were used.
+  </div>
+
+  <!-- STATIC IP -->
+  <h2 id="staticip">Static public IPs</h2>
+  <p>Two ways in: the <strong>Static public IP</strong> field on the subscriber's Edit form, or
+     <strong>Network → Static IPs</strong>.</p>
+  <p>Setting an address stops the pool being requested and reconnects the customer so it applies
+     immediately. The address is recorded with full assignment history and starts its own monthly
+     billing cycle.</p>
+  <div class="note tip"><b>Leave auth method alone</b>
+    A static address works on any authentication method. You do not need to switch to STATIC.
+  </div>
+  <div class="note bad"><b>Before reassigning</b>
+    Clearing the field releases the address and stops billing. Do not give it to another customer
+    until you have confirmed the previous one is actually off it.
+  </div>
+
+  <!-- FUP -->
+  <h2 id="fup">Data allowances and FUP</h2>
+  <p>Passing the allowance <strong>throttles</strong> rather than disconnects — the customer stays
+     connected and billable, which avoids turning a heavy user into a cancellation.</p>
+  <ul>
+    <li>Set <strong>Data Quota (GB)</strong> plus <strong>FUP Download/Upload</strong> on the package.</li>
+    <li>Leave the FUP speeds blank and the quota is never enforced — the right default for unlimited plans.</li>
+    <li>Usage shows live on the subscriber header, measured over <em>their own</em> billing period,
+        so a renewal resets it.</li>
+    <li><strong>KYC &amp; Data Usage → Data usage</strong> lists everyone at 70% or beyond.</li>
+  </ul>
+  <div class="note ok"><b>Commercially</b>
+    Anyone sitting at 100% is an upgrade conversation, not a problem.
+  </div>
+
+  <!-- ARCHITECTURE -->
+  <h2 id="architecture">Architecture</h2>
+  <div class="flow">Customer CPE
+   │  PPPoE
+   ▼
+ONU ──── PON port / splitter ──── OLT ──── BRAS (MikroTik)
+                                              │ RADIUS
+                                              ▼
+                                   FreeRADIUS ── PostgreSQL
+                                                     ▲
+                                              Jointbox backend
+                                                     ▲
+                                              Jointbox frontend</div>
+  <p><strong>Multi-tenancy</strong> is enforced server-side by a recursive subtree query. Every
+     account sees only its own descendants; only <code>SUPER_ADMIN</code> is global. Applied in the
+     service layer, not the interface, so it cannot be bypassed by calling the API directly.</p>
+
+  <!-- ADDRESSING -->
+  <h2 id="addressing">Addressing rules</h2>
+  <div class="note bad"><b>The rule that breaks networks</b>
+    RADIUS sends <strong>either</strong> <code>Framed-Pool</code> <strong>or</strong>
+    <code>Framed-IP-Address</code> — never both. Sending both makes the router take the literal
+    address, fail, and drop the session in a loop every few seconds. The subscriber's RADIUS tab
+    flags this if it ever occurs.
+  </div>
+  <p>A common myth is that <code>255.255.255.254</code> means "let the NAS choose". RFC&nbsp;2865
+     describes it that way; <strong>MikroTik does not honour it</strong> — it assigns the literal
+     address, finds it unusable, and terminates. Use <code>Framed-Pool</code> alone.</p>
+
+  <!-- DIAGNOSTICS -->
+  <h2 id="diagnostics">Diagnostics</h2>
+  <table>
+    <tr><th>Screen</th><th>Answers</th></tr>
+    <tr><td>Subscriber → <strong>Router Log</strong></td>
+        <td>What the MikroTik itself says, with an automatic plain-language diagnosis and the fix</td></tr>
+    <tr><td>Subscriber → <strong>RADIUS</strong></td>
+        <td><code>radcheck</code> and <code>radreply</code>; flags conflicting addressing and missing address source</td></tr>
+    <tr><td><strong>Insights → Analytics</strong></td>
+        <td>Whether a fault is one customer or a whole VLAN, area, router or dealer</td></tr>
+    <tr><td><strong>Network → IP Pools</strong></td>
+        <td>Whether each pool actually exists on the router</td></tr>
+    <tr><td><code>/topology/trace/:id</code></td>
+        <td>Full ONU → splitter → OLT → BRAS path with a verdict</td></tr>
+  </table>
+
+  <!-- TOPOLOGY -->
+  <h2 id="topology">Transmission path <span class="pill">Auto-detected</span></h2>
+  <p>The panel learns your ONU → splitter → OLT → BRAS path from the circuit-id the OLT stamps
+     into each session, then uses it to say <em>where</em> a fault is rather than just that one exists.</p>
+  <p>Read <strong>top-down</strong> — the widest failure wins, because a dead OLT also makes every
+     splitter beneath it look dead, and dispatching to a house in that case wastes a day.</p>
+  <table>
+    <tr><th>Observed</th><th>Cause</th><th>Action</th></tr>
+    <tr><td>&lt;20% of a BRAS online</td><td>BRAS</td><td>Check router and uplink. Do not dispatch.</td></tr>
+    <tr><td>&lt;25% of an OLT online</td><td>OLT or its uplink</td><td>Check OLT power and uplink fibre</td></tr>
+    <tr><td>&lt;34% of one splitter</td><td>PON port / splitter</td><td>One truck roll fixes everyone</td></tr>
+    <tr><td>Only this customer</td><td>Customer end</td><td>Drop cable, ONU power, fibre bend</td></tr>
+  </table>
+  <div class="note warn"><b>Requirements and honest limits</b>
+    Auto-detection needs <strong>PPPoE Intermediate Agent</strong> enabled on the OLT so it sends a
+    circuit-id. Without it the path must be entered manually, and the panel says so rather than
+    guessing. Optical power (Rx/Tx dBm) is <strong>not in RADIUS</strong> — those fields stay null
+    until something polls the OLT over SNMP. Null means "not measured", deliberately distinct from
+    "bad signal".
+  </div>
+
+  <!-- BILLING -->
+  <h2 id="billing">Billing and the reseller chain</h2>
+  <p>Each account has a wallet; activating a subscriber settles down the chain automatically.</p>
+  <div class="note tip"><b>The rule to remember</b>
+    A price row is what <strong>that account pays</strong>. Their margin is what their child pays
+    minus what they pay. A child never sees upstream pricing — that is by design, not an oversight.
+  </div>
+  <ul>
+    <li><strong>Reseller Pricing</strong> — assign a package downstream with its price.</li>
+    <li>Wallets are controlled by the parent. Children can be given permission to set their own
+        sell prices, but never to control wallets.</li>
+    <li><strong>Reports → Debt by age</strong> ranks unpaid invoices by <em>amount</em>, not age —
+        the oldest debt is usually small; the largest is what hurts cash flow.</li>
+  </ul>
+
+  <!-- KYC -->
+  <h2 id="kyc">CNIC verification</h2>
+  <p>A PTA licence requirement, and your defence against resale fraud.</p>
+  <ul>
+    <li>Record the CNIC number alongside the images. Punctuation is ignored when matching, so
+        <code>35201-1234567-1</code> and <code>3520112345671</code> are correctly seen as the same person.</li>
+    <li>Verification refuses to approve without a number, both image sides, and a non-expired CNIC.</li>
+    <li>Shared CNICs are listed but <strong>not blocked</strong> — families and businesses
+        legitimately share one. The point is to make them deliberate rather than accidental.</li>
+    <li>Export the subscriber register as CSV when a regulator asks.</li>
+  </ul>
+
+  <!-- ANALYTICS -->
+  <h2 id="analytics">Analytics</h2>
+  <p><strong>Insights → Analytics</strong> leads with a plain sentence: everything normal, or which
+     segments need attention. Below that, the same base cut by VLAN, area, dealer, router and package.</p>
+  <div class="note tip"><b>What makes it useful</b>
+    Every segment shows <strong>ONLINE against ACTIVE</strong>. The gap between them is where faults
+    hide — a VLAN with 40 active customers and 3 online is broken, and a total on its own can never
+    tell you that. Healthy segments are hidden by default so problems are what you see first.
+  </div>
+  <p>Small segments are judged gently: two of three offline means nothing, while 33% of sixty is an
+     outage. Flagging the former trains people to ignore the indicator.</p>
+
+  <!-- SECURITY -->
+  <h2 id="security">Security model</h2>
+  <table>
+    <tr><th>Control</th><th>Behaviour</th></tr>
+    <tr><td>Scope isolation</td><td>Every account sees only its own subtree, enforced server-side</td></tr>
+    <tr><td>Self-privilege</td><td>An account cannot see or edit its own wallet, commission or permissions</td></tr>
+    <tr><td>Upstream pricing</td><td>Hidden from children by design</td></tr>
+    <tr><td>Password export</td><td>ISP owner only; every export logged with who and what</td></tr>
+    <tr><td>API keys</td><td>SHA-256 hashed; plaintext shown once at creation</td></tr>
+    <tr><td>Webhooks</td><td>HMAC-SHA256 signed, exponential backoff, auto-disabled after 20 failures</td></tr>
+    <tr><td>Infrastructure</td><td>OLT management IPs and backup controls are ISP-only</td></tr>
+  </table>
+  <div class="note bad"><b>Report it</b>
+    If a dealer sees data that is not theirs, treat it as a bug. That should not be possible.
+  </div>
+
+  <!-- JOBS -->
+  <h2 id="jobs">Scheduled jobs</h2>
+  <table>
+    <tr><th>Job</th><th>Schedule</th><th>Purpose</th></tr>
+    <tr><td>Router log collection</td><td>every 2 min</td><td>Pull <code>/log print</code> from each MikroTik</td></tr>
+    <tr><td>Session reconciliation</td><td>every 30 s</td><td>MikroTik is the source of truth for online state</td></tr>
+    <tr><td>Topology learning</td><td>every 10 min</td><td>Parse circuit-ids into OLT/port/ONU</td></tr>
+    <tr><td>FUP enforcement</td><td>hourly</td><td>Throttle customers past their allowance</td></tr>
+    <tr><td>Auto-renewal</td><td>daily</td><td>Renew from wallet balance</td></tr>
+    <tr><td>Suspension</td><td>daily</td><td>Suspend past the grace period</td></tr>
+    <tr><td>Static IP billing</td><td>daily 03:45</td><td>Monthly add-on charges</td></tr>
+    <tr><td>KYC expiry sweep</td><td>daily 05:00</td><td>Flag expired CNICs</td></tr>
+    <tr><td>Credit defaults</td><td>daily 06:30</td><td>Flag unpaid credit extensions</td></tr>
+    <tr><td>Database backup</td><td>daily 02:00</td><td><code>pg_dump -Fc</code>, 14-day retention</td></tr>
+    <tr><td>Log pruning</td><td>daily 04:20</td><td>Drop router logs older than 14 days</td></tr>
+  </table>
+
+  <!-- TROUBLESHOOTING -->
+  <h2 id="trouble">Troubleshooting</h2>
+
+  <h3>Customer reconnects every few seconds</h3>
+  <p>The router log will say <code>could not determine remote address</code> (the pool does not
+     exist on the router) or show <code>255.255.255.254</code> being issued. Check
+     <strong>Network → IP Pools</strong> for the mismatch warning.</p>
+
+  <h3><code>Property 'x' does not exist on type 'PrismaService'</code></h3>
+  <p>The Prisma client is stale. Run <code>npx prisma generate</code>. This is always the cause when
+     you see a wall of these after a schema change.</p>
+
+  <h3><code>Can't reach database server</code></h3>
+  <p>PostgreSQL is down. Check <code>df -h</code> <strong>before</strong> restarting — a full disk
+     from accumulated backups is a common cause, and restarting without freeing space just repeats
+     the crash. FreeRADIUS uses the same database, so this takes authentication down too.</p>
+
+  <h3><code>AddrParseError(Ip)</code></h3>
+  <p>A non-IP value is being matched against an <code>INET</code> column. Usually a
+     <code>nasipaddress</code> carrying a prefix such as <code>192.168.1.1/32</code>.</p>
+
+  <h3>Renewed customer still cannot connect</h3>
+  <p>Their RADIUS credentials were deleted by suspension and not restored. Press <strong>Force
+     Sync</strong> on the subscriber's RADIUS tab.</p>
+
+  <h3>Router Log tab is empty</h3>
+  <p>The NAS is missing its API username and password under <strong>Network → NAS / Routers</strong>.</p>
+
+  <!-- SCALE -->
+  <h2 id="scale">Scale</h2>
+  <p>Design targets: <strong>200+ NAS</strong> and large subscriber counts.</p>
+  <ul>
+    <li>Bounded worker pools — never all routers at once</li>
+    <li>Split poll cycles: fast 30&nbsp;s for sessions, slow 5&nbsp;min for health</li>
+    <li>Bulk <code>UPDATE … FROM (VALUES …)</code> instead of per-subscriber writes</li>
+    <li>Aggregate queries per page rather than per row</li>
+    <li>Router logs deduplicated by fingerprint and pruned at 14 days</li>
+  </ul>
+  <div class="note warn"><b>The trap that produces impossible numbers</b>
+    Postgres <code>BIGINT</code> arrives in JavaScript as a <strong>string</strong>. Always
+    <code>Number()</code> before arithmetic — otherwise <code>+</code> concatenates, and a usage
+    figure becomes something like <code>7.7e+251&nbsp;GB</code>.
+  </div>
+
+  <footer>
+    In-app help: <strong>Help &amp; Guide</strong> in the sidebar, organised by task.<br>
+    Diagnostics: <strong>Insights → Logs</strong> for RADIUS checks and backup status.<br>
+    Markdown version: <code>DOCUMENTATION.md</code> in the project root.<br>
+    This page prints cleanly — use your browser's Print to PDF for a paper copy.<br><br>
+    Support: <a href="mailto:ehtisham@jointbox.net" style="color:#F9A8D4;text-decoration:none;font-weight:600">ehtisham@jointbox.net</a>
+    &nbsp;·&nbsp; © <span id="yr"></span> Jointbox · ISP Management
+    <script>document.getElementById('yr').textContent=new Date().getFullYear()</script>
+  </footer>
+</main>
+</div>
+</body>
+</html>

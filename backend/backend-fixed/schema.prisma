@@ -1,0 +1,380 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  SALES
+  RESELLER
+  SUB_RESELLER
+  RETAILER
+}
+
+enum SubscriberStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  SUSPENDED
+}
+
+enum ConnectionType {
+  FTTH
+  FTTB
+  FTTC
+  WIRELESS
+  DSL
+  CABLE
+  OTHER
+}
+
+enum NasType {
+  MIKROTIK
+  CISCO
+  HUAWEI
+  OTHER
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  ONLINE
+  CHEQUE
+  OTHER
+}
+
+enum VoucherType {
+  INTERNET
+  BALANCE
+  DISCOUNT
+}
+
+enum VoucherStatus {
+  UNUSED
+  USED
+  EXPIRED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TicketCategory {
+  TECHNICAL
+  BILLING
+  GENERAL
+  COMPLAINT
+  OTHER
+}
+
+enum IpType {
+  DYNAMIC
+  STATIC
+}
+
+enum DiscountType {
+  NONE
+  PERCENTAGE
+  FIXED
+}
+
+enum ServiceType {
+  RESIDENTIAL
+  COMMERCIAL
+  ENTERPRISE
+}
+
+enum DurationType {
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+  CUSTOM
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      UserRole @default(SALES)
+  phone     String?
+  address   String?
+  isActive  Boolean  @default(true)
+  balance   Float    @default(0)
+  parentId  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent            User?       @relation("UserChildren", fields: [parentId], references: [id])
+  children          User[]      @relation("UserChildren")
+  ownedSubscribers  Subscriber[] @relation("UserSubscribers")
+  receivedPayments  Payment[]   @relation("ReceivedByUser")
+  assignedTickets   Ticket[]    @relation("AssignedToUser")
+}
+
+model Package {
+  id            Int          @id @default(autoincrement())
+  name          String
+  speed         String
+  price         Float
+  description   String?
+  serviceType   ServiceType  @default(RESIDENTIAL)
+  quota         String?
+  fup           String?
+  ipPool        String?
+  tax           Float        @default(0)
+  durationType  DurationType @default(MONTHLY)
+  autoRenew     Boolean      @default(false)
+  setupFee      Float        @default(0)
+  contractTerm  Int?
+  lateFee       Float        @default(0)
+  isActive      Boolean      @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscribers Subscriber[]
+}
+
+model Area {
+  id       Int     @id @default(autoincrement())
+  name     String
+  city     String?
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscribers Subscriber[]
+}
+
+model Nas {
+  id            Int     @id @default(autoincrement())
+  nasIp         String  @unique
+  nasName       String
+  radiusSecret  String
+  incomingPort  Int     @default(3799)
+  apiPort       Int     @default(8728)
+  apiUsername   String?
+  apiPassword   String?
+  nasType       NasType @default(MIKROTIK)
+  description   String?
+  isActive      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscribers Subscriber[]
+}
+
+model Subscriber {
+  id               Int              @id @default(autoincrement())
+  fullName         String
+  phone            String
+  email            String?
+  address          String?
+  username         String           @unique
+  password         String
+  identity         String?
+  connectionType   ConnectionType   @default(FTTH)
+  status           SubscriberStatus @default(ACTIVE)
+  documentUrl      String?
+  installationDate DateTime?
+  latitude         Float?
+  longitude        Float?
+
+  packageId    Int?
+  areaId       Int?
+  nasId        Int?
+  salespersonId Int?
+  userId       Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  package     Package?        @relation(fields: [packageId], references: [id])
+  area        Area?           @relation(fields: [areaId], references: [id])
+  nas         Nas?            @relation(fields: [nasId], references: [id])
+  salesperson User?           @relation("UserSubscribers", fields: [salespersonId], references: [id])
+  invoices    Invoice[]
+  payments    Payment[]
+  tickets     Ticket[]
+  serviceSettings ServiceSettings?
+  usedVouchers    Voucher[]
+}
+
+model Invoice {
+  id           Int           @id @default(autoincrement())
+  invoiceNo    String        @unique
+  subscriberId Int
+  amount       Float
+  tax          Float         @default(0)
+  discount     Float         @default(0)
+  total        Float
+  paidAmount   Float         @default(0)
+  dueAmount    Float
+  dueDate      DateTime
+  paidDate     DateTime?
+  notes        String?
+  status       InvoiceStatus @default(UNPAID)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriber Subscriber     @relation(fields: [subscriberId], references: [id])
+  items      InvoiceItem[]
+  payments   Payment[]
+}
+
+model InvoiceItem {
+  id          Int    @id @default(autoincrement())
+  invoiceId   Int
+  description String
+  quantity    Int    @default(1)
+  unitPrice   Float
+  total       Float
+
+  createdAt DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id           Int           @id @default(autoincrement())
+  paymentNo    String        @unique
+  invoiceId    Int?
+  subscriberId Int
+  amount       Float
+  method       PaymentMethod @default(CASH)
+  referenceNo  String?
+  notes        String?
+  receivedBy   Int?
+  paymentDate  DateTime      @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoice        Invoice?    @relation(fields: [invoiceId], references: [id])
+  subscriber     Subscriber  @relation(fields: [subscriberId], references: [id])
+  receivedByUser User?       @relation("ReceivedByUser", fields: [receivedBy], references: [id])
+}
+
+model Ticket {
+  id           Int            @id @default(autoincrement())
+  ticketNo     String         @unique
+  subscriberId Int
+  category     TicketCategory @default(TECHNICAL)
+  priority     TicketPriority @default(MEDIUM)
+  subject      String
+  description  String?
+  status       TicketStatus   @default(OPEN)
+  assignedTo   Int?
+  resolution   String?
+  resolvedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriber   Subscriber     @relation(fields: [subscriberId], references: [id])
+  assignedUser User?          @relation("AssignedToUser", fields: [assignedTo], references: [id])
+  messages     TicketMessage[]
+}
+
+model TicketMessage {
+  id            Int    @id @default(autoincrement())
+  ticketId      Int
+  message       String
+  attachmentUrl String?
+  sentBy        Int
+  sentByType    String @default("STAFF")
+
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+}
+
+model Voucher {
+  id           Int           @id @default(autoincrement())
+  code         String        @unique
+  pin          String
+  type         VoucherType   @default(INTERNET)
+  amount       Float         @default(0)
+  dataQuota    String?
+  validityDays Int           @default(30)
+  status       VoucherStatus @default(UNUSED)
+  batchId      String?
+  createdBy    Int?
+  usedBy       Int?
+  usedAt       DateTime?
+  activatedAt  DateTime?
+  expiresAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  usedByUser Subscriber? @relation(fields: [usedBy], references: [id])
+}
+
+model ServiceSettings {
+  id              Int          @id @default(autoincrement())
+  subscriberId    Int          @unique
+  ipAddress       String?
+  ipType          IpType       @default(DYNAMIC)
+  macAddress      String?
+  quota           String?
+  quotaUsed       Float        @default(0)
+  quotaResetDate  DateTime?
+  expiryDate      DateTime?
+  duration        Int?
+  discountType    DiscountType @default(NONE)
+  discountValue   Float        @default(0)
+  customPrice     Float?
+  ontSerial       String?
+  ontModel        String?
+  signalLevel     Float?
+  rxPower         Float?
+  txPower         Float?
+  uploadSpeed     String?
+  downloadSpeed   String?
+  vlanId          Int?
+  pptpUsername    String?
+  pptpPassword    String?
+  notes           String?
+  technicalNotes  String?
+  isStaticIp      Boolean      @default(false)
+  hasBackup       Boolean      @default(false)
+  isBlocked       Boolean      @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+}

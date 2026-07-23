@@ -1,0 +1,55 @@
+# Jointbox — full stack in Docker. From the project root:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+# Then open http://<host>/  (admin) and http://<host>/portal (subscribers).
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: jointbox
+      POSTGRES_USER: zaluser
+      POSTGRES_PASSWORD: zalpass123
+    volumes:
+      - jointbox_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zaluser -d jointbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: "postgresql://zaluser:zalpass123@db:5432/jointbox?connection_limit=10&pool_timeout=15"
+      RADIUS_DATABASE_URL: "postgresql://zaluser:zalpass123@db:5432/jointbox"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: "change-me-in-production-please"
+      PORT: "3001"
+      NODE_ENV: "production"
+    ports:
+      - "3001:3001"
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  jointbox_db:

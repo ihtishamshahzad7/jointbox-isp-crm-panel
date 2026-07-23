@@ -1,0 +1,1565 @@
+"use client";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { Wizard, Field } from "../components/wizard";
+import { NasTable } from "../components/network-tables";
+import { RecordNotes } from "../components/record-notes";
+
+// ─── Types ─────────────────────────────────────────────────────────
+interface NasEntry {
+  id: number; nasname: string; shortname?: string | null; nasIp: string | null; secret: string | null;
+  type: string; apiPort: number; incomingPort: number;
+  apiUsername: string | null; apiPassword: string | null;
+  isActive: boolean; description: string | null;
+  _count?: { subscribers: number };
+  /** Who registered this router. Null for legacy rows predating ownership. */
+  ownerId?: number | null;
+  owner?: { id: number; name: string; role: string } | null;
+  /** Accounts this router has been shared down to. */
+  assignments?: { userId: number; user?: { id: number; name: string } }[];
+}
+
+interface NasOverview {
+  totalNas: number;
+  onlineNas: number;
+  offlineNas: number;
+  activeSessions: number;
+  radiusAlive: boolean;
+  radiusNasCount: number;
+}
+
+// Matches what nas.service.ts checkReachability() actually returns:
+interface Reachability {
+  apiPortOpen: boolean;       // TCP check to MikroTik API port
+  radiusPortOpen: boolean;    // UDP check to FreeRADIUS :1812
+  incomingPortOpen: boolean;  // UDP check to CoA port
+  nasRegistered: boolean;     // NAS IP found in RADIUS DB
+  activeSessionCount: number; // from radacct WHERE acctstoptime IS NULL
+  radiusNasCount: number;     // total NAS rows in RADIUS DB
+  // MikroTik quickCheck fields (empty string '' = not available, NOT undefined)
+  identity: string;
+  version: string;
+  cpuLoad: string;
+  uptime: string;
+  activeConnections: number;  // from /ppp/active/print count-only
+  // meta
+  radiusIp: string;
+  radiusPort: number;
+  coaPort: number;
+  responseTimeMs: number | null;
+  lastChecked: Date | null;
+}
+
+// Matches MikrotikDetails from mikrotik-sync.service.ts syncDetails()
+interface MikrotikDetails {
+  identity: string; version: string; board: string; uptime: string;
+  cpuLoad: string; totalMemory: string; freeMemory: string;
+  totalHdd: string; freeHdd: string; activeConnections: number;
+  interfaces: MikrotikInterface[];
+  pppoeServer: PppoeServerInfo | null;
+  pppoeProfiles: PppoeProfile[];
+  radiusClients: RadiusClient[];
+  apiService: ApiServiceInfo | null;
+  ipAddresses: IpAddress[];
+}
+interface MikrotikInterface {
+  name: string; type: string; mtu: string; macAddress: string;
+  running: string; disabled: string; comment: string;
+}
+interface PppoeServerInfo {
+  enabled: boolean; interface: string; serviceName: string;
+  maxMtu: string; maxMru: string; authentication: string;
+  keepaliveTimeout: string; defaultProfile: string;
+}
+interface PppoeProfile {
+  name: string; localAddress: string; remoteAddress: string;
+  rateLimit: string; sessionTimeout: string; comment: string;
+}
+interface RadiusClient {
+  service: string; address: string; secret: string;
+  authPort: string; acctPort: string; timeout: string; disabled: string;
+}
+interface ApiServiceInfo { enabled: boolean; port: string; tlsPort: string; disabled: string; }
+interface IpAddress { address: string; network: string; interface: string; disabled: string; }
+
+interface NasLog { id: string; level: 'info'|'warn'|'error'; message: string; time: Date; }
+
+interface ViewDetail {
+  nas: NasEntry;
+  reachability: Reachability | null;
+  details: MikrotikDetails | null;   // full sync result
+  sessions: any[];
+  loadingReach: boolean;
+  loadingDetails: boolean;
+  loadingSessions: boolean;
+  detailsError: string | null;
+}
+
+const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+
+/** ISP-level roles bypass every reseller permission gate. */
+const isAdminRole = (role?: string) => role === 'ADMIN' || role === 'SUPER_ADMIN';
+
+// ─── SVG Icons ──────────────────────────────────────────────────────
+const Icons = {
+  Dashboard:   () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
+  Subscribers: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  Payments:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
+  Invoices:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
+  Packages:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+  Pool:        () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
+  Vouchers:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 12V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h14"/><line x1="12" y1="4" x2="12" y2="20"/><path d="M20 15h2M20 19h2"/></svg>,
+  NAS:         () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>,
+  Areas:       () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>,
+  Complaints:  () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  Reports:     () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  Users:       () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  Settings:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  Menu:        () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
+  ChevronLeft: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>,
+  Sun:         () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
+  Moon:        () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
+  Refresh:     () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>,
+  Plus:        () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  Logs:        () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
+  Signal:      () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>,
+  Router:      () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="1" y="13" width="22" height="8" rx="2"/><path d="M8 21V13"/><path d="M16 21V13"/><path d="M12 4v5M8.5 7.5L12 4l3.5 3.5"/></svg>,
+  Eye:         () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
+  Edit:        () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+  Trash:       () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>,
+  Toggle:      () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="1" y="5" width="22" height="14" rx="7"/><circle cx="16" cy="12" r="3" fill="currentColor"/></svg>,
+  CPU:         () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>,
+  Clock:       () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  Network:     () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/></svg>,
+  Memory:      () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M8 6V4M12 6V4M16 6V4M8 18v2M12 18v2M16 18v2"/></svg>,
+  Board:       () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
+  X:           () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  Logout:      () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+  PPPoE:       () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>,
+  Shield:      () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+  IP:          () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>,
+};
+
+// ─── Helpers ────────────────────────────────────────────────────────
+/** Format bytes to human-readable */
+const fmtBytes = (b: number): string => {
+  if (!b || isNaN(b)) return '—';
+  if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+  if (b >= 1048576)    return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1024).toFixed(0) + ' KB';
+};
+
+/** Parse MikroTik CPU load string "45%" -> 45 */
+const parseCpu = (s: string): number => parseFloat(s?.replace('%','') || '0');
+
+/** Display a value or dash */
+const val = (v: any) => (v !== undefined && v !== null && v !== '') ? String(v) : '—';
+
+export default function NasPage() {
+  const router = useRouter();
+  const [user, setUser]   = useState<any>(null);
+  const [time, setTime]   = useState('');
+  const [greeting, setGreeting] = useState('Welcome');
+  const [darkMode, setDarkMode] = useState(true);
+  const [nasList, setNasList] = useState<NasEntry[]>([]);
+  const [stats, setStats] = useState({ total:0, active:0, inactive:0, mikrotik:0, cisco:0, other:0 });
+  const [overview, setOverview] = useState<NasOverview | null>(null);
+  const [radiusStats, setRadiusStats] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [searchQ, setSearchQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL'|'ACTIVE'|'INACTIVE'>('ALL');
+  const [typeFilter, setTypeFilter] = useState<'ALL'|'MIKROTIK'|'CISCO'|'HUAWEI'|'OTHER'>('ALL');
+  const [showRadiusSecret, setShowRadiusSecret] = useState(false);
+  const [showApiPassword, setShowApiPassword] = useState(false);
+
+  // reachMap: keyed by NAS id, holds real-time status from /reachability
+  const [reachMap, setReachMap] = useState<Record<number, Reachability>>({});
+  const [checkingIds, setCheckingIds] = useState<Set<number>>(new Set());
+
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState<NasEntry|null>(null);
+  const [viewDetail, setViewDetail] = useState<ViewDetail|null>(null);
+  const [logs, setLogs] = useState<NasLog[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<number|null>(null);
+  const [activeTab, setActiveTab] = useState<'overview'|'interfaces'|'pppoe'|'radius'|'ips'|'sessions'>('overview');
+
+  // Auto-refresh intervals
+  const pollIntervalRef = useRef<NodeJS.Timeout|null>(null);
+  const sessionPollRef  = useRef<NodeJS.Timeout|null>(null);
+
+  const [form, setForm] = useState({
+    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK',
+    apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true
+  });
+
+  /** The signed-in account — decides whether router registration is offered. */
+  const [me, setMe] = useState<any>(null);
+
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : '';
+  const headers = { 'Content-Type':'application/json', Authorization:`Bearer ${token}` };
+
+  /** Router-sharing dialog: which NAS, and the downline accounts to offer. */
+  const [shareFor, setShareFor] = useState<NasEntry|null>(null);
+  const [shareAccounts, setShareAccounts] = useState<any[]>([]);
+  const [shareBusy, setShareBusy] = useState(false);
+  // When true a share reaches the account's whole downline; when false only
+  // that exact account gets the router — so one dealer can have it while a
+  // sibling dealer under the same franchise never sees it.
+  const [sharePropagate, setSharePropagate] = useState(true);
+
+  const openShare = async (nas: NasEntry) => {
+    setShareFor(nas);
+    try {
+      const r = await fetch(`${API}/users`, { headers });
+      const rows = r.ok ? await r.json() : [];
+      // /users already returns only the caller's downline, excluding themselves.
+      setShareAccounts(Array.isArray(rows) ? rows : rows?.data ?? []);
+    } catch { setShareAccounts([]); }
+  };
+
+  const toggleShare = async (userId: number, on: boolean) => {
+    if (!shareFor) return;
+    setShareBusy(true);
+    try {
+      const r = await fetch(`${API}/nas/${shareFor.id}/assign/${userId}`, {
+        method: on ? 'POST' : 'DELETE', headers,
+        ...(on ? { body: JSON.stringify({ propagate: sharePropagate }) } : {}),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        addLog('error', `Share failed: ${e.message || 'Unknown error'}`);
+      } else {
+        addLog('info', `Router ${on ? 'shared with' : 'withdrawn from'} account #${userId}`);
+        await loadData();
+        // Re-read the row so the assignment list in the dialog stays truthful.
+        setShareFor(prev => prev ? { ...prev, assignments: on
+          ? [...(prev.assignments ?? []), { userId }]
+          : (prev.assignments ?? []).filter(a => a.userId !== userId) } : prev);
+      }
+    } catch (e: any) { addLog('error', `Network error: ${e.message}`); }
+    finally { setShareBusy(false); }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API}/auth/profile`, { headers })
+      .then(r => (r.ok ? r.json() : null))
+      // /auth/profile answers { user: {...} }, not the user itself.
+      .then(d => setMe(d?.user ?? d))
+      .catch(() => {});
+  }, [token]);
+
+  const addLog = useCallback((level: NasLog['level'], message: string) => {
+    setLogs(p => [{ id: `${Date.now()}-${Math.random()}`, level, message, time: new Date() }, ...p].slice(0, 200));
+  }, []);
+
+  // ── Theme ──────────────────────────────────────────────────────────
+  const d = darkMode;
+  const t = {
+    bg:          d ? 'var(--bg)' : '#f0f4fa',
+    sidebar:     d ? 'var(--surface)' : 'var(--border)',
+    card:        d ? 'var(--surface)' : '#ffffff',
+    cardBorder:  d ? 'var(--border)' : 'var(--text)',
+    header:      d ? 'var(--surface)' : 'var(--border)',
+    text:        d ? 'var(--text)' : 'var(--surface)',
+    textMuted:   d ? 'var(--muted)' : 'var(--muted)',
+    textSub:     d ? 'var(--muted)' : '#475569',
+    input:       d ? 'var(--bg)' : '#f8fafc',
+    inputBorder: d ? 'var(--border)' : '#cbd5e1',
+    tableRow:    d ? 'var(--surface-2)' : '#f8fafc',
+    tableRow2:   d ? '#121d30' : '#ffffff',
+    accent:    '#0ea5e9',
+    green:     '#22c55e',
+    red:       '#ef4444',
+    amber:     '#f59e0b',
+    purple:    '#8b5cf6',
+    teal:      '#14b8a6',
+  };
+
+  // ── Load all NAS + stats ───────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [nasRes, statsRes, radRes, overviewRes] = await Promise.all([
+        fetch(`${API}/nas`, { headers }),
+        fetch(`${API}/nas/stats`, { headers }),
+        fetch(`${API}/nas/radius/stats`, { headers }),
+        fetch(`${API}/nas/overview`, { headers }),
+      ]);
+      if (nasRes.ok)   setNasList(await nasRes.json());
+      if (statsRes.ok) setStats(await statsRes.json());
+      if (radRes.ok)   setRadiusStats(await radRes.json());
+      if (overviewRes.ok) setOverview(await overviewRes.json());
+    } catch { addLog('error', 'Failed to load NAS data'); }
+    setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Check one NAS reachability (NON-DISRUPTIVE: read-only API calls) ─
+  // The backend /reachability calls quickCheck (read-only) + RADIUS DB queries.
+  // Zero risk to PPPoE sessions — no write commands issued.
+  const checkNas = useCallback(async (id: number, silent = false) => {
+    setCheckingIds(p => new Set([...p, id]));
+    try {
+      const res = await fetch(`${API}/nas/${id}/reachability`, { headers });
+      if (res.ok) {
+        const data: Reachability = await res.json();
+        // Normalise: backend may return empty string or null for API fields
+        data.identity  = data.identity  || '';
+        data.version   = data.version   || '';
+        data.cpuLoad   = data.cpuLoad   || '';
+        data.uptime    = data.uptime    || '';
+        data.activeConnections = data.activeConnections ?? 0;
+        setReachMap(p => ({ ...p, [id]: data }));
+        if (!silent) addLog(
+          data.apiPortOpen ? 'info' : 'warn',
+          `NAS #${id} — RADIUS:${data.radiusPortOpen?'UP':'DOWN'} ` +
+          `API:${data.apiPortOpen?'UP':'DOWN'} ` +
+          (data.identity  ? `Identity:${data.identity} ` : '') +
+          (data.cpuLoad   ? `CPU:${data.cpuLoad} `        : '') +
+          `Sessions:${data.activeSessionCount}`
+        );
+      } else {
+        if (!silent) addLog('error', `Reachability check failed for NAS #${id} (HTTP ${res.status})`);
+      }
+    } catch (e: any) {
+      if (!silent) addLog('error', `Reachability check error for NAS #${id}: ${e.message}`);
+    }
+    setCheckingIds(p => { const s = new Set(p); s.delete(id); return s; });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Full sync (read-only on MikroTik — no writes) ─────────────────
+  // Fetches system/resource, interfaces, ppp/active, etc.
+  // Safe to call in production — does NOT disconnect any PPPoE user.
+  const fetchDetails = useCallback(async (nasId: number): Promise<MikrotikDetails | null> => {
+    try {
+      const res = await fetch(`${API}/nas/${nasId}/sync`, { headers });
+      if (!res.ok) { addLog('warn', `Sync returned ${res.status} for NAS #${nasId}`); return null; }
+      return await res.json() as MikrotikDetails;
+    } catch (e: any) {
+      addLog('error', `Sync error NAS #${nasId}: ${e.message}`);
+      return null;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Fetch sessions for a NAS ───────────────────────────────────────
+  const fetchSessions = useCallback(async (nasId: number): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API}/nas/${nasId}/sessions`, { headers });
+      if (!res.ok) return [];
+      const raw = await res.json();
+      return Array.isArray(raw) ? raw : (raw.sessions || []);
+    } catch { return []; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Open NAS detail — loads sections independently so partial data shows ─
+  const openView = useCallback(async (nas: NasEntry) => {
+    // Reset to loading state — keep previous data if re-opening same NAS
+    setActiveTab('overview');
+    setViewDetail({
+      nas, reachability: null, details: null, sessions: [],
+      loadingReach: true, loadingDetails: !!(nas.apiUsername && nas.apiPassword),
+      loadingSessions: true, detailsError: null,
+    });
+
+    // 1) Reachability (fast: ~5s) — loads first
+    fetch(`${API}/nas/${nas.id}/reachability`, { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then((reach: Reachability | null) => {
+        if (reach) {
+          reach.identity  = reach.identity  || '';
+          reach.version   = reach.version   || '';
+          reach.cpuLoad   = reach.cpuLoad   || '';
+          reach.uptime    = reach.uptime    || '';
+          reach.activeConnections = reach.activeConnections ?? 0;
+          setReachMap(p => ({ ...p, [nas.id]: reach }));
+        }
+        setViewDetail(p => p ? { ...p, reachability: reach, loadingReach: false } : null);
+      })
+      .catch(() => setViewDetail(p => p ? { ...p, loadingReach: false } : null));
+
+    // 2) Sessions (fast: DB query only)
+    fetchSessions(nas.id).then(sessions => {
+      setViewDetail(p => p ? { ...p, sessions, loadingSessions: false } : null);
+    });
+
+    // 3) Full MikroTik sync — only if credentials exist
+    if (nas.apiUsername && nas.apiPassword) {
+      fetchDetails(nas.id).then(details => {
+        if (details) {
+          // Also update reachMap with fresh data from sync
+          setReachMap(p => {
+            const existing = p[nas.id];
+            if (!existing) return p;
+            return {
+              ...p, [nas.id]: {
+                ...existing,
+                identity: details.identity || existing.identity,
+                version:  details.version  || existing.version,
+                cpuLoad:  details.cpuLoad  || existing.cpuLoad,
+                uptime:   details.uptime   || existing.uptime,
+                activeConnections: details.activeConnections ?? existing.activeConnections,
+              }
+            };
+          });
+        }
+        setViewDetail(p => p ? {
+          ...p, details,
+          loadingDetails: false,
+          detailsError: details ? null : 'Could not connect to MikroTik API',
+        } : null);
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchDetails, fetchSessions]);
+
+  // ── Refresh detail view (updates all sections) ─────────────────────
+  const refreshView = useCallback(async () => {
+    if (!viewDetail) return;
+    const nas = viewDetail.nas;
+    setViewDetail(p => p ? { ...p, loadingReach: true, loadingSessions: true } : null);
+
+    const [reachRes, sessions] = await Promise.all([
+      fetch(`${API}/nas/${nas.id}/reachability`, { headers })
+        .then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchSessions(nas.id),
+    ]);
+
+    const reach = reachRes as Reachability | null;
+    if (reach) {
+      reach.identity  = reach.identity  || '';
+      reach.version   = reach.version   || '';
+      reach.cpuLoad   = reach.cpuLoad   || '';
+      reach.uptime    = reach.uptime    || '';
+      reach.activeConnections = reach.activeConnections ?? 0;
+      setReachMap(p => ({ ...p, [nas.id]: reach }));
+    }
+    setViewDetail(p => p ? { ...p, reachability: reach, sessions, loadingReach: false, loadingSessions: false } : null);
+
+    // Re-sync details too
+    if (nas.apiUsername && nas.apiPassword) {
+      setViewDetail(p => p ? { ...p, loadingDetails: true } : null);
+      fetchDetails(nas.id).then(details => {
+        setViewDetail(p => p ? { ...p, details, loadingDetails: false, detailsError: details ? null : 'API unreachable' } : null);
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewDetail, fetchDetails, fetchSessions]);
+
+  // ── Save NAS ───────────────────────────────────────────────────────
+  const saveNas = async () => {
+    if (!form.nasName.trim()) { addLog('error', 'NAS Name is required'); return; }
+    if (!form.nasIp.trim())   { addLog('error', 'NAS IP is required'); return; }
+    if (!form.radiusSecret.trim()) { addLog('error', 'RADIUS Secret is required'); return; }
+    const ipOk = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(form.nasIp.trim());
+    if (!ipOk) { addLog('error', 'NAS IP must be a valid IP address'); return; }
+    const url    = editItem ? `${API}/nas/${editItem.id}` : `${API}/nas`;
+    const method = editItem ? 'PUT' : 'POST';
+    const body = {
+      nasName: form.nasName.trim(),
+      shortname: (form.shortname.trim() || form.nasName.trim()),
+      nasIp:   form.nasIp.trim(),
+      secret:  form.radiusSecret.trim(),
+      nasType: form.nasType,
+      // FIX: send the actual ports from the form, not hardcoded values
+      apiPort:      Number(form.apiPort),
+      incomingPort: Number(form.incomingPort),
+      apiUsername:  form.apiUsername.trim() || undefined,
+      apiPassword:  form.apiPassword.trim() || undefined,
+      description:  form.description.trim() || undefined,
+      isActive:     form.isActive,
+    };
+    try {
+      const res = await fetch(url, { method, headers, body: JSON.stringify(body) });
+      if (res.ok) {
+        addLog('info', `NAS "${form.nasName}" ${editItem ? 'updated' : 'created'} — apiPort=${form.apiPort}`);
+        setShowForm(false); setEditItem(null); resetForm(); await loadData();
+      } else {
+        const e: any = await res.json().catch(() => ({}));
+        const msg = Array.isArray(e?.message) ? e.message.join(' ') : e?.message;
+        addLog('error', `Save failed: ${msg || 'Unknown error'}`);
+        // Throw so the wizard keeps the dialog open and shows the reason,
+        // instead of closing as though the router had been added.
+        throw new Error(msg || `Save failed (HTTP ${res.status})`);
+      }
+    } catch (e: any) {
+      addLog('error', `Network error: ${e.message}`);
+      throw e;
+    }
+  };
+
+  const deleteNas = async (id: number) => {
+    try {
+      const res = await fetch(`${API}/nas/${id}`, { method:'DELETE', headers });
+      if (res.ok) { addLog('info', `NAS #${id} deleted`); await loadData(); }
+      else addLog('error', `Delete failed for NAS #${id}`);
+    } catch (e: any) { addLog('error', `Delete error: ${e.message}`); }
+    setDeleteConfirm(null);
+  };
+
+  const toggleNas = async (id: number) => {
+    try {
+      const res = await fetch(`${API}/nas/${id}/toggle`, { method:'PATCH', headers });
+      if (res.ok) await loadData();
+      else addLog('error', `Toggle failed for NAS #${id}`);
+    } catch (e: any) { addLog('error', `Toggle error: ${e.message}`); }
+  };
+
+  const resetForm = () => setForm({
+    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK',
+    apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true
+  });
+
+  // FIX: populate form with actual stored ports from the NAS record
+  const openEdit = (nas: NasEntry) => {
+    setForm({
+      nasName:     nas.nasname,
+      shortname:   nas.shortname || nas.nasname,
+      nasIp:       nas.nasIp       || '',
+      radiusSecret:nas.secret      || '',
+      nasType:     nas.type        || 'MIKROTIK',
+      apiPort:     nas.apiPort     || 8728,   // use actual stored port
+      incomingPort:nas.incomingPort|| 3799,   // use actual stored port
+      apiUsername: nas.apiUsername || '',
+      apiPassword: nas.apiPassword || '',
+      description: nas.description || '',
+      isActive:    nas.isActive,
+    });
+    setEditItem(nas); setShowForm(true);
+  };
+
+  // ── Lifecycle ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const tk = localStorage.getItem('token');
+    if (!tk) { router.push('/login'); return; }
+    fetch(`${API}/profile`, { headers })
+      .then(r => r.json()).then(d => setUser(d.user))
+      .catch(() => router.push('/login'));
+    loadData();
+    const tick = () => {
+      const h = new Date().getHours();
+      setGreeting(h < 12 ? 'Good Morning' : h < 18 ? 'Good Afternoon' : 'Good Evening');
+      setTime(new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' }));
+    };
+    tick();
+    const clockId = setInterval(tick, 1000);
+    return () => clearInterval(clockId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-poll reachability every 30s for all NAS devices
+  useEffect(() => {
+    if (nasList.length === 0) return;
+    // Initial check
+    nasList.forEach(n => checkNas(n.id, true));
+    // Stagger polls to avoid hammering the server
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    pollIntervalRef.current = setInterval(() => {
+      nasList.forEach((n, i) => {
+        setTimeout(() => checkNas(n.id, true), i * 500); // 500ms stagger
+      });
+    }, 30_000);
+    return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
+  }, [nasList.length, checkNas]);
+
+  // Auto-refresh sessions in detail view every 15s (PPPoE session tracking)
+  useEffect(() => {
+    if (!viewDetail) { if (sessionPollRef.current) clearInterval(sessionPollRef.current); return; }
+    if (sessionPollRef.current) clearInterval(sessionPollRef.current);
+    sessionPollRef.current = setInterval(async () => {
+      if (!viewDetail) return;
+      const sessions = await fetchSessions(viewDetail.nas.id);
+      setViewDetail(p => p ? { ...p, sessions } : null);
+    }, 15_000);
+    return () => { if (sessionPollRef.current) clearInterval(sessionPollRef.current); };
+  }, [viewDetail?.nas?.id, fetchSessions]);
+
+  // ── Component helpers ──────────────────────────────────────────────
+  const reach = (id: number) => reachMap[id];
+  const isChecking = (id: number) => checkingIds.has(id);
+
+  const StatusDot = ({ online, size = 8 }: { online?: boolean; size?: number }) => (
+    <span style={{
+      display: 'inline-block', width: size, height: size, borderRadius: '50%', flexShrink: 0,
+      background: online === undefined ? '#475569' : online ? '#22c55e' : '#ef4444',
+      boxShadow:  online ? `0 0 ${size}px #22c55e88` : online === false ? `0 0 ${size}px #ef444488` : 'none',
+      marginRight: 5,
+    }} />
+  );
+
+  const Badge = ({ children, color, bg }: { children: React.ReactNode; color: string; bg: string }) => (
+    <span style={{ padding:'2px 8px', borderRadius:4, fontSize:10, fontWeight:700, color, background:bg, letterSpacing:'0.04em', whiteSpace:'nowrap' }}>
+      {children}
+    </span>
+  );
+
+  const Btn = ({ onClick, children, variant = 'default', size = 'sm', disabled = false, style: ext = {}, title = '' }: any) => {
+    const vs: Record<string, React.CSSProperties> = {
+      default: { background:'var(--border)',    color:t.textSub },
+      primary: { background:t.accent,     color:'#fff' },
+      success: { background:'#14532d',    color:'#4ade80' },
+      danger:  { background:'#450a0a',    color:'#f87171' },
+      warning: { background:'#422006',    color:'#fbbf24' },
+      ghost:   { background:'transparent',color:t.textSub, border:`1px solid ${t.cardBorder}` },
+      teal:    { background:'#134e4a',    color:'#2dd4bf' },
+    };
+    return (
+      <button onClick={onClick} disabled={disabled} title={title} style={{
+        display:'inline-flex', alignItems:'center', gap:5,
+        padding: size === 'xs' ? '3px 8px' : '5px 12px',
+        borderRadius:6, border:'none', cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: size === 'xs' ? 11 : 12, fontWeight:600, opacity: disabled ? 0.5 : 1,
+        transition:'all .15s', ...vs[variant], ...ext,
+      }}>
+        {children}
+      </button>
+    );
+  };
+
+  const inputSt: React.CSSProperties = {
+    background: t.input, border:`1px solid ${t.inputBorder}`, borderRadius:6,
+    color: t.text, padding:'7px 10px', width:'100%', fontSize:12, outline:'none', fontFamily:'inherit',
+  };
+  const labelSt: React.CSSProperties = {
+    fontSize:11, color:t.textSub, marginBottom:3, display:'block', fontWeight:600,
+  };
+
+  const Tab = ({ id, label, icon }: { id: typeof activeTab; label: string; icon?: React.ReactNode }) => (
+    <button onClick={() => setActiveTab(id)} style={{
+      padding:'6px 14px', borderRadius:6, border:'none', cursor:'pointer', fontSize:11, fontWeight:600,
+      background: activeTab === id ? t.accent : 'transparent',
+      color:      activeTab === id ? '#fff' : t.textSub,
+      display:'inline-flex', alignItems:'center', gap:5,
+    }}>
+      {icon}{label}
+    </button>
+  );
+
+  // ── CPU color helper ───────────────────────────────────────────────
+  const cpuColor = (s: string) => {
+    const n = parseCpu(s);
+    return n > 80 ? '#f87171' : n > 50 ? '#fbbf24' : '#4ade80';
+  };
+
+  const filteredNasList = nasList.filter((nas) => {
+    const query = searchQ.trim().toLowerCase();
+    const matchesQuery = !query
+      || nas.nasname.toLowerCase().includes(query)
+      || (nas.shortname || '').toLowerCase().includes(query)
+      || (nas.nasIp || '').toLowerCase().includes(query);
+    const matchesStatus = statusFilter === 'ALL' || (statusFilter === 'ACTIVE' ? nas.isActive : !nas.isActive);
+    const matchesType = typeFilter === 'ALL' || (nas.type || 'MIKROTIK').toUpperCase() === typeFilter;
+    return matchesQuery && matchesStatus && matchesType;
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ display:'flex', minHeight:'100vh', background:t.bg, color:t.text, fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif", fontSize:13 }}>
+
+      {/* ══════════ MAIN ══════════ */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+
+        {/* ── CONTENT ── */}
+        <div style={{ flex:1, padding:'16px 20px', overflowY:'auto' }}>
+
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:16, flexWrap:'wrap', marginBottom:16 }}>
+            <div>
+              {/* Say up front where this account's routers come from. Without
+                  it, an account that can only use routers handed down to it
+                  saw an "Add NAS" button that always failed at save time. */}
+              {me && !isAdminRole(me.role) && (
+                <div style={{ fontSize:12, color:t.textMuted, lineHeight:1.7, maxWidth:520 }}>
+                  {me.canAddNas
+                    ? <>You may <b style={{color:t.text}}>register your own routers</b>, and you can also use any assigned to you by your parent.</>
+                    : <>You use routers <b style={{color:t.text}}>assigned to you by your parent</b>. Registering your own is switched off for this account — ask them to enable “can add router”, or to assign you a NAS.</>}
+                </div>
+              )}
+            </div>
+            {(!me || isAdminRole(me.role) || me.canAddNas) && (
+              <Btn onClick={() => { resetForm(); setEditItem(null); setShowForm(true); }} variant="primary" style={{ padding:'9px 14px', fontSize:13 }}><Icons.Plus /> Add NAS</Btn>
+            )}
+          </div>
+
+          {/* Stat Cards */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))', gap:10, marginBottom:16 }}>
+            {[
+              { label:'Total NAS',       value: overview?.totalNas ?? stats.total,    color: t.accent,  icon:<Icons.Router /> },
+              { label:'Online NAS',      value: overview?.onlineNas ?? '—',   color: t.green,   icon:<Icons.Signal /> },
+              { label:'Offline NAS',     value: overview?.offlineNas ?? '—', color: t.red,     icon:<Icons.Signal /> },
+              { label:'Active Sessions', value: overview?.activeSessions ?? radiusStats?.activeSessionCount ?? '—', color: t.purple, icon:<Icons.PPPoE /> },
+              { label:'MikroTik',        value: stats.mikrotik, color: t.amber,   icon:<Icons.CPU /> },
+              { label:'RADIUS',          value: radiusStats?.alive ? 'ALIVE':'DOWN', color: radiusStats?.alive ? t.green : t.red, icon:<Icons.Shield /> },
+              { label:'24h Accepts',     value: radiusStats?.accepts ?? '—', color: t.green, icon:null },
+              { label:'24h Rejects',     value: radiusStats?.rejects ?? '—', color: t.red,   icon:null },
+            ].map((c, i) => (
+              <div key={i} style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:10, padding:'12px 14px', display:'flex', flexDirection:'column', gap:4 }}>
+                <div style={{ color:t.textMuted, opacity:0.7, marginBottom:2 }}>{c.icon}</div>
+                <div style={{ fontSize:22, fontWeight:800, color:c.color, lineHeight:1 }}>{c.value}</div>
+                <div style={{ fontSize:10, color:t.textMuted, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>{c.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* RADIUS status bar */}
+          {radiusStats && (
+            <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:10, padding:'10px 16px', marginBottom:16, display:'flex', gap:16, flexWrap:'wrap', alignItems:'center' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <Icons.Signal />
+                <span style={{ fontSize:12, color:t.textSub, fontWeight:700, letterSpacing:'0.04em' }}>RADIUS SERVER</span>
+              </div>
+              <Badge color={radiusStats.alive?'#4ade80':'#f87171'} bg={radiusStats.alive?'#14532d':'#450a0a'}>
+                {radiusStats.alive ? '● ALIVE' : '● DOWN'}
+              </Badge>
+              {[
+                ['IP', radiusStats.serverIp || '—'], ['Port', `${radiusStats.radiusPort ?? 1812} / ${radiusStats.acctPort ?? 1813} UDP`],
+                ['NAS Registered', radiusStats.nasCount ?? '—'],
+                ['Active Sessions', radiusStats.activeSessionCount ?? '—'],
+                ['24h Accepts', radiusStats.accepts ?? '—'],
+                ['24h Rejects', radiusStats.rejects ?? '—'],
+              ].map(([k, v]) => (
+                <span key={String(k)} style={{ fontSize:11, color:t.textMuted }}>
+                  {k}: <b style={{color:t.text}}>{v}</b>
+                </span>
+              ))}
+              <div style={{ marginLeft:'auto' }}>
+                <Btn onClick={loadData} variant="ghost" size="xs"><Icons.Refresh /> Refresh</Btn>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search by NAS name or IP address" style={{ ...inputSt, maxWidth:320 }} />
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
+              <option value="ALL">All Status</option>
+              <option value="ACTIVE">Active</option>
+              <option value="INACTIVE">Inactive</option>
+            </select>
+            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as any)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
+              <option value="ALL">All Types</option>
+              <option value="MIKROTIK">MikroTik</option>
+              <option value="CISCO">Cisco</option>
+              <option value="HUAWEI">Huawei</option>
+              <option value="OTHER">Other</option>
+            </select>
+            <span style={{ fontSize:11, color:t.textMuted }}>{filteredNasList.length} result{filteredNasList.length !== 1 ? 's' : ''}</span>
+          </div>
+
+          {/* NAS Table */}
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:10, overflow:'hidden' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 16px', borderBottom:`1px solid ${t.cardBorder}` }}>
+              <div>
+                <span style={{ fontWeight:800, fontSize:14 }}>Registered NAS Devices</span>
+                <span style={{ fontSize:11, color:t.textMuted, marginLeft:10 }}>{filteredNasList.length} device{filteredNasList.length !== 1 ? 's' : ''}</span>
+              </div>
+              <span style={{ fontSize:11, color:t.textMuted }}>
+                Auto-refresh 30s &nbsp;·&nbsp;
+                <span style={{ color: checkingIds.size > 0 ? t.amber : t.green }}>
+                  {checkingIds.size > 0 ? `Checking ${checkingIds.size}…` : 'Idle'}
+                </span>
+              </span>
+            </div>
+            {loading ? (
+              <div style={{ textAlign:'center', padding:40, color:t.textMuted }}>⏳ Loading NAS devices…</div>
+            ) : filteredNasList.length === 0 ? (
+              <div style={{ textAlign:'center', padding:40, color:t.textMuted }}>
+                <div style={{ fontSize:32, marginBottom:8 }}>📡</div>
+                No NAS devices match the current search or filters.
+              </div>
+            ) : (
+              <NasTable
+                rows={filteredNasList}
+                me={me}
+                onView={openView}
+                onEdit={openEdit}
+                onShare={openShare}
+                onCheck={checkNas}
+                onDelete={(nas) => setDeleteConfirm(nas.id)}
+                checkingIds={checkingIds}
+                reachOf={(id) => {
+                  const r = reach(id);
+                  return r ? { apiPortOpen: r.apiPortOpen, activeSessionCount: r.activeSessionCount, identity: r.identity } : undefined;
+                }}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════
+          MODAL: VIEW NAS DETAIL
+      ══════════════════════════════════════ */}
+      {viewDetail && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setViewDetail(null)}>
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:820, maxHeight:'92vh', overflowY:'auto', display:'flex', flexDirection:'column', gap:0 }}
+            onClick={e => e.stopPropagation()}>
+
+            {/* ── Modal header ── */}
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ width:42, height:42, background:'linear-gradient(135deg,#0ea5e9,#6366f1)', borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                  <Icons.NAS />
+                </div>
+                <div>
+                  <div style={{ fontWeight:800, fontSize:17, color:'#f1f5f9' }}>{viewDetail.nas.nasname}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
+                    <code style={{ fontSize:12, color:'#38bdf8' }}>{viewDetail.nas.nasIp}</code>
+                    <Badge color='#60a5fa' bg='rgba(96,165,250,0.1)'>{viewDetail.nas.type}</Badge>
+                    {/* Show actual configured port */}
+                    <Badge color='var(--muted)' bg='rgba(148,163,184,0.1)'>
+                      API :{viewDetail.nas.apiPort || 8728}
+                    </Badge>
+                    <Badge color='var(--muted)' bg='rgba(148,163,184,0.1)'>
+                      CoA :{viewDetail.nas.incomingPort || 3799}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+              <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                <Btn onClick={refreshView} variant="ghost" size="xs"><Icons.Refresh /> Refresh</Btn>
+                <button onClick={() => setViewDetail(null)} style={{ background:'transparent', border:`1px solid ${t.cardBorder}`, borderRadius:6, padding:'5px 8px', cursor:'pointer', color:t.textSub }}>
+                  <Icons.X />
+                </button>
+              </div>
+            </div>
+
+            {/* ── Notes (transmission, device, install details) ── */}
+            <div style={{ border:`1px solid ${t.cardBorder}`, borderRadius:10, padding:'12px 14px', marginBottom:14 }}>
+              <RecordNotes entityType="NAS" entityId={viewDetail.nas.id} title="Notes — device, transmission, site" />
+            </div>
+
+            {/* ── Sessions live ticker ── */}
+            {!viewDetail.loadingSessions && (
+              <div style={{ background: d ? 'var(--surface)' : '#eff6ff', border:`1px solid ${d?'#1e3a5f':'#bfdbfe'}`, borderRadius:8, padding:'7px 14px', marginBottom:14, display:'flex', alignItems:'center', gap:12 }}>
+                <StatusDot online={viewDetail.reachability?.radiusPortOpen} size={10} />
+                <span style={{ fontSize:12, fontWeight:700, color:t.text }}>
+                  PPPoE Sessions: <span style={{ color:'#a78bfa', fontSize:15 }}>{viewDetail.sessions.length}</span>
+                </span>
+                <span style={{ fontSize:11, color:t.textMuted }}>
+                  (auto-refreshes every 15s)
+                </span>
+                {viewDetail.loadingSessions && <span style={{ fontSize:11, color:t.amber }}>Updating…</span>}
+                <span style={{ marginLeft:'auto', fontSize:10, color:t.textMuted }}>
+                  RADIUS: {viewDetail.reachability?.radiusNasCount ?? '—'} registered NAS
+                </span>
+              </div>
+            )}
+
+            {/* ── Port / RADIUS status ── */}
+            {viewDetail.loadingReach ? (
+              <div style={{ textAlign:'center', padding:16, color:t.textMuted, fontSize:12 }}>⏳ Checking reachability…</div>
+            ) : viewDetail.reachability && (
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:14 }}>
+                {[
+                  { label:'RADIUS Auth',    val: viewDetail.reachability.radiusPortOpen,  note:'UDP :1812' },
+                  { label:'API Port',       val: viewDetail.reachability.apiPortOpen,      note:`TCP :${viewDetail.nas.apiPort || 8728}` },
+                  { label:'NAS Registered', val: viewDetail.reachability.nasRegistered,   note:'In RADIUS DB' },
+                ].map(c => (
+                  <div key={c.label} style={{
+                    background: c.val ? (d?'#14532d':'#f0fdf4') : (d?'#450a0a':'#fef2f2'),
+                    borderRadius:8, padding:'11px', textAlign:'center',
+                    border:`1px solid ${c.val ? (d?'#166534':'#bbf7d0') : (d?'#7f1d1d':'#fecaca')}`,
+                  }}>
+                    <div style={{ fontSize:18, marginBottom:4 }}>{c.val ? '✅' : '❌'}</div>
+                    <div style={{ fontSize:11, fontWeight:700, color: c.val?'#4ade80':'#f87171' }}>{c.label}</div>
+                    <div style={{ fontSize:10, color:t.textMuted, marginTop:2 }}>{c.note}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── MikroTik device stats ── */}
+            {(viewDetail.reachability || viewDetail.details) && (
+              (() => {
+                // Merge: prefer full details if available, fallback to reachability quickCheck
+                const r  = viewDetail.reachability;
+                const dt = viewDetail.details;
+                const identity     = dt?.identity  || r?.identity  || '';
+                const version      = dt?.version   || r?.version   || '';
+                const cpuLoad      = dt?.cpuLoad   || r?.cpuLoad   || '';
+                const uptime       = dt?.uptime    || r?.uptime    || '';
+                const board        = dt?.board     || '';
+                const totalMemory  = dt?.totalMemory  || '';
+                const freeMemory   = dt?.freeMemory   || '';
+                const activeConns  = dt?.activeConnections ?? r?.activeConnections ?? 0;
+                const hasData      = identity.length > 0 || version.length > 0;
+                if (!hasData && !viewDetail.loadingDetails) return null;
+                return (
+                  <div style={{ background: d?'var(--surface)':'#eff6ff', border:`1px solid ${d?'#1e3a5f':'#bfdbfe'}`, borderRadius:10, padding:14, marginBottom:14 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'#38bdf8', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
+                      <Icons.Router /> MikroTik Device Details
+                      {viewDetail.loadingDetails && <span style={{ color:t.amber, fontWeight:400 }}>— syncing…</span>}
+                    </div>
+                    {/* Row 1: identity/version/cpu/uptime */}
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:8 }}>
+                      {[
+                        { label:'Identity', value: identity,  icon:<Icons.NAS />,   color: t.text },
+                        { label:'Version',  value: version ? `v${version}` : '',    icon:<Icons.Board />, color:'#a78bfa' },
+                        { label:'CPU Load', value: cpuLoad,  icon:<Icons.CPU />,    color: cpuLoad ? cpuColor(cpuLoad) : t.text },
+                        { label:'Uptime',   value: uptime,   icon:<Icons.Clock />,  color: t.text },
+                      ].map(item => (
+                        <div key={item.label} style={{ background: d?'var(--surface)':'#fff', borderRadius:8, padding:'10px 12px', border:`1px solid ${d?'var(--border)':'var(--text)'}` }}>
+                          <div style={{ color:'var(--muted)', marginBottom:4 }}>{item.icon}</div>
+                          <div style={{ fontSize:10, color:t.textMuted, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:3 }}>{item.label}</div>
+                          <div style={{ fontSize:13, color: item.value ? item.color : t.textMuted, fontWeight:700 }}>{item.value || '—'}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Row 2: board/memory/sessions */}
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+                      {[
+                        { label:'Board Model',    value: board,        color: t.text },
+                        { label:'Memory (Free/Total)', value: (freeMemory && totalMemory) ? `${fmtBytes(+freeMemory)} / ${fmtBytes(+totalMemory)}` : '', color: t.text },
+                        { label:'PPPoE Connections', value: String(activeConns), color:'#4ade80' },
+                      ].map(item => (
+                        <div key={item.label} style={{ background: d?'var(--surface)':'#fff', borderRadius:8, padding:'10px 12px', border:`1px solid ${d?'var(--border)':'var(--text)'}`, textAlign:'center' }}>
+                          <div style={{ fontSize:16, fontWeight:800, color: item.value ? item.color : t.textMuted }}>{item.value || '—'}</div>
+                          <div style={{ fontSize:10, color:t.textMuted, marginTop:2, fontWeight:600 }}>{item.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* API service details */}
+                    {dt?.apiService && (
+                      <div style={{ marginTop:8, fontSize:11, color:t.textMuted }}>
+                        API service on router: port <b style={{color:t.text}}>{dt.apiService.port}</b>
+                        {dt.apiService.tlsPort && <> &nbsp;·&nbsp; API-SSL port <b style={{color:t.text}}>{dt.apiService.tlsPort}</b></>}
+                        &nbsp;·&nbsp; Status: <b style={{ color: dt.apiService.enabled ? '#4ade80':'#f87171' }}>{dt.apiService.enabled ? 'Enabled' : 'Disabled'}</b>
+                      </div>
+                    )}
+                    {/* Error */}
+                    {viewDetail.detailsError && !viewDetail.loadingDetails && (
+                      <div style={{ marginTop:8, fontSize:11, color:'#f87171', background:'#450a0a', padding:'6px 10px', borderRadius:6 }}>
+                        ⚠️ {viewDetail.detailsError}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            )}
+
+            {/* ── Tabs ── */}
+            <div style={{ display:'flex', gap:4, marginBottom:12, flexWrap:'wrap' }}>
+              <Tab id="overview"    label="Overview"    icon={<Icons.NAS />} />
+              <Tab id="interfaces"  label={`Interfaces${viewDetail.details?.interfaces?.length ? ` (${viewDetail.details.interfaces.length})` : ''}`} icon={<Icons.Network />} />
+              <Tab id="pppoe"       label="PPPoE Server" icon={<Icons.PPPoE />} />
+              <Tab id="radius"      label="RADIUS Clients" icon={<Icons.Shield />} />
+              <Tab id="ips"         label="IP Addresses" icon={<Icons.IP />} />
+              <Tab id="sessions"    label={`Sessions (${viewDetail.sessions.length})`} icon={<Icons.Subscribers />} />
+            </div>
+
+            {/* ── Tab: Overview ── */}
+            {activeTab === 'overview' && (
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+                {[
+                  ['NAS IP',       viewDetail.nas.nasIp || '—'],
+                  ['API Port',     String(viewDetail.nas.apiPort || 8728)],   // actual port
+                  ['CoA Port',     String(viewDetail.nas.incomingPort || 3799)],
+                  ['API Username', viewDetail.nas.apiUsername || '—'],
+                  ['Subscribers',  String(viewDetail.nas._count?.subscribers ?? 0)],
+                  ['Status',       viewDetail.nas.isActive ? 'Active' : 'Inactive'],
+                  ['Description',  viewDetail.nas.description || '—'],
+                  ['RADIUS IP',    viewDetail.reachability?.radiusIp || '127.0.0.1'],
+                ].map(([k, v]) => (
+                  <div key={k} style={{ background: d?'var(--bg)':'#f8fafc', borderRadius:8, padding:'9px 11px', border:`1px solid ${t.cardBorder}` }}>
+                    <div style={{ fontSize:10, color:t.textMuted, marginBottom:3, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>{k}</div>
+                    <div style={{ fontSize:12, color:t.text, fontWeight:700, wordBreak:'break-all' }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Tab: Interfaces ── */}
+            {activeTab === 'interfaces' && (
+              viewDetail.loadingDetails ? (
+                <div style={{ textAlign:'center', padding:20, color:t.textMuted }}>⏳ Loading interface data…</div>
+              ) : !viewDetail.details?.interfaces?.length ? (
+                <div style={{ textAlign:'center', padding:20, color:t.textMuted }}>
+                  {viewDetail.detailsError ? `⚠️ ${viewDetail.detailsError}` : 'No interface data — add API credentials to enable.'}
+                </div>
+              ) : (
+                <div style={{ overflowX:'auto', borderRadius:8, border:`1px solid ${t.cardBorder}` }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                    <thead>
+                      <tr style={{ background: d?'var(--bg)':'#f1f5f9' }}>
+                        {['Name','Type','MAC Address','MTU','Running','Disabled','Comment'].map(h => (
+                          <th key={h} style={{ padding:'7px 10px', textAlign:'left', fontSize:10, color:t.textMuted, fontWeight:700, textTransform:'uppercase' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewDetail.details.interfaces.map((iface, i) => (
+                        <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#38bdf8' }}>{iface.name}</code></td>
+                          <td style={{ padding:'7px 10px', color:t.textSub }}>{iface.type || '—'}</td>
+                          {/* FIX: use normalized field name macAddress not mac-address */}
+                          <td style={{ padding:'7px 10px' }}><code style={{ fontSize:10, color:t.textMuted }}>{iface.macAddress || '—'}</code></td>
+                          <td style={{ padding:'7px 10px', color:t.textSub }}>{iface.mtu || '—'}</td>
+                          <td style={{ padding:'7px 10px' }}>
+                            {/* FIX: 'running' is a string "true"/"false" from MikroTik */}
+                            <Badge color={iface.running==='true'?'#4ade80':'#f87171'} bg={iface.running==='true'?'#14532d':'#450a0a'}>
+                              {iface.running==='true' ? 'Yes' : 'No'}
+                            </Badge>
+                          </td>
+                          <td style={{ padding:'7px 10px' }}>
+                            <Badge color={iface.disabled==='true'?'#f87171':'#4ade80'} bg={iface.disabled==='true'?'#450a0a':'#14532d'}>
+                              {iface.disabled==='true' ? 'Yes' : 'No'}
+                            </Badge>
+                          </td>
+                          <td style={{ padding:'7px 10px', color:t.textMuted }}>{iface.comment || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+
+            {/* ── Tab: PPPoE Server ── */}
+            {activeTab === 'pppoe' && (
+              viewDetail.loadingDetails ? (
+                <div style={{ textAlign:'center', padding:20, color:t.textMuted }}>⏳ Loading PPPoE data…</div>
+              ) : (
+                <div>
+                  {viewDetail.details?.pppoeServer ? (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:t.textSub, marginBottom:8 }}>PPPoE Server Config</div>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+                        {[
+                          ['Enabled',          viewDetail.details.pppoeServer.enabled ? 'Yes' : 'No'],
+                          ['Interface',        viewDetail.details.pppoeServer.interface],
+                          ['Service Name',     viewDetail.details.pppoeServer.serviceName || '—'],
+                          ['Max MTU',          viewDetail.details.pppoeServer.maxMtu      || '—'],
+                          ['Max MRU',          viewDetail.details.pppoeServer.maxMru      || '—'],
+                          ['Authentication',   viewDetail.details.pppoeServer.authentication || '—'],
+                          ['Keepalive',        viewDetail.details.pppoeServer.keepaliveTimeout || '—'],
+                          ['Default Profile',  viewDetail.details.pppoeServer.defaultProfile  || '—'],
+                        ].map(([k, v]) => (
+                          <div key={k} style={{ background:d?'var(--bg)':'#f8fafc', borderRadius:8, padding:'9px 11px', border:`1px solid ${t.cardBorder}` }}>
+                            <div style={{ fontSize:10, color:t.textMuted, marginBottom:2, fontWeight:600, textTransform:'uppercase' }}>{k}</div>
+                            <div style={{ fontSize:12, color:t.text, fontWeight:700 }}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ color:t.textMuted, padding:12 }}>No PPPoE server configured on this NAS.</div>
+                  )}
+                  {viewDetail.details?.pppoeProfiles && viewDetail.details.pppoeProfiles.length > 0 && (
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:t.textSub, marginBottom:8 }}>PPPoE Profiles ({viewDetail.details.pppoeProfiles.length})</div>
+                      <div style={{ overflowX:'auto', borderRadius:8, border:`1px solid ${t.cardBorder}` }}>
+                        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                          <thead>
+                            <tr style={{ background:d?'var(--bg)':'#f1f5f9' }}>
+                              {['Name','Local IP','Remote Pool','Rate Limit','Session Timeout','Comment'].map(h => (
+                                <th key={h} style={{ padding:'7px 10px', textAlign:'left', fontSize:10, color:t.textMuted, fontWeight:700 }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {viewDetail.details.pppoeProfiles.map((p, i) => (
+                              <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
+                                <td style={{ padding:'7px 10px' }}><b style={{ color:'#60a5fa' }}>{p.name}</b></td>
+                                <td style={{ padding:'7px 10px', color:t.textSub }}><code style={{ fontSize:10 }}>{val(p.localAddress)}</code></td>
+                                <td style={{ padding:'7px 10px', color:t.textSub }}>{val(p.remoteAddress)}</td>
+                                <td style={{ padding:'7px 10px', color:'#fbbf24' }}>{val(p.rateLimit)}</td>
+                                <td style={{ padding:'7px 10px', color:t.textSub }}>{val(p.sessionTimeout)}</td>
+                                <td style={{ padding:'7px 10px', color:t.textMuted }}>{val(p.comment)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+
+            {/* ── Tab: RADIUS Clients (on MikroTik) ── */}
+            {activeTab === 'radius' && (
+              viewDetail.loadingDetails ? (
+                <div style={{ textAlign:'center', padding:20, color:t.textMuted }}>⏳ Loading RADIUS config…</div>
+              ) : !viewDetail.details?.radiusClients?.length ? (
+                <div style={{ color:t.textMuted, padding:12 }}>No RADIUS clients configured on this MikroTik.</div>
+              ) : (
+                <div style={{ overflowX:'auto', borderRadius:8, border:`1px solid ${t.cardBorder}` }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                    <thead>
+                      <tr style={{ background:d?'var(--bg)':'#f1f5f9' }}>
+                        {['Service','Server Address','Auth Port','Acct Port','Timeout','Enabled'].map(h => (
+                          <th key={h} style={{ padding:'7px 10px', textAlign:'left', fontSize:10, color:t.textMuted, fontWeight:700 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewDetail.details.radiusClients.map((rc, i) => (
+                        <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
+                          <td style={{ padding:'7px 10px' }}><Badge color='#60a5fa' bg='rgba(96,165,250,0.1)'>{rc.service}</Badge></td>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#38bdf8', fontSize:10 }}>{rc.address}</code></td>
+                          <td style={{ padding:'7px 10px', color:t.textSub }}>{rc.authPort}</td>
+                          <td style={{ padding:'7px 10px', color:t.textSub }}>{rc.acctPort}</td>
+                          <td style={{ padding:'7px 10px', color:t.textSub }}>{rc.timeout}</td>
+                          <td style={{ padding:'7px 10px' }}>
+                            <Badge color={rc.disabled==='false'?'#4ade80':'#f87171'} bg={rc.disabled==='false'?'#14532d':'#450a0a'}>
+                              {rc.disabled === 'false' ? 'Yes' : 'No'}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+
+            {/* ── Tab: IP Addresses ── */}
+            {activeTab === 'ips' && (
+              viewDetail.loadingDetails ? (
+                <div style={{ textAlign:'center', padding:20, color:t.textMuted }}>⏳ Loading IP addresses…</div>
+              ) : !viewDetail.details?.ipAddresses?.length ? (
+                <div style={{ color:t.textMuted, padding:12 }}>No IP addresses found.</div>
+              ) : (
+                <div style={{ overflowX:'auto', borderRadius:8, border:`1px solid ${t.cardBorder}` }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                    <thead>
+                      <tr style={{ background:d?'var(--bg)':'#f1f5f9' }}>
+                        {['IP / Prefix','Network','Interface','Disabled'].map(h => (
+                          <th key={h} style={{ padding:'7px 10px', textAlign:'left', fontSize:10, color:t.textMuted, fontWeight:700 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewDetail.details.ipAddresses.map((ip, i) => (
+                        <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#38bdf8' }}>{ip.address}</code></td>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:t.textSub, fontSize:10 }}>{ip.network}</code></td>
+                          <td style={{ padding:'7px 10px', color:t.textSub }}>{ip.interface}</td>
+                          <td style={{ padding:'7px 10px' }}>
+                            <Badge color={ip.disabled==='true'?'#f87171':'#4ade80'} bg={ip.disabled==='true'?'#450a0a':'#14532d'}>
+                              {ip.disabled==='true' ? 'Yes' : 'No'}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+
+            {/* ── Tab: Sessions ── */}
+            {activeTab === 'sessions' && (
+              <div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+                  <span style={{ fontSize:12, color:t.textSub, fontWeight:700 }}>
+                    Active PPPoE Sessions — {viewDetail.sessions.length} online
+                  </span>
+                  <Btn onClick={() => fetchSessions(viewDetail.nas.id).then(s => setViewDetail(p => p ? {...p, sessions:s} : null))} variant="ghost" size="xs">
+                    <Icons.Refresh /> Refresh
+                  </Btn>
+                </div>
+                {viewDetail.loadingSessions ? (
+                  <div style={{ textAlign:'center', padding:20, color:t.textMuted }}>⏳ Loading sessions…</div>
+                ) : viewDetail.sessions.length === 0 ? (
+                  <div style={{ color:t.textMuted, fontSize:12, padding:12, background:d?'var(--bg)':'#f8fafc', borderRadius:8, border:`1px solid ${t.cardBorder}`, textAlign:'center' }}>
+                    No active PPPoE sessions for this NAS
+                  </div>
+                ) : (
+                  <div style={{ overflowX:'auto', maxHeight:320, overflowY:'auto', borderRadius:8, border:`1px solid ${t.cardBorder}` }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                      <thead style={{ position:'sticky', top:0 }}>
+                        <tr style={{ background:d?'var(--bg)':'#f1f5f9' }}>
+                          {['Username','Framed IP','MAC','Session Start','Duration','↑ Upload','↓ Download'].map(h => (
+                            <th key={h} style={{ padding:'7px 10px', textAlign:'left', fontSize:10, color:t.textMuted, fontWeight:700 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {viewDetail.sessions.map((sess: any, i: number) => {
+                          const dur = sess.duration_seconds;
+                          const h = Math.floor(dur / 3600);
+                          const m = Math.floor((dur % 3600) / 60);
+                          const durFmt = dur ? `${h}h ${m}m` : '—';
+                          const mbUp   = sess.upload_bytes   ? fmtBytes(+sess.upload_bytes)   : '—';
+                          const mbDown = sess.download_bytes ? fmtBytes(+sess.download_bytes) : '—';
+                          return (
+                            <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
+                              <td style={{ padding:'7px 10px' }}><b style={{ color:'#60a5fa' }}>{sess.username}</b></td>
+                              <td style={{ padding:'7px 10px' }}><code style={{ fontSize:10 }}>{sess.framedipaddress || '—'}</code></td>
+                              <td style={{ padding:'7px 10px' }}><code style={{ fontSize:10, color:t.textMuted }}>{sess.callingstationid || '—'}</code></td>
+                              <td style={{ padding:'7px 10px', color:t.textSub }}>
+                                {sess.acctstarttime ? new Date(sess.acctstarttime).toLocaleString() : '—'}
+                              </td>
+                              <td style={{ padding:'7px 10px', color:t.textSub }}>{durFmt}</td>
+                              <td style={{ padding:'7px 10px', color:'#4ade80', fontWeight:600 }}>{mbUp}</td>
+                              <td style={{ padding:'7px 10px', color:'#60a5fa', fontWeight:600 }}>{mbDown}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Footer buttons ── */}
+            <div style={{ marginTop:16, display:'flex', gap:8, paddingTop:12, borderTop:`1px solid ${t.cardBorder}` }}>
+              <Btn onClick={() => { openEdit(viewDetail.nas); setViewDetail(null); }} variant="warning"><Icons.Edit /> Edit</Btn>
+              <Btn onClick={refreshView} variant="success"><Icons.Refresh /> Refresh All</Btn>
+              <Btn onClick={() => setViewDetail(null)} variant="ghost" style={{ marginLeft:'auto' }}><Icons.X /> Close</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════
+          MODAL: ADD / EDIT
+      ══════════════════════════════════════ */}
+      {/* ══════════ SHARE ROUTER WITH A DOWNSTREAM ACCOUNT ══════════ */}
+      {shareFor && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShareFor(null)}>
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:520, maxHeight:'85vh', overflowY:'auto' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight:800, fontSize:16, color:'#f1f5f9' }}>Share “{shareFor.nasname}”</div>
+            <div style={{ fontSize:11.5, color:t.textMuted, marginTop:4, lineHeight:1.7 }}>
+              Ticked accounts can put their subscribers on this router. You keep ownership —
+              they cannot edit or delete it. Untick to withdraw access.
+            </div>
+
+            {/* Reach of the share. "Whole downline" is the old behaviour — the
+                account and every dealer below it. "Only this account" restricts
+                it, so you can give a router to one dealer without a sibling
+                dealer under the same franchise ever seeing it. */}
+            <div style={{ marginTop:14 }}>
+              <div style={{ fontSize:10.5, color:t.textMuted, textTransform:'uppercase', letterSpacing:'.06em', fontWeight:700, marginBottom:6 }}>Who gets it</div>
+              <div style={{ display:'inline-flex', gap:2, background:t.input, border:`1px solid ${t.cardBorder}`, borderRadius:999, padding:3 }}>
+                {[
+                  { v:true,  label:'Account + its downline' },
+                  { v:false, label:'Only this account' },
+                ].map(o => (
+                  <button key={String(o.v)} onClick={() => setSharePropagate(o.v)}
+                    style={{ border:'none', cursor:'pointer', borderRadius:999, padding:'5px 12px', fontSize:11.5, fontWeight:600,
+                      background: sharePropagate === o.v ? t.accent : 'transparent',
+                      color: sharePropagate === o.v ? '#fff' : t.textSub }}>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize:10.5, color:t.textMuted, marginTop:6, lineHeight:1.6 }}>
+                Applies to accounts you tick from here on. Set it before ticking.
+              </div>
+            </div>
+
+            <div style={{ marginTop:16, display:'flex', flexDirection:'column', gap:6 }}>
+              {shareAccounts.map((u:any) => {
+                const on = !!shareFor.assignments?.some(a => a.userId === u.id);
+                return (
+                  <label key={u.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 11px',
+                    borderRadius:9, cursor:shareBusy?'wait':'pointer',
+                    background: on ? 'rgba(45,212,191,.10)' : 'transparent',
+                    border:`1px solid ${on ? 'rgba(45,212,191,.4)' : t.cardBorder}` }}>
+                    <input type="checkbox" checked={on} disabled={shareBusy}
+                      onChange={(e) => toggleShare(u.id, e.target.checked)} />
+                    <span style={{ flex:1 }}>
+                      <b style={{ fontSize:13, color:'#f1f5f9' }}>{u.name}</b>
+                      <span style={{ display:'block', fontSize:10.5, color:t.textMuted }}>{u.role} · {u.email}</span>
+                    </span>
+                  </label>
+                );
+              })}
+              {shareAccounts.length === 0 && (
+                <div style={{ fontSize:12, color:t.textMuted, padding:'14px 0', lineHeight:1.7 }}>
+                  No downstream accounts yet. Create a franchise or dealer under
+                  <b style={{color:t.text}}> Administration → Organization</b> first.
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop:18, display:'flex', justifyContent:'flex-end' }}>
+              <Btn onClick={() => setShareFor(null)} variant="default">Done</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShowForm(false)}>
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:18, width:'100%', maxWidth:700, maxHeight:'95vh', overflowY:'auto' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+              <div>
+                <div style={{ fontWeight:800, fontSize:16, color:'#f1f5f9' }}>{editItem ? 'Edit NAS Device' : 'Add New NAS Device'}</div>
+                <div style={{ fontSize:11, color:t.textMuted, marginTop:2 }}>Configure router, API access, and RADIUS authentication</div>
+              </div>
+              <button onClick={() => setShowForm(false)} style={{ background:'transparent', border:`1px solid ${t.cardBorder}`, borderRadius:6, padding:'5px 8px', cursor:'pointer', color:t.textSub }}>
+                <Icons.X />
+              </button>
+            </div>
+
+
+            {/* Stepped form. The old version put connection details, the
+                RADIUS secret and API credentials in one grid — three unrelated
+                concerns, and no indication that the secret is the field that
+                decides whether authentication works at all. */}
+            {!editItem ? (
+              <Wizard
+                busy={false}
+                onCancel={() => setShowForm(false)}
+                finishLabel="Add router"
+                onFinish={saveNas}
+                steps={[
+                  {
+                    id: 'identify',
+                    title: 'Identify',
+                    hint: 'Where the router is on your network, and what to call it here.',
+                    validate: () => {
+                      if (!form.nasIp.trim()) return 'NAS IP is required — RADIUS matches requests by this address.';
+                      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(form.nasIp.trim())) return 'That does not look like an IPv4 address (e.g. 192.168.1.127).';
+                      if (!form.nasName.trim()) return 'Give the router a name so you can recognise it later.';
+                      return null;
+                    },
+                    summary: () => [
+                      ['NAS IP', form.nasIp],
+                      ['Name', form.nasName],
+                      ['Shortname', form.shortname || form.nasName],
+                      ['Type', form.nasType],
+                    ],
+                    render: () => (
+                      <>
+                        <Field label="NAS IP" required hint="The router's address, with no subnet suffix.">
+                          <input value={form.nasIp} placeholder="192.168.1.127"
+                            onChange={e => setForm(p => ({ ...p, nasIp: e.target.value }))} />
+                        </Field>
+                        <Field label="Name" required hint="Shown throughout the panel.">
+                          <input value={form.nasName} placeholder="Main-MikroTik"
+                            onChange={e => setForm(p => ({ ...p, nasName: e.target.value }))} />
+                        </Field>
+                        <Field label="Shortname" hint="Optional. Defaults to the name.">
+                          <input value={form.shortname} placeholder="Main-MT"
+                            onChange={e => setForm(p => ({ ...p, shortname: e.target.value }))} />
+                        </Field>
+                        <Field label="Vendor" required>
+                          <select value={form.nasType} onChange={e => setForm(p => ({ ...p, nasType: e.target.value }))}>
+                            {['MIKROTIK','CISCO','HUAWEI','OTHER'].map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </Field>
+                      </>
+                    ),
+                  },
+                  {
+                    id: 'radius',
+                    title: 'RADIUS',
+                    hint: 'The shared secret is the single most common cause of authentication failing. It must match the router exactly.',
+                    validate: () => {
+                      if (!form.radiusSecret.trim()) return 'The RADIUS secret is required — without it every login is rejected.';
+                      if (form.radiusSecret !== form.radiusSecret.trim()) return 'The secret has leading or trailing spaces. Those are invisible here and break authentication on the router.';
+                      return null;
+                    },
+                    summary: () => [
+                      ['RADIUS secret', form.radiusSecret ? '•'.repeat(Math.min(form.radiusSecret.length, 12)) : ''],
+                      ['CoA port', String(form.incomingPort || 3799)],
+                    ],
+                    render: () => (
+                      <>
+                        <Field label="RADIUS secret" required
+                          hint="Must be identical to the secret configured on the router.">
+                          <input type={showRadiusSecret ? 'text' : 'password'} value={form.radiusSecret}
+                            onChange={e => setForm(p => ({ ...p, radiusSecret: e.target.value }))} />
+                        </Field>
+                        <Field label="CoA / Incoming port"
+                          hint="3799 by default. Used to disconnect a live session — leave it unless your router differs.">
+                          <input type="number" value={form.incomingPort}
+                            onChange={e => setForm(p => ({ ...p, incomingPort: +e.target.value }))} />
+                        </Field>
+                      </>
+                    ),
+                  },
+                  {
+                    id: 'api',
+                    title: 'API access',
+                    hint: 'Optional, but without it the panel cannot read live sessions, pull router logs or disconnect a customer.',
+                    summary: () => [
+                      ['API port', String(form.apiPort || 8728)],
+                      ['API username', form.apiUsername],
+                      ['API password', form.apiPassword ? 'set' : ''],
+                      ['Status', form.isActive ? 'Active' : 'Inactive'],
+                      ['Description', form.description],
+                    ],
+                    render: () => (
+                      <>
+                        <Field label="API port" hint="8728 for MikroTik.">
+                          <input type="number" value={form.apiPort}
+                            onChange={e => setForm(p => ({ ...p, apiPort: +e.target.value }))} />
+                        </Field>
+                        <Field label="API username" hint="Needs read access, plus write to disconnect sessions.">
+                          <input value={form.apiUsername} placeholder="admin"
+                            onChange={e => setForm(p => ({ ...p, apiUsername: e.target.value }))} />
+                        </Field>
+                        <Field label="API password">
+                          <input type={showApiPassword ? 'text' : 'password'} value={form.apiPassword}
+                            onChange={e => setForm(p => ({ ...p, apiPassword: e.target.value }))} />
+                        </Field>
+                        <Field label="Description" hint="Optional note — location, site, anything useful.">
+                          <input value={form.description}
+                            onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
+                        </Field>
+                      </>
+                    ),
+                  },
+                ]}
+              />
+            ) : (
+            <>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              {([
+                { label:'NAS IP *',        key:'nasIp',        type:'text',     ph:'e.g., 192.168.0.100', desc:'Insert NAS/Router IP address here without any block' },
+                { label:'NAS Name / Shortname *', key:'nasName', type:'text', ph:'e.g., Main-MikroTik', desc:'Give a name to your router for easy identification' },
+                { label:'Shortname',       key:'shortname',    type:'text',     ph:'e.g., Main-MT', desc:'Optional short router label for listings' },
+                { label:'NAS Type *',      key:'nasType',      type:'select',   opts:['MIKROTIK','CISCO','HUAWEI','OTHER'], desc:'Router vendor / NAS type' },
+                { label:'API Port',        key:'apiPort',      type:'number',   ph:'8728', desc:'API port for router communication' },
+                { label:'Incoming Port',   key:'incomingPort', type:'number',   ph:'3799', desc:'Must be enabled for CoA requests and user graph data' },
+                { label:'API Username',    key:'apiUsername',  type:'text',     ph:'admin', desc:'Router API username with necessary permissions' },
+              ] as const).map(f => (
+                <div key={f.key}>
+                  <label style={labelSt}>{f.label}</label>
+                  {'desc' in f && f.desc && <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>{f.desc}</div>}
+                  {f.type === 'select' ? (
+                    <select value={(form as any)[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
+                      style={{ ...inputSt, cursor:'pointer' }}>
+                      {(f as any).opts?.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <input type={f.type} placeholder={f.ph} value={(form as any)[f.key]}
+                      onChange={e => setForm(p => ({ ...p, [f.key]: f.type==='number' ? +e.target.value : e.target.value }))}
+                      style={inputSt} />
+                  )}
+                </div>
+              ))}
+
+              <div>
+                <label style={labelSt}>RADIUS Secret *</label>
+                <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>Insert your radius secret here, it acts like a password. Must match the secret in router&apos;s RADIUS configuration</div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <input type={showRadiusSecret ? 'text' : 'password'} placeholder="Enter RADIUS secret" value={form.radiusSecret}
+                    onChange={e => setForm(p => ({ ...p, radiusSecret:e.target.value }))} style={inputSt} />
+                  <Btn onClick={() => setShowRadiusSecret(v => !v)} variant="ghost" size="xs">{showRadiusSecret ? 'Hide' : 'Show'}</Btn>
+                </div>
+              </div>
+
+              <div>
+                <label style={labelSt}>API Password</label>
+                <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>Router API password</div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <input type={showApiPassword ? 'text' : 'password'} placeholder="Router API password" value={form.apiPassword}
+                    onChange={e => setForm(p => ({ ...p, apiPassword:e.target.value }))} style={inputSt} />
+                  <Btn onClick={() => setShowApiPassword(v => !v)} variant="ghost" size="xs">{showApiPassword ? 'Hide' : 'Show'}</Btn>
+                </div>
+              </div>
+            </div>
+            <div style={{ marginTop:12 }}>
+              <label style={labelSt}>Description</label>
+              <input value={form.description} onChange={e => setForm(p=>({...p,description:e.target.value}))}
+                placeholder="Optional notes" style={inputSt} />
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, background:d?'var(--bg)':'#f8fafc', borderRadius:8, padding:'10px 12px', marginTop:14, fontSize:11, color:t.textMuted, border:`1px solid ${t.inputBorder}` }}>
+              <div>
+                <div style={{ fontWeight:700, color:t.text, marginBottom:2 }}>Status</div>
+                <div>Control whether this NAS is active in the panel and monitoring cycle.</div>
+              </div>
+              <Btn onClick={() => setForm(p => ({ ...p, isActive: !p.isActive }))} variant={form.isActive ? 'success' : 'danger'} size="xs">
+                <Icons.Toggle /> {form.isActive ? 'Active' : 'Inactive'}
+              </Btn>
+            </div>
+            <div style={{ display:'flex', gap:8, marginTop:16, justifyContent:'flex-end' }}>
+              <Btn onClick={() => setShowForm(false)} variant="ghost">Cancel</Btn>
+              <Btn onClick={saveNas} variant="primary"><Icons.Plus /> {editItem ? 'Update NAS' : 'Add NAS'}</Btn>
+            </div>
+            </>
+            )}{/* end: edit keeps the single-page form — when you are changing
+                   one field, steps are friction rather than guidance */}
+
+            {/* Reference notes, BELOW the form.
+                At the top they pushed the first input off the screen and were
+                read once and never again. Underneath they are still there when
+                a value is questioned, without standing between you and the
+                field you came to fill in. */}
+            <div style={{ background:d?'var(--surface-2)':'#fff7ed', border:`1px solid ${d?'var(--border)':'#fdba74'}`, borderRadius:10, padding:'11px 13px', marginTop:16 }}>
+              <div style={{ fontSize:10.5, fontWeight:800, color:d ? '#fbbf24' : '#c2410c', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:5 }}>Things that commonly go wrong</div>
+              <div style={{ fontSize:11.5, color:t.textSub, lineHeight:1.65 }}>
+                <div>NAS IP must be the plain address, with no subnet suffix.</div>
+                <div>RADIUS secret must match the router&apos;s RADIUS configuration exactly.</div>
+                <div>Incoming port (CoA) must be open, or sessions cannot be disconnected.</div>
+                <div>API user needs read access, plus write to kick a live session.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════
+          MODAL: LOGS
+      ══════════════════════════════════════ */}
+      {showLogs && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShowLogs(false)}>
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:640, maxHeight:'80vh', display:'flex', flexDirection:'column' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+              <span style={{ fontWeight:800, fontSize:15 }}>Activity Logs ({logs.length})</span>
+              <div style={{ display:'flex', gap:8 }}>
+                <Btn onClick={() => setLogs([])} variant="danger" size="xs">Clear</Btn>
+                <button onClick={() => setShowLogs(false)} style={{ background:'transparent', border:`1px solid ${t.cardBorder}`, borderRadius:6, padding:'5px 8px', cursor:'pointer', color:t.textSub }}>
+                  <Icons.X />
+                </button>
+              </div>
+            </div>
+            <div style={{ overflowY:'auto', flex:1 }}>
+              {logs.length === 0 ? (
+                <div style={{ textAlign:'center', padding:30, color:t.textMuted }}>No activity logs yet</div>
+              ) : logs.map(log => (
+                <div key={log.id} style={{ display:'flex', gap:10, padding:'5px 0', borderBottom:`1px solid ${t.cardBorder}`, fontSize:11 }}>
+                  <span style={{ flexShrink:0 }}>{log.level==='error'?'❌':log.level==='warn'?'⚠️':'✅'}</span>
+                  <span style={{ color:t.textMuted, flexShrink:0, whiteSpace:'nowrap' }}>{new Date(log.time).toLocaleTimeString()}</span>
+                  <span style={{ color:t.text, wordBreak:'break-all' }}>{log.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════
+          MODAL: DELETE CONFIRM
+      ══════════════════════════════════════ */}
+      {deleteConfirm !== null && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setDeleteConfirm(null)}>
+          <div style={{ background:t.card, border:'1px solid #7f1d1d', borderRadius:12, padding:24, width:'100%', maxWidth:380 }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+              <div style={{ fontSize:24 }}>⚠️</div>
+              <div style={{ fontWeight:800, fontSize:15, color:'#f87171' }}>Delete NAS Device</div>
+            </div>
+            <p style={{ fontSize:13, color:t.textSub, marginBottom:20, lineHeight:1.6 }}>
+              This will permanently remove the NAS from the CRM <b>and</b> from FreeRADIUS.
+              Subscribers using this NAS for authentication will be unable to reconnect until you re-register it.
+            </p>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <Btn onClick={() => setDeleteConfirm(null)} variant="ghost">Cancel</Btn>
+              <Btn onClick={() => deleteNas(deleteConfirm!)} variant="danger"><Icons.Trash /> Delete Permanently</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
