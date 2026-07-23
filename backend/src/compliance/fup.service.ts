@@ -237,11 +237,24 @@ export class FupService {
     try {
       // Push the reduced speed, then kick the session so it takes effect now
       // rather than whenever the customer next reconnects.
+      const subForOpts = await this.prisma.subscriber.findUnique({
+        where: { id: sub.id },
+        include: { serviceSettings: true },
+      });
+      const wantsStatic = subForOpts?.authMethod === 'STATIC' || subForOpts?.serviceSettings?.ipType === 'STATIC';
+      const staticIp = wantsStatic ? subForOpts?.serviceSettings?.ipAddress ?? null : null;
+
       await this.radiusSync.syncSubscriberProfile(
         sub.username,
         sub.password,
         { ...pkg, downloadSpeed: pkg.fupDownloadSpeed, uploadSpeed: pkg.fupUploadSpeed },
-        { serviceType: sub.authMethod },
+        {
+          serviceType: subForOpts?.authMethod as any,
+          staticIp,
+          macAddress: subForOpts?.serviceSettings?.macAddress ?? null,
+          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        },
       );
       await this.network.disconnect(sub.username).catch(() => null);
 
@@ -283,13 +296,25 @@ export class FupService {
 
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
-      include: { package: { include: { pool: true } } },
+      include: { 
+        package: { include: { pool: true } },
+        serviceSettings: true,
+      },
     });
     if (!sub?.username) return { released: false };
 
+    const wantsStatic = sub.authMethod === 'STATIC' || sub.serviceSettings?.ipType === 'STATIC';
+    const staticIp = wantsStatic ? sub.serviceSettings?.ipAddress ?? null : null;
+
     await this.radiusSync.syncSubscriberProfile(
       sub.username, sub.password, sub.package as any,
-      { serviceType: sub.authMethod as any },
+      {
+        serviceType: sub.authMethod as any,
+        staticIp,
+        macAddress: sub.serviceSettings?.macAddress ?? null,
+        sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+        idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+      },
     );
     await this.network.disconnect(sub.username).catch(() => null);
 

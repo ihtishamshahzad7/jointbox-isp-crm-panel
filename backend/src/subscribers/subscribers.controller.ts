@@ -360,10 +360,20 @@ export class SubscribersController {
     try {
       // Fetch package with pool to sync speed + Framed-Pool
       const pkg = subscriber.package ?? null;
+      // Build opts like syncToRadius does
+      const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
+      const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
       await this.subscribersService['radiusSync'].syncSubscriberProfile(
         subscriber.username,
         subscriber.password,
         pkg,
+        {
+          serviceType: subscriber.authMethod as any,
+          staticIp,
+          macAddress: subscriber.serviceSettings?.macAddress ?? null,
+          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        },
       );
       return {
         message: `Subscriber ${subscriber.username} synced to RADIUS`,
@@ -391,10 +401,20 @@ export class SubscribersController {
       if (subscriber && subscriber.username && subscriber.password) {
         try {
           const pkg = subscriber.package ?? null;
+          // Build opts like syncToRadius does
+          const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
+          const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
           await this.subscribersService['radiusSync'].syncSubscriberProfile(
             subscriber.username,
             subscriber.password,
             pkg,
+            {
+              serviceType: subscriber.authMethod as any,
+              staticIp,
+              macAddress: subscriber.serviceSettings?.macAddress ?? null,
+              sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+              idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+            },
           );
           results.push({
             id,
@@ -481,10 +501,22 @@ export class SubscribersController {
       // Remove and re-add with full profile
       await this.subscribersService['radiusSync'].removeSubscriberFromRadius(subscriber.username);
       const pkg = subscriber.package ?? null;
+      
+      // Build opts like syncToRadius does
+      const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
+      const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
+      
       await this.subscribersService['radiusSync'].syncSubscriberProfile(
         subscriber.username,
         subscriber.password,
         pkg,
+        {
+          serviceType: subscriber.authMethod as any,
+          staticIp,
+          macAddress: subscriber.serviceSettings?.macAddress ?? null,
+          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        },
       );
       return {
         message: `RADIUS profile re-synced for ${subscriber.username}`,

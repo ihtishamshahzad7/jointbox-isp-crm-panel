@@ -1174,70 +1174,101 @@ export class SubscribersService implements OnModuleInit {
       console.log('✅ Subscriber saved to CRM, ID:', subscriber.id);
 
       // ── Step 2: Sync to RADIUS with full profile (password + speed + pool)
-      /**
-       * SETTLE BEFORE GRANTING ACCESS.
-       *
-       * The wallet cascade used to run fire-and-forget AFTER the RADIUS sync.
-       * With prepaid enforcement on, an empty wallet made the cascade throw,
-       * the .catch() swallowed it — and the customer was already in RADIUS.
-       * Result: service delivered, nobody charged, silently.
-       *
-       * Now the money moves first. If the activator cannot pay, the subscriber
-       * record is still CREATED (so the sale is not lost and the data is kept)
-       * but is left INACTIVE and never reaches RADIUS. They have an account;
-       * they do not have internet until someone tops up and activates.
-       */
-      let unpaid = false;
-      let unpaidReason = '';
-      if (subscriber.userId && subscriber.packageId) {
-        try {
-          await this.pricing.settleActivation(subscriber.id, { byUserId: ownerId ?? undefined });
-        } catch (e: any) {
-          unpaid = true;
-          unpaidReason = e?.message || 'Wallet could not cover this activation.';
-          await this.prisma.subscriber.update({
-            where: { id: subscriber.id },
-            data: { status: 'INACTIVE' },
-          });
-          this.logger.warn(
-            `Subscriber #${subscriber.id} created but NOT activated — ${unpaidReason}`,
-          );
-        }
+    /**
+     * SETTLE BEFORE GRANTING ACCESS.
+     *
+     * The wallet cascade used to run fire-and-forget AFTER the RADIUS sync.
+     * With prepaid enforcement on, an empty wallet made the cascade throw,
+     * the .catch() swallowed it — and the customer was already in RADIUS.
+     * Result: service delivered, nobody charged, silently.
+     *
+     * Now the money moves first. If the activator cannot pay, the subscriber
+     * record is still CREATED (so the sale is not lost and the data is kept)
+     * but is left INACTIVE and never reaches RADIUS. They have an account;
+     * they do not have internet until someone tops up and activates.
+     */
+    let unpaid = false;
+    let unpaidReason = '';
+    if (subscriber.userId && subscriber.packageId) {
+      try {
+        await this.pricing.settleActivation(subscriber.id, { byUserId: ownerId ?? undefined });
+      } catch (e: any) {
+        unpaid = true;
+        unpaidReason = e?.message || 'Wallet could not cover this activation.';
+        await this.prisma.subscriber.update({
+          where: { id: subscriber.id },
+          data: { status: 'INACTIVE' },
+        });
+        this.logger.warn(
+          `Subscriber #${subscriber.id} created but NOT activated — ${unpaidReason}`,
+        );
       }
+    }
 
-      if (!unpaid && data.username && data.password) {
-        try {
-          // Fetch package WITH pool so we can send speed + Framed-Pool to RADIUS
-          const pkg = await this.getPackageForRadius(subscriber.packageId);
+if (!unpaid && data.username && data.password) {
+      try {
+        // **CRITICAL**: Sync to RADIUS ONLY after successful wallet activation.
+        // Previously RADIUS sync happened BEFORE wallet validation, meaning users
+        // could have RADIUS credentials but no paid service, or users would remain
+        // activated without a wallet to cover costs.
+        // 
+        // This order ensures:
+        // 1. The user has paid/can pay for the service
+        // 2. Only then do they receive RADIUS credentials for internet access
+        // 3. Users with insufficient balance get INACTIVE status and cannot connect
+        
+        // Fetch package WITH pool so we can send speed + Framed-Pool to RADIUS
+        const pkg = await this.getPackageForRadius(subscriber.packageId);
 
-          if (pkg) {
-            console.log(`📡 Syncing "${data.username}" → RADIUS`);
-            console.log(`   Package: ${pkg.name}`);
-            console.log(`   Speed:   ${pkg.downloadSpeed}M/${pkg.uploadSpeed}M`);
-            console.log(`   Pool:    ${pkg.pool?.name ?? 'none (no pool assigned to package)'}`);
-          } else {
-            console.log(`📡 Syncing "${data.username}" → RADIUS (no package — password only)`);
-          }
+        // **FIX**: Build opts like syncToRadius does - include authMethod, MAC, static IP, timeouts
+        const subForOpts = await this.prisma.subscriber.findUnique({
+          where: { id: subscriber.id },
+          include: { serviceSettings: true },
+        });
+        const wantsStatic =
+          subForOpts?.authMethod === 'STATIC' || subForOpts?.serviceSettings?.ipType === 'STATIC';
+        const staticIp = wantsStatic ? subForOpts?.serviceSettings?.ipAddress ?? null : null;
 
-          await this.radiusSync.syncSubscriberProfile(
-            data.username,
-            data.password,
-            pkg,   // null if no package — RadiusSyncService handles that gracefully
-          );
-
-          console.log(`✅ RADIUS sync successful for "${data.username}"`);
-          this.logger.log(
-            `✅ Subscriber "${data.username}" synced to RADIUS` +
-            (pkg ? ` with package "${pkg.name}"` : ' (no package)'),
-          );
-        } catch (error: any) {
-          // RADIUS failure does NOT block CRM creation
-          console.error(`❌ RADIUS sync failed:`, error.message);
-          this.logger.error(
-            `⚠️ Subscriber "${data.username}" created in CRM but RADIUS sync failed: ${error.message}`,
-          );
+        if (pkg) {
+          console.log(`📡 Syncing "${data.username}" → RADIUS (POST-ACTIVATION)`);
+          console.log(`   Package: ${pkg.name}`);
+          console.log(`   Speed:   ${pkg.downloadSpeed}M/${pkg.uploadSpeed}M`);
+          console.log(`   Pool:    ${pkg.pool?.name ?? 'none (no pool assigned to package)'}`);
+        } else {
+          console.log(`📡 Syncing "${data.username}" → RADIUS (no package — password only)`);
         }
+
+        await this.radiusSync.syncSubscriberProfile(
+          data.username,
+          data.password,
+          pkg,
+          {
+            serviceType: subForOpts?.authMethod as any,
+            staticIp,
+            macAddress: subForOpts?.serviceSettings?.macAddress ?? null,
+            sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+            idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+          },
+        );
+
+        console.log(`✅ RADIUS sync successful for "${data.username}" (activated & paid)`);
+        this.logger.log(
+          `✅ Subscriber "${data.username}" synced to RADIUS` +
+          (pkg ? ` with package "${pkg.name}"` : ' (no package)'),
+        );
+      } catch (error: any) {
+        // RADIUS failure does NOT block CRM creation
+        console.error(`❌ RADIUS sync failed:`, error.message);
+        this.logger.error(
+          `⚠️ Subscriber "${data.username}" created in CRM but RADIUS sync failed after activation: ${error.message}`,
+        );
       }
+    } else if (!data.username || !data.password) {
+      // **SECURITY FIX**: Explicitly log when subscribers are created without username/password.
+      // These users cannot authenticate through RADIUS but may have local MikroTik secrets.
+      // This log helps identify cases where RADIUS authentication would fail.
+      console.log(`⚠️ Subscriber created but missing username/password - RADIUS auth will fail`);
+    }
 
       console.log('========================================');
 
@@ -1485,6 +1516,9 @@ export class SubscribersService implements OnModuleInit {
       }
     }
 
+    // Fetch service settings for RADIUS opts (not included in Prisma subscriber query)
+    const serviceSettings = await this.prisma.serviceSettings.findUnique({ where: { subscriberId: id } });
+
     try {
       if (usernameChanged) {
         // Username changed → remove old entry, create completely new entry
@@ -1492,10 +1526,20 @@ export class SubscribersService implements OnModuleInit {
         await this.radiusSync.removeSubscriberFromRadius(old.username);
 
         const pkg = await this.getPackageForRadius(subscriber.packageId);
+        // **FIX**: Pass opts like syncToRadius does
+        const wantsStatic = subscriber.authMethod === 'STATIC' || serviceSettings?.ipType === 'STATIC';
+        const staticIp = wantsStatic ? serviceSettings?.ipAddress ?? null : null;
         await this.radiusSync.syncSubscriberProfile(
           data.username,
           data.password || old.password,
           pkg,
+          {
+            serviceType: subscriber.authMethod as any,
+            staticIp,
+            macAddress: serviceSettings?.macAddress ?? null,
+            sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+            idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+          },
         );
         this.logger.log(
           `✅ RADIUS updated: username "${old.username}" → "${data.username}"`,
@@ -1512,10 +1556,20 @@ export class SubscribersService implements OnModuleInit {
           console.log(`   New pool:    ${pkg.pool?.name ?? 'none'}`);
         }
 
+        // **FIX**: Pass opts like syncToRadius does
+        const wantsStatic = subscriber.authMethod === 'STATIC' || serviceSettings?.ipType === 'STATIC';
+        const staticIp = wantsStatic ? serviceSettings?.ipAddress ?? null : null;
         await this.radiusSync.syncSubscriberProfile(
           subscriber.username,
           data.password || old.password,
           pkg,
+          {
+            serviceType: subscriber.authMethod as any,
+            staticIp,
+            macAddress: serviceSettings?.macAddress ?? null,
+            sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+            idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+          },
         );
         this.logger.log(
           `✅ RADIUS profile updated for "${subscriber.username}" (package changed)`,
@@ -1584,6 +1638,46 @@ export class SubscribersService implements OnModuleInit {
     }
 
     console.log('📝 Deleting:', subscriber.username);
+
+    /**
+     * FIRST: Cleanup the router before touching RADIUS - ensure no authentication
+     * path remains. MikroTik checks /ppp/secret BEFORE RADIUS, so removing
+     * the local secret first prevents any fallback to local authentication.
+     */
+    if (subscriber.username && subscriber.nasId) {
+      try {
+        const nas = await this.prisma.nas.findUnique({
+          where: { id: subscriber.nasId },
+          select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+        });
+        if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+          console.log(`🔌 Disconnecting ${subscriber.username} from router before deletion...`);
+          await this.mikrotik.disconnectPppoeUser(
+            nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
+          );
+          console.log(`📡 Removing ${subscriber.username}'s MikroTik secret...`);
+          await this.mikrotik.removePppSecret(
+            nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
+          );
+        }
+      } catch (e: any) {
+        console.log(`⚠️ Router cleanup after delete failed for ${subscriber.username}: ${e?.message}`);
+      }
+    }
+
+    /**
+     * SECOND: Now remove from RADIUS after router cleanup - removes the
+     * final authentication path. RADIUS runs AFTER MikroTik in the
+     * authentication chain.
+     */
+    if (subscriber.username) {
+      try {
+        console.log(`📡 Removing ${subscriber.username} from RADIUS...`);
+        await this.radiusSync.removeSubscriberFromRadius(subscriber.username);
+      } catch (error: any) {
+        console.log(`⚠️ RADIUS cleanup after delete failed for ${subscriber.username}: ${error?.message}`);
+      }
+    }
 
     /**
      * RADIUS removal moved to AFTER the database delete succeeds.
@@ -1832,38 +1926,39 @@ export class SubscribersService implements OnModuleInit {
     }
 
     /**
-     * Only now remove them from RADIUS. The record is gone, so cutting the
-     * service is correct and cannot leave the two out of step.
+     * First cleanup the router before touching RADIUS - ensure no authentication
+     * path remains. MikroTik checks /ppp/secret BEFORE RADIUS, so removing
+     * the local secret first prevents any fallback to local authentication.
+     */
+    if (subscriber.username && subscriber.nasId) {
+      try {
+        const nas = await this.prisma.nas.findUnique({
+          where: { id: subscriber.nasId },
+          select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+        });
+        if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+          this.logger.log(`🔌 Disconnecting ${subscriber.username} from router before deletion...`);
+          await this.mikrotik.disconnectPppoeUser(
+            nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
+          );
+          await this.mikrotik.removePppSecret(
+            nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(`Router cleanup after delete failed for ${subscriber.username}: ${e?.message}`);
+      }
+    }
+
+    /**
+     * Now remove RADIUS credentials only after the router is clear.
+     * This ensures no authentication path remains.
      */
     if (subscriber.username) {
       try {
         await this.radiusSync.removeSubscriberFromRadius(subscriber.username);
       } catch (error: any) {
         this.logger.error(`⚠️ Deleted from CRM but RADIUS cleanup failed: ${error.message}`);
-      }
-      /**
-       * And the router's own copy. RADIUS is not the only place a credential
-       * lives — MikroTik keeps local PPP secrets and checks them FIRST, so a
-       * subscriber deleted from the database and from RADIUS still logs in
-       * until the secret on the router is gone too.
-       */
-      try {
-        if (subscriber.nasId) {
-          const nas = await this.prisma.nas.findUnique({
-            where: { id: subscriber.nasId },
-            select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
-          });
-          if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
-            await this.mikrotik.removePppSecret(
-              nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
-            );
-            await this.mikrotik.disconnectPppoeUser(
-              nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
-            );
-          }
-        }
-      } catch (e: any) {
-        this.logger.warn(`Router cleanup after delete failed for ${subscriber.username}: ${e?.message}`);
       }
     }
 
@@ -1946,7 +2041,7 @@ export class SubscribersService implements OnModuleInit {
     if (actor) await this.scope.assertSubscriber(actor, id);
     const sub = await this.prisma.subscriber.findUnique({
       where: { id },
-      select: { id: true, username: true, fullName: true },
+      select: { id: true, username: true, fullName: true, nasId: true },
     });
     if (!sub) throw new NotFoundException('Subscriber not found');
 
@@ -1979,17 +2074,14 @@ export class SubscribersService implements OnModuleInit {
      */
     let sessionCut = false;
     if (sub.username) {
-      try {
-        await this.radiusSync.removeSubscriberFromRadius(sub.username);
-      } catch (e: any) {
-        this.logger.error(`Deactivated in CRM but RADIUS cleanup failed: ${e?.message}`);
-      }
-
       /**
-       * Removing credentials only blocks the NEXT login. An established PPPoE
-       * session keeps running until it happens to drop, which on a stable link
-       * can be weeks — so a "deactivated" customer would carry on using the
-       * internet. Kick the live session off the router directly.
+       * First remove the router's LOCAL PPP secret before cutting the session.
+       *
+       * MikroTik checks /ppp/secret before it asks RADIUS. With a secret
+       * still present, the customer simply reconnects and authenticates
+       * locally — which is why a "deleted" subscriber kept getting online
+       * one more time. Order matters: remove the MikroTik secret BEFORE RADIUS,
+       * then kill the session, or they race back on.
        */
       try {
         const nas = await this.prisma.nas.findFirst({
@@ -1999,15 +2091,6 @@ export class SubscribersService implements OnModuleInit {
           select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
         });
         if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
-          /**
-           * Remove the router's LOCAL PPP secret before cutting the session.
-           *
-           * MikroTik checks /ppp/secret before it asks RADIUS. With a secret
-           * still present, the customer simply reconnects and authenticates
-           * locally — which is why a "deleted" subscriber kept getting online
-           * one more time. Order matters: remove the credential first, then
-           * kill the session, or they race back on.
-           */
           await this.mikrotik.removePppSecret(
             nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
           );
@@ -2017,6 +2100,16 @@ export class SubscribersService implements OnModuleInit {
         }
       } catch (e: any) {
         this.logger.warn(`Could not cut the live session for ${sub.username}: ${e?.message}`);
+      }
+
+      /**
+       * Now remove RADIUS credentials only after the router is clear.
+       * This ensures no authentication path remains.
+       */
+      try {
+        await this.radiusSync.removeSubscriberFromRadius(sub.username);
+      } catch (e: any) {
+        this.logger.error(`Deactivated in CRM but RADIUS cleanup failed: ${e?.message}`);
       }
 
       this.logger.log(

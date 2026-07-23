@@ -210,7 +210,25 @@ export class BillingService {
         });
 
         // 4. make sure RADIUS lets them in again
-        await this.radiusSync.syncSubscriberProfile(sub.username, sub.password, sub.package as any);
+        const subForOpts = await this.prisma.subscriber.findUnique({
+          where: { id: sub.id },
+          include: { serviceSettings: true },
+        });
+        const wantsStatic = subForOpts?.authMethod === 'STATIC' || subForOpts?.serviceSettings?.ipType === 'STATIC';
+        const staticIp = wantsStatic ? subForOpts?.serviceSettings?.ipAddress ?? null : null;
+
+        await this.radiusSync.syncSubscriberProfile(
+          sub.username,
+          sub.password,
+          sub.package as any,
+          {
+            serviceType: subForOpts?.authMethod as any,
+            staticIp,
+            macAddress: subForOpts?.serviceSettings?.macAddress ?? null,
+            sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+            idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+          },
+        );
 
         void this.notifications.fireEvent('RENEWAL', sub, { amount: price, invoiceNo, expiry: newExpiry });
         this.webhooks.emit('subscriber.renewed', {

@@ -164,7 +164,25 @@ export class GatewayService {
       data: { status: 'ACTIVE', fupApplied: false, fupAppliedAt: null },
     });
     try {
-      await this.radiusSync.syncSubscriberProfile(sub.username, sub.password, sub.package as any);
+      const subForOpts = await this.prisma.subscriber.findUnique({
+        where: { id: subscriberId },
+        include: { serviceSettings: true },
+      });
+      const wantsStatic = subForOpts?.authMethod === 'STATIC' || subForOpts?.serviceSettings?.ipType === 'STATIC';
+      const staticIp = wantsStatic ? subForOpts?.serviceSettings?.ipAddress ?? null : null;
+
+      await this.radiusSync.syncSubscriberProfile(
+        sub.username,
+        sub.password,
+        sub.package as any,
+        {
+          serviceType: subForOpts?.authMethod as any,
+          staticIp,
+          macAddress: subForOpts?.serviceSettings?.macAddress ?? null,
+          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        },
+      );
     } catch (e: any) {
       this.logger.error(`RADIUS re-enable failed for ${sub.username}: ${e.message}`);
     }

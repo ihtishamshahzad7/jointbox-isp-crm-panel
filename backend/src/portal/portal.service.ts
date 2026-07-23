@@ -161,13 +161,30 @@ export class PortalService {
 
     // Push to RADIUS so the change applies on the next connection.
     try {
+      const subForOpts = await this.prisma.subscriber.findUnique({
+        where: { id: sub.id },
+        include: { serviceSettings: true },
+      });
+      const wantsStatic = subForOpts?.authMethod === 'STATIC' || subForOpts?.serviceSettings?.ipType === 'STATIC';
+      const staticIp = wantsStatic ? subForOpts?.serviceSettings?.ipAddress ?? null : null;
       const pkg = sub.packageId
         ? await this.prisma.package.findUnique({
             where: { id: sub.packageId },
             include: { pool: true },
           })
         : null;
-      await this.radiusSync.syncSubscriberProfile(sub.username, pw, pkg as any);
+      await this.radiusSync.syncSubscriberProfile(
+        sub.username,
+        pw,
+        pkg as any,
+        {
+          serviceType: subForOpts?.authMethod as any,
+          staticIp,
+          macAddress: subForOpts?.serviceSettings?.macAddress ?? null,
+          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        },
+      );
     } catch {
       // Roll back rather than leave CRM and RADIUS disagreeing.
       await this.prisma.subscriber.update({
