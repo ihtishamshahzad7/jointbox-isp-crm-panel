@@ -362,6 +362,7 @@ model Nas {
   olts          Olt[]         @relation("NasOlts")
   pppoeSessions PppoeSession[] @relation("PppoeSessionNas")
   ipPools       IpPool[]      @relation("IpPoolNas")
+  accessGroups  AccessGroupNas[] @relation("AccessGroupNasRel")
 
   @@index([nasname])
   @@map("nas")
@@ -396,6 +397,26 @@ model User {
   photoUrl     String?  // profile picture
   cnicFrontUrl String?  // CNIC / national ID — front
   cnicBackUrl  String?  // CNIC / national ID — back
+
+  // Extended profile fields from franchise user profile spec
+  identity         String?   // National ID / CNIC number
+  zipCode          String?
+  dateOfBirth      DateTime?
+  about            String?   // Bio / notes about this user
+  additionalPhones String?   // JSON array of extra phone numbers
+  additionalEmails String?   // JSON array of extra email addresses
+
+  /// Auto-renew: when enabled, the user's subscribers are renewed automatically.
+  autoRenew        Boolean   @default(true)
+  /// Billing model this account uses for its subscribers.
+  billingType      String?   @default("PREPAID") // PREPAID / POSTPAID
+  /// For staff: balance deducted on subscriber activation to track collections.
+  /// For reseller: maximum transaction limit for balance transfers.
+  accountingLimit  Float?
+
+  // Group assignments for NAS and Area filtering.
+  nasGroup  String?
+  areaGroup String?
 
   // Phase 4A: two-factor authentication (TOTP)
   twoFactorSecret  String?
@@ -453,6 +474,7 @@ model User {
   ownedPackages    Package[]              @relation("PackageOwner")
   inventoryItems   InventoryItem[]        @relation("InventoryOwner")
   fieldJobs        FieldJob[]             @relation("TechnicianJobs")
+  groupMemberships AccessGroupMember[]
 
   @@index([parentId])
   @@index([role, isActive])
@@ -934,6 +956,10 @@ model ResellerPackagePrice {
    * Null means "not set" and the package's own price is used.
    */
   retailPrice Float?
+  /** Profit margin for sub-resellers (how much this reseller's downline can earn). */
+  subresellerProfit Float?
+  /** Reseller's profit per subscriber sold. */
+  subscriberProfit  Float?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -982,6 +1008,10 @@ model Package {
 
   subscribers Subscriber[] @relation("PackageSubscribers")
   resellerPrices ResellerPackagePrice[] @relation("PackageResellerPrices")
+  accessGroups AccessGroupPackage[] @relation("AccessGroupPackageRel")
+  proRatedBilling ProRatedBilling?
+  throttlePolicies PackageThrottlePolicy[]
+  extraFees ExtraFeePackage[]
 
   createdAt DateTime @default(now())
 
@@ -1108,6 +1138,9 @@ model Subscriber {
   radReplies      RadReply[]       @relation("radReplies")
   radAccts        RadAcct[]        @relation("radAccts")
   radPostAuths    RadPostAuth[]    @relation("radPostAuths")
+  billing         SubscriberBilling?
+  wallet          SubscriberBalance?
+  throttlePolicies SubscriberThrottle[]
 
   @@index([status])
   @@index([packageId])
@@ -1279,6 +1312,9 @@ model Invoice {
 
   items    InvoiceItem[] @relation("InvoiceItems")
   payments Payment[]     @relation("InvoicePayments")
+  reversal InvoiceReversal? @relation("ReversalOriginal")
+  reversedFrom InvoiceReversal? @relation("ReversalNew")
+  gatewayTransactions PaymentTransaction[]
 
   // Phase 1: invoice reversal (🔍 reason is mandatory in the API)
   reversedAt     DateTime?
@@ -1326,6 +1362,8 @@ model Payment {
   subscriber Subscriber? @relation("SubscriberPayments", fields: [subscriberId], references: [id], onDelete: SetNull)
   /// Who paid, captured at the time. Survives the delete.
   subscriberName String?
+
+  transactions PaymentTransaction[]
 
   amount      Float
   method      PaymentMethod @default(CASH)
@@ -1461,6 +1499,7 @@ model ActivityLog {
   entity    String
   entityId  Int?
   details   String?
+  traceId   String?
   ipAddress String?
   userAgent String?
   createdAt DateTime @default(now())
@@ -1468,6 +1507,7 @@ model ActivityLog {
   user User? @relation("ActivityLogUser", fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([traceId])
   @@index([createdAt])
   @@index([entity, entityId])
 }
@@ -1637,6 +1677,8 @@ model Onu {
   notes        String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  telemetry OnuTelemetry?
 
   @@index([oltId])
   @@index([ponPortId])
@@ -2014,4 +2056,516 @@ model RecordNote {
 
   @@index([entityType, entityId])
   @@index([createdById])
+}
+
+//////////////////////////////////////
+// PHASE 1 NEW MODELS — groups, payments, pro-rata, FTTH, throttle, discounts
+//////////////////////////////////////
+
+/// Access groups are the heart of "share a NAS/package with franchise A and
+/// dealer B, but hide it from dealer C". A resource is either GLOBAL (visible
+/// to everyone — null group), PERSONAL (visible only to its owner), or in one
+/// or more NAMED groups (visible to members of those groups, with optional
+/// inheritance to their descendants). This is what ISPs need when one ISP runs
+/// multiple brands, or when a franchise only sells a subset of packages to a
+/// specific dealer.
+model AccessGroup {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(100)
+  description String?  @db.VarChar(500)
+  color       String?  @db.VarChar(20)  // hex tag for the UI
+  /// When true, membership in a parent account cascades down to its downline.
+  /// The ISP's "Premium Customers" group flows automatically to its dealers
+  /// when propagate=true, so the dealer never has to be added by hand.
+  propagate   Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members        AccessGroupMember[]
+  nasResources   AccessGroupNas[]
+  pkgResources   AccessGroupPackage[]
+
+  @@index([isActive])
+  @@map("access_group")
+}
+
+model AccessGroupMember {
+  id        Int      @id @default(autoincrement())
+  groupId   Int
+  userId    Int
+  /// A membership can itself propagate to the user’s downline, so a franchise
+  /// being in a group drags its dealers in too. Mirrors AccessGroup.propagate
+  /// but per-membership so a single dealer can be granted without their siblings.
+  propagate Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  group AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("access_group_member")
+}
+
+/// Many-to-many between AccessGroup and Nas. A NAS with no row here is GLOBAL
+/// (visible to all); a row means the NAS is restricted to the listed group(s).
+model AccessGroupNas {
+  id      Int @id @default(autoincrement())
+  groupId Int
+  nasId   Int
+
+  group AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  nas   Nas         @relation("AccessGroupNasRel", fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, nasId])
+  @@index([nasId])
+  @@map("access_group_nas")
+}
+
+/// Many-to-many between AccessGroup and Package — same visibility model as
+/// AccessGroupNas. Lets the ISP offer a "Premium Fiber" plan only to one
+/// franchise without exposing it to the rest of the tree.
+model AccessGroupPackage {
+  id        Int @id @default(autoincrement())
+  groupId   Int
+  packageId Int
+
+  group   AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  package Package     @relation("AccessGroupPackageRel", fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, packageId])
+  @@index([packageId])
+  @@map("access_group_package")
+}
+
+/// Payment gateway configuration. Per-tenant — the same ISP can run JazzCash
+/// for one branch and Stripe for the international customers in another.
+/// `credentials` is an encrypted JSON blob (gateway-specific keys, secrets,
+/// webhook URL). The actual integration lives in PaymentGatewayService.
+model PaymentGateway {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  /// JAZZCASH | EASYPAISA | STRIPE | PAYPAL | BKASH | RAZORPAY | FLUTTERWAVE
+  /// SADAD | MANUAL_BANK | CRYPTO | OTHER
+  provider    String   @db.VarChar(40)
+  /// Public-safe creds (publishable key, merchant id) shown to the portal.
+  publicConfig Json    @default("{}")
+  /// Server-side secret creds (API key, signing secret). Never sent to the client.
+  secretConfig Json    @default("{}")
+  /// Webhook URL registered with the gateway.
+  webhookUrl  String?  @db.VarChar(500)
+  /// Per-100-unit fee charged by the gateway (e.g. 2.9 for Stripe).
+  feePercent  Float    @default(0)
+  /// Flat fee per transaction in the ISP's currency.
+  feeFixed    Float    @default(0)
+  /// Display order in the checkout list.
+  displayOrder Int     @default(0)
+  isActive    Boolean  @default(true)
+  /// Restrict by currency: empty = accept any.
+  supportedCurrencies String?  @db.VarChar(200)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  transactions PaymentTransaction[]
+
+  @@index([provider, isActive])
+  @@map("payment_gateway")
+}
+
+/// One row per gateway payment attempt. The portal creates this on checkout,
+/// the gateway callback updates it, and the invoices/payments services use it
+/// to flip the invoice to PAID once the gateway confirms. Refunds also live
+/// here so the audit trail stays in one place.
+model PaymentTransaction {
+  id              Int      @id @default(autoincrement())
+  gatewayId       Int
+  /// Local reference (shown on the invoice / receipt). Format: JT-<timestamp>-<rand>
+  reference       String   @unique @db.VarChar(64)
+  /// Gateway-side id returned in the create-order response.
+  gatewayRef      String?  @db.VarChar(128)
+  subscriberId    Int?
+  invoiceId       Int?
+  amount          Float
+  currency        String   @db.VarChar(8)  @default("PKR")
+  /// PENDING | SUCCESS | FAILED | EXPIRED | REFUNDED | PARTIAL_REFUND
+  status          String   @db.VarChar(20) @default("PENDING")
+  /// Raw gateway response, for debugging and audit.
+  rawResponse     Json?    @default("{}")
+  /// Once settled, link to the actual Payment row in the accounting ledger.
+  paymentId       Int?
+  failureReason   String?  @db.VarChar(500)
+  /// Idempotency key from the client — same key returns the same row.
+  idempotencyKey  String?  @unique @db.VarChar(64)
+  expiresAt       DateTime?
+  paidAt          DateTime?
+  refundedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  gateway PaymentGateway @relation(fields: [gatewayId], references: [id])
+  invoice Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  payment Payment?       @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([gatewayId, status])
+  @@index([subscriberId])
+  @@index([invoiceId])
+  @@map("payment_transaction")
+}
+
+/// Pro-rata billing settings for a package. When a subscriber activates
+/// mid-cycle, the first invoice is calculated day-based: remaining_days/total *
+/// package_price, then optionally charged a setup fee and rounded to the ISP's
+/// preferred unit (5 PKR, 10 PKR, 1 USD, etc.). This is what makes mid-month
+/// signups feel fair and is a hard differentiator vs flat-rate billing.
+model ProRatedBilling {
+  id              Int      @id @default(autoincrement())
+  packageId       Int      @unique
+  /// Master switch — turn off pro-rata on a single package without removing it.
+  isActive        Boolean  @default(true)
+  /// Minimum first invoice in currency units. A 5-day activation still bills
+  /// at least this much so micro-amounts don't go on the books.
+  minCharge       Float    @default(0)
+  /// Optional flat setup fee added to every first invoice.
+  setupFee        Float    @default(0)
+  /// Round to nearest (0 = no rounding, 1 = round to whole unit, 0.5 = half).
+  roundTo         Float    @default(0)
+  /// Carry over unused time to the next cycle? When true, the new cycle
+  /// starts from the natural anniversary minus the unused days.
+  carryOver       Boolean  @default(false)
+  /// Day the package normally renews on (1-28, 0 = use activation day).
+  anniversaryDay  Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@map("pro_rated_billing")
+}
+
+/// Per-subscriber billing mode override. Defaults follow the package, but a
+/// customer can be flagged as POSTPAID with a credit limit, a PREPAID with
+/// auto-topup, or HYBRID (charges from a balance until it hits zero, then
+/// stops — used for kiosks / public WiFi where you want a daily budget that
+/// the customer tops up themselves).
+enum BillingMode {
+  PREPAID
+  POSTPAID
+  HYBRID
+}
+
+model SubscriberBilling {
+  id              Int      @id @default(autoincrement())
+  subscriberId    Int      @unique
+  mode            BillingMode @default(PREPAID)
+  /// POSTPAID only: the maximum overdue balance allowed before suspension.
+  creditLimit     Float    @default(0)
+  /// PREPAID only: when balance drops below this, fire a "low balance" notice.
+  lowBalanceThreshold Float @default(0)
+  /// PREPAID only: auto top up by this amount when balance < threshold.
+  autoTopupAmount Float    @default(0)
+  /// Optional discount in percent (0-100) applied to every renewal.
+  discountPercent Float    @default(0)
+  /// Billing day of the month (1-28) for postpaid customers.
+  billingDay      Int      @default(1)
+  /// Carry unused time when changing plans?
+  carryOver       Boolean  @default(true)
+  /// Grace period in days after expiry before hard disconnect.
+  graceDays       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@map("subscriber_billing")
+}
+
+/// Subscriber balance ledger (PREPAID wallet, separate from User balance for
+/// staff). Top-ups, package purchases, refunds, and the daily/periodic
+/// deductions all flow through this single table so a subscriber's "what's
+/// left" is always the sum of the rows.
+model SubscriberBalance {
+  id          Int      @id @default(autoincrement())
+  subscriberId Int     @unique
+  balance     Float    @default(0)
+  reservedBalance Float @default(0)  // held for in-flight renewals
+  currency    String   @db.VarChar(8) @default("PKR")
+  updatedAt   DateTime @updatedAt
+
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  ledger     SubscriberBalanceLedger[]
+
+  @@map("subscriber_balance")
+}
+
+enum SubscriberBalanceEntryType {
+  TOPUP
+  RENEWAL
+  PACKAGE_PURCHASE
+  REFUND
+  ADJUSTMENT
+  TRANSFER
+  REVERSAL
+  FEE
+  REWARD
+}
+
+model SubscriberBalanceLedger {
+  id           Int      @id @default(autoincrement())
+  subscriberId Int
+  type         SubscriberBalanceEntryType
+  amount       Float    // positive = credit, negative = debit
+  balanceAfter Float
+  reference    String?  @db.VarChar(64)  // invoice, payment, manual note
+  description  String?  @db.VarChar(500)
+  /// Actor who triggered the change. SYSTEM for scheduled jobs, PORTAL for
+  /// self-service, or a staff user id.
+  actorType    String   @db.VarChar(20)  @default("STAFF")
+  actorId      Int?
+  actorName    String?  @db.VarChar(200)
+  createdAt    DateTime @default(now())
+
+  subscriber SubscriberBalance @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([subscriberId, createdAt])
+  @@index([type])
+  @@map("subscriber_balance_ledger")
+}
+
+/// Throttle / bandwidth policies. A policy is a named rule that says "during
+/// peak hours, give this package 50% of its normal speed". The policy is then
+/// attached to one or more packages, or to individual subscribers as an
+/// override. Implementation on the NAS is done by RADIUS reply attributes
+/// written at session start.
+model ThrottlePolicy {
+  id              Int      @id @default(autoincrement())
+  name            String   @db.VarChar(100)
+  description     String?  @db.VarChar(500)
+  /// PERCENT | ABSOLUTE_KBPS | BURST_TO_KBPS
+  mode            String   @db.VarChar(20) @default("PERCENT")
+  /// Value used with mode. 50 = 50%, 5120 = 5 Mbps.
+  value           Float    @default(0)
+  /// When the throttle applies. Empty = always.
+  /// 0=Sunday … 6=Saturday. Multiple days = recurring window.
+  daysOfWeek      Int[]    @default([])
+  startTime       String?  @db.VarChar(8)   // "08:00"
+  endTime         String?  @db.VarChar(8)   // "23:00"
+  /// Burst window in seconds when mode=BURST_TO_KBPS.
+  burstSeconds    Int      @default(0)
+  /// Burst threshold in bytes.
+  burstThreshold  Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  packages PackageThrottlePolicy[]
+  subscribers SubscriberThrottle[]
+
+  @@index([isActive])
+  @@map("throttle_policy")
+}
+
+model PackageThrottlePolicy {
+  id        Int @id @default(autoincrement())
+  packageId Int
+  policyId  Int
+
+  package Package       @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  policy  ThrottlePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, policyId])
+  @@map("package_throttle_policy")
+}
+
+model SubscriberThrottle {
+  id           Int @id @default(autoincrement())
+  subscriberId Int
+  policyId     Int
+  /// Subscriber override: when set, takes precedence over package defaults.
+  /// Used to throttle a specific heavy user without touching the package.
+  isOverride   Boolean @default(false)
+  createdAt    DateTime @default(now())
+
+  subscriber Subscriber     @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  policy     ThrottlePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriberId, policyId])
+  @@map("subscriber_throttle")
+}
+
+/// Extra fees / surcharges that can be attached to a package or to an invoice
+/// directly. Distinct from taxes: a fee is a one-time addition (e.g. "new
+/// connection fee", "router installation fee"), taxes are recurring.
+model ExtraFee {
+  id            Int      @id @default(autoincrement())
+  name          String   @db.VarChar(100)
+  /// FIXED | PERCENT
+  type          String   @db.VarChar(20) @default("FIXED")
+  value         Float    @default(0)
+  description   String?  @db.VarChar(500)
+  isRecurring   Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  packages ExtraFeePackage[]
+
+  @@index([isActive])
+  @@map("extra_fee")
+}
+
+model ExtraFeePackage {
+  id        Int @id @default(autoincrement())
+  packageId Int
+  feeId     Int
+
+  package Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  fee     ExtraFee @relation(fields: [feeId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, feeId])
+  @@map("extra_fee_package")
+}
+
+/// Subscriber-level discount (percent or fixed). Different from package-level
+/// pricing — this is a customer-specific promotion ("3 months free for this
+/// VIP customer"). The discount applies to the package price at renewal or
+/// activation, never to taxes or fees.
+model SubscriberDiscount {
+  id           Int      @id @default(autoincrement())
+  subscriberId Int
+  /// PERCENT | FIXED
+  type         String   @db.VarChar(20) @default("PERCENT")
+  value        Float    @default(0)
+  /// Optional human reason — "loyalty", "winback", "VIP".
+  reason       String?  @db.VarChar(200)
+  /// 0 = forever, otherwise the discount auto-expires.
+  expiresAt    DateTime?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([subscriberId, isActive])
+  @@map("subscriber_discount")
+}
+
+/// Subscriber portal self-service registration request. When a customer fills
+/// the sign-up form on the portal, this row is created. Staff review and
+/// either activate the subscriber (which creates a real Subscriber + RADIUS
+/// credentials) or reject it. Failed rows are kept for spam analysis.
+model ActivationRequest {
+  id              Int      @id @default(autoincrement())
+  /// Token used to look up the request from the confirmation email.
+  token           String   @unique @db.VarChar(64)
+  /// PENDING | APPROVED | REJECTED | EXPIRED
+  status          String   @db.VarChar(20) @default("PENDING")
+  /// Captured form fields — name, phone, address, package id, etc.
+  formData        Json
+  selectedPackageId Int?
+  selectedNasId   Int?
+  /// The staff user who decided the request.
+  decidedById     Int?
+  decidedByName   String?  @db.VarChar(200)
+  decidedAt       DateTime?
+  decisionNote    String?  @db.VarChar(500)
+  /// When created, this maps to a real Subscriber (after approval).
+  subscriberId    Int?
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([expiresAt])
+  @@map("activation_request")
+}
+
+/// FTTH OLT extension — already had Olt/PonPort/Onu; this adds the
+/// "operational" fields the team needs: last seen, signal level, distance,
+/// VLAN mapping, and a per-ONU status log. Existing Olt/Onu models are kept
+/// untouched for backward compat; this is the new high-fidelity layer.
+model OnuTelemetry {
+  id           Int      @id @default(autoincrement())
+  onuId        Int      @unique
+  onu          Onu      @relation(fields: [onuId], references: [id], onDelete: Cascade)
+  rxPowerDbm   Float?   // received signal level (dBm)
+  txPowerDbm   Float?
+  distanceM    Float?   // estimated fiber distance
+  temperatureC Float?
+  voltageV     Float?
+  status       String?  @db.VarChar(40)  // ONLINE | OFFLINE | LOS | DYING_GASP
+  lastSeenAt   DateTime?
+  rawPayload   Json?    @default("{}")
+  collectedAt  DateTime @default(now())
+
+  @@index([onuId])
+  @@index([status])
+  @@map("onu_telemetry")
+}
+
+/// Audit trail for invoice reversals. The original invoice gets CANCELLED,
+/// a new reversal invoice is created, and every step is logged here.
+model InvoiceReversal {
+  id              Int      @id @default(autoincrement())
+  originalInvoiceId Int    @unique
+  originalInvoice  Invoice @relation("ReversalOriginal", fields: [originalInvoiceId], references: [id], onDelete: Cascade)
+  reversalInvoiceId Int?   @unique
+  reversalInvoice  Invoice? @relation("ReversalNew", fields: [reversalInvoiceId], references: [id], onDelete: SetNull)
+  reason          String   @db.VarChar(500)
+  proRated        Boolean  @default(false)
+  refundedAmount  Float    @default(0)
+  /// FULL | PARTIAL | PRO_RATA
+  mode            String   @db.VarChar(20) @default("FULL")
+  createdById     Int?
+  createdByName   String?  @db.VarChar(200)
+  createdAt       DateTime @default(now())
+
+  @@index([createdById])
+  @@map("invoice_reversal")
+}
+
+/// Captive portal session — separate from PPPoE sessions because hotspot
+/// users authenticate by MAC + voucher/credentials, not dial-up.
+model PortalSession {
+  id          Int      @id @default(autoincrement())
+  subscriberId Int?
+  macAddress  String   @db.VarChar(32)
+  ipAddress   String?  @db.VarChar(64)
+  /// VOUCHER | PASSWORD | SOCIAL | FREE
+  authMethod  String   @db.VarChar(20)
+  startedAt   DateTime @default(now())
+  endedAt     DateTime?
+  bytesIn     BigInt   @default(0)
+  bytesOut    BigInt   @default(0)
+  sessionId   String?  @unique @db.VarChar(64)
+
+  @@index([macAddress])
+  @@index([subscriberId])
+  @@index([startedAt])
+  @@map("portal_session")
+}
+
+/// CoA (Change of Authorization) requests. A staff action like "disconnect
+/// this customer now" or "drop their bandwidth to 1Mbps" is logged here so
+/// the audit trail matches the NAS-side reality.
+model CoaRequest {
+  id           Int      @id @default(autoincrement())
+  subscriberId Int?
+  nasId        Int?
+  sessionId    String?  @db.VarChar(64)
+  /// DISCONNECT | BANDWIDTH_CHANGE | ENABLE | DISABLE | RENEWAUTH
+  action       String   @db.VarChar(30)
+  /// What was sent (e.g. "Mikrotik-Rate-Limit=1024k/512k").
+  payload      Json?    @default("{}")
+  /// QUEUED | SENT | ACK | NAK | TIMEOUT
+  status       String   @db.VarChar(20) @default("QUEUED")
+  responseLog  String?  @db.VarChar(1000)
+  /// Success or failure reason from the NAS.
+  resultMessage String? @db.VarChar(500)
+  requestedById Int?
+  requestedByName String? @db.VarChar(200)
+  createdAt    DateTime @default(now())
+  completedAt  DateTime?
+
+  @@index([subscriberId, createdAt])
+  @@index([status])
+  @@map("coa_request")
 }

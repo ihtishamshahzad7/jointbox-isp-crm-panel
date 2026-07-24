@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { LogsService } from '../logs/logs.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { EventsService } from '../common/events.service';
 import * as bcrypt from 'bcrypt';
 import { verifyTotp } from '../security/totp';
 
@@ -16,6 +17,7 @@ export class AuthService {
     private jwtService: JwtService,
     private logsService: LogsService,
     private scope: ScopeService,
+    private events: EventsService,
   ) {}
 
   async login(
@@ -142,6 +144,11 @@ export class AuthService {
     const { password: _, ...userWithoutPassword } = user;
 
     console.log('🎉 Login successful for:', email);
+    this.events.broadcast('login', {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    });
 
     return {
       message: 'Login successful',

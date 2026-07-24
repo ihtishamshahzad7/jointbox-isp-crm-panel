@@ -4,6 +4,8 @@ import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationService } from '../organization/organization.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { EventsService } from '../common/events.service';
+import { renderInvoiceHtml } from './invoice-pdf-template';
 
 @Injectable()
 export class InvoicesService {
@@ -13,6 +15,7 @@ export class InvoicesService {
     private notifications: NotificationsService,
     private organization: OrganizationService,
     private scope: ScopeService,
+    private events: EventsService,
   ) {}
 
   /**
@@ -137,6 +140,50 @@ export class InvoicesService {
     return invoice;
   }
 
+  /**
+   * Generate printable HTML invoice page.
+   * The user can print → Save as PDF from the browser.
+   */
+  async getInvoicePdf(id: number) {
+    const invoice = await this.prisma.invoice.findUnique({
+      where: { id },
+      include: { items: true, payments: true, subscriber: { include: { package: true } } },
+    });
+    if (!invoice) throw new Error('Invoice not found');
+
+    return renderInvoiceHtml({
+      invoiceNo: invoice.invoiceNo,
+      invoiceDate: invoice.invoiceDate.toLocaleDateString(),
+      dueDate: invoice.dueDate.toLocaleDateString(),
+      status: invoice.status,
+      subscriberName: invoice.subscriberName || invoice.subscriber?.fullName || 'Unknown',
+      subscriberPhone: invoice.subscriber?.phone || '',
+      subscriberEmail: invoice.subscriber?.email || '',
+      subscriberAddress: invoice.subscriber?.address || undefined,
+      packageName: invoice.subscriber?.package?.name || undefined,
+      amount: invoice.amount,
+      tax: invoice.tax,
+      discount: invoice.discount,
+      total: invoice.total,
+      paidAmount: invoice.paidAmount,
+      dueAmount: invoice.dueAmount,
+      items: invoice.items.map((i) => ({
+        description: i.description,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        total: i.total,
+      })),
+      payments: invoice.payments
+        .filter((p) => !p.refundedAt)
+        .map((p) => ({
+          paymentNo: p.paymentNo,
+          amount: p.amount,
+          method: p.method,
+          paymentDate: p.paymentDate.toLocaleDateString(),
+        })),
+    });
+  }
+
   async recordPayment(invoiceId: number, data: any) {
     const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId } });
     if (!invoice) throw new Error('Invoice not found');
@@ -178,6 +225,13 @@ export class InvoicesService {
     void this.notifications.fireEvent('PAYMENT_RECEIVED', paySubscriber, {
       amount: data.amount,
       invoiceNo: invoice.invoiceNo,
+    });
+    this.events.broadcast('payment', {
+      id: payment.id,
+      amount: data.amount,
+      method: data.method,
+      invoiceNo: invoice.invoiceNo,
+      subscriberName: paySubscriber?.fullName,
     });
 
     return this.prisma.invoice.update({

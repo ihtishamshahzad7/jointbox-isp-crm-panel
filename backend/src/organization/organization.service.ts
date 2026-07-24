@@ -520,4 +520,94 @@ export class OrganizationService {
       this.logger.error(`Commission distribution failed for payment#${payment.id}: ${e.message}`);
     }
   }
+
+  // ── FRANCHISE GROUP PRICING (ISP sets wholesale price per franchise) ────
+
+  /**
+   * List all franchise users with their pricing for a given package.
+   * ISP can see every franchise; a franchise only sees itself.
+   */
+  async listFranchisePricing(actor: any, packageId: number) {
+    const where: any = { role: { in: RESELLER_ROLES as any } };
+    if (!this.scope.isAdmin(actor?.role)) {
+      const ids = await this.scope.descendantIds(this.scope.actorId(actor));
+      where.id = { in: ids.length ? ids : [-1] };
+    }
+    const franchises = await this.prisma.user.findMany({
+      where,
+      select: {
+        id: true, name: true, email: true, role: true, isActive: true,
+        branchId: true, parentId: true, balance: true, commissionPercent: true,
+        _count: { select: { salesSubscribers: true, children: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    // Get existing pricing for this package
+    const existingPrices = packageId ? await this.prisma.resellerPackagePrice.findMany({
+      where: { packageId, userId: { in: franchises.map(f => f.id) } },
+      select: { userId: true, price: true, retailPrice: true, subresellerProfit: true, subscriberProfit: true },
+    }) : [];
+
+    const priceMap = new Map(existingPrices.map(p => [p.userId, p]));
+
+    return franchises.map(f => ({
+      ...f,
+      wholesalePrice: priceMap.get(f.id)?.price ?? null,
+      retailPrice: priceMap.get(f.id)?.retailPrice ?? null,
+      subresellerProfit: priceMap.get(f.id)?.subresellerProfit ?? null,
+      subscriberProfit: priceMap.get(f.id)?.subscriberProfit ?? null,
+      assigned: priceMap.has(f.id),
+    }));
+  }
+
+  /**
+   * Set wholesale price for a franchise on a package.
+   * Bypasses the direct-child hierarchy check for ISP accounts.
+   */
+  async setFranchisePricing(actor: any, body: { userId: number; packageId: number; price: number }) {
+    const userId = Number(body.userId);
+    const packageId = Number(body.packageId);
+    const price = Number(body.price);
+
+    if (!packageId || !userId) throw new BadRequestException('userId and packageId are required');
+    if (isNaN(price) || price < 0) throw new BadRequestException('price must be a non-negative number');
+
+    const franchise = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, role: true } });
+    if (!franchise) throw new NotFoundException('User not found');
+
+    // ISP can set pricing for any reseller; non-admin must use the regular hierarchy
+    if (!this.scope.isAdmin(actor?.role)) {
+      await this.scope.assertUser(actor, userId);
+    }
+
+    return this.prisma.resellerPackagePrice.upsert({
+      where: { userId_packageId: { userId, packageId } },
+      update: { price },
+      create: { userId, packageId, price },
+      include: {
+        package: { select: { id: true, name: true, price: true } },
+        user: { select: { id: true, name: true, role: true } },
+      },
+    });
+  }
+
+  /**
+   * Remove a franchise's assignment to a package.
+   */
+  async removeFranchisePricing(actor: any, userId: number, packageId: number) {
+    const existing = await this.prisma.resellerPackagePrice.findUnique({
+      where: { userId_packageId: { userId, packageId } },
+    });
+    if (!existing) throw new NotFoundException('No pricing found for this franchise-package pair');
+
+    if (!this.scope.isAdmin(actor?.role)) {
+      await this.scope.assertUser(actor, userId);
+    }
+
+    await this.prisma.resellerPackagePrice.delete({
+      where: { userId_packageId: { userId, packageId } },
+    });
+    return { ok: true };
+  }
 }

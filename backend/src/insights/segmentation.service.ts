@@ -39,15 +39,15 @@ export class SegmentationService {
   private async liveSessions(): Promise<
     Map<string, { nasip: string; nasport: string; up: number; down: number }>
   > {
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT username,
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT username,
               nasipaddress::text AS nasip,
               COALESCE(nasportid, '') AS nasport,
               COALESCE(acctinputoctets, 0)::bigint  AS up,
               COALESCE(acctoutputoctets, 0)::bigint AS down
          FROM radacct
-        WHERE acctstoptime IS NULL AND username IS NOT NULL`,
-    ).catch(() => [] as any[]);
+        WHERE acctstoptime IS NULL AND username IS NOT NULL`
+    .catch(() => [] as any[]);
 
     const map = new Map<string, any>();
     for (const r of rows) {
@@ -435,13 +435,12 @@ export class SegmentationService {
 
     const usernames = rows.map((r) => r.username).filter(Boolean) as string[];
     const lastStops = usernames.length
-      ? await this.prisma.$queryRawUnsafe<any[]>(
-          `SELECT DISTINCT ON (username) username, acctterminatecause, acctstoptime
+      ? await this.prisma.$queryRaw<any[]>`
+          SELECT DISTINCT ON (username) username, acctterminatecause, acctstoptime
              FROM radacct
-            WHERE username = ANY($1::text[]) AND acctstoptime IS NOT NULL
-            ORDER BY username, acctstoptime DESC`,
-          usernames,
-        ).catch(() => [] as any[])
+            WHERE username = ANY(${usernames}::text[]) AND acctstoptime IS NOT NULL
+            ORDER BY username, acctstoptime DESC`
+        .catch(() => [] as any[])
       : [];
     const stopByName = new Map(lastStops.map((r) => [r.username, r]));
 

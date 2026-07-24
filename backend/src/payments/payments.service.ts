@@ -5,6 +5,7 @@ import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationService } from '../organization/organization.service';
 import { ScopeService } from '../common/scope.service';
+import { EventsService } from '../common/events.service';
 
 @Injectable()
 export class PaymentsService {
@@ -14,6 +15,7 @@ export class PaymentsService {
     private notifications: NotificationsService,
     private organization: OrganizationService,
     private scope: ScopeService,
+    private events: EventsService,
   ) {}
 
   /**
@@ -156,6 +158,13 @@ export class PaymentsService {
     void this.notifications.fireEvent('PAYMENT_RECEIVED', subscriber, {
       amount: payment.amount,
       invoiceNo: payment.invoice?.invoiceNo,
+    });
+    this.events.broadcast('payment', {
+      id: payment.id,
+      amount: payment.amount,
+      method: payment.method,
+      invoiceNo: payment.invoice?.invoiceNo,
+      subscriberName: payment.subscriber?.fullName,
     });
     return payment;
   }

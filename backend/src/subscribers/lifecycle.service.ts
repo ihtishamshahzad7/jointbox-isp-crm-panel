@@ -71,7 +71,7 @@ export class LifecycleService {
             await this.notifications.send({
               channel: 'SMS', recipient: s.phone, subscriberId: s.id, event: 'RENEWAL_REMINDER',
               body: `Dear ${s.fullName}, your internet expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${exp.toLocaleDateString()}). Please renew to avoid disconnection.`,
-            }).catch(() => {});
+            }).catch((e) => { this.logger?.warn?.('sendReminder: ' + (e?.message || e)); });
             reminded++;
           }
 
@@ -86,7 +86,7 @@ export class LifecycleService {
               await this.notifications.send({
                 channel: 'SMS', recipient: s.phone, subscriberId: s.id, event: 'EXPIRED_SUSPENDED',
                 body: `Dear ${s.fullName}, your internet has expired and been suspended. Please pay to reconnect.`,
-              }).catch(() => {});
+              }).catch((e) => { this.logger?.warn?.('sendSuspensionNotification: ' + (e?.message || e)); });
             }
             suspended++;
           }

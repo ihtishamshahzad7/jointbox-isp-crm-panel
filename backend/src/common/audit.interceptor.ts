@@ -33,6 +33,7 @@ export class AuditInterceptor implements NestInterceptor {
     const entityId = idSeg ? Number(idSeg) : undefined;
     const action = { POST: 'CREATE', PUT: 'UPDATE', PATCH: 'UPDATE', DELETE: 'DELETE' }[method] || method;
     const userId = req.user?.sub ?? req.user?.id;
+    const traceId = req.traceId || null;
     const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0] || null;
     const userAgent = req.headers['user-agent'] || null;
 
@@ -52,9 +53,9 @@ export class AuditInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap({
-        next: () => this.write(userId, action, entity, entityId, detail, ip, userAgent),
+        next: () => this.write(userId, action, entity, entityId, detail, traceId, ip, userAgent),
         // still record failed mutations (useful for security review)
-        error: () => this.write(userId, `${action}_FAILED`, entity, entityId, detail, ip, userAgent),
+        error: () => this.write(userId, `${action}_FAILED`, entity, entityId, detail, traceId, ip, userAgent),
       }),
     );
   }
@@ -65,12 +66,13 @@ export class AuditInterceptor implements NestInterceptor {
     entity: string,
     entityId: number | undefined,
     details: string | undefined,
+    traceId: string | null,
     ipAddress: string | null,
     userAgent: string | null,
   ) {
     // fire-and-forget; never block or fail the request because of logging
     this.prisma.activityLog
-      .create({ data: { userId, action, entity, entityId, details, ipAddress, userAgent } })
+      .create({ data: { userId, action, entity, entityId, details, traceId, ipAddress, userAgent } })
       .catch(() => undefined);
   }
 }

@@ -203,9 +203,9 @@ export class ExportService {
     // a separate query against accounting and pointless otherwise.
     let live = new Set<string>();
     if (columns.includes('online') && subs.length) {
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL`,
-      ).catch(() => [] as any[]);
+      const rows = await this.prisma.$queryRaw<any[]>`
+        SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL`
+      .catch(() => [] as any[]);
       live = new Set(rows.map((r) => r.username));
     }
 

@@ -1,9 +1,9 @@
 import {
   Injectable, Logger, OnModuleInit,
-  ForbiddenException, NotFoundException, BadRequestException,
+  ForbiddenException, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { RadiusSyncService } from '../nas/radius-sync.service';
+import { RadiusSyncService, RadiusPolicyAttr } from '../nas/radius-sync.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { CacheService } from '../common/cache.service';
 import { QueueService } from '../common/queue.service';
@@ -18,6 +18,8 @@ import {
   CONNECTION_TYPE, PROFILE_STATUS, DISCOUNT_TYPE, parsePanelDate, parseFlag,
 } from './panel-format';
 import { parseCursor, buildCursorPage } from '../common/pagination';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class SubscribersService implements OnModuleInit {
@@ -25,7 +27,7 @@ export class SubscribersService implements OnModuleInit {
 
   constructor(
     private prisma: PrismaService,
-    private radiusSync: RadiusSyncService,
+    public radiusSync: RadiusSyncService,
     private cache: CacheService,
     private queue: QueueService,
     private accounting: AccountingService,
@@ -103,10 +105,41 @@ export class SubscribersService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────
   private async getPackageForRadius(packageId: number | null) {
     if (!packageId) return null;
-    return this.prisma.package.findUnique({
+    const pkg = await this.prisma.package.findUnique({
       where: { id: packageId },
       include: { pool: true },
     });
+    if (!pkg) return null;
+
+    // Resolve linked RADIUS policies from the packages-management.json store
+    let policyAttributes: RadiusPolicyAttr[] | undefined;
+    try {
+      const storePath = path.join(process.cwd(), 'data', 'packages-management.json');
+      if (fs.existsSync(storePath)) {
+        const store = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+        const settings = (store.packageSettings || []).find(
+          (s: any) => s.packageId === packageId,
+        );
+        const policyIds: number[] = settings?.policyIds ?? [];
+        if (policyIds.length > 0 && Array.isArray(store.policies)) {
+          const matched = store.policies.filter((p: any) => policyIds.includes(p.id));
+          if (matched.length > 0) {
+            policyAttributes = matched.map((p: any) => ({
+              attribute: p.attributeName,
+              op: p.attributeOp,
+              value: p.attributeValue,
+            }));
+          }
+        }
+      }
+    } catch {
+      // Non-critical — if the store cannot be read, fall back to speed fields
+    }
+
+    return {
+      ...pkg,
+      policyAttributes,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -622,11 +655,9 @@ export class SubscribersService implements OnModuleInit {
         let ip: string | null = null;
         if (s.username) {
           try {
-            const rows = await this.prisma.$queryRawUnsafe<any[]>(
-              `SELECT host(nasipaddress) AS ip FROM radacct
-                WHERE username = $1 ORDER BY radacctid DESC LIMIT 1`,
-              s.username,
-            );
+            const rows = await this.prisma.$queryRaw<any[]>`
+              SELECT host(nasipaddress) AS ip FROM radacct
+                WHERE username = ${s.username} ORDER BY radacctid DESC LIMIT 1`;
             ip = rows?.[0]?.ip ? String(rows[0].ip) : null;
           } catch { /* fall through to the fallback */ }
         }
@@ -661,11 +692,9 @@ export class SubscribersService implements OnModuleInit {
       // ── Package: match the speed we pushed to RADIUS back to a package
       if (!s.packageId && s.username) {
         try {
-          const rows = await this.prisma.$queryRawUnsafe<any[]>(
-            `SELECT value FROM radreply
-              WHERE username = $1 AND attribute = 'Mikrotik-Rate-Limit' LIMIT 1`,
-            s.username,
-          );
+          const rows = await this.prisma.$queryRaw<any[]>`
+            SELECT value FROM radreply
+              WHERE username = ${s.username} AND attribute = 'Mikrotik-Rate-Limit' LIMIT 1`;
           const rl = rows?.[0]?.value ? String(rows[0].value) : null;
           const m = rl ? /^(\d+)([KM])\/(\d+)([KM])/i.exec(rl) : null;
           if (m) {
@@ -899,6 +928,22 @@ export class SubscribersService implements OnModuleInit {
     const onlineNow = await this.prisma.subscriber.count({
       where: withScope({ username: { in: Array.from(onlineSet) } }),
     });
+
+    // Count stale sessions: those that appear to radacct as still open but
+    // haven't reported activity in 15+ minutes (same window as attachLiveStatus).
+    const staleRows = await this.prisma.$queryRaw<Array<{ username: string }>>`
+      SELECT DISTINCT username
+      FROM radacct
+      WHERE acctstoptime IS NULL
+        AND username IS NOT NULL
+        AND COALESCE(acctupdatetime, acctstarttime) <= NOW() - INTERVAL '15 minutes'
+        AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '7 days'
+    `;
+    const staleSet = new Set(staleRows.map((r) => r.username));
+    const staleCount = await this.prisma.subscriber.count({
+      where: withScope({ username: { in: Array.from(staleSet) } }),
+    });
+
     const offline = Math.max(total - onlineNow, 0);
 
     return {
@@ -908,6 +953,7 @@ export class SubscribersService implements OnModuleInit {
       suspended,
       expired,
       onlineNow,
+      stale: staleCount,
       offline,
       todaySignups,
     };
@@ -2223,8 +2269,41 @@ if (!unpaid && data.username && data.password) {
     const packageId = Number(payload.packageId);
     const extraFee = payload.extraFeeAmount ? Number(payload.extraFeeAmount) : 0;
 
-    const subscriber = await this.prisma.subscriber.findUnique({ where: { id: subscriberId } });
-    if (!subscriber) throw new Error('Subscriber not found');
+    const subscriber = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: {
+        id: true,
+        status: true,
+        username: true,
+        fullName: true,
+        userId: true,
+        packageId: true,
+        password: true,
+        sellPrice: true,
+        costPrice: true,
+        profit: true,
+      },
+    });
+    if (!subscriber) throw new NotFoundException('Subscriber not found');
+
+    if (subscriber.status === 'ACTIVE' && payload.force !== true) {
+      const auditCreate = this.prisma.activityLog?.create;
+      if (auditCreate) {
+        await auditCreate({
+          data: {
+            userId: payload.actorId ?? null,
+            action: 'DUPLICATE_ACTIVATION_BLOCKED',
+            entity: 'Subscriber',
+            entityId: subscriberId,
+            details: `Blocked duplicate activation for subscriber #${subscriberId} because the record is already ACTIVE.`,
+          },
+        }).catch(() => null);
+      }
+
+      throw new ConflictException(
+        `Subscriber #${subscriberId} is already ACTIVE. Duplicate activation is blocked to prevent double-charging.`,
+      );
+    }
 
     const pkg = await this.prisma.package.findUnique({ where: { id: packageId } });
     if (!pkg) throw new Error('Package not found');
@@ -2951,6 +3030,75 @@ if (!unpaid && data.username && data.password) {
     } catch (error: any) {
       this.logger.error(`getRadiusSession error: ${error.message}`);
       return { session: null, history: [] };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // BANDWIDTH HISTORY (live graph data)
+  // Called by profile page — live bandwidth chart
+  // Returns time-series of upload/download bytes over last N minutes
+  // ─────────────────────────────────────────────────────────────
+  async getBandwidthHistory(username: string, minutes = 60) {
+    try {
+      const pg = this.radiusSync.getPgClient();
+      if (!pg) return { samples: [] };
+
+      const cutoff = `NOW() - INTERVAL '${minutes} minutes'`;
+      const res = await pg.query(`
+        SELECT
+          acctupdatetime AS sampled_at,
+          acctstarttime,
+          acctstoptime,
+          acctinputoctets   AS upload_bytes,
+          acctoutputoctets  AS download_bytes,
+          acctsessiontime   AS duration_seconds
+        FROM radacct
+        WHERE username = $1
+          AND (acctupdatetime >= ${cutoff} OR acctstarttime >= ${cutoff})
+        ORDER BY acctupdatetime ASC
+      `, [username]);
+
+      // Compute rate (bytes/sec) between consecutive samples of the active
+      // session by calculating the delta from previous sample.  Completed
+      // sessions contribute one point at their stop time.
+      const raw = res.rows;
+      const samples: any[] = [];
+      let prevUp = 0;
+      let prevDown = 0;
+      let prevTime: Date | null = null;
+
+      for (const row of raw) {
+        const t = new Date(row.sampled_at || row.acctstarttime);
+        if (prevTime && t.getTime() !== prevTime.getTime()) {
+          const dt = (t.getTime() - prevTime.getTime()) / 1000; // seconds
+          const upBps = dt > 0 ? Math.max(0, (Number(row.upload_bytes) - prevUp) / dt) : 0;
+          const downBps = dt > 0 ? Math.max(0, (Number(row.download_bytes) - prevDown) / dt) : 0;
+          samples.push({
+            timestamp: t.toISOString(),
+            uploadBps: Math.round(upBps),
+            downloadBps: Math.round(downBps),
+            uploadBytes: Number(row.upload_bytes),
+            downloadBytes: Number(row.download_bytes),
+          });
+        } else if (!row.acctstoptime) {
+          // First sample of the active session — include as base point
+          samples.push({
+            timestamp: t.toISOString(),
+            uploadBps: 0,
+            downloadBps: 0,
+            uploadBytes: Number(row.upload_bytes),
+            downloadBytes: Number(row.download_bytes),
+          });
+        }
+        prevUp = Number(row.upload_bytes);
+        prevDown = Number(row.download_bytes);
+        prevTime = t;
+      }
+
+      return { samples };
+    } catch (error: any) {
+      this.logger.error(`getBandwidthHistory error: ${error.message}`);
+      return { samples: [] };
     }
   }
 

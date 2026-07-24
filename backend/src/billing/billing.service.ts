@@ -7,6 +7,7 @@ import { QueueService } from '../common/queue.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NetworkService } from '../network/network.service';
 import { WebhooksService } from '../integrations/webhooks.service';
+import { ProrationService } from './proration.service';
 
 /**
  * Phase 1 billing automation.
@@ -30,6 +31,8 @@ export class BillingService {
     private network: NetworkService,
     // Outbound event notifications for third-party integrations.
     private webhooks: WebhooksService,
+    // Daily-rate proration for partial-cycle billing.
+    private proration: ProrationService,
   ) {
     this.queue.registerProcessor('billing-auto-invoice', (d) => this.runAutoInvoice(d?.dryRun === true));
     this.queue.registerProcessor('billing-auto-renewal', (d) => this.runAutoRenewal(d?.dryRun === true));
@@ -158,16 +161,37 @@ export class BillingService {
     for (const sub of candidates) {
       try {
         const price = sub.serviceSettings?.customPrice ?? sub.package!.price;
-        if (sub.balance < price) continue;
+        const duration = sub.package!.duration || 30;
+        // Pro-rated pricing for partial-cycle renewal.
+        // When a subscriber expires mid-cycle, the next renewal should only
+        // charge for the days they actually use in the new period rather than
+        // requiring the full price up front. This matches Zal Ultra behaviour
+        // where subscribers can return from expiry with a partial payment.
+        let chargeAmount = price;
+        let renewalNote = `Auto-renewal ${sub.package!.name}`;
+        const expiryDate = sub.serviceSettings?.expiryDate;
+        if (expiryDate && new Date(expiryDate) < new Date()) {
+          // Days already lapsed since expiry
+          const daysLapsed = Math.ceil(
+            (Date.now() - new Date(expiryDate).getTime()) / 86_400_000,
+          );
+          if (daysLapsed > 0 && daysLapsed < duration) {
+            const remainingDays = duration - daysLapsed;
+            const dailyRate = duration > 0 ? price / duration : price / 30;
+            chargeAmount = Math.round(dailyRate * remainingDays);
+            renewalNote = `Pro-rated renewal (${remainingDays}/${duration} days) - ${sub.package!.name}`;
+          }
+        }
+        if (sub.balance < chargeAmount) continue;
 
         if (dryRun) {
-          lines.push(`DRY: would renew #${sub.id} ${sub.username} for ${price}`);
+          lines.push(`DRY: would renew #${sub.id} ${sub.username} for ${chargeAmount}`);
           succeeded++;
           continue;
         }
 
         // 1. deduct wallet (posts ledger + balance tx)
-        await this.accounting.deductBalance(sub.id, price, `Auto-renewal ${sub.package!.name}`);
+        await this.accounting.deductBalance(sub.id, chargeAmount, renewalNote);
 
         // 2. paid invoice + payment
         const invoiceNo = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}-${sub.id}`;
@@ -177,15 +201,15 @@ export class BillingService {
           data: {
             invoiceNo,
             subscriberId: sub.id,
-            amount: price,
-            total: price,
-            paidAmount: price,
+            amount: chargeAmount,
+            total: chargeAmount,
+            paidAmount: chargeAmount,
             dueAmount: 0,
             dueDate: newExpiry,
             paidDate: new Date(),
             status: 'PAID',
             notes: 'Auto-renewal (wallet balance)',
-            items: { create: [{ description: `Auto-renewal - ${sub.package!.name}`, quantity: 1, unitPrice: price, total: price }] },
+            items: { create: [{ description: renewalNote, quantity: 1, unitPrice: chargeAmount, total: chargeAmount }] },
           },
         });
         await this.prisma.payment.create({
@@ -193,7 +217,7 @@ export class BillingService {
             paymentNo: `PAY-${Date.now()}-${sub.id}`,
             invoiceId: invoice.id,
             subscriberId: sub.id,
-            amount: price,
+            amount: chargeAmount,
             method: 'BALANCE',
             notes: 'Auto-renewal from wallet',
           },
@@ -230,11 +254,11 @@ export class BillingService {
           },
         );
 
-        void this.notifications.fireEvent('RENEWAL', sub, { amount: price, invoiceNo, expiry: newExpiry });
+        void this.notifications.fireEvent('RENEWAL', sub, { amount: chargeAmount, invoiceNo, expiry: newExpiry });
         this.webhooks.emit('subscriber.renewed', {
           subscriberId: sub.id,
           username: sub.username,
-          amount: price,
+          amount: chargeAmount,
           invoiceNo,
           expiryDate: newExpiry,
         });

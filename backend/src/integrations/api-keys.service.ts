@@ -103,7 +103,7 @@ export class ApiKeysService {
     // Best-effort usage tracking — must never block the request.
     this.prisma.apiKey
       .update({ where: { id: key.id }, data: { lastUsedAt: new Date(), lastUsedIp: ip ?? null } })
-      .catch(() => {});
+      .catch((e) => { this.logger?.warn?.('updateUsageTracking: ' + (e?.message || e)); });
 
     return key;
   }

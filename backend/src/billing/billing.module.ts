@@ -7,12 +7,12 @@ import { NasModule } from '../nas/nas.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { NetworkModule } from '../network/network.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { ProrationService } from './proration.service';
 
 @Module({
-  // NetworkModule provides CoA disconnect so suspension takes effect instantly.
-  // IntegrationsModule provides outbound webhooks.
   imports: [PrismaModule, AccountingModule, NasModule, NotificationsModule, NetworkModule, IntegrationsModule],
   controllers: [BillingController],
-  providers: [BillingService],
+  providers: [BillingService, ProrationService],
+  exports: [ProrationService],
 })
 export class BillingModule {}

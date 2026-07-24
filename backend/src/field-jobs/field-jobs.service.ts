@@ -180,8 +180,8 @@ export class FieldJobsService {
   /** Per-technician performance — completion counts and average duration. */
   async technicianPerformance(actor?: Actor, days = 30) {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT u.id, u.name,
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT u.id, u.name,
               COUNT(*) FILTER (WHERE j.status = 'COMPLETED')::int AS completed,
               COUNT(*) FILTER (WHERE j.status = 'FAILED')::int    AS failed,
               COUNT(*) FILTER (WHERE j.status IN ('ASSIGNED','IN_PROGRESS'))::int AS open,
@@ -189,11 +189,10 @@ export class FieldJobsService {
                     FILTER (WHERE j."completedAt" IS NOT NULL AND j."startedAt" IS NOT NULL)::numeric, 0) AS avg_minutes
          FROM "FieldJob" j
          JOIN "User" u ON u.id = j."assignedTo"
-        WHERE j."createdAt" >= $1
+        WHERE j."createdAt" >= ${since}
         GROUP BY u.id, u.name
-        ORDER BY completed DESC`,
-      since,
-    ).catch(() => [] as any[]);
+        ORDER BY completed DESC`
+    .catch(() => [] as any[]);
 
     return rows.map((r) => ({
       technicianId: Number(r.id),
@@ -316,7 +315,7 @@ export class FieldJobsService {
             resolution: body.notes || `Resolved on site (job ${job.jobNo})`,
           },
         })
-        .catch(() => {});
+        .catch((e) => { this.logger?.warn?.('cleanupOnDelete: ' + (e?.message || e)); });
     }
 
     this.logger.log(`Field job ${job.jobNo} ${success ? 'completed' : 'FAILED'}`);

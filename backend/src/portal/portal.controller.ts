@@ -87,4 +87,49 @@ export class PortalController {
   sessions(@Request() req: any, @Query('limit') limit?: string) {
     return this.portal.sessions(req.subscriber.id, limit ? +limit : 20);
   }
+
+  // ───────────────────────────────────────────────────────────────
+  // SELF-ACTIVATION
+  // ───────────────────────────────────────────────────────────────
+  //
+  // A prospective subscriber can browse available packages, register an
+  // account, pay via any configured gateway, and get activated automatically
+  // — all without operator involvement. This is the key competitive gap vs
+  // Zal Ultra / Onezeroart.
+
+  /** List packages available for self-activation (public, no auth). */
+  @Get('packages')
+  packages() {
+    return this.portal.availablePackages();
+  }
+
+  /**
+   * Register a new subscriber account (public, no auth).
+   * On success returns a JWT so the subscriber proceeds directly to payment.
+   */
+  @Post('register')
+  register(@Body() body: {
+    fullName: string; phone: string; email?: string; password: string;
+    packageId: number; address?: string;
+  }, @Ip() ip: string) {
+    return this.portal.selfRegister(body, ip || '0.0.0.0');
+  }
+
+  /**
+   * Initiate payment for a self-activation invoice.
+   * The subscriber is already registered (JWT required) and has an unpaid
+   * activation invoice. This picks a gateway and returns the payment URL.
+   */
+  @UseGuards(PortalGuard)
+  @Post('self-activate/:gateway')
+  selfActivate(@Request() req: any, @Param('gateway') gateway: string) {
+    return this.portal.selfActivate(req.subscriber.id, gateway);
+  }
+
+  /** Check activation status (is the subscriber active, any pending invoice). */
+  @UseGuards(PortalGuard)
+  @Get('activation-status')
+  activationStatus(@Request() req: any) {
+    return this.portal.activationStatus(req.subscriber.id);
+  }
 }

@@ -74,7 +74,7 @@ export class IpPoolService {
                 subnet: this.rangeToCidr(rp.ranges),
                 nasId: nas.id,
               },
-            }).catch(() => {});
+            }).catch((e) => { this.logger?.warn?.('createPool: ' + (e?.message || e)); });
           }
         } else if ((existing.network || '').trim() !== rp.ranges.trim()) {
           report.push({
@@ -86,7 +86,7 @@ export class IpPoolService {
             await this.prisma.ipPool.update({
               where: { id: existing.id },
               data: { network: rp.ranges, subnet: this.rangeToCidr(rp.ranges), nasId: nas.id },
-            }).catch(() => {});
+            }).catch((e) => { this.logger?.warn?.('updatePool: ' + (e?.message || e)); });
           }
         } else {
           report.push({
@@ -267,7 +267,7 @@ export class IpPoolService {
        */
       await this.prisma.ipPoolAssignment
         .delete({ where: { poolId_userId: { poolId, userId } } })
-        .catch(() => null);
+        .catch((e) => { this.logger?.warn?.('deleteAssignment: ' + (e?.message || e)); });
     }
     return { poolId, userId, shared: on };
   }

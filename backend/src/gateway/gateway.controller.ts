@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
+import { createHmac } from 'crypto';
 import { GatewayService } from './gateway.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
@@ -108,5 +109,92 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
     }
     await this.gateway.handleFailure(key, result || 'failed');
     return res.redirect(`${frontend}/portal?paid=0`);
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // JAZZCASH (Pakistan)
+  // ───────────────────────────────────────────────────────────────
+
+  /** JazzCash checkout form — renders a self-submitting HTML page. */
+  @Get('jazzcash/form/:key')
+  async jazzcashForm(@Param('key') key: string, @Res() res: Response) {
+    const tx = await this.gateway.findTransactionByIdempotencyKey(key);
+    if (!tx) return res.status(404).send('Transaction not found');
+
+    const merchantId = process.env.JAZZCASH_MERCHANT_ID || '';
+    const password   = process.env.JAZZCASH_PASSWORD || '';
+    const salt       = process.env.JAZZCASH_INTEGERITY_SALT || '';
+    const sandbox    = process.env.JAZZCASH_SANDBOX !== '0';
+    const base       = sandbox
+      ? 'https://sandbox.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/'
+      : 'https://payments.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/';
+
+    const pp_TxnDateTime = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const pp_TxnExpiryDateTime = new Date(Date.now() + 86400_000).toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+    const integrityString = [
+      salt, 'INTEGRITY_SALT_FIXED', merchantId, password, key,
+      pp_TxnDateTime, '', tx.amount.toFixed(2), '', 'PKR', '', '', '',
+      `${process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001'}/gateway/callback/jazzcash?key=${key}`,
+      '', '', '', '', salt,
+    ].join('&');
+
+    const pp_SecureHash = createHmac('sha256', salt).update(integrityString).digest('hex');
+
+    res.type('html').send(`<!doctype html><html><head><title>Redirecting to JazzCash...</title>
+<style>body{font-family:system-ui;background:#0c1220;color:#e2e8f0;display:flex;align-items:center;justify-content:center;height:100vh}
+.card{background:#151f30;border:1px solid #1e2d47;border-radius:14px;padding:32px;text-align:center;max-width:380px}
+.spinner{border:3px solid #1e2d47;border-top:3px solid #22c55e;border-radius:50%;width:32px;height:32px;animation:spin .8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="card"><div class="spinner"></div><h2>Redirecting to JazzCash...</h2>
+<p style="color:#94a3b8;font-size:14px;">You are being redirected to JazzCash's secure payment page.</p>
+<form id="jazzcash" action="${base}" method="POST">
+  <input type="hidden" name="PP_VERSION" value="INTEGRITY_SALT_FIXED">
+  <input type="hidden" name="PP_MERCHANT_ID" value="${merchantId}">
+  <input type="hidden" name="PP_PASSWORD" value="${password}">
+  <input type="hidden" name="PP_TXNREFNO" value="${key}">
+  <input type="hidden" name="PP_TXN_DATE_TIME" value="${pp_TxnDateTime}">
+  <input type="hidden" name="PP_TXN_EXP_DATE_TIME" value="${pp_TxnExpiryDateTime}">
+  <input type="hidden" name="PP_AMOUNT" value="${tx.amount.toFixed(2)}">
+  <input type="hidden" name="PP_CURRENCY" value="PKR">
+  <input type="hidden" name="PP_BILL_REFERENCE" value="INV-${tx.invoiceId}">
+  <input type="hidden" name="PP_DESCRIPTION" value="Invoice Payment">
+  <input type="hidden" name="PP_RETURN_URL" value="${process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001'}/gateway/callback/jazzcash?key=${key}">
+  <input type="hidden" name="PP_SECURE_HASH" value="${pp_SecureHash}">
+  <noscript><button type="submit" style="padding:10px 24px;background:#2563eb;color:white;border:none;border-radius:6px;margin-top:16px;cursor:pointer;">Continue to JazzCash</button></noscript>
+</form>
+<script>document.getElementById('jazzcash').submit()</script>
+</div></body></html>`);
+  }
+
+  /** JazzCash callback — POST from JazzCash after payment. */
+  @Post('callback/jazzcash')
+  async jazzcashCallback(@Query('key') key: string, @Body() body: any, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    const result: any = await this.gateway.jazzcashHandle(key, body || {});
+    return res.redirect(`${frontend}/portal?paid=${result?.ok ? 1 : 0}`);
+  }
+
+  @Get('callback/jazzcash')
+  async jazzcashCallbackGet(@Query('key') key: string, @Query() query: any, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    const result: any = await this.gateway.jazzcashHandle(key, query || {});
+    return res.redirect(`${frontend}/portal?paid=${result?.ok ? 1 : 0}`);
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // EASYPAISA (Pakistan)
+  // ───────────────────────────────────────────────────────────────
+
+  @Get('callback/easypaisa')
+  async epCallback(@Query('key') key: string, @Query('result') result: string, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    const r: any = await this.gateway.epHandle(key, result || 'failed');
+    return res.redirect(`${frontend}/portal?paid=${r?.ok ? 1 : 0}`);
+  }
+
+  @Post('callback/easypaisa')
+  async epCallbackPost(@Query('key') key: string, @Query('result') result: string, @Res() res: Response) {
+    return this.epCallback(key, result, res);
   }
 }

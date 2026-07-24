@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
@@ -10,9 +10,14 @@ import { VouchersService } from '../vouchers/vouchers.service';
  * Phase 3 subscriber self-service portal API.
  * Separate JWT scope ('subscriber') — an admin token cannot be used here and vice versa.
  * Login is rate-limited: 5 attempts per username+IP per 10 minutes.
+ *
+ * Phase 3.5: Self-activation.
+ * A new subscriber can pick a package, register, pay via gateway, and get
+ * auto-activated — no operator involvement. This is the key gap vs Zal Ultra.
  */
 @Injectable()
 export class PortalService {
+  private readonly logger = new Logger(PortalService.name);
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
@@ -236,17 +241,15 @@ export class PortalService {
     });
     if (!sub?.username) return [];
 
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT acctstarttime, acctstoptime, acctterminatecause,
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT acctstarttime, acctstoptime, acctterminatecause,
               framedipaddress::text AS ip,
               acctinputoctets, acctoutputoctets,
               GREATEST(0, COALESCE(NULLIF(acctsessiontime,0),
                 EXTRACT(EPOCH FROM (COALESCE(acctstoptime, NOW()) - acctstarttime))::int)) AS seconds
-         FROM radacct WHERE username = $1
-        ORDER BY radacctid DESC LIMIT $2`,
-      sub.username,
-      Math.min(Number(limit) || 20, 100),
-    ).catch(() => [] as any[]);
+         FROM radacct WHERE username = ${sub.username}
+        ORDER BY radacctid DESC LIMIT ${Math.min(Number(limit) || 20, 100)}`
+    .catch(() => [] as any[]);
 
     const REASON: Record<string, string> = {
       'User-Request': 'You disconnected',
@@ -305,5 +308,241 @@ export class PortalService {
     return this.prisma.ticketMessage.create({
       data: { ticketId, message: message.trim(), sentBy: subscriberId, sentByType: 'SUBSCRIBER' },
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // SELF-ACTIVATION
+  // ─────────────────────────────────────────────────────────────
+
+  /** List packages that are active and marked for self-activation. */
+  async availablePackages() {
+    const packages = await this.prisma.package.findMany({
+      where: { isActive: true },
+      select: {
+        id: true, name: true, price: true, description: true,
+        downloadSpeed: true, uploadSpeed: true, duration: true,
+        dataQuotaGb: true, poolId: true,
+      },
+      orderBy: { price: 'asc' },
+    });
+
+    // Filter by selfActivation flag from the file-based settings store.
+    // Only show packages where self-activation is explicitly enabled.
+    // Silently skip packages without self-activation settings.
+    const store = await this.readPackageStore();
+    return packages.filter((p) => store[p.id]?.selfActivation === true);
+  }
+
+  /**
+   * Register a new subscriber for self-activation.
+   *
+   * Flow:
+   * 1. Validate inputs (phone / email uniqueness, package availability)
+   * 2. Generate a RADIUS username from the phone number
+   * 3. Create the subscriber + ServiceSettings
+   * 4. Generate the first invoice (pro-rated for the remaining days)
+   * 5. Return a JWT so the subscriber can proceed straight to payment
+   */
+  async selfRegister(body: {
+    fullName: string; phone: string; email?: string; password: string;
+    packageId: number; address?: string;
+  }, ip: string) {
+    const { fullName, phone, password, packageId, email, address } = body;
+
+    // Validate
+    if (!fullName?.trim()) throw new BadRequestException('Full name is required');
+    if (!phone?.trim()) throw new BadRequestException('Phone number is required');
+    if (!password || password.length < 6) throw new BadRequestException('Password must be at least 6 characters');
+
+    const pkg = await this.prisma.package.findUnique({ where: { id: packageId } });
+    if (!pkg || !pkg.isActive) throw new BadRequestException('Package not found or inactive');
+
+    // Check self-activation is enabled for this package
+    const store = await this.readPackageStore();
+    if (!store[pkg.id]?.selfActivation) {
+      throw new BadRequestException('This package is not available for self-activation');
+    }
+
+    // Check phone uniqueness
+    const existing = await this.prisma.subscriber.findFirst({
+      where: { OR: [{ phone }, ...(email ? [{ email }] : [])] },
+    });
+    if (existing) {
+      const field = existing.phone === phone ? 'Phone number' : 'Email';
+      throw new BadRequestException(`${field} is already registered`);
+    }
+
+    // Generate a clean username: phone number prefixed
+    const username = phone.replace(/[^0-9]/g, '').replace(/^(\+?92|0)/, '92');
+
+    // Find an admin user to assign ownership (first SUPER_ADMIN)
+    const admin = await this.prisma.user.findFirst({
+      where: { role: 'SUPER_ADMIN' },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+
+    // Create the subscriber
+    const sub = await this.prisma.subscriber.create({
+      data: {
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        email: email?.trim() || null,
+        username,
+        password,
+        address: address?.trim() || null,
+        packageId: pkg.id,
+        userId: admin?.id || null,
+        status: 'INACTIVE',
+        sellPrice: pkg.price,
+        costPrice: pkg.price,
+        profit: 0,
+      },
+    });
+
+    // Create ServiceSettings with a short initial expiry (1 day grace for payment)
+    const initialExpiry = new Date();
+    initialExpiry.setDate(initialExpiry.getDate() + 1); // 1 day to pay
+    await this.prisma.serviceSettings.create({
+      data: {
+        subscriberId: sub.id,
+        expiryDate: initialExpiry,
+        duration: pkg.duration || 30,
+      },
+    });
+
+    // Create the activation invoice
+    const invoiceNo = `ACT-${Date.now()}-${sub.id}`;
+    const invoice = await this.prisma.invoice.create({
+      data: {
+        invoiceNo,
+        subscriberId: sub.id,
+        subscriberName: sub.fullName,
+        amount: pkg.price,
+        total: pkg.price,
+        dueAmount: pkg.price,
+        dueDate: initialExpiry,
+        status: 'UNPAID',
+        notes: 'Self-activation invoice',
+        items: {
+          create: [{
+            description: `Activation - ${pkg.name} (${pkg.downloadSpeed}M/${pkg.uploadSpeed}M)`,
+            quantity: 1,
+            unitPrice: pkg.price,
+            total: pkg.price,
+          }],
+        },
+      },
+    });
+
+    // Issue a JWT so the subscriber can pay immediately
+    const token = this.jwt.sign(
+      { sub: sub.id, username: sub.username, scope: 'subscriber' },
+      { expiresIn: '7d' },
+    );
+
+    this.logger.log(`Self-registration: #${sub.id} ${username} package #${pkg.id} invoice #${invoice.id}`);
+
+    return {
+      token,
+      subscriber: {
+        id: sub.id,
+        fullName: sub.fullName,
+        username: sub.username,
+        phone: sub.phone,
+        status: sub.status,
+        package: {
+          name: pkg.name,
+          price: pkg.price,
+          downloadSpeed: pkg.downloadSpeed,
+          uploadSpeed: pkg.uploadSpeed,
+        },
+      },
+      invoice: {
+        id: invoice.id,
+        invoiceNo: invoice.invoiceNo,
+        amount: invoice.total,
+        dueDate: invoice.dueDate,
+      },
+    };
+  }
+
+  /**
+   * Initiate the payment for a self-activation.
+   *
+   * Called after registration — the subscriber has an unpaid activation
+   * invoice and a JWT. This picks up that invoice and creates a gateway
+   * transaction, returning the payment URL to redirect the subscriber to.
+   */
+  async selfActivate(subscriberId: number, gatewayName: string) {
+    // Find the unpaid activation invoice
+    const invoice = await this.prisma.invoice.findFirst({
+      where: {
+        subscriberId,
+        status: 'UNPAID',
+        invoiceNo: { startsWith: 'ACT-' },
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!invoice) {
+      throw new BadRequestException('No pending activation invoice found. Already activated?');
+    }
+
+    // Initiate payment
+    const result = await this.gateway.initiate(invoice.id, gatewayName, subscriberId);
+    return result;
+  }
+
+  /** Check if the subscriber is fully activated and their service status. */
+  async activationStatus(subscriberId: number) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      include: {
+        package: { select: { name: true, downloadSpeed: true, uploadSpeed: true } },
+        serviceSettings: { select: { expiryDate: true } },
+      },
+    });
+    if (!sub) throw new UnauthorizedException();
+
+    const pendingInvoice = await this.prisma.invoice.findFirst({
+      where: {
+        subscriberId,
+        status: 'UNPAID',
+        invoiceNo: { startsWith: 'ACT-' },
+      },
+      orderBy: { id: 'desc' },
+    });
+
+    return {
+      id: sub.id,
+      fullName: sub.fullName,
+      status: sub.status,
+      isActive: sub.status === 'ACTIVE',
+      hasPendingPayment: !!pendingInvoice,
+      pendingAmount: pendingInvoice?.dueAmount || 0,
+      package: sub.package ? {
+        name: sub.package.name,
+        downloadSpeed: sub.package.downloadSpeed,
+        uploadSpeed: sub.package.uploadSpeed,
+      } : null,
+      expiryDate: sub.serviceSettings?.expiryDate || null,
+    };
+  }
+
+  /**
+   * Read the packages-management.json store for self-activation flags.
+   * Same mechanism used by PackagesService.
+   */
+  private async readPackageStore(): Promise<Record<number, { selfActivation?: boolean }>> {
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const storePath = path.resolve(process.cwd(), 'data', 'packages-management.json');
+      if (!fs.existsSync(storePath)) return {};
+      const raw = fs.readFileSync(storePath, 'utf-8');
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
   }
 }

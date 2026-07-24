@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
+import { silent } from "../components/silent";
+import { PackageShareModal } from "./package-share-modal";
 
 const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -146,6 +148,12 @@ export default function PackagesPage() {
   const [showAllocationModal, setShowAllocationModal] = useState(false);
   const [showSubscribersModal, setShowSubscribersModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [sharePackage, setSharePackage] = useState<PackageRow | null>(null);
+
+  // Group-based package filters used by the package list UI
+  const [franchiseGroups, setFranchiseGroups] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
+  const [groupFilter, setGroupFilter] = useState("ALL");
 
   const [editingPackage, setEditingPackage] = useState<PackageRow | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<PackageRow | null>(null);
@@ -187,7 +195,12 @@ export default function PackagesPage() {
       .then((r) => (r.ok ? r.json() : null))
       // /auth/profile returns { user: {...} }, not the user itself.
       .then((d) => setMe(d?.user ?? d))
-      .catch(() => {});
+      .catch(silent("authProfileFetch"));
+    // Fetch franchise groups
+    fetch(`${API}/groups/options`, { headers: { Authorization: `Bearer ${t}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setFranchiseGroups(Array.isArray(data) ? data : []))
+      .catch(silent("groupsFetch"));
   }, []);
 
   const queryString = useMemo(() => {
@@ -297,6 +310,11 @@ export default function PackagesPage() {
       allocationIds: Array.isArray(pkg.settings?.allocationIds) ? pkg.settings.allocationIds : [],
     });
     setShowPackageModal(true);
+  };
+
+  const openPackageShare = (pkg: PackageRow) => {
+    setSharePackage(pkg);
+    setShowShareModal(true);
   };
 
   const submitPackage = async () => {
@@ -567,15 +585,15 @@ export default function PackagesPage() {
       </div>
 
       {/* Tell a reseller what this screen is for, before they hunt for buttons
-          that are not theirs. The catalogue is the ISP's; the price is theirs. */}
+          that are not theirs. The catalogue is the ISP's; the sharing step lives
+          here, and each downline account decides its own onward price. */}
       {me && !isIsp && (
         <div style={{ padding: "12px 16px", marginBottom: 14, borderRadius: 12,
           background: "rgba(56,189,248,.08)", border: "1px solid rgba(56,189,248,.3)",
           fontSize: 12, lineHeight: 1.7, color: "rgba(255,255,255,.65)" }}>
           <b style={{ color: "#7dd3fc" }}>These are the ISP's packages — the price shown is what YOU pay.</b><br />
-          You cannot change the speed, quota or the catalogue itself, but what you charge is
-          entirely yours. Set your selling price in <b>Billing → Reseller Pricing</b>, or give one
-          customer a different rate in the <b>Retail price</b> field when you add them.
+          You cannot change the speed, quota or the catalogue itself. Share a package to a group here,
+          then set your own child pricing in <b>Billing → Reseller Pricing</b>.
         </div>
       )}
 
@@ -757,6 +775,23 @@ export default function PackagesPage() {
           <option value="ALL">All Duration Types</option>
           {durationTypes.map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
+        <select
+          style={{
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: "10px",
+            padding: "10px 14px",
+            color: "var(--text)",
+            fontSize: "13px",
+            width: "100%",
+          }}
+          value={groupFilter}
+          onChange={(e) => { setGroupFilter(e.target.value); setPage(1); }}
+        >
+          <option value="ALL">All Groups</option>
+          <option value="UNGROUPED">Ungrouped</option>
+          {franchiseGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
       </div>
 
       {/* Table */}
@@ -786,6 +821,7 @@ export default function PackagesPage() {
             onPrice={() => { window.location.href = "/pricing"; }}
             onViewSubs={(pkg) => { setSelectedPackage(pkg); setShowSubscribersModal(true); mutateSubscribers(); }}
             onDuplicate={duplicatePackage}
+            onShare={openPackageShare}
           />
         )}
       </div>
@@ -1328,6 +1364,23 @@ export default function PackagesPage() {
           </div>
         </div>
       )}
+
+      {/* ============================================================ */}
+      {/* PACKAGE SHARE MODAL */}
+      {/* ============================================================ */}
+      {/* Enhanced Share Modal Component - Handles franchisee pricing */}
+      <PackageShareModal
+        isOpen={showShareModal}
+        onClose={() => {
+          setShowShareModal(false);
+          setSharePackage(null);
+        }}
+        package={sharePackage}
+        token={token}
+        onSuccess={() => {
+          mutatePackages();
+        }}
+      />
     </div>
   );
 }

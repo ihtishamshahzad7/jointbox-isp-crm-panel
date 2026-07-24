@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TicketSlaService } from './ticket-sla.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
 @Injectable()
 export class TicketsService {
+  private readonly logger = new Logger(TicketsService.name);
+
   constructor(
     private prisma: PrismaService,
     private sla: TicketSlaService,
@@ -122,7 +124,7 @@ export class TicketsService {
     // A reply from staff stops the response clock. Customer replies don't —
     // otherwise a customer chasing for an update would clear our own SLA.
     if ((data.sentByType || 'STAFF') === 'STAFF') {
-      void this.sla.markFirstResponse(Number(ticketId)).catch(() => {});
+      void this.sla.markFirstResponse(Number(ticketId)).catch((e) => { this.logger?.warn?.('markFirstResponse: ' + (e?.message || e)); });
     }
     return msg;
   }

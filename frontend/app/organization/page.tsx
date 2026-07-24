@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { silent } from "../components/silent";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -43,9 +44,9 @@ export default function OrganizationPage() {
   }, [token]);
 
   const loadAll = useCallback(() => {
-    get("/organization/isps").then((d) => setIsps(Array.isArray(d) ? d : [])).catch(() => {});
-    get("/organization/branches").then((d) => setBranches(Array.isArray(d) ? d : [])).catch(() => {});
-    get("/organization/resellers").then((d) => setResellers(Array.isArray(d) ? d : [])).catch(() => {});
+    get("/organization/isps").then((d) => setIsps(Array.isArray(d) ? d : [])).catch(silent("loadIsps"));
+    get("/organization/branches").then((d) => setBranches(Array.isArray(d) ? d : [])).catch(silent("loadBranches"));
+    get("/organization/resellers").then((d) => setResellers(Array.isArray(d) ? d : [])).catch(silent("loadResellers"));
   }, [get]);
 
   useEffect(() => {

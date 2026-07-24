@@ -36,14 +36,12 @@ export class FupService {
 
   /** Bytes used in the current billing period, from RADIUS accounting. */
   private async usageBytes(username: string, since: Date): Promise<number> {
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT COALESCE(SUM(acctinputoctets),0)::bigint  AS up,
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT COALESCE(SUM(acctinputoctets),0)::bigint  AS up,
               COALESCE(SUM(acctoutputoctets),0)::bigint AS down
          FROM radacct
-        WHERE username = $1 AND acctstarttime >= $2`,
-      username,
-      since,
-    ).catch(() => [] as any[]);
+        WHERE username = ${username} AND acctstarttime >= ${since}`
+    .catch(() => [] as any[]);
     const up = Number(rows?.[0]?.up ?? 0);
     const down = Number(rows?.[0]?.down ?? 0);
     return up + down;
@@ -225,7 +223,7 @@ export class FupService {
         void this.notifications.send({
           channel: 'SMS', recipient: sub.phone, subscriberId: sub.id, event: 'FUP_BLOCK',
           body: `Dear customer, you have used your ${quotaGb} GB data limit and your internet is now stopped. Please top up your data or renew to continue.`,
-        }).catch(() => {});
+        }).catch((e) => { this.logger?.warn?.('sendBlockNotification: ' + (e?.message || e)); });
       }
     } catch (e: any) {
       this.logger.warn(`FUP block failed for ${sub.username}: ${e?.message || e}`);
@@ -281,7 +279,7 @@ export class FupService {
             subscriberId: sub.id,
             event: 'FUP',
           })
-          .catch(() => {});
+          .catch((e) => { this.logger?.warn?.('sendThrottleNotification: ' + (e?.message || e)); });
       }
     } catch (e: any) {
       this.logger.warn(`FUP throttle failed for ${sub.username}: ${e?.message || e}`);
@@ -354,15 +352,13 @@ export class FupService {
     if (usernames.length) {
       const starts = subs.map((s) => this.cycleStart(s.serviceSettings?.expiryDate, s.serviceSettings?.duration));
       const floor = new Date(Math.min(...starts.map((d) => d.getTime())));
-      const agg = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT username, acctstarttime,
+      const agg = await this.prisma.$queryRaw<any[]>`
+        SELECT username, acctstarttime,
                 COALESCE(acctinputoctets,0)::bigint  AS up,
                 COALESCE(acctoutputoctets,0)::bigint AS down
            FROM radacct
-          WHERE username = ANY($1::text[]) AND acctstarttime >= $2`,
-        usernames,
-        floor,
-      ).catch(() => [] as any[]);
+          WHERE username = ANY(${usernames}::text[]) AND acctstarttime >= ${floor}`
+      .catch(() => [] as any[]);
 
       for (const s of subs) {
         if (!s.username) continue;

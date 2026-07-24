@@ -180,18 +180,23 @@ export class UsersService {
 
     const total = await this.prisma.user.count({ where });
 
-    const usersWithCounts = await Promise.all(
-      users.map(async (user) => {
-        const [ownedSubscribersCount, childrenCount] = await Promise.all([
-          this.prisma.subscriber.count({ where: { userId: user.id } }),
-          this.prisma.user.count({ where: { parentId: user.id } }),
-        ]);
-        return {
-          ...user,
-          _count: { ownedSubscribers: ownedSubscribersCount, children: childrenCount },
-        };
-      }),
-    );
+    const userIds = users.map((u) => u.id);
+
+    const [subGroups, childGroups] = await Promise.all([
+      this.prisma.subscriber.groupBy({ by: ['userId'], where: { userId: { in: userIds } }, _count: { userId: true } }),
+      this.prisma.user.groupBy({ by: ['parentId'], where: { parentId: { in: userIds } }, _count: { _all: true } }),
+    ]);
+
+    const subMap = new Map(subGroups.map((r) => [r.userId, r._count.userId]));
+    const childMap = new Map(childGroups.map((r) => [r.parentId, r._count._all]));
+
+    const usersWithCounts = users.map((user) => ({
+      ...user,
+      _count: {
+        ownedSubscribers: subMap.get(user.id) ?? 0,
+        children: childMap.get(user.id) ?? 0,
+      },
+    }));
 
     return {
       data: usersWithCounts,
@@ -214,15 +219,23 @@ export class UsersService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return Promise.all(
-      users.map(async (user) => {
-        const [ownedSubscribersCount, childrenCount] = await Promise.all([
-          this.prisma.subscriber.count({ where: { userId: user.id } }),
-          this.prisma.user.count({ where: { parentId: user.id } }),
-        ]);
-        return { ...user, _count: { ownedSubscribers: ownedSubscribersCount, children: childrenCount } };
-      }),
-    );
+    const userIds = users.map((u) => u.id);
+
+    const [subGroups, childGroups] = await Promise.all([
+      this.prisma.subscriber.groupBy({ by: ['userId'], where: { userId: { in: userIds } }, _count: { userId: true } }),
+      this.prisma.user.groupBy({ by: ['parentId'], where: { parentId: { in: userIds } }, _count: { _all: true } }),
+    ]);
+
+    const subMap = new Map(subGroups.map((r) => [r.userId, r._count.userId]));
+    const childMap = new Map(childGroups.map((r) => [r.parentId, r._count._all]));
+
+    return users.map((user) => ({
+      ...user,
+      _count: {
+        ownedSubscribers: subMap.get(user.id) ?? 0,
+        children: childMap.get(user.id) ?? 0,
+      },
+    }));
   }
 
   async getUserHierarchy(userId: number) {
@@ -234,10 +247,26 @@ export class UsersService {
         select: { id: true, name: true, email: true, role: true, phone: true, balance: true, createdAt: true },
       });
 
-      for (const child of children) {
-        const subscribersCount = await this.prisma.subscriber.count({ where: { userId: child.id } });
-        (child as any).children  = await getChildren(child.id);
-        (child as any)._count    = { ownedSubscribers: subscribersCount };
+      if (children.length === 0) return children;
+
+      const childIds = children.map((c) => c.id);
+
+      // One batch query for subscriber counts at this level, not N
+      const subGroups = await this.prisma.subscriber.groupBy({
+        by: ['userId'],
+        where: { userId: { in: childIds } },
+        _count: { userId: true },
+      });
+      const subMap = new Map(subGroups.map((r) => [r.userId, r._count.userId]));
+
+      // Recurse for grandchildren
+      const nestedChildren = await Promise.all(
+        childIds.map((cid) => getChildren(cid)),
+      );
+
+      for (let i = 0; i < children.length; i++) {
+        (children[i] as any).children = nestedChildren[i];
+        (children[i] as any)._count   = { ownedSubscribers: subMap.get(children[i].id) ?? 0 };
       }
       return children;
     };
@@ -262,6 +291,17 @@ export class UsersService {
         createdAt: true,
         updatedAt: true,
         photoUrl: true, cnicFrontUrl: true, cnicBackUrl: true,
+        smsEnabled: true, emailEnabled: true,
+        country: true, province: true, city: true,
+        identity: true, zipCode: true, dateOfBirth: true, about: true,
+        additionalPhones: true, additionalEmails: true,
+        autoRenew: true, billingType: true, accountingLimit: true,
+        nasGroup: true, areaGroup: true,
+        commissionPercent: true,
+        branchId: true,
+        branch: {
+          select: { id: true, name: true, isp: { select: { id: true, name: true } } },
+        },
         parent: { select: { id: true, name: true, email: true, role: true } },
       },
     });
@@ -273,14 +313,20 @@ export class UsersService {
       childrenCount,
       paymentsCount,
       ticketsCount,
+      ownedPackagesCount,
       recentSubscribers,
       recentPayments,
       recentTickets,
+      lastLogin,
+      childRoleCounts,
     ] = await Promise.all([
       this.prisma.subscriber.count({ where: { userId: id } }),
       this.prisma.user.count({ where: { parentId: id } }),
       this.prisma.payment.count({ where: { receivedBy: id } }),
       this.prisma.ticket.count({ where: { assignedTo: id } }),
+      this.prisma
+        .resellerPackagePrice
+        .count({ where: { userId: id } }),
       this.prisma.subscriber.findMany({
         where:   { userId: id },
         take:    10,
@@ -305,33 +351,110 @@ export class UsersService {
         orderBy: { createdAt: 'desc' },
         select:  { id: true, ticketNo: true, subject: true, status: true, priority: true, createdAt: true },
       }),
+      this.prisma.loginLog.findFirst({
+        where:  { userId: id, status: 'SUCCESS' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.user.groupBy({
+        by: ['role'],
+        where: { parentId: id },
+        _count: { role: true },
+      }),
     ]);
+
+    // Convert child role counts into named fields
+    const roleBreakdown: Record<string, number> = {};
+    for (const row of childRoleCounts) {
+      roleBreakdown[row.role.toLowerCase()] = row._count.role;
+    }
 
     const children = await this.prisma.user.findMany({
       where:  { parentId: id },
       select: { id: true, name: true, email: true, role: true, isActive: true, balance: true },
     });
 
-    const childrenWithCounts = await Promise.all(
-      children.map(async (child) => {
-        const subscribersCount = await this.prisma.subscriber.count({ where: { userId: child.id } });
-        return { ...child, _count: { ownedSubscribers: subscribersCount } };
-      }),
-    );
+    const childIds = children.map((c) => c.id);
+    const subGroups = childIds.length
+      ? await this.prisma.subscriber.groupBy({ by: ['userId'], where: { userId: { in: childIds } }, _count: { userId: true } })
+      : [];
+    const subMap = new Map(subGroups.map((r) => [r.userId, r._count.userId]));
+
+    const childrenWithCounts = children.map((child) => ({
+      ...child,
+      _count: { ownedSubscribers: subMap.get(child.id) ?? 0 },
+    }));
 
     return {
       ...user,
-      children:         childrenWithCounts,
-      subscribers:      recentSubscribers,
-      payments:         recentPayments,
-      assignedTickets:  recentTickets,
+      lastLogin:       lastLogin?.createdAt ?? null,
+      children:        childrenWithCounts,
+      subscribers:     recentSubscribers,
+      payments:        recentPayments,
+      assignedTickets: recentTickets,
       _count: {
         ownedSubscribers: ownedSubscribersCount,
         children:         childrenCount,
         payments:         paymentsCount,
         assignedTickets:  ticketsCount,
+        ownedPackages:    ownedPackagesCount,
+        subresellers:     roleBreakdown['sub_reseller'] ?? 0,
+        retailers:        roleBreakdown['retailer'] ?? 0,
+        sales:            roleBreakdown['sales'] ?? 0,
       },
     };
+  }
+
+  async findUserPackages(id: number, actor?: Actor) {
+    if (actor) await this.scope.assertUser(actor, id);
+    const user = await this.prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!user) throw new NotFoundException(`User with ID ${id} not found`);
+
+    // Get all active packages that this user's ancestors own, plus the user's own prices
+    const ancestors = await this.scope.ancestorIds(id);
+    const packages = await this.prisma.package.findMany({
+      where: {
+        ownerId: { in: ancestors },
+        isActive: true,
+      },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        price: true,
+        duration: true,
+        isActive: true,
+        downloadSpeed: true,
+        uploadSpeed: true,
+        dataQuotaGb: true,
+        _count: { select: { subscribers: true } },
+      },
+    });
+
+    // Get the reseller's pricing for these packages (if set)
+    const userPrices = await this.prisma.resellerPackagePrice.findMany({
+      where:  { userId: id },
+      select: {
+        packageId: true,
+        price: true,
+        retailPrice: true,
+        subresellerProfit: true,
+        subscriberProfit: true,
+      },
+    });
+    const priceMap = new Map(userPrices.map((p) => [p.packageId, p]));
+
+    return packages.map((pkg) => {
+      const assigned = priceMap.get(pkg.id);
+      return {
+        ...pkg,
+        minimumPrice: Math.round(pkg.price),
+        price:        assigned?.price ?? null,
+        retailPrice:  assigned?.retailPrice ?? null,
+        subresellerProfit: assigned?.subresellerProfit ?? null,
+        subscriberProfit:  assigned?.subscriberProfit ?? null,
+      };
+    });
   }
 
   async getStats(actor?: Actor) {
@@ -514,6 +637,19 @@ export class UsersService {
       country?:      string;
       province?:     string;
       city?:         string;
+      identity?:        string;
+      zipCode?:         string;
+      dateOfBirth?:     string;
+      about?:           string;
+      additionalPhones?: string;
+      additionalEmails?: string;
+      autoRenew?:       boolean;
+      billingType?:     string;
+      accountingLimit?: number;
+      nasGroup?:        string;
+      areaGroup?:       string;
+      branchId?:        number;
+      commissionPercent?: number;
     },
     actor?: Actor,
   ) {
@@ -548,6 +684,11 @@ export class UsersService {
     // and scoped. Silently drop any balance sent from the edit form.
     delete updateData.balance;
 
+    // Handle dateOfBirth as ISO string → Date
+    if (typeof updateData.dateOfBirth === 'string') {
+      updateData.dateOfBirth = new Date(updateData.dateOfBirth);
+    }
+
     if (data.password) {
       // Phase 4A: password policy
       const policyError = validatePassword(data.password);
@@ -566,6 +707,11 @@ export class UsersService {
         parentId: true, updatedAt: true,
         photoUrl: true, cnicFrontUrl: true, cnicBackUrl: true,
         smsEnabled: true, emailEnabled: true, country: true, province: true, city: true,
+        identity: true, zipCode: true, dateOfBirth: true, about: true,
+        additionalPhones: true, additionalEmails: true,
+        autoRenew: true, billingType: true, accountingLimit: true,
+        nasGroup: true, areaGroup: true,
+        commissionPercent: true,
       },
     });
   }

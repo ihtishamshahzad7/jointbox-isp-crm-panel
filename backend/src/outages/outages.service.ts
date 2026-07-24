@@ -120,19 +120,17 @@ export class OutagesService {
       const since = new Date(Date.now() - this.windowMin * 60_000);
 
       // Recent drops grouped by area, alongside that area's total customer base.
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT s."areaId"                       AS area_id,
+      const rows = await this.prisma.$queryRaw<any[]>`
+        SELECT s."areaId"                       AS area_id,
                 COUNT(DISTINCT r.username)::int  AS dropped,
                 (SELECT COUNT(*)::int FROM "Subscriber" s2
                   WHERE s2."areaId" = s."areaId" AND s2.status = 'ACTIVE') AS area_total,
                 COUNT(DISTINCT r.nasipaddress)::int AS nas_count
            FROM radacct r
            JOIN "Subscriber" s ON s.username = r.username
-          WHERE r.acctstoptime >= $1
+          WHERE r.acctstoptime >= ${since}
             AND s."areaId" IS NOT NULL
-          GROUP BY s."areaId"`,
-        since,
-      );
+          GROUP BY s."areaId"`;
 
       for (const row of rows) {
         const areaId = Number(row.area_id);
@@ -190,12 +188,10 @@ export class OutagesService {
     const open = await this.prisma.powerOutage.findMany({ where: { endedAt: null } });
     for (const o of open) {
       if (!o.areaId) continue;
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT COUNT(DISTINCT r.username)::int AS online
+      const rows = await this.prisma.$queryRaw<any[]>`
+        SELECT COUNT(DISTINCT r.username)::int AS online
            FROM radacct r JOIN "Subscriber" s ON s.username = r.username
-          WHERE s."areaId" = $1 AND r.acctstoptime IS NULL`,
-        o.areaId,
-      );
+          WHERE s."areaId" = ${o.areaId} AND r.acctstoptime IS NULL`;
       const online = Number(rows?.[0]?.online ?? 0);
       // Back to at least half the area connected → treat as restored.
       if (o.areaTotal > 0 && online / o.areaTotal >= 0.5) {
@@ -252,13 +248,11 @@ export class OutagesService {
 
     const out: any[] = [];
     for (const a of areas) {
-      const [counts] = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT (SELECT COUNT(*)::int FROM "Subscriber" WHERE "areaId" = $1 AND status = 'ACTIVE') AS total,
+      const [counts] = await this.prisma.$queryRaw<any[]>`
+        SELECT (SELECT COUNT(*)::int FROM "Subscriber" WHERE "areaId" = ${a.id} AND status = 'ACTIVE') AS total,
                 (SELECT COUNT(DISTINCT r.username)::int
                    FROM radacct r JOIN "Subscriber" s ON s.username = r.username
-                  WHERE s."areaId" = $1 AND r.acctstoptime IS NULL) AS online`,
-        a.id,
-      );
+                  WHERE s."areaId" = ${a.id} AND r.acctstoptime IS NULL) AS online`;
       const total = Number(counts?.total ?? 0);
       const online = Number(counts?.online ?? 0);
       if (!total) continue;

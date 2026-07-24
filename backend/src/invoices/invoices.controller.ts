@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Put, Delete,
-  Body, Param, UseGuards, Query, Req,
+  Body, Param, UseGuards, Query, Req, Res, Header,
 } from '@nestjs/common';
 import { InvoicesService } from './invoices.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -29,6 +29,14 @@ export class InvoicesController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.invoicesService.findOne(+id);
+  }
+
+  /** Printable HTML invoice (browser print → Save as PDF). */
+  @Get(':id/pdf')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async getPdf(@Param('id') id: string, @Res() res: any) {
+    const html = await this.invoicesService.getInvoicePdf(+id);
+    res.send(html);
   }
 
   @Post()

@@ -228,11 +228,9 @@ export class DatabaseSetupService implements OnModuleInit {
 
     // Surface the problem rather than letting the next `db push` fail cryptically.
     try {
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT count(*)::int AS n FROM pg_tables
-          WHERE schemaname='public' AND tableowner <> $1`,
-        dbUser,
-      );
+      const rows = await this.prisma.$queryRaw<any[]>`
+        SELECT count(*)::int AS n FROM pg_tables
+          WHERE schemaname='public' AND tableowner <> ${dbUser}`;
       const bad = Number(rows?.[0]?.n ?? 0);
       if (bad > 0) {
         this.logger.warn(
@@ -260,10 +258,8 @@ export class DatabaseSetupService implements OnModuleInit {
    */
   async archiveOldSessions(retainDays = Number(process.env.RADACCT_RETAIN_DAYS || 90)) {
     try {
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT archive_radacct($1) AS moved`,
-        retainDays,
-      );
+      const rows = await this.prisma.$queryRaw<any[]>`
+        SELECT archive_radacct(${retainDays}) AS moved`;
       const moved = Number(rows?.[0]?.moved ?? 0);
       if (moved) this.logger.log(`Archived ${moved} session(s) older than ${retainDays} days`);
       return { moved, retainDays };

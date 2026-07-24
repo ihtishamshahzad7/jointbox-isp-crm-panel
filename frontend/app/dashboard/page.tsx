@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { NovaArea, NovaBars, NovaDonut, dailySeries } from "../components/nova-charts";
 import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
+import { useSSE } from "../components/use-sse";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -344,6 +345,17 @@ export default function DashboardPage() {
   const { data: paymentsData, isLoading: payLoading, mutate: mutatePayments } = useSWR<Payment[]>(paymentsKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: usersData, isLoading: usrLoading, mutate: mutateUsers } = useSWR<User[]>(usersKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: nasData, isLoading: nasLoading, mutate: mutateNas } = useSWR<NasDevice[]>(nasKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
+
+  // ── Real-time SSE — instantly revalidate SWR caches on backend events ──
+  useSSE({
+    onEvent: (type) => {
+      if (type === 'payment') {
+        // A payment was recorded — refresh payments + invoices to update KPIs
+        mutatePayments();
+        mutateInvoices();
+      }
+    },
+  });
 
   const subscribers = subscribersData || [];
   const invoices = invoicesData || [];

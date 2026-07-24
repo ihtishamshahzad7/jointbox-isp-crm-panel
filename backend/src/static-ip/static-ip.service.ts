@@ -417,7 +417,7 @@ export class StaticIpService {
           entity: 'StaticIp',
           details: `${username}: pool address ${releasedAddress} released for static ${newIp} (via ${method})`,
         },
-      }).catch(() => null);
+        }).catch(() => null);
     }
 
     return { reconnected, releasedAddress, method };
@@ -668,7 +668,7 @@ export class StaticIpService {
               body: `Monthly charge for your static IP ${ip.ipAddress} is due. Invoice ${invoice.invoiceNo}.`,
               subscriberId: ip.subscriberId!,
               event: 'STATIC_IP_RENEWAL',
-            }).catch(() => {});
+            }).catch((e) => { this.logger?.warn?.('sendBillingNotification: ' + (e?.message || e)); });
           }
           billed++;
         } catch (e: any) {

@@ -125,14 +125,13 @@ export class DeviceIntelService {
     if (!subs.length) return { vendors: [], unidentified: 0, total: 0 };
 
     // Latest MAC per user, plus whether they are up right now.
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT DISTINCT ON (username) username, callingstationid,
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT DISTINCT ON (username) username, callingstationid,
               (acctstoptime IS NULL) AS online
          FROM radacct
-        WHERE username = ANY($1::text[]) AND callingstationid IS NOT NULL
-        ORDER BY username, acctstarttime DESC`,
-      subs.map((s) => s.username).filter(Boolean),
-    ).catch(() => [] as any[]);
+        WHERE username = ANY(${subs.map((s) => s.username).filter(Boolean)}::text[]) AND callingstationid IS NOT NULL
+        ORDER BY username, acctstarttime DESC`
+    .catch(() => [] as any[]);
 
     const map = new Map<string, any>();
     let unidentified = 0;
@@ -211,16 +210,15 @@ export class DeviceIntelService {
 
     // Disconnects, bucketed. Truncating to the window size is what turns
     // "within 90 seconds of each other" into a cheap groupable key.
-    const events = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT username,
-              FLOOR(EXTRACT(EPOCH FROM acctstoptime) / $2)::bigint AS bucket
+    const events = await this.prisma.$queryRaw<any[]>`
+      SELECT username,
+              FLOOR(EXTRACT(EPOCH FROM acctstoptime) / ${win})::bigint AS bucket
          FROM radacct
-        WHERE username = ANY($1::text[])
+        WHERE username = ANY(${names}::text[])
           AND acctstoptime IS NOT NULL
-          AND acctstoptime > NOW() - ($3 || ' days')::interval
-        GROUP BY username, bucket`,
-      names, win, String(days),
-    ).catch(() => [] as any[]);
+          AND acctstoptime > NOW() - (${String(days)} || ' days')::interval
+        GROUP BY username, bucket`
+    .catch(() => [] as any[]);
 
     if (events.length < 10) {
       return { clusters: [], analysed: names.length,

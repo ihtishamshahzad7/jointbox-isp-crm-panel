@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { IpPoolService } from '../ip-pool/ip-pool.service';
 import { CacheService } from '../common/cache.service';
-import { ScopeService } from '../common/scope.service';
+import { ScopeService, Actor } from '../common/scope.service';
+import { SecurityService } from '../security/security.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -89,6 +90,7 @@ export class PackagesService {
     private ipPoolService: IpPoolService,
     private cache: CacheService,
     private scope: ScopeService,
+    private security: SecurityService,
   ) {}
 
   /** ⚡ Phase 0: drop cached package list after any mutation */
@@ -260,23 +262,29 @@ export class PackagesService {
    * displayed price is its inherited cost. Shared by findAll() and getStats() so
    * the stat cards can never disagree with the list. The ISP passes through.
    */
+  /**
+   * Restrict the visible package list to packages EXPLICITLY shared with this
+   * account — either the account owns the package (created it) or it has a
+   * direct ResellerPackagePrice row assigned to it. Packages inherited from
+   * an ancestor are not shown until the ancestor explicitly assigns them.
+   *
+   * The assignment endpoint /users/:id/packages keeps the ancestor-chain
+   * lookup because upstream account holders need to see what they _can_ assign
+   * to a downstream account. This function controls what the downstream account
+   * itself may see and sell — and that should only be what has been explicitly
+   * shared with them.
+   */
   private async scopeToActor(packages: any[], actor: any): Promise<any[]> {
     const meId = this.scope.actorId(actor);
-    const chain = await this.scope.ancestorIds(meId); // [self, parent, …, root]
-    const rank = new Map(chain.map((id, i) => [id, i])); // 0 = me, higher = further up
+    // Only check the user's OWN ResellerPackagePrice rows — no ancestor inheritance.
     const rows = await this.prisma.resellerPackagePrice.findMany({
-      where: { userId: { in: chain } },
-      select: { packageId: true, userId: true, price: true },
+      where: { userId: meId },
+      select: { packageId: true, price: true },
     });
-    const buyByPkg = new Map<number, { rank: number; price: number }>();
-    for (const r of rows) {
-      const rk = rank.get(r.userId) ?? 999;
-      const cur = buyByPkg.get(r.packageId);
-      if (!cur || rk < cur.rank) buyByPkg.set(r.packageId, { rank: rk, price: r.price });
-    }
+    const buyByPkg = new Map(rows.map((r) => [r.packageId, r.price]));
     return packages
       .filter((p: any) => buyByPkg.has(p.id) || p.ownerId === meId)
-      .map((p: any) => ({ ...p, price: buyByPkg.get(p.id)?.price ?? p.price }));
+      .map((p: any) => ({ ...p, price: buyByPkg.get(p.id) ?? p.price }));
   }
 
   async getStats(actor?: any) {
@@ -492,7 +500,11 @@ export class PackagesService {
   // ─────────────────────────────────────────────────────────────
   // DELETE
   // ─────────────────────────────────────────────────────────────
-  async remove(id: number) {
+  async remove(id: number, actor?: Actor) {
+    if (actor) {
+      await this.security.assertCan(actor, 'packages.delete');
+    }
+
     const existing = await this.prisma.package.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Package not found');
 

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -78,29 +79,25 @@ export class ReportAnalyticsService {
     }
 
     const unit = this.trunc(grain);
-    const filter = ids ? `AND "subscriberId" = ANY($3::int[])` : '';
-    const args: any[] = [start, end];
-    if (ids) args.push(ids);
+    const filter: Prisma.Sql = ids
+      ? Prisma.sql`AND "subscriberId" = ANY(${Prisma.join(ids)}::int[])`
+      : Prisma.sql``;
 
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT date_trunc('${unit}', "paymentDate") AS bucket,
+    const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
+      SELECT date_trunc(${unit}, "paymentDate") AS bucket,
               SUM(amount)::float AS total,
               COUNT(*)::int      AS payments
          FROM "Payment"
-        WHERE "paymentDate" >= $1 AND "paymentDate" < $2 ${filter}
-        GROUP BY 1 ORDER BY 1`,
-      ...args,
+        WHERE "paymentDate" >= ${start} AND "paymentDate" < ${end} ${filter}
+        GROUP BY 1 ORDER BY 1`
     ).catch(() => [] as any[]);
 
-    const prevArgs: any[] = [prevStart, prevEnd];
-    if (ids) prevArgs.push(ids);
-    const prevRows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT date_trunc('${unit}', "paymentDate") AS bucket,
+    const prevRows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
+      SELECT date_trunc(${unit}, "paymentDate") AS bucket,
               SUM(amount)::float AS total
          FROM "Payment"
-        WHERE "paymentDate" >= $1 AND "paymentDate" < $2 ${filter}
-        GROUP BY 1 ORDER BY 1`,
-      ...prevArgs,
+        WHERE "paymentDate" >= ${prevStart} AND "paymentDate" < ${prevEnd} ${filter}
+        GROUP BY 1 ORDER BY 1`
     ).catch(() => [] as any[]);
 
     // Align the two windows by position, not by date — bucket N of this month
@@ -157,26 +154,24 @@ export class ReportAnalyticsService {
     const ids = await this.scopedSubscriberIds(actor);
     if (ids && ids.length === 0) return { grain, points: [], summary: { joined: 0, left: 0, net: 0, churnRate: 0 } };
 
-    const filter = ids ? `AND id = ANY($3::int[])` : '';
-    const argsA: any[] = [start, end];
-    if (ids) argsA.push(ids);
+    const filter: Prisma.Sql = ids
+      ? Prisma.sql`AND id = ANY(${Prisma.join(ids)}::int[])`
+      : Prisma.sql``;
 
-    const joined = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT date_trunc('${unit}', "createdAt") AS bucket, COUNT(*)::int AS n
-         FROM "Subscriber" WHERE "createdAt" >= $1 AND "createdAt" < $2 ${filter}
-        GROUP BY 1 ORDER BY 1`,
-      ...argsA,
+    const joined = await this.prisma.$queryRaw<any[]>(Prisma.sql`
+      SELECT date_trunc(${unit}, "createdAt") AS bucket, COUNT(*)::int AS n
+         FROM "Subscriber" WHERE "createdAt" >= ${start} AND "createdAt" < ${end} ${filter}
+        GROUP BY 1 ORDER BY 1`
     ).catch(() => [] as any[]);
 
     // Departure is approximated by the move to INACTIVE/SUSPENDED, since there
     // is no hard "cancelled" timestamp. updatedAt is the best signal available.
-    const left = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT date_trunc('${unit}', "updatedAt") AS bucket, COUNT(*)::int AS n
+    const left = await this.prisma.$queryRaw<any[]>(Prisma.sql`
+      SELECT date_trunc(${unit}, "updatedAt") AS bucket, COUNT(*)::int AS n
          FROM "Subscriber"
-        WHERE "updatedAt" >= $1 AND "updatedAt" < $2
+        WHERE "updatedAt" >= ${start} AND "updatedAt" < ${end}
           AND status IN ('INACTIVE','SUSPENDED') ${filter}
-        GROUP BY 1 ORDER BY 1`,
-      ...argsA,
+        GROUP BY 1 ORDER BY 1`
     ).catch(() => [] as any[]);
 
     const key = (d: any) => new Date(d).toISOString();

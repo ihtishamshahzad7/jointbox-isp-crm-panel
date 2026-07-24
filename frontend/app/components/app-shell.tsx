@@ -5,6 +5,8 @@ import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
 import { NovaStyles } from './ui';
 import { usePathname, useRouter } from 'next/navigation';
+import { silent } from './silent';
+import { Icons } from './icons';
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:'http://localhost:3001');
 
@@ -17,28 +19,27 @@ interface UserProfile {
   parentId?: number | null;
 }
 
-const Icons = {
-  Dashboard:   () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
-  Subscribers: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
-  Payments:    () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
-  Invoices:    () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
-  Packages:    () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
-  Pool:        () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
-  Vouchers:    () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 12V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h14"/><line x1="12" y1="4" x2="12" y2="20"/><path d="M20 15h2M20 19h2"/></svg>,
-  NAS:         () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>,
-  Areas:       () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>,
-  Complaints:  () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
-  Reports:     () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
-  Users:       () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
-  Logs:        () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
-  Settings:    () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
-  ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>,
-  Menu:        () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
-  Logout:      () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
-  // FIXED: Added missing icons
-  Search:      () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
-  Support:     () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
-  Network:     () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="16" y="2" width="6" height="6" rx="1"/><rect x="9" y="16" width="6" height="6" rx="1"/><path d="M5 8v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><line x1="12" y1="12" x2="12" y2="16"/></svg>,
+const navIcons = {
+  Dashboard:   () => <Icons.Dashboard width={18} height={18} />,
+  Subscribers: () => <Icons.Subscribers width={18} height={18} />,
+  Payments:    () => <Icons.Payments width={18} height={18} />,
+  Invoices:    () => <Icons.Invoices width={18} height={18} />,
+  Packages:    () => <Icons.Packages width={18} height={18} />,
+  Pool:        () => <Icons.Pool width={18} height={18} />,
+  Vouchers:    () => <Icons.Vouchers width={18} height={18} />,
+  NAS:         () => <Icons.NAS width={18} height={18} />,
+  Areas:       () => <Icons.Areas width={18} height={18} />,
+  Complaints:  () => <Icons.Complaints width={18} height={18} />,
+  Reports:     () => <Icons.Reports width={18} height={18} />,
+  Users:       () => <Icons.Users width={18} height={18} />,
+  Logs:        () => <Icons.Logs width={18} height={18} />,
+  Settings:    () => <Icons.Settings width={18} height={18} />,
+  ChevronLeft: () => <Icons.ChevronLeft width={16} height={16} />,
+  Menu:        () => <Icons.Menu width={18} height={18} />,
+  Logout:      () => <Icons.Logout width={16} height={16} />,
+  Search:      () => <Icons.Search width={18} height={18} />,
+  Support:     () => <Icons.Support width={18} height={18} />,
+  Network:     () => <Icons.Network width={18} height={18} />,
 };
 
 // Grouped, workflow-ordered menu: most-used on top, setup steps in order,
@@ -49,29 +50,31 @@ const menuGroups = [
   // than a hunt down a long list. The old routes all still work — deep links
   // and bookmarks are unaffected.
   { label: 'Daily Work', items: [
-    { id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: Icons.Dashboard },
-    { id: 'subscribers', label: 'Subscribers', href: '/subscribers', Icon: Icons.Subscribers },
-    { id: 'support', label: 'Support', href: '/support-center', Icon: Icons.Support },
-    { id: 'trace', label: 'Trace Search', href: '/trace', Icon: Icons.Search },
+    { id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: navIcons.Dashboard },
+    { id: 'subscribers', label: 'Subscribers', href: '/subscribers', Icon: navIcons.Subscribers },
+    { id: 'support', label: 'Support', href: '/support-center', Icon: navIcons.Support },
+    { id: 'trace', label: 'Trace Search', href: '/trace', Icon: navIcons.Search },
   ]},
   { label: 'Operations', items: [
-    { id: 'network', label: 'Network', href: '/network-center', Icon: Icons.Network },
-    { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: Icons.Packages },
+    { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
+    { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
+    { id: 'advanced', label: 'Advanced Features', href: '/advanced-features', Icon: navIcons.Support },
   ]},
   { label: 'Business', items: [
-    { id: 'billing', label: 'Billing', href: '/billing-center', Icon: Icons.Payments },
-    { id: 'insights', label: 'Insights', href: '/insights', Icon: Icons.Reports },
-    { id: 'compliance', label: 'KYC & Data Usage', href: '/compliance', Icon: Icons.Users },
+    { id: 'billing', label: 'Billing', href: '/billing-center', Icon: navIcons.Payments },
+    { id: 'insights', label: 'Insights', href: '/insights', Icon: navIcons.Reports },
+    { id: 'compliance', label: 'KYC & Data Usage', href: '/compliance', Icon: navIcons.Users },
+    { id: 'capability', label: 'Capability Checklist', href: '/reseller-capabilities', Icon: navIcons.Support },
   ]},
   { label: 'System', items: [
-    { id: 'admin', label: 'Administration', href: '/admin-center', Icon: Icons.Settings },
+    { id: 'admin', label: 'Administration', href: '/admin-center', Icon: navIcons.Settings },
     // Sits above Help deliberately: it answers "what do I do next", which is
     // the question people actually arrive with, and it checks itself.
-    { id: 'setup', label: 'Setup Checklist', href: '/setup', Icon: Icons.Dashboard },
+    { id: 'setup', label: 'Setup Checklist', href: '/setup', Icon: navIcons.Dashboard },
     // ISP owner only — root server console (logs + terminal). Hidden for
     // everyone else, and the backend refuses the routes for non-owners anyway.
-    { id: 'console', label: 'Server Console', href: '/console', Icon: Icons.NAS, ispOnly: true },
-    { id: 'help', label: 'Help & Guide', href: '/help', Icon: Icons.Support },
+    { id: 'console', label: 'Server Console', href: '/console', Icon: navIcons.NAS, ispOnly: true },
+    { id: 'help', label: 'Help & Guide', href: '/help', Icon: navIcons.Support },
   ]},
 ];
 // Flat list kept for title lookup / active-menu detection.
@@ -99,6 +102,8 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/network-center', 'network'],
   ['/billing-center', 'billing'],
   ['/service-catalog', 'catalog'],
+  ['/advanced-features', 'advanced'],
+  ['/reseller-capabilities', 'capability'],
   ['/support-center', 'support'],
   ['/admin-center', 'admin'],
   ['/insights', 'insights'],
@@ -111,6 +116,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   // Network hub
   ['/network', 'network'],
   ['/nas', 'network'],
+  ['/fiber', 'network'],
   ['/ip-pools', 'network'],
   ['/static-ips', 'network'],
   ['/outages', 'network'],
@@ -119,11 +125,13 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/packages', 'catalog'],
   ['/areas', 'catalog'],
   ['/inventory', 'catalog'],
+  ['/franchise-groups', 'catalog'],
 
   // Billing
   ['/accounting', 'billing'],
   ['/invoices', 'billing'],
   ['/payments', 'billing'],
+  ['/gateways', 'billing'],
   ['/vouchers', 'billing'],
   ['/pricing', 'billing'],
 
@@ -280,7 +288,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         const me = payload?.sub;
         setSwitchList((Array.isArray(rows) ? rows : []).filter((u: any) => u.id !== me));
       })
-      .catch(() => {});
+      .catch(silent("usersListFetch"));
     /**
      * Runs ONCE per session, not per navigation.
      *

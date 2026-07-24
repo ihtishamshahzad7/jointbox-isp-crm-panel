@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtAuthGuard } from './auth.guard';
+import { TokenBlacklistService } from './token-blacklist.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LogsModule } from '../logs/logs.module';
 
@@ -19,7 +20,7 @@ import { LogsModule } from '../logs/logs.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard],
+  providers: [AuthService, JwtStrategy, JwtAuthGuard, TokenBlacklistService],
   exports: [AuthService, JwtAuthGuard],
 })
 export class AuthModule {}

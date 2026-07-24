@@ -425,6 +425,13 @@ export class NasService implements OnModuleInit {
         }
 
         // 6. Finally, delete the NAS itself
+        // Verify the record still exists before deletion (prevent race condition)
+        const nasStillExists = await tx.nas.findUnique({ where: { id } });
+        if (!nasStillExists) {
+          this.logger.warn(`⚠️ NAS ${id} was already deleted by another process; skipping final delete`);
+          return nas; // Return the original NAS that was fetched
+        }
+
         const deletedNas = await tx.nas.delete({
           where: { id }
         });
@@ -448,8 +455,11 @@ export class NasService implements OnModuleInit {
             `Cannot delete NAS: It has existing related records. Please ensure all network logs and sessions are removed first.`
           );
         }
+        // P2025 = record not found (already deleted or didn't exist)
+        // This can happen with race conditions. Treat as successful.
         if (error.code === 'P2025') {
-          throw new NotFoundException(`NAS with ID ${id} not found`);
+          this.logger.warn(`⚠️ NAS ${id} not found during delete (may have been deleted by another process); treating as successful`);
+          return null; // Return null to indicate already deleted
         }
       }
       

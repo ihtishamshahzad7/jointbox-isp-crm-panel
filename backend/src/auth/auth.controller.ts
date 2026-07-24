@@ -11,10 +11,14 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './auth.guard'; // Use JwtAuthGuard instead
+import { TokenBlacklistService } from './token-blacklist.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly tokenBlacklistService: TokenBlacklistService,
+  ) {}
 
   // Switch into a downstream user's profile ("act as").
   @Post('impersonate/:userId')
@@ -73,5 +77,16 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async verifyToken(@Body() body: { token: string }) {
     return this.authService.verifyToken(body.token);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  async logout(@Req() req: any) {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (token) {
+      this.tokenBlacklistService.add(token);
+    }
+    return { message: 'Logged out successfully' };
   }
 }

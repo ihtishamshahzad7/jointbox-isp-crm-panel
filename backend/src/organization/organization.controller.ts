@@ -74,6 +74,20 @@ export class OrganizationController {
     });
   }
 
+  @Post('pricing/reverse/:subscriberId')
+  async reversePricing(
+    @Param('subscriberId') subscriberId: string,
+    @Body() body: { reference?: string; reason?: string },
+    @Request() req: any,
+  ) {
+    await this.scope.assertSubscriber(req.user, +subscriberId);
+    return this.pricing.reverseActivation(+subscriberId, {
+      reference: body?.reference,
+      reason: body?.reason,
+      actorId: req.user?.sub,
+    });
+  }
+
   // ── ISPs ──────────────────────────────────────────────────────
   @Get('isps')
   isps() {
@@ -197,5 +211,22 @@ export class OrganizationController {
     // WITHDRAWAL was calling the unscoped walletAdjust(), which let any account
     // drain any other account by id. Same guards as top-up now apply.
     return this.org.walletWithdrawScoped(req.user, +id, Number(body.amount), body.notes);
+  }
+
+  // ── FRANCHISE GROUP PRICING (ISP → multiple franchises, different prices) ──
+
+  @Get('franchise-pricing/:packageId')
+  franchisePricing(@Param('packageId') packageId: string, @Request() req: any) {
+    return this.org.listFranchisePricing(req.user, +packageId);
+  }
+
+  @Put('franchise-pricing')
+  setFranchisePricing(@Body() body: { userId: number; packageId: number; price: number }, @Request() req: any) {
+    return this.org.setFranchisePricing(req.user, body);
+  }
+
+  @Delete('franchise-pricing/:userId/:packageId')
+  removeFranchisePricing(@Param('userId') userId: string, @Param('packageId') packageId: string, @Request() req: any) {
+    return this.org.removeFranchisePricing(req.user, +userId, +packageId);
   }
 }

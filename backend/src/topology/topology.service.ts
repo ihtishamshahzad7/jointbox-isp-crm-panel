@@ -130,8 +130,8 @@ export class TopologyService {
     if (process.env.TOPOLOGY_AUTODETECT === 'false') return;
     try {
       // Latest session per user carrying a port id, over the last week.
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
-        `SELECT DISTINCT ON (username)
+      const rows = await this.prisma.$queryRaw<any[]>`
+        SELECT DISTINCT ON (username)
                 username,
                 COALESCE(nasportid,'') AS nasportid,
                 nasipaddress::text     AS nasip,
@@ -140,8 +140,8 @@ export class TopologyService {
           WHERE username IS NOT NULL
             AND nasportid IS NOT NULL AND nasportid <> ''
             AND acctstarttime > NOW() - INTERVAL '7 days'
-          ORDER BY username, acctstarttime DESC`,
-      ).catch(() => [] as any[]);
+          ORDER BY username, acctstarttime DESC`
+      .catch(() => [] as any[]);
 
       if (!rows.length) return;
 
@@ -228,9 +228,9 @@ export class TopologyService {
 
   /** Usernames with a live session right now. */
   private async onlineSet(): Promise<Set<string>> {
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL AND username IS NOT NULL`,
-    ).catch(() => [] as any[]);
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL AND username IS NOT NULL`
+    .catch(() => [] as any[]);
     return new Set(rows.map((r) => r.username));
   }
 

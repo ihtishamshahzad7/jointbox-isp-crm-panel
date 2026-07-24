@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { silent } from "../components/silent";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -51,9 +52,9 @@ export default function CommunicationPage() {
 
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
-    get("/communication/status").then(setStatus).catch(() => {});
-    get("/areas").then((d) => setAreas(Array.isArray(d) ? d : [])).catch(() => {});
-    get("/packages").then((d) => setPackages(Array.isArray(d) ? d : [])).catch(() => {});
+    get("/communication/status").then(setStatus).catch(silent("loadCommStatus"));
+    get("/areas").then((d) => setAreas(Array.isArray(d) ? d : [])).catch(silent("loadAreas"));
+    get("/packages").then((d) => setPackages(Array.isArray(d) ? d : [])).catch(silent("loadPackages"));
   }, []);
 
   const loadLog = useCallback(async (reset = true) => {
@@ -66,7 +67,7 @@ export default function CommunicationPage() {
 
   useEffect(() => {
     if (!token) return;
-    if (tab === "Templates") get("/communication/templates").then(setTemplates).catch(() => {});
+    if (tab === "Templates") get("/communication/templates").then(setTemplates).catch(silent("loadTemplates"));
     if (tab === "Log") void loadLog(true);
   }, [tab, logStatus]);
 

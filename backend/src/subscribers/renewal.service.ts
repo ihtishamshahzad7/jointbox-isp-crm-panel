@@ -335,7 +335,7 @@ export class RenewalService {
           body: `Your payment of ${Math.round(c.amountDue)} was due on ${new Date(c.dueDate).toLocaleDateString()}. Please settle it to keep your connection active.`,
           subscriberId: c.subscriberId,
           event: 'CREDIT_OVERDUE',
-        }).catch(() => {});
+        }).catch((e) => { this.logger?.warn?.('sendCreditOverdueNotification: ' + (e?.message || e)); });
       }
 
       this.logger.warn(`${overdue.length} credit extension(s) passed their payment date`);

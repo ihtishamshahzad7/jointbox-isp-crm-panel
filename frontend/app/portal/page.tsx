@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { silent } from "../components/silent";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -53,19 +54,19 @@ export default function PortalPage() {
     const saved = localStorage.getItem("portal_token");
     if (saved) {
       setToken(saved);
-      get("/portal/me", saved).then(setMe).catch(() => {});
+      get("/portal/me", saved).then(setMe).catch(silent("restoreSession"));
     }
   }, []);
 
   useEffect(() => {
     if (!token || !me) return;
-    if (tab === "Usage") get("/portal/usage").then(setUsage).catch(() => {});
+    if (tab === "Usage") get("/portal/usage").then(setUsage).catch(silent("loadUsage"));
     if (tab === "Invoices") {
-      get("/portal/invoices").then(setInvoices).catch(() => {});
-      get("/portal/gateways").then(setGateways).catch(() => {});
+      get("/portal/invoices").then(setInvoices).catch(silent("loadInvoices"));
+      get("/portal/gateways").then(setGateways).catch(silent("loadGateways"));
     }
-    if (tab === "Support") get("/portal/tickets").then(setTickets).catch(() => {});
-    if (tab === "My Account") get("/portal/sessions?limit=20").then(setSessions).catch(() => {});
+    if (tab === "Support") get("/portal/tickets").then(setTickets).catch(silent("loadTickets"));
+    if (tab === "My Account") get("/portal/sessions?limit=20").then(setSessions).catch(silent("loadSessions"));
   }, [tab, token, me]);
 
   /** Redeem a prepaid scratch card into the wallet. */
@@ -81,7 +82,7 @@ export default function PortalPage() {
       setVoucher({ code: "", pin: "" });
       setNote({ text: `Recharged. New balance: ${fmt(data.newBalance ?? 0)}`, ok: true });
       // Refresh the header balance.
-      get("/portal/me").then(setMe).catch(() => {});
+      get("/portal/me").then(setMe).catch(silent("refreshMeAfterRecharge"));
     } catch (e: any) {
       setNote({ text: e.message, ok: false });
     } finally { setBusy(false); }

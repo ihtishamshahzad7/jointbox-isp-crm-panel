@@ -127,7 +127,7 @@ export class TicketSlaService {
             priority: t.priority,
             reason,
           })
-          .catch(() => {});
+          .catch((e) => { this.logger?.warn?.('sendNotification: ' + (e?.message || e)); });
       }
 
       this.logger.log(`SLA sweep: ${atRisk.length} ticket(s) breached and escalated`);
@@ -159,12 +159,11 @@ export class TicketSlaService {
     ]);
 
     // Average hours to resolve, over the window.
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT AVG(EXTRACT(EPOCH FROM ("resolvedAt" - "createdAt")) / 3600)::numeric(10,2) AS avg_hours
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT AVG(EXTRACT(EPOCH FROM ("resolvedAt" - "createdAt")) / 3600)::numeric(10,2) AS avg_hours
          FROM "Ticket"
-        WHERE "resolvedAt" IS NOT NULL AND "resolvedAt" >= $1`,
-      since,
-    ).catch(() => [] as any[]);
+        WHERE "resolvedAt" IS NOT NULL AND "resolvedAt" >= ${since}`
+    .catch(() => [] as any[]);
 
     const compliance = resolved + breachedInPeriod > 0
       ? Math.round((resolved / (resolved + breachedInPeriod)) * 1000) / 10
@@ -191,7 +190,7 @@ export class TicketSlaService {
     });
     for (const t of missing) {
       const due = this.computeDueDates(t.priority, t.createdAt);
-      await this.prisma.ticket.update({ where: { id: t.id }, data: due }).catch(() => {});
+      await this.prisma.ticket.update({ where: { id: t.id }, data: due }).catch((e) => { this.logger?.warn?.('backfill: ' + (e?.message || e)); });
     }
     if (missing.length) this.logger.log(`Backfilled SLA targets on ${missing.length} ticket(s)`);
     return { backfilled: missing.length };

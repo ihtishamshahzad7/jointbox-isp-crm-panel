@@ -55,7 +55,7 @@ export class BackupService implements OnModuleInit {
       if (!list.length) {
         // No backup has ever been taken — do one now rather than waiting for 2am.
         this.logger.warn('No backup found — taking an initial one now');
-        setTimeout(() => this.run().catch(() => {}), 15_000).unref?.();
+        setTimeout(() => this.run().catch((e) => { this.logger?.warn?.('initialBackup: ' + (e?.message || e)); }), 15_000).unref?.();
       }
     } catch (e: any) {
       this.logger.warn(`Backup directory not usable: ${e?.message || e}`);

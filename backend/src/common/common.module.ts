@@ -6,6 +6,8 @@ import { ScopeService } from './scope.service';
 import { AuditInterceptor } from './audit.interceptor';
 import { DatabaseSetupService } from './database-setup.service';
 import { BackupService } from './backup.service';
+import { EventsService } from './events.service';
+import { EventsController } from './events.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -16,14 +18,16 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Global()
 @Module({
   imports: [PrismaModule],
+  controllers: [EventsController],
   providers: [
     CacheService,
     QueueService,
     ScopeService,
     DatabaseSetupService,
     BackupService,
+    EventsService,
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
-  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService],
+  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService],
 })
 export class CommonModule {}

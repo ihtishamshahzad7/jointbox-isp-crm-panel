@@ -39,7 +39,22 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
   }
 }
 
+function validateEnv() {
+  const required: [string, string][] = [
+    ['JWT_SECRET', 'JWT_SECRET'],
+    ['ADMIN_PASSWORD', 'ADMIN_PASSWORD'],
+  ];
+  for (const [key, desc] of required) {
+    if (!process.env[key] || process.env[key] === 'your-super-secret-key-change-this-in-production') {
+      console.error(`❌ CRITICAL: ${desc} environment variable is not set or is using the default value.`);
+      console.error(`   Set ${key}=<your-value> in .env or environment.`);
+      process.exit(1);
+    }
+  }
+}
+
 async function bootstrap() {
+  validateEnv();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Create the default admin on a fresh database (first Ubuntu install / new VM).
@@ -52,8 +67,9 @@ async function bootstrap() {
   app.getHttpAdapter().getInstance().set('etag', 'strong');
 
   // Enable CORS for frontend access
+  const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
   app.enableCors({
-    origin: true, // Allow all origins for development
+    origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((s) => s.trim()),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],

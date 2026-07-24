@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { silent } from "./silent";
 
 /**
  * RecordNotes — a notes/comments panel for ANY record.
@@ -63,12 +64,12 @@ export function RecordNotes({
   };
 
   const togglePin = async (n: Note) => {
-    await fetch(`${API}/notes/${n.id}`, { method: "PUT", headers, body: JSON.stringify({ pinned: !n.pinned }) }).catch(() => {});
+    await fetch(`${API}/notes/${n.id}`, { method: "PUT", headers, body: JSON.stringify({ pinned: !n.pinned }) }).catch(silent("toggleNotePin"));
     load();
   };
   const remove = async (n: Note) => {
     if (!confirm("Delete this note?")) return;
-    await fetch(`${API}/notes/${n.id}`, { method: "DELETE", headers }).catch(() => {});
+    await fetch(`${API}/notes/${n.id}`, { method: "DELETE", headers }).catch(silent("deleteNote"));
     load();
   };
 

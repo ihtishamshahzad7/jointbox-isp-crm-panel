@@ -481,6 +481,7 @@ export class MikrotikSyncService {
     apiPort: number,
     apiUsername: string,
     apiPassword: string,
+    retries: number = 1,
   ): Promise<{
     online: boolean;
     identity: string;
@@ -489,30 +490,49 @@ export class MikrotikSyncService {
     uptime: string;
     activeConnections: number;
   }> {
-    try {
-      return await withMikrotik(
-        { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 8000 },
-        async (client) => {
-          const [identity, resource, active] = await Promise.all([
-            client.send(['/system/identity/print']).catch(() => []),
-            client.send(['/system/resource/print']).catch(() => []),
-            client.send(['/ppp/active/print', 'count-only']).catch(() => []),
-          ]);
-          const res = resource[0] || {};
-          return {
-            online: true,
-            identity: identity[0]?.name || nasIp,
-            version: res.version || '',
-            cpuLoad: res['cpu-load'] ? `${res['cpu-load']}%` : '',
-            uptime: res.uptime || '',
-            activeConnections: parseInt(active[0]?.ret || '0', 10),
-          };
-        },
-      );
-    } catch (error: any) {
-      this.logger.warn(`⚠️ Quick check failed for ${nasIp}:${apiPort} — ${error.message}`);
-      return { online: false, identity: '', version: '', cpuLoad: '', uptime: '', activeConnections: 0 };
+    let lastError: any;
+    
+    // Retry with exponential backoff for transient failures
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await withMikrotik(
+          { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 4000 },
+          async (client) => {
+            const [identity, resource, active] = await Promise.all([
+              client.send(['/system/identity/print']).catch(() => []),
+              client.send(['/system/resource/print']).catch(() => []),
+              client.send(['/ppp/active/print', 'count-only']).catch(() => []),
+            ]);
+            const res = resource[0] || {};
+            return {
+              online: true,
+              identity: identity[0]?.name || nasIp,
+              version: res.version || '',
+              cpuLoad: res['cpu-load'] ? `${res['cpu-load']}%` : '',
+              uptime: res.uptime || '',
+              activeConnections: parseInt(active[0]?.ret || '0', 10),
+            };
+          },
+        );
+      } catch (error: any) {
+        lastError = error;
+        // Timeout/ECONNREFUSED = router offline, don't retry
+        if (error.code === 'ECONNREFUSED' || error.message.includes('timeout')) {
+          this.logger.debug(`⚠️ Router ${nasIp}:${apiPort} offline or unreachable (attempt ${attempt}/${retries})`);
+          break; // Stop retrying for permanent connection failures
+        }
+        // Transient error, retry with backoff
+        if (attempt < retries) {
+          const backoffMs = Math.pow(2, attempt - 1) * 500; // 500ms, 1s, 2s, etc.
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          this.logger.debug(`Retrying quickCheck for ${nasIp} (attempt ${attempt + 1}/${retries})`);
+        }
+      }
     }
+    
+    // All attempts failed
+    this.logger.warn(`⚠️ Quick check failed for ${nasIp}:${apiPort} after ${retries} attempt(s) — ${lastError?.message || 'Unknown error'}`);
+    return { online: false, identity: '', version: '', cpuLoad: '', uptime: '', activeConnections: 0 };
   }
 
   // ========== ADD THESE MISSING METHODS ==========

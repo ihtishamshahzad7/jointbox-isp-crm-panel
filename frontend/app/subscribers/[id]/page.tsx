@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { money } from "../../components/currency";
 import { RecordNotes } from "../../components/record-notes";
+import { Icons as SIcons } from "../../components/icons";
+import { BandwidthChart } from "../../components/bandwidth-chart";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Subscriber {
@@ -40,26 +42,24 @@ const API = (typeof window!=="undefined"?`http://${window.location.hostname}:300
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const Ic = {
-  Back:        ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>,
-  User:        ()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
-  Shield:      ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
-  Wifi:        ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>,
-  Server:      ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>,
-  Package:     ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>,
-  Invoice:     ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
-  Activity:    ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
-  Clock:       ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
-  Upload:      ()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>,
-  Download:    ()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>,
-  IP:          ()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>,
-  MAC:         ()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>,
-  Refresh:     ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>,
-  Disconnect:  ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
-  Edit:        ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
-  Sun:         ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
-  Moon:        ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
-  Check:       ()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>,
-  Lock:        ()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+  ...SIcons,
+  // ── Inline-only icons (not in shared Icons) ─────────────────────────────
+  Back:        () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>,
+  User:        () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  Shield:      () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+  Wifi:        () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>,
+  Server:      () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>,
+  Package:     () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>,
+  Invoice:     () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
+  Activity:    () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
+  Clock:       () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  Upload:      () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>,
+  Download:    () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>,
+  IP:          () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>,
+  MAC:         () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>,
+  Disconnect:  () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  Lock:        () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+  Box:         () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -294,6 +294,21 @@ export default function SubscriberProfilePage() {
     await Promise.all([loadLiveData(sub.username), loadUsage()]);
     setRefreshing(false);
     showToast("Live data refreshed","ok");
+  };
+
+  const killSession = async () => {
+    if (!sub?.username) return;
+    if (!confirm(`Disconnect ${sub.fullName}'s active session? This will force them offline.`)) return;
+    try {
+      const r = await fetch(`${API}/network/disconnect/${encodeURIComponent(sub.username)}`, { method: 'POST', headers });
+      if (r.ok) {
+        showToast("Session disconnected","ok");
+        setTimeout(() => loadLiveData(sub.username!), 2000);
+      } else {
+        const e = await r.json().catch(() => ({}));
+        showToast(e.message || "Failed to disconnect","err");
+      }
+    } catch { showToast("Network error disconnecting session","err"); }
   };
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -605,20 +620,65 @@ export default function SubscriberProfilePage() {
               <InfoRow label="Connection Type" value={sub.connectionType}/>
               <InfoRow label="NAS" value={sub.nas?.nasname}/>
               <InfoRow label="Salesperson" value={sub.salesperson?.name}/>
+              <InfoRow label="Package" value={sub.package?.name}/>
               <InfoRow label="Expiry Date" value={fmtDate(serviceSettings?.expiryDate || null, true)}/>
-              <InfoRow label="IP Address" value={serviceSettings?.ipAddress}/>
+              <InfoRow label="Duration (Days)" value={serviceSettings?.duration ?? (sub.package?.duration ?? "—")}/>
+              <InfoRow label="IP Address" value={serviceSettings?.ipAddress || "—"}/>
               <InfoRow label="IP Type" value={serviceSettings?.ipType}/>
-              <InfoRow label="MAC" value={serviceSettings?.macAddress} mono/>
+              <InfoRow label="MAC Address" value={serviceSettings?.macAddress || "—"} mono/>
+              <InfoRow label="MAC Lock" value={serviceSettings?.macLockEnabled ? "Enabled" : "Disabled"}/>
+              <InfoRow label="VLAN ID" value={serviceSettings?.vlanId}/>
               {/* Live figures from RADIUS, not the stored counter — quotaUsed
                   in the database only updates when a job runs, so it drifts. */}
               <InfoRow label="Data Allowance" value={usage?.quotaGb ? `${usage.quotaGb} GB` : (serviceSettings?.quota || "Unlimited")}/>
               <InfoRow label="Used This Cycle" value={usage?.usedGb != null ? `${usage.usedGb} GB` : "—"}/>
+              <InfoRow label="Bonus Quota" value={serviceSettings?.bonusQuotaGb ? `${serviceSettings.bonusQuotaGb} GB` : "—"}/>
+              <InfoRow label="Quota Reset Date" value={fmtDate(serviceSettings?.quotaResetDate || null, true)}/>
+              <InfoRow label="Custom Price" value={serviceSettings?.customPrice ? money(serviceSettings.customPrice) : "—"}/>
               <InfoRow label="Discount Type" value={serviceSettings?.discountType}/>
-              <InfoRow label="Discount" value={serviceSettings?.discountValue?.toString()}/>
-              <InfoRow label="Box/POP Number" value={serviceSettings?.ontSerial}/>
-              <InfoRow label="Box/POP Address" value={serviceSettings?.ontModel}/>
-              <InfoRow label="Uplink Port" value={serviceSettings?.uploadSpeed}/>
-              <InfoRow label="Fiber Code/ID" value={serviceSettings?.downloadSpeed}/>
+              <InfoRow label="Discount Value" value={serviceSettings?.discountValue?.toString() || "—"}/>
+              <InfoRow label="SMS Notifications" value={serviceSettings?.smsEnabled ? "Enabled" : "Disabled"}/>
+            </div>
+            <div style={{marginTop:20,borderTop:`1px solid ${t.cardBorder}`,paddingTop:16}}>
+              <SectionTitle icon={<Ic.Network/>} label="Bandwidth Override" color="#f59e0b" size="sm"/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <InfoRow label="Upload Speed" value={serviceSettings?.uploadSpeed ? `${serviceSettings.uploadSpeed}` : "— (uses package)"}/>
+                <InfoRow label="Download Speed" value={serviceSettings?.downloadSpeed ? `${serviceSettings.downloadSpeed}` : "— (uses package)"}/>
+              </div>
+            </div>
+            <div style={{marginTop:20,borderTop:`1px solid ${t.cardBorder}`,paddingTop:16}}>
+              <SectionTitle icon={<Ic.Box/>} label="Physical Installation" color="#8b5cf6" size="sm"/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <InfoRow label="Box/POP Number" value={serviceSettings?.boxNumber || serviceSettings?.ontSerial || "—"}/>
+                <InfoRow label="Box/POP Address" value={serviceSettings?.boxAddress || serviceSettings?.ontModel || "—"}/>
+                <InfoRow label="Uplink Port" value={serviceSettings?.uplinkPort || serviceSettings?.uploadSpeed || "—"}/>
+                <InfoRow label="Fiber Code/ID" value={serviceSettings?.fiberCode || serviceSettings?.downloadSpeed || "—"}/>
+                <InfoRow label="Fiber Color" value={serviceSettings?.fiberColor || "—"}/>
+                <InfoRow label="Cable Type" value={serviceSettings?.cableType || "—"}/>
+                <InfoRow label="Switch Board" value={serviceSettings?.switchBoard || "—"}/>
+                <InfoRow label="Switch Port" value={serviceSettings?.switchPort || "—"}/>
+                <InfoRow label="Electric Socket" value={serviceSettings?.electricSocket || "—"}/>
+                <InfoRow label="ONU Note" value={serviceSettings?.onuNote || "—"}/>
+              </div>
+            </div>
+            <div style={{marginTop:20,borderTop:`1px solid ${t.cardBorder}`,paddingTop:16}}>
+              <SectionTitle icon={<Ic.Wifi/>} label="ONT / Optical" color="#10b981" size="sm"/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <InfoRow label="ONT Serial" value={serviceSettings?.ontSerial || "—"}/>
+                <InfoRow label="ONT Model" value={serviceSettings?.ontModel || "—"}/>
+                <InfoRow label="Signal Level" value={serviceSettings?.signalLevel || "—"}/>
+                <InfoRow label="RX Power" value={serviceSettings?.rxPower || "—"}/>
+                <InfoRow label="TX Power" value={serviceSettings?.txPower || "—"}/>
+              </div>
+            </div>
+            <div style={{marginTop:20,borderTop:`1px solid ${t.cardBorder}`,paddingTop:16}}>
+              <SectionTitle icon={<Ic.Lock/>} label="PPTP / Backup" color="#ef4444" size="sm"/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <InfoRow label="PPTP Username" value={serviceSettings?.pptpUsername || "—"}/>
+                <InfoRow label="PPTP Password" value={serviceSettings?.pptpPassword ? "••••••" : "—"}/>
+                <InfoRow label="Has Backup" value={serviceSettings?.hasBackup ? "Yes" : "No"}/>
+                <InfoRow label="Notes" value={serviceSettings?.notes || "—"}/>
+              </div>
             </div>
           </Card>
         )}
@@ -909,17 +969,23 @@ export default function SubscriberProfilePage() {
         {/* ════════════════════════════════════
             TAB: CONNECTION (live from RADIUS)
         ════════════════════════════════════ */}
-        {activeTab==="Connection" && (
+        {activeTab==="Connection" && (<>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
             {/* Connection Status */}
             <Card>
               <SectionTitle icon={<Ic.Wifi/>} label="Connection Status" color="#4ade80"/>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:isOnline?"rgba(34,197,94,0.1)":"rgba(239,68,68,0.1)",borderRadius:8,border:`1px solid ${isOnline?"rgba(34,197,94,0.3)":"rgba(239,68,68,0.3)"}`}}>
                 <span style={{width:10,height:10,borderRadius:"50%",background:isOnline?"#22c55e":"#ef4444",boxShadow:isOnline?"0 0 10px #22c55e":undefined,flexShrink:0}}/>
-                <div>
+                <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:14,color:isOnline?"#4ade80":"#f87171"}}>{isOnline?"Online":"Offline"}</div>
                   {isOnline&&liveSession&&<div style={{fontSize:11,color:t.textMuted}}>Online Uptime: {fmtDuration(liveSession.duration_seconds)}</div>}
                 </div>
+                {isOnline && (
+                  <button onClick={killSession} title="Disconnect this subscriber"
+                    style={{padding:"5px 12px",borderRadius:6,border:"none",fontSize:11,fontWeight:600,cursor:"pointer",background:"#450a0a",color:"#f87171",display:"flex",alignItems:"center",gap:5}}>
+                    <Ic.X/> Disconnect
+                  </button>
+                )}
               </div>
               {liveSession ? (
                 <>
@@ -983,7 +1049,15 @@ export default function SubscriberProfilePage() {
               </Card>
             </div>
           </div>
-        )}
+
+          {/* Bandwidth Chart — full width */}
+          <div style={{marginTop:14}}>
+            <Card>
+              <SectionTitle icon={<Ic.Activity/>} label="Live Bandwidth (last 60 min)" color="#60a5fa"/>
+              {sub?.username && <BandwidthChart username={sub.username} minutes={60} darkMode={d} />}
+            </Card>
+          </div>
+        </>)}
 
         {/* ════════════════════════════════════
             TAB: SESSION LOG (from radacct)

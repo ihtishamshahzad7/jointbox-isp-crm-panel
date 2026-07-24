@@ -2,6 +2,16 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { Pool } from 'pg';
 
 /**
+ * Resolved policy attributes from a package's linked RADIUS policies.
+ * Each entry is written directly to radreply as (attribute, op, value).
+ */
+export interface RadiusPolicyAttr {
+  attribute: string;
+  op: string;
+  value: string;
+}
+
+/**
  * POOL, NOT CLIENT.
  *
  * This service held a single `pg.Client` shared by everything that touches
@@ -109,7 +119,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.reconnecting = true;
     // Best-effort close of the dead client so it stops emitting further events.
     try {
-      this.pgClient?.end().catch(() => {});
+      this.pgClient?.end().catch((e) => { this.logger?.warn?.('scheduleReconnect: ' + (e?.message || e)); });
     } catch {
       /* ignore */
     }
@@ -174,10 +184,10 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     return `${dl}M/${ul}M`;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // CORE: Write full subscriber profile to RADIUS
-  // (radcheck + radreply for speed limit + IP pool)
-  // ─────────────────────────────────────────────────────────────
+  /**
+   * Resolved policy attributes from a package's linked RADIUS policies.
+   * Each entry is written directly to radreply as (attribute, op, value).
+   */
   async syncSubscriberProfile(
     username: string,
     password: string,
@@ -189,6 +199,12 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       burstThreshold?: number | null;
       burstTime?: number | null;
       pool?: { name: string } | null;
+      /**
+       * Resolved policy attributes from the package's linked RADIUS policies.
+       * When set, these OVERRIDE the auto-computed Mikrotik-Rate-Limit and any
+       * other computed attributes with the policy-defined values.
+       */
+      policyAttributes?: RadiusPolicyAttr[];
     } | null,
     /**
      * Optional service profile. Omitted → behaves exactly as before (PPPoE with
@@ -235,62 +251,84 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
           [username, attr, op, value],
         );
 
-      // Write speed + addressing to radreply (only if package exists)
-      if (pkg) {
-        const rateLimit = this.buildRateLimit(pkg);
-        await addReply('Mikrotik-Rate-Limit', rateLimit);
-
-        // ── Addressing ────────────────────────────────────────
-        // Priority: an explicit static IP beats the package pool. Business
-        // customers are sold a fixed address and it must win.
-        let addressing = 'none';
-        if (opts?.staticIp) {
-          await addReply('Framed-IP-Address', opts.staticIp);
-          // /32 — the customer gets exactly this address, not a range.
-          await addReply('Framed-IP-Netmask', '255.255.255.255');
-          addressing = `static ${opts.staticIp}`;
-        } else if (pkg.pool?.name) {
-          // Framed-Pool ONLY. Do not also send Framed-IP-Address here.
-          //
-          // 255.255.255.254 is sometimes described as a "let the NAS choose"
-          // sentinel (RFC 2865), but MikroTik does not treat it that way — it
-          // takes the value literally, assigns 255.255.255.254 to the session,
-          // finds it unusable and terminates immediately. The customer then
-          // redials every few seconds forever. The router log gives it away:
-          //   "logged in, 255.255.255.254" followed by "terminating..."
-          //
-          // With Framed-Pool alone the router allocates from the named pool,
-          // which is the behaviour we actually want.
-          await addReply('Framed-Pool', pkg.pool.name);
-          addressing = `pool ${pkg.pool.name}`;
+      // If the package has linked RADIUS policies, use them as the source of truth
+      // and skip the auto-computed speed/rate-limit entirely. This lets operators
+      // define arbitrary RADIUS attributes (Mikrotik-Rate-Limit, Ascend-*,
+      // Huawei-*, etc.) per package via the Policies UI.
+      if (pkg?.policyAttributes && pkg.policyAttributes.length > 0) {
+        for (const pa of pkg.policyAttributes) {
+          await addReply(pa.attribute, pa.value, pa.op);
         }
-
-        // ── Service-specific attributes ───────────────────────
-        if (serviceType === 'HOTSPOT') {
-          // Hotspot users are usually sold time or data, not a month of
-          // always-on service, so limits are the norm rather than exception.
-          if (opts?.sessionTimeout) {
-            await addReply('Session-Timeout', String(opts.sessionTimeout));
-          }
-          // Free the session when the user walks away, so the slot and the
-          // address return to the pool instead of idling all day.
-          await addReply('Idle-Timeout', String(opts?.idleTimeout ?? 900));
-          // MikroTik hotspot honours this for per-user queues.
-          await addReply('Mikrotik-Address-List', 'hotspot-users');
-        } else if (serviceType === 'PPPOE') {
-          if (opts?.idleTimeout) {
-            await addReply('Idle-Timeout', String(opts.idleTimeout));
-          }
-        }
-
         this.logger.log(
           `✅ RADIUS profile synced for "${username}" — ` +
-            `${serviceType}, speed ${rateLimit}, ${addressing}`,
+            `${pkg.policyAttributes.length} policy attributes written`,
         );
+        // Still write addressing (Framed-IP-Address / Framed-Pool) even when
+        // policies are active — the pool is about connectivity, not speed.
+        if (opts?.staticIp) {
+          await addReply('Framed-IP-Address', opts.staticIp);
+          await addReply('Framed-IP-Netmask', '255.255.255.255');
+        } else if (pkg.pool?.name) {
+          await addReply('Framed-Pool', pkg.pool.name);
+        }
       } else {
-        this.logger.warn(
-          `⚠️ "${username}" added to RADIUS with no package — no speed limit, no IP pool`,
-        );
+        // ── No policy attributes — compute rate-limit from package speed fields ──
+        if (pkg) {
+          const rateLimit = this.buildRateLimit(pkg);
+          await addReply('Mikrotik-Rate-Limit', rateLimit);
+
+          // ── Addressing ────────────────────────────────────────
+          // Priority: an explicit static IP beats the package pool. Business
+          // customers are sold a fixed address and it must win.
+          let addressing = 'none';
+          if (opts?.staticIp) {
+            await addReply('Framed-IP-Address', opts.staticIp);
+            // /32 — the customer gets exactly this address, not a range.
+            await addReply('Framed-IP-Netmask', '255.255.255.255');
+            addressing = `static ${opts.staticIp}`;
+          } else if (pkg.pool?.name) {
+            // Framed-Pool ONLY. Do not also send Framed-IP-Address here.
+            //
+            // 255.255.255.254 is sometimes described as a "let the NAS choose"
+            // sentinel (RFC 2865), but MikroTik does not treat it that way — it
+            // takes the value literally, assigns 255.255.255.254 to the session,
+            // finds it unusable and terminates immediately. The customer then
+            // redials every few seconds forever. The router log gives it away:
+            //   "logged in, 255.255.255.254" followed by "terminating..."
+            //
+            // With Framed-Pool alone the router allocates from the named pool,
+            // which is the behaviour we actually want.
+            await addReply('Framed-Pool', pkg.pool.name);
+            addressing = `pool ${pkg.pool.name}`;
+          }
+
+          // ── Service-specific attributes ───────────────────────
+          if (serviceType === 'HOTSPOT') {
+            // Hotspot users are usually sold time or data, not a month of
+            // always-on service, so limits are the norm rather than exception.
+            if (opts?.sessionTimeout) {
+              await addReply('Session-Timeout', String(opts.sessionTimeout));
+            }
+            // Free the session when the user walks away, so the slot and the
+            // address return to the pool instead of idling all day.
+            await addReply('Idle-Timeout', String(opts?.idleTimeout ?? 900));
+            // MikroTik hotspot honours this for per-user queues.
+            await addReply('Mikrotik-Address-List', 'hotspot-users');
+          } else if (serviceType === 'PPPOE') {
+            if (opts?.idleTimeout) {
+              await addReply('Idle-Timeout', String(opts.idleTimeout));
+            }
+          }
+
+          this.logger.log(
+            `✅ RADIUS profile synced for "${username}" — ` +
+              `${serviceType}, speed ${rateLimit}, ${addressing}`,
+          );
+        } else {
+          this.logger.warn(
+            `⚠️ "${username}" added to RADIUS with no package — no speed limit, no IP pool`,
+          );
+        }
       }
     } catch (error: any) {
       this.logger.error(

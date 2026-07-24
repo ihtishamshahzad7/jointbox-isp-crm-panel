@@ -13,5 +13,6 @@ import { CommonModule } from '../common/common.module';
   imports: [PrismaModule, IpPoolModule, CommonModule],
   controllers: [PackagesController],
   providers: [PackagesService],
+  exports: [PackagesService],
 })
 export class PackagesModule {}

@@ -12,6 +12,8 @@ import { NotificationsService } from '../notifications/notifications.service';
  *   STRIPE      — STRIPE_SECRET_KEY (+ STRIPE_WEBHOOK_SECRET for signed webhooks)
  *   BKASH       — BKASH_BASE_URL, BKASH_APP_KEY, BKASH_APP_SECRET, BKASH_USERNAME, BKASH_PASSWORD
  *   SSLCOMMERZ  — SSLCZ_STORE_ID, SSLCZ_STORE_PASS (+ SSLCZ_SANDBOX=1 for test mode)
+ *   JAZZCASH    — JAZZCASH_MERCHANT_ID, JAZZCASH_PASSWORD, JAZZCASH_INTEGERITY_SALT (+ JAZZCASH_SANDBOX=0/1)
+ *   EASYPAISA   — EASYPAISA_STORE_ID, EASYPAISA_STORE_PASS (+ EASYPAISA_SANDBOX=0/1)
  *
  * Flow: initiate() → subscriber pays on gateway → callback → handleSuccess():
  *   record payment (ledger + notification) → extend expiry → reactivate → RADIUS re-add.
@@ -41,6 +43,8 @@ export class GatewayService {
     if (process.env.STRIPE_SECRET_KEY) list.push('STRIPE');
     if (process.env.BKASH_APP_KEY) list.push('BKASH');
     if (process.env.SSLCZ_STORE_ID) list.push('SSLCOMMERZ');
+    if (process.env.JAZZCASH_MERCHANT_ID) list.push('JAZZCASH');
+    if (process.env.EASYPAISA_STORE_ID) list.push('EASYPAISA');
     return list;
   }
 
@@ -96,6 +100,12 @@ export class GatewayService {
         break;
       case 'SSLCOMMERZ':
         paymentUrl = await this.sslczCheckout(tx, invoice);
+        break;
+      case 'JAZZCASH':
+        paymentUrl = await this.jazzcashCheckout(tx, invoice);
+        break;
+      case 'EASYPAISA':
+        paymentUrl = await this.epCheckout(tx, invoice);
         break;
       default:
         throw new BadRequestException('Unknown gateway');
@@ -204,6 +214,11 @@ export class GatewayService {
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     return { items, nextCursor: hasMore ? items[items.length - 1].id : null, hasMore };
+  }
+
+  /** Lookup a transaction by its idempotency key (used by controller for JazzCash form). */
+  async findTransactionByIdempotencyKey(key: string) {
+    return this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
   }
 
   /** Reconciliation: SUCCESS gateway transactions without a matching payment row. */
@@ -352,5 +367,152 @@ export class GatewayService {
       throw new BadRequestException(`SSLCommerz: ${data?.failedreason || 'session failed'}`);
     }
     return data.GatewayPageURL;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // DRIVER: JAZZCASH (Pakistan — Mobilink Microfinance Bank)
+  // ─────────────────────────────────────────────────────────────
+  //
+  // JazzCash uses a POST-redirect model: the merchant sends a form to the
+  // customer's browser which POSTs to JazzCash's hosted checkout page.
+  // The gateway then redirects back to the callback URL with a POST.
+  //
+  // https://merchants.jazzcash.com.pk/ — Integrated API v2.1
+  //
+  private async jazzcashCheckout(tx: any, invoice: any): Promise<string> {
+    const merchantId = process.env.JAZZCASH_MERCHANT_ID || '';
+    const password   = process.env.JAZZCASH_PASSWORD || '';
+    const salt       = process.env.JAZZCASH_INTEGERITY_SALT || '';
+    const sandbox    = process.env.JAZZCASH_SANDBOX !== '0';
+    const base       = sandbox
+      ? 'https://sandbox.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/'
+      : 'https://payments.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/';
+
+    const pp_TxnDateTime   = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const pp_TxnExpiryDateTime = new Date(Date.now() + 86400_000).toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+    // JazzCash requires a specific HMAC-SHA256 integrity check string
+    const integrityString = [
+      salt,
+      'INTEGRITY_SALT_FIXED',      // PP_VERSION
+      merchantId,                   // PP_MERCHANT_ID
+      password,                     // PP_PASSWORD
+      tx.idempotencyKey,            // PP_TXNREFNO
+      pp_TxnDateTime,               // PP_TXN_DATE_TIME
+      '',                           // PP_BILL_REFERENCE (optional)
+      tx.amount.toFixed(2),         // PP_AMOUNT
+      '',                           // PP_DISCOUNT (optional)
+      'PKR',                        // PP_CURRENCY
+      invoice.subscriber?.phone || '0', // PP_MOBILE_NO (optional but recommended)
+      invoice.subscriber?.email || '',  // PP_EMAIL (optional)
+      '',                           // PP_PIN (optional)
+      `${this.backendUrl}/gateway/callback/jazzcash?key=${tx.idempotencyKey}`, // PP_RETURN_URL
+      '',                           // PP_SUB_MERCHANT_ID (optional)
+      '',                           // PPMP_1 (optional)
+      '',                           // PPMP_2 (optional)
+      '',                           // PPMP_3 (optional)
+      salt,                         // Trailing salt
+    ].join('&');
+
+    const pp_SecureHash = createHmac('sha256', salt).update(integrityString).digest('hex');
+
+    // JazzCash doesn't return a URL — the merchant POSTs a form from their
+    // own page. We return a self-submitting HTML page instead.
+    await this.prisma.gatewayTransaction.update({
+      where: { id: tx.id },
+      data: { gatewayRef: tx.idempotencyKey },
+    });
+
+    const formFields = [
+      ['PP_VERSION', 'INTEGRITY_SALT_FIXED'],
+      ['PP_MERCHANT_ID', merchantId],
+      ['PP_PASSWORD', password],
+      ['PP_TXNREFNO', tx.idempotencyKey],
+      ['PP_TXN_DATE_TIME', pp_TxnDateTime],
+      ['PP_TXN_EXP_DATE_TIME', pp_TxnExpiryDateTime],
+      ['PP_AMOUNT', tx.amount.toFixed(2)],
+      ['PP_CURRENCY', 'PKR'],
+      ['PP_BILL_REFERENCE', `INV-${invoice.id}`],
+      ['PP_DESCRIPTION', `Invoice ${invoice.invoiceNo}`],
+      ['PP_MOBILE_NO', invoice.subscriber?.phone || ''],
+      ['PP_EMAIL', invoice.subscriber?.email || ''],
+      ['PP_RETURN_URL', `${this.backendUrl}/gateway/callback/jazzcash?key=${tx.idempotencyKey}`],
+      ['PP_SECURE_HASH', pp_SecureHash],
+    ];
+
+    const fieldsHtml = formFields
+      .map(([name, val]) => `<input type="hidden" name="${name}" value="${val}"/>`)
+      .join('\n');
+
+    return `${this.backendUrl}/gateway/jazzcash/form/${tx.idempotencyKey}`;
+  }
+
+  /** JazzCash callback — POST from JazzCash after payment. */
+  async jazzcashHandle(key: string, body: any): Promise<{ ok: boolean }> {
+    // JazzCash POSTs back to our return URL with payment details.
+    // pp_ResponseCode = '000' means success.
+    if (body?.pp_ResponseCode === '000') {
+      return this.handleSuccess(key, body.pp_TxnRefNo || body.pp_TXNREFNO, JSON.stringify(body));
+    }
+    await this.handleFailure(key, body?.pp_ResponseCode || 'jazzcash-failed');
+    return { ok: true };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // DRIVER: EASYPAISA (Pakistan — Telenor Microfinance Bank)
+  // ─────────────────────────────────────────────────────────────
+  //
+  // Easypaisa uses a hosted checkout page. Merchant sends a POST request to
+  // Easypaisa's API, gets back a redirect URL. Callback comes via GET/POST.
+  //
+  private async epCheckout(tx: any, invoice: any): Promise<string> {
+    const storeId   = process.env.EASYPAISA_STORE_ID || '';
+    const storePass = process.env.EASYPAISA_STORE_PASS || '';
+    const sandbox   = process.env.EASYPAISA_SANDBOX !== '0';
+    const base      = sandbox
+      ? 'https://sandbox.easypaisa.com.pk/merchantpayment/v2/api'
+      : 'https://easypaisa.com.pk/merchantpayment/v2/api';
+
+    const res = await fetch(`${base}/CreateOrder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        storeId,
+        storePass,
+        orderId: tx.idempotencyKey,
+        transactionAmount: tx.amount.toFixed(2),
+        transactionType: 'PAYMENT',
+        currency: 'PKR',
+        description: `Invoice ${invoice.invoiceNo}`,
+        customerName: invoice.subscriber?.fullName || 'Subscriber',
+        customerMobile: invoice.subscriber?.phone || '0',
+        customerEmail: invoice.subscriber?.email || '',
+        token: tx.idempotencyKey,
+        successUrl: `${this.backendUrl}/gateway/callback/easypaisa?key=${tx.idempotencyKey}&result=success`,
+        failureUrl: `${this.backendUrl}/gateway/callback/easypaisa?key=${tx.idempotencyKey}&result=fail`,
+        cancelUrl: `${this.backendUrl}/gateway/callback/easypaisa?key=${tx.idempotencyKey}&result=cancel`,
+      }),
+    });
+
+    const data: any = await res.json();
+    if (!res.ok || !data?.paymentUrl) {
+      throw new BadRequestException(`Easypaisa: ${data?.message || data?.error || res.status}`);
+    }
+
+    await this.prisma.gatewayTransaction.update({
+      where: { id: tx.id },
+      data: { gatewayRef: data.orderRef || data.orderId || null },
+    });
+
+    return data.paymentUrl;
+  }
+
+  /** Easypaisa callback — user redirected back after payment. */
+  async epHandle(key: string, result: string): Promise<{ ok: boolean }> {
+    if (result === 'success') {
+      return this.handleSuccess(key, `easypaisa-${Date.now()}`);
+    }
+    await this.handleFailure(key, result || 'easypaisa-cancelled');
+    return { ok: true };
   }
 }

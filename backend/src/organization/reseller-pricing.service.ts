@@ -1,4 +1,5 @@
-import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -37,11 +38,20 @@ export class ResellerPricingService {
   }
 
   /** Set (upsert) a price. A reseller may only price for itself or a descendant. */
-  async setPrice(actor: Actor, body: { userId?: number; packageId: number; price: number }) {
+  async setPrice(actor: Actor, body: {
+    userId?: number;
+    packageId: number;
+    price?: number;
+    retailPrice?: number;
+    subresellerProfit?: number;
+    subscriberProfit?: number;
+  }) {
     const packageId = Number(body.packageId);
-    const price = Number(body.price);
-    if (!packageId || Number.isNaN(price) || price < 0) {
-      throw new ForbiddenException('packageId and a non-negative price are required.');
+
+    // price is the only genuinely required field — the others are optional extras.
+    // But for updates where only profit fields change, price might already exist.
+    if (!packageId) {
+      throw new ForbiddenException('packageId is required.');
     }
     let userId = body.userId ? Number(body.userId) : this.scope.actorId(actor);
 
@@ -126,16 +136,43 @@ export class ResellerPricingService {
 
       // Selling below your own cost would make the cascade pay out more than it
       // takes in — the margin (sell − cost) would be negative.
-      if (price < myCost) {
+      const p = body.price !== undefined ? Number(body.price) : undefined;
+      if (p !== undefined && p < myCost) {
         throw new ForbiddenException(
-          `Price cannot be below your own cost of ${myCost}. You would lose ${(myCost - price).toFixed(2)} per activation.`,
+          `Price cannot be below your own cost of ${myCost}. You would lose ${(myCost - p).toFixed(2)} per activation.`,
         );
       }
     }
+
+    // Build the data object with only the provided fields, preserving existing ones
+    const priceVal = body.price !== undefined ? Number(body.price) : undefined;
+    const retailPrice = body.retailPrice !== undefined ? Number(body.retailPrice) : undefined;
+    const subresellerProfit = body.subresellerProfit !== undefined ? Number(body.subresellerProfit) : undefined;
+    const subscriberProfit = body.subscriberProfit !== undefined ? Number(body.subscriberProfit) : undefined;
+
+    // If no price is provided, read the existing one (or package default) for upsert
+    const existingPrice = priceVal !== undefined ? priceVal : (
+      await this.prisma.resellerPackagePrice.findUnique({
+        where: { userId_packageId: { userId, packageId } },
+      }).then((r) => r?.price)
+    );
+
     return this.prisma.resellerPackagePrice.upsert({
       where: { userId_packageId: { userId, packageId } },
-      update: { price },
-      create: { userId, packageId, price },
+      update: {
+        ...(priceVal !== undefined && { price: priceVal }),
+        ...(retailPrice !== undefined && { retailPrice }),
+        ...(subresellerProfit !== undefined && { subresellerProfit }),
+        ...(subscriberProfit !== undefined && { subscriberProfit }),
+      },
+      create: {
+        userId,
+        packageId,
+        price: existingPrice ?? 0,
+        ...(retailPrice !== undefined && { retailPrice }),
+        ...(subresellerProfit !== undefined && { subresellerProfit }),
+        ...(subscriberProfit !== undefined && { subscriberProfit }),
+      },
     });
   }
 
@@ -504,20 +541,21 @@ export class ResellerPricingService {
   async profitSummary(actor: Actor) {
     const admin = this.scope.isAdmin(actor?.role);
     const ids = admin ? null : await this.scope.descendantIds(this.scope.actorId(actor));
-    const whereIds = admin
-      ? `WHERE u.role IN ('RESELLER','SUB_RESELLER','RETAILER','SALES','ADMIN')`
-      : `WHERE u.id IN (${ids && ids.length ? ids.join(',') : '0'})`;
-    const rows: any[] = await this.prisma.$queryRawUnsafe(`
-      SELECT u.id, u.name, u.role, u.balance,
-        COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS earned,
-        COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0) AS spent,
-        COUNT(t.id) AS movements
-      FROM "User" u
-      LEFT JOIN "UserBalanceTransaction" t
-        ON t."userId" = u.id AND t.reference LIKE 'SUB#%'
-      ${whereIds}
-      GROUP BY u.id
-      ORDER BY earned DESC`);
+    const whereClause: Prisma.Sql = admin
+      ? Prisma.sql`WHERE u.role IN ('RESELLER','SUB_RESELLER','RETAILER','SALES','ADMIN')`
+      : Prisma.sql`WHERE u.id IN (${Prisma.join(ids && ids.length ? ids : [0])})`;
+    const rows: any[] = await this.prisma.$queryRaw(
+      Prisma.sql`
+        SELECT u.id, u.name, u.role, u.balance,
+          COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS earned,
+          COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0) AS spent,
+          COUNT(t.id) AS movements
+        FROM "User" u
+        LEFT JOIN "UserBalanceTransaction" t
+          ON t."userId" = u.id AND t.reference LIKE 'SUB#%'
+        ${whereClause}
+        GROUP BY u.id
+        ORDER BY earned DESC`);
     /**
      * RETAIL REVENUE — the missing half of every reseller's profit.
      *
@@ -539,14 +577,14 @@ export class ResellerPricingService {
     // accounts the query actually returned, which is not the same thing.
     const rowIds = rows.map((r) => Number(r.id));
     const retail = rowIds.length
-      ? await this.prisma.$queryRawUnsafe<Array<{ userId: number; collected: number; billed: number; subs: number }>>(`
+      ? await this.prisma.$queryRaw<Array<{ userId: number; collected: number; billed: number; subs: number }>>(Prisma.sql`
           SELECT s."userId"                                   AS "userId",
                  COALESCE(SUM(i."paidAmount"), 0)             AS collected,
                  COALESCE(SUM(i.total), 0)                    AS billed,
                  COUNT(DISTINCT s.id)                         AS subs
           FROM "Subscriber" s
           LEFT JOIN "Invoice" i ON i."subscriberId" = s.id
-          WHERE s."userId" IN (${rowIds.join(',')})
+          WHERE s."userId" IN (${Prisma.join(rowIds)})
           GROUP BY s."userId"`)
       : [];
     const retailMap = new Map(
@@ -600,7 +638,7 @@ export class ResellerPricingService {
         select: { id: true, fullName: true, status: true, sellPrice: true, costPrice: true, profit: true,
                   package: { select: { name: true } } },
       }),
-      this.prisma.$queryRawUnsafe<Array<{ billed: number; collected: number; outstanding: number }>>(`
+      this.prisma.$queryRaw<Array<{ billed: number; collected: number; outstanding: number }>>(Prisma.sql`
         SELECT COALESCE(SUM(i.total), 0)                              AS billed,
                COALESCE(SUM(i."paidAmount"), 0)                       AS collected,
                COALESCE(SUM(i.total - i."paidAmount"), 0)             AS outstanding
@@ -610,7 +648,7 @@ export class ResellerPricingService {
     ]);
 
     // Wallet movements: what this account paid upward, and earned from below.
-    const moves = await this.prisma.$queryRawUnsafe<Array<{ paidUp: number; earnedDown: number }>>(`
+    const moves = await this.prisma.$queryRaw<Array<{ paidUp: number; earnedDown: number }>>(Prisma.sql`
       SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0) AS "paidUp",
              COALESCE(SUM(CASE WHEN amount > 0 THEN  amount ELSE 0 END), 0) AS "earnedDown"
       FROM "UserBalanceTransaction"
@@ -682,6 +720,70 @@ export class ResellerPricingService {
    * Apply the cascade atomically: update wallets + write a UserBalanceTransaction
    * for each tier. `enforce` blocks the activator if their wallet can't cover it.
    */
+  async reverseActivation(
+    subscriberId: number,
+    opts: { reference?: string; reason?: string; actorId?: number } = {},
+  ) {
+    const reference = opts.reference || `SUB#${subscriberId}`;
+    const reversalReference = `REV#${reference}`;
+
+    const rows = await this.prisma.userBalanceTransaction.findMany({
+      where: {
+        reference: {
+          in: [reference, `${reference}:RENEWAL`],
+        },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    if (!rows.length) {
+      throw new NotFoundException(`No activation settlement found for subscriber #${subscriberId}.`);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const row of rows) {
+        const signed = Number(row.amount || 0);
+        if (!signed) continue;
+
+        const updated = await tx.user.update({
+          where: { id: row.userId },
+          data: { balance: { increment: -signed } },
+          select: { id: true, balance: true },
+        });
+
+        await tx.userBalanceTransaction.create({
+          data: {
+            userId: row.userId,
+            type: 'ADJUSTMENT',
+            amount: -signed,
+            balanceAfter: updated.balance,
+            reference: reversalReference,
+            notes: opts.reason || `Activation reversal for ${reference}`,
+            createdBy: opts.actorId ?? null,
+          } as any,
+        });
+      }
+    });
+
+    await this.prisma.activityLog.create({
+      data: {
+        userId: opts.actorId ?? null,
+        action: 'REVERSE_ACTIVATION',
+        entity: 'Subscriber',
+        entityId: subscriberId,
+        details: opts.reason || `Reversed activation settlement for ${reference}`,
+      },
+    }).catch(() => null);
+
+    return {
+      reversed: true,
+      subscriberId,
+      reference,
+      reversalReference,
+      reversedRows: rows.length,
+    };
+  }
+
   async settleActivation(
     subscriberId: number,
     opts: { enforce?: boolean; byUserId?: number; event?: string } = {},

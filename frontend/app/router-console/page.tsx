@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { silent } from "../components/silent";
 
 /**
  * Router Console — a WinBox-style workspace, wired to live data.
@@ -72,7 +73,7 @@ export default function RouterConsole() {
     fetch(`${API}/nas`, { headers })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows) => { const list = arr(rows); setNasList(list); if (list[0]) setNasId((id) => id ?? list[0].id); })
-      .catch(() => {});
+      .catch(silent("nasListFetch"));
   }, [token]);
 
   const loadAll = React.useCallback(async (id: number) => {

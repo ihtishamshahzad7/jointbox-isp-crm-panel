@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -210,16 +211,15 @@ export class KycService {
       ? await this.scope.descendantIds(await this.scope.rootId(actor))
       : null;
 
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(
-      `SELECT "cnicNumber", COUNT(*)::int AS n
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT "cnicNumber", COUNT(*)::int AS n
          FROM "Subscriber"
         WHERE "cnicNumber" IS NOT NULL
-          ${scopeIds ? `AND "userId" = ANY($1::int[])` : ''}
+          ${scopeIds ? Prisma.sql`AND "userId" = ANY(${scopeIds}::int[])` : Prisma.sql``}
         GROUP BY "cnicNumber"
        HAVING COUNT(*) > 1
-        ORDER BY n DESC LIMIT 100`,
-      ...(scopeIds ? [scopeIds] : []),
-    ).catch(() => [] as any[]);
+        ORDER BY n DESC LIMIT 100`
+    .catch(() => [] as any[]);
 
     const out: any[] = [];
     for (const r of rows) {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { silent } from "../components/silent";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -50,16 +51,16 @@ export default function SecurityPage() {
 
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
-    get("/security/meta").then(setMeta).catch(() => {});
-    get("/security/permissions").then(setMatrix).catch(() => {});
-    get("/security/2fa").then(setTfa).catch(() => {});
+    get("/security/meta").then(setMeta).catch(silent("loadSecurityMeta"));
+    get("/security/permissions").then(setMatrix).catch(silent("loadPermissions"));
+    get("/security/2fa").then(setTfa).catch(silent("loadTwoFactorStatus"));
   }, []);
 
   useEffect(() => {
-    if (tab === "Active Sessions") get("/security/sessions").then((d) => setSessions(Array.isArray(d) ? d : [])).catch(() => {});
+    if (tab === "Active Sessions") get("/security/sessions").then((d) => setSessions(Array.isArray(d) ? d : [])).catch(silent("loadActiveSessions"));
     if (tab === "Child Permissions") {
-      get("/security/child-permissions/catalog").then((d) => setCatalog(Array.isArray(d) ? d : [])).catch(() => {});
-      get("/users").then((d) => setChildList(Array.isArray(d) ? d : [])).catch(() => {});
+      get("/security/child-permissions/catalog").then((d) => setCatalog(Array.isArray(d) ? d : [])).catch(silent("loadChildPermCatalog"));
+      get("/users").then((d) => setChildList(Array.isArray(d) ? d : [])).catch(silent("loadChildUserList"));
     }
   }, [tab]);
 

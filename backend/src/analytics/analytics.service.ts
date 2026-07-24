@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -39,19 +40,16 @@ export class AnalyticsService {
   }
 
   /**
-   * Builds an owner restriction for raw SQL.
+   * Builds a scoped owner restriction for raw SQL.
    *
-   * The ids come from ScopeService (database integers, never request input),
-   * so this is not injectable today. It is coerced anyway: this string is
-   * concatenated straight into SQL, and the day someone passes a value from a
-   * query parameter here it becomes a live injection. Number() plus a finite
-   * check means that mistake fails closed instead of executing.
+   * Returns a Prisma.Sql fragment so it can be interpolated safely into a
+   * $queryRaw tagged template — values are parameterized, never concatenated.
    */
-  private ownerFilter(ids: number[] | null, column = '"userId"') {
-    if (!ids) return '';
+  private ownerFilter(ids: number[] | null, column: string = '"userId"'): Prisma.Sql {
+    if (!ids || ids.length === 0) return Prisma.sql``;
     const safe = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0);
-    // No valid ids means "see nothing", not "see everything".
-    return `AND s.${column} IN (${safe.length ? safe.join(',') : '0'})`;
+    if (safe.length === 0) return Prisma.sql`AND s.${Prisma.raw(column)} IN (0)`;
+    return Prisma.sql`AND s.${Prisma.raw(column)} IN (${Prisma.join(safe)})`;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -67,7 +65,7 @@ export class AnalyticsService {
       const own = this.ownerFilter(ids);
 
       const [counts, revenue, prevRevenue, newSubs, lostSubs] = await Promise.all([
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT
             COUNT(*)::int                                        AS total,
             COUNT(*) FILTER (WHERE s.status = 'ACTIVE')::int      AS active,
@@ -75,25 +73,24 @@ export class AnalyticsService {
             COUNT(*) FILTER (WHERE s.status = 'SUSPENDED')::int   AS suspended
           FROM "Subscriber" s WHERE 1=1 ${own}`),
 
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT COALESCE(SUM(p.amount),0)::float AS total, COUNT(*)::int AS payments
           FROM "Payment" p JOIN "Subscriber" s ON s.id = p."subscriberId"
-          WHERE p."paymentDate" >= $1 AND p."refundedAt" IS NULL ${own}`, since),
+          WHERE p."paymentDate" >= ${since} AND p."refundedAt" IS NULL ${own}`),
 
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT COALESCE(SUM(p.amount),0)::float AS total
           FROM "Payment" p JOIN "Subscriber" s ON s.id = p."subscriberId"
-          WHERE p."paymentDate" >= $1 AND p."paymentDate" < $2 AND p."refundedAt" IS NULL ${own}`,
-          prevSince, since),
+          WHERE p."paymentDate" >= ${prevSince} AND p."paymentDate" < ${since} AND p."refundedAt" IS NULL ${own}`),
 
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT COUNT(*)::int AS n FROM "Subscriber" s
-          WHERE s."createdAt" >= $1 ${own}`, since),
+          WHERE s."createdAt" >= ${since} ${own}`),
 
         // "Lost" = moved out of ACTIVE during the window.
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT COUNT(*)::int AS n FROM "Subscriber" s
-          WHERE s.status IN ('EXPIRED','INACTIVE') AND s."updatedAt" >= $1 ${own}`, since),
+          WHERE s.status IN ('EXPIRED','INACTIVE') AND s."updatedAt" >= ${since} ${own}`),
       ]);
 
       const c = counts[0] || {};
@@ -160,25 +157,25 @@ export class AnalyticsService {
       since.setDate(1);
 
       const [revenue, signups, losses] = await Promise.all([
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT to_char(date_trunc('month', p."paymentDate"), 'YYYY-MM') AS month,
                  COALESCE(SUM(p.amount),0)::float AS revenue
           FROM "Payment" p JOIN "Subscriber" s ON s.id = p."subscriberId"
-          WHERE p."paymentDate" >= $1 AND p."refundedAt" IS NULL ${own}
-          GROUP BY 1 ORDER BY 1`, since),
+          WHERE p."paymentDate" >= ${since} AND p."refundedAt" IS NULL ${own}
+          GROUP BY 1 ORDER BY 1`),
 
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT to_char(date_trunc('month', s."createdAt"), 'YYYY-MM') AS month,
                  COUNT(*)::int AS n
-          FROM "Subscriber" s WHERE s."createdAt" >= $1 ${own}
-          GROUP BY 1 ORDER BY 1`, since),
+          FROM "Subscriber" s WHERE s."createdAt" >= ${since} ${own}
+          GROUP BY 1 ORDER BY 1`),
 
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT to_char(date_trunc('month', s."updatedAt"), 'YYYY-MM') AS month,
                  COUNT(*)::int AS n
           FROM "Subscriber" s
-          WHERE s."updatedAt" >= $1 AND s.status IN ('EXPIRED','INACTIVE') ${own}
-          GROUP BY 1 ORDER BY 1`, since),
+          WHERE s."updatedAt" >= ${since} AND s.status IN ('EXPIRED','INACTIVE') ${own}
+          GROUP BY 1 ORDER BY 1`),
       ]);
 
       const map = new Map<string, any>();
@@ -209,24 +206,26 @@ export class AnalyticsService {
 
     return this.cache.wrap(key, 300, async () => {
       const since = new Date(Date.now() - days * 86400_000);
-      const filter = ids ? `AND u.id IN (${ids.length ? ids.join(',') : '0'})` : '';
+      const filter: Prisma.Sql = ids && ids.length > 0
+        ? Prisma.sql`AND u.id IN (${Prisma.join(ids)})`
+        : Prisma.sql``;
 
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(`
+      const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
         SELECT u.id, u.name, u.role, u.balance,
                COUNT(s.id)::int                                        AS total_subs,
                COUNT(s.id) FILTER (WHERE s.status = 'ACTIVE')::int      AS active_subs,
-               COUNT(s.id) FILTER (WHERE s."createdAt" >= $1)::int      AS new_subs,
+               COUNT(s.id) FILTER (WHERE s."createdAt" >= ${since})::int      AS new_subs,
                COALESCE(SUM(s.profit),0)::float                         AS total_margin,
                COALESCE((
                  SELECT SUM(p.amount) FROM "Payment" p
                  JOIN "Subscriber" s2 ON s2.id = p."subscriberId"
-                 WHERE s2."userId" = u.id AND p."paymentDate" >= $1 AND p."refundedAt" IS NULL
+                 WHERE s2."userId" = u.id AND p."paymentDate" >= ${since} AND p."refundedAt" IS NULL
                ),0)::float                                              AS revenue
           FROM "User" u
           LEFT JOIN "Subscriber" s ON s."userId" = u.id
          WHERE u.role IN ('RESELLER','SUB_RESELLER','RETAILER') ${filter}
          GROUP BY u.id, u.name, u.role, u.balance
-         ORDER BY revenue DESC, active_subs DESC`, since);
+         ORDER BY revenue DESC, active_subs DESC`);
 
       return rows.map((r, i) => {
         const active = Number(r.active_subs || 0);
@@ -290,16 +289,16 @@ export class AnalyticsService {
         this.prisma.subscriber.groupBy({
           by: ['userId'], where: { userId: { in: userIds }, status: 'ACTIVE' }, _count: { _all: true },
         }),
-        this.prisma.$queryRawUnsafe<any[]>(`
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT s."userId" AS uid, COALESCE(SUM(p.amount),0)::float AS revenue
             FROM "Payment" p JOIN "Subscriber" s ON s.id = p."subscriberId"
-           WHERE p."paymentDate" >= $1 AND p."refundedAt" IS NULL
-             AND s."userId" = ANY($2::int[])
-           GROUP BY s."userId"`, since, userIds),
-        this.prisma.$queryRawUnsafe<any[]>(`
+           WHERE p."paymentDate" >= ${since} AND p."refundedAt" IS NULL
+             AND s."userId" = ANY(${userIds}::int[])
+           GROUP BY s."userId"`),
+        this.prisma.$queryRaw<any[]>(Prisma.sql`
           SELECT "userId" AS uid, COALESCE(SUM(profit),0)::float AS margin
-            FROM "Subscriber" WHERE "userId" = ANY($1::int[])
-           GROUP BY "userId"`, userIds),
+            FROM "Subscriber" WHERE "userId" = ANY(${userIds}::int[])
+           GROUP BY "userId"`),
       ]);
 
       const num = (rows: any[], key: string, val: string) =>
@@ -405,13 +404,13 @@ export class AnalyticsService {
   async byPackage(actor?: Actor) {
     const ids = await this.visibleOwnerIds(actor);
     const own = this.ownerFilter(ids);
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(`
+    const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
       SELECT pk.id, pk.name, pk.price,
              COUNT(s.id)::int AS subscribers,
              COUNT(s.id) FILTER (WHERE s.status = 'ACTIVE')::int AS active,
              (COUNT(s.id) FILTER (WHERE s.status = 'ACTIVE') * pk.price)::float AS mrr
         FROM packages pk
-        LEFT JOIN "Subscriber" s ON s."packageId" = pk.id ${own ? own.replace('AND s.', 'AND s.') : ''}
+        LEFT JOIN "Subscriber" s ON s."packageId" = pk.id ${own}
        GROUP BY pk.id, pk.name, pk.price
        ORDER BY active DESC`);
 
@@ -429,7 +428,7 @@ export class AnalyticsService {
   async byArea(actor?: Actor) {
     const ids = await this.visibleOwnerIds(actor);
     const own = this.ownerFilter(ids);
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(`
+    const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
       SELECT a.id, a.name, a.city,
              COUNT(s.id)::int AS subscribers,
              COUNT(s.id) FILTER (WHERE s.status = 'ACTIVE')::int  AS active,

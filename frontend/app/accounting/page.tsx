@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { silent } from "../components/silent";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -77,7 +78,7 @@ export default function AccountingPage() {
       router.push("/login");
       return;
     }
-    get("/accounting/ledger/summary").then(setSummary).catch(() => {});
+    get("/accounting/ledger/summary").then(setSummary).catch(silent("loadLedgerSummary"));
   }, []);
 
   // ── per-tab loaders ──────────────────────────────────────────
@@ -115,10 +116,10 @@ export default function AccountingPage() {
   useEffect(() => {
     if (!token) return;
     if (tab === "Ledger") void loadLedger(true);
-    if (tab === "Cashflow") get(`/accounting/cashflow?days=${cfDays}`).then(setCashflow).catch(() => {});
-    if (tab === "Expenses") get("/accounting/expenses").then(setExpenses).catch(() => {});
-    if (tab === "Balances") get("/accounting/balances").then(setBalances).catch(() => {});
-    if (tab === "Automation") get("/billing/runs").then(setRuns).catch(() => {});
+    if (tab === "Cashflow") get(`/accounting/cashflow?days=${cfDays}`).then(setCashflow).catch(silent("loadCashflow"));
+    if (tab === "Expenses") get("/accounting/expenses").then(setExpenses).catch(silent("loadExpenses"));
+    if (tab === "Balances") get("/accounting/balances").then(setBalances).catch(silent("loadBalances"));
+    if (tab === "Automation") get("/billing/runs").then(setRuns).catch(silent("loadBillingRuns"));
   }, [tab, ledgerAccount, cfDays]);
 
   // ── actions ──────────────────────────────────────────────────

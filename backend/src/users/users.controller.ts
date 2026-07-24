@@ -5,11 +5,15 @@ import {
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ResellerPricingService } from '../organization/reseller-pricing.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly pricing: ResellerPricingService,
+  ) {}
 
   @Get()
   findAll(@Req() req: any) {
@@ -29,6 +33,28 @@ export class UsersController {
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.usersService.findOne(+id, req.user);
+  }
+
+  @Get(':id/packages')
+  findPackages(@Param('id') id: string, @Req() req: any) {
+    return this.usersService.findUserPackages(+id, req.user);
+  }
+
+  @Put(':id/packages/:packageId')
+  setPackagePrice(
+    @Param('id') id: string,
+    @Param('packageId') packageId: string,
+    @Body() body: { price?: number; retailPrice?: number; subresellerProfit?: number; subscriberProfit?: number },
+    @Req() req: any,
+  ) {
+    return this.pricing.setPrice(req.user, {
+      userId: +id,
+      packageId: +packageId,
+      price: body.price,
+      retailPrice: body.retailPrice,
+      subresellerProfit: body.subresellerProfit,
+      subscriberProfit: body.subscriberProfit,
+    });
   }
 
   @Post()

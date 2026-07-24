@@ -119,7 +119,7 @@ export class PackagesController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string): any {
-    return this.packagesService.remove(+id);
+  remove(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.remove(+id, req.user);
   }
 }

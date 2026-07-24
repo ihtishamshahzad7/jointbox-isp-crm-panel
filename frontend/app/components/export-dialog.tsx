@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Button, Field, Input, Segmented, Badge, NV } from "./ui";
 import { exportCsv, exportExcel } from "./export-file";
+import { silent } from "./silent";
 
 const API =
   process.env.NEXT_PUBLIC_BACKEND_URL ||
@@ -47,7 +48,7 @@ export default function ExportDialog({ open, onClose }: { open: boolean; onClose
     fetch(`${API}/subscribers/export/options`, { headers })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d) { setOpts(d); setColumns(d.defaultColumns || []); } })
-      .catch(() => {});
+      .catch(silent("exportOptionsFetch"));
   }, [open]);
 
   // Live match count, debounced so toggling several filters quickly doesn't

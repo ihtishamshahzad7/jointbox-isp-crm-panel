@@ -51,7 +51,7 @@ export function NasTable({
       <table>
         <thead>
           <tr>
-            <th>Router</th><th>Reachability</th><th>Sessions</th><th>Ports</th><th>Access</th><th />
+            <th>Router</th><th>Reachability</th><th>Sessions</th><th>Ports</th><th>Site</th><th>Access</th><th />
           </tr>
         </thead>
         <tbody>
@@ -104,6 +104,21 @@ export function NasTable({
                   <div className="sub">API {n.apiPort || 8728} · CoA {n.incomingPort || 3799}</div>
                 </td>
 
+                {/* Site / Group — parsed from description or shortname.
+                    Shows where the router lives physically. */}
+                <td>
+                  {n.description ? (
+                    <>
+                      <span className="tag site">{n.shortname || n.description.slice(0, 20)}</span>
+                      {n.description.length > 20 && <div className="sub">{n.description.slice(0, 30)}</div>}
+                    </>
+                  ) : n.shortname ? (
+                    <span className="tag site">{n.shortname}</span>
+                  ) : (
+                    <span className="sub">—</span>
+                  )}
+                </td>
+
                 {/* Credentials present or not, stated plainly. Without API
                     access the panel cannot read sessions, pull router logs or
                     disconnect anyone — worth knowing at a glance. */}
@@ -126,7 +141,7 @@ export function NasTable({
             );
           })}
           {rows.length === 0 && (
-            <tr className="empty"><td colSpan={6}>
+            <tr className="empty"><td colSpan={7}>
               <b>No routers yet.</b>
               <span>Add one, or ask your parent account to share theirs with you.</span>
             </td></tr>
@@ -214,11 +229,12 @@ export function PoolTable({
    PACKAGES
    ═══════════════════════════════════════════════════════════════════ */
 export function PackageTable({
-  rows, isIsp, money, onEdit, onToggle, onDelete, onPrice, onViewSubs, onDuplicate,
+  rows, isIsp, money, onEdit, onToggle, onDelete, onPrice, onViewSubs, onDuplicate, onShare,
 }: {
   rows: Row[]; isIsp: boolean; money: (n: any) => string;
   onEdit: (r: Row) => void; onToggle: (r: Row) => void; onDelete: (r: Row) => void;
   onPrice: () => void; onViewSubs: (r: Row) => void; onDuplicate?: (r: Row) => void;
+  onShare?: (r: Row) => void;
 }) {
   return (
     <div className="nt">
@@ -273,6 +289,7 @@ export function PackageTable({
                     <>
                       <button onClick={() => onEdit(p)}>Edit</button>
                       {onDuplicate && <button onClick={() => onDuplicate(p)}>Copy</button>}
+                      {onShare && <button onClick={() => onShare(p)} className="warn">Share</button>}
                       <button onClick={() => onToggle(p)}>{p.isActive ? "Off" : "On"}</button>
                       <button className="bad" disabled={subs > 0}
                         title={subs > 0 ? "Customers are on this plan — move them first" : "Delete package"}
@@ -340,6 +357,7 @@ const CSS = `
   font-weight:800;letter-spacing:.04em;text-transform:uppercase;margin-right:5px}
 .nt .tag.ok{background:rgba(16,185,129,.15);color:#6EE7B7}
 .nt .tag.warn{background:rgba(245,158,11,.15);color:#FCD34D}
+.nt .tag.site{background:rgba(99,102,241,.15);color:#A5B4FC}
 
 .nt td.act{white-space:nowrap;text-align:right}
 .nt td.act button{margin-left:5px;padding:4px 9px;border-radius:7px;font-size:10.5px;
@@ -348,6 +366,7 @@ const CSS = `
   transition:opacity .12s ease,color .12s ease,border-color .12s ease}
 .nt tbody tr:hover td.act button{opacity:1}
 .nt td.act button:hover:not(:disabled){color:var(--text);border-color:#6C3CE1}
+.nt td.act button.warn:hover:not(:disabled){color:#FCD34D;border-color:#F59E0B}
 .nt td.act button.bad:hover:not(:disabled){color:#FCA5A5;border-color:#EF4444}
 .nt td.act button:disabled{opacity:.28;cursor:not-allowed}
 

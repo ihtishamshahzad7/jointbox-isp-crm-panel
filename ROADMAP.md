@@ -68,6 +68,36 @@ Customizable login page, voucher login, MikroTik hotspot integration.
 ### 11. Reports expansion
 Financial (revenue/profit/collection), subscriber growth, top bandwidth users, reseller performance; PDF/Excel/CSV export server-side.
 
+## Advanced capabilities roadmap (next-generation platform)
+
+The following features should be treated as the next strategic expansion layer for Jointbox after the current parity and operations baseline is stable:
+
+### A. AI & assistance
+- Intelligent assistant for troubleshooting, workflow guidance, and operator support
+- Personalized recommendations based on usage, risk, and performance trends
+- AI-powered network management and anomaly detection
+
+### B. Real-time operations & experience
+- Real-time monitoring 2.0 with richer observability and operator alerts
+- Customizable dashboards 2.0 for role-based, executive, and network views
+- Mobile optimization 2.0 for field teams and on-the-go operations
+
+### C. Security, trust & compliance
+- Enhanced security features 2.0 with stronger identity, control, and access hardening
+- Integrated security protocols 2.0 across network and application layers
+- Blockchain-based security and authentication for tamper-resistant identity and auditability
+
+### D. Automation & scale
+- Automated network management 2.0 with guided self-healing and policy automation
+- Advanced routing and switching 2.0 for optimized traffic handling and resilience
+- Scalable architecture 2.0 designed for larger ISP, branch, and reseller deployments
+- Machine learning-based network optimization 2.0 for predictive tuning
+
+### E. Collaboration & engagement
+- Gamification and incentives for operational performance and user engagement
+- Social sharing and collaboration features for support workflows and knowledge exchange
+- Edge computing and IoT integration for distributed services and smart-network operations
+
 ## Suggested build order (backend → frontend per phase)
 
 1. **Accounting core + billing automation** (ledger, balance, expenses, invoice reversal; cron auto-invoice/renewal/suspension) — unlocks real ISP operations.
@@ -76,3 +106,4 @@ Financial (revenue/profit/collection), subscriber growth, top bandwidth users, r
 4. **RBAC/2FA + multi-tenancy** (ISP/branch scoping, reseller profit chain).
 5. **Network extras** (NAS groups, MAC binding, CoA hardening, OLT/ONU, IPv6).
 6. **Inventory, captive portal/hotspot, reports expansion** — parity completion.
+7. **AI-assisted operations, automation, and next-gen security** — advanced platform maturity.

@@ -9,7 +9,10 @@ import { LifecycleService } from './lifecycle.service';
 import { PANEL_COLUMNS, CONNECTION_TYPE, PROFILE_STATUS, DISCOUNT_TYPE } from './panel-format';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
-import { ForbiddenException } from '@nestjs/common';
+import {
+  ForbiddenException, NotFoundException,
+  BadRequestException, InternalServerErrorException,
+} from '@nestjs/common';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('subscribers')
@@ -271,6 +274,14 @@ export class SubscribersController {
     return this.subscribersService.getRadiusSession(username);
   }
 
+  @Get('bandwidth-history/:username')
+  async getBandwidthHistory(
+    @Param('username') username: string,
+    @Query('minutes') minutes?: string,
+  ) {
+    return this.subscribersService.getBandwidthHistory(username, Number(minutes) || 60);
+  }
+
   @Get('radius-auth-log/:username')
   async getRadiusAuthLog(@Param('username') username: string) {
     return this.subscribersService.getRadiusAuthLog(username);
@@ -350,39 +361,35 @@ export class SubscribersController {
   async syncOneToRadius(@Param('id') id: string) {
     const subscriber = await this.subscribersService.findOne(+id);
     if (!subscriber) {
-      return { error: 'Subscriber not found' };
+      throw new NotFoundException('Subscriber not found');
     }
     
     if (!subscriber.username || !subscriber.password) {
-      return { error: 'Subscriber missing username or password' };
+      throw new BadRequestException('Subscriber missing username or password');
     }
     
-    try {
-      // Fetch package with pool to sync speed + Framed-Pool
-      const pkg = subscriber.package ?? null;
-      // Build opts like syncToRadius does
-      const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
-      const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
-      await this.subscribersService['radiusSync'].syncSubscriberProfile(
-        subscriber.username,
-        subscriber.password,
-        pkg,
-        {
-          serviceType: subscriber.authMethod as any,
-          staticIp,
-          macAddress: subscriber.serviceSettings?.macAddress ?? null,
-          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
-          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
-        },
-      );
-      return {
-        message: `Subscriber ${subscriber.username} synced to RADIUS`,
-        username: subscriber.username,
-        package: pkg?.name || 'none',
-      };
-    } catch (error: any) {
-      return { error: error.message };
-    }
+    // Fetch package with pool to sync speed + Framed-Pool
+    const pkg = subscriber.package ?? null;
+    // Build opts like syncToRadius does
+    const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
+    const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
+    await this.subscribersService.radiusSync.syncSubscriberProfile(
+      subscriber.username,
+      subscriber.password,
+      pkg,
+      {
+        serviceType: subscriber.authMethod as any,
+        staticIp,
+        macAddress: subscriber.serviceSettings?.macAddress ?? null,
+        sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+        idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+      },
+    );
+    return {
+      message: `Subscriber ${subscriber.username} synced to RADIUS`,
+      username: subscriber.username,
+      package: pkg?.name || 'none',
+    };
   }
 
   // Bulk sync specific subscribers by IDs
@@ -404,7 +411,7 @@ export class SubscribersController {
           // Build opts like syncToRadius does
           const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
           const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
-          await this.subscribersService['radiusSync'].syncSubscriberProfile(
+          await this.subscribersService.radiusSync.syncSubscriberProfile(
             subscriber.username,
             subscriber.password,
             pkg,
@@ -443,12 +450,8 @@ export class SubscribersController {
   // Remove a subscriber from RADIUS only (doesn't delete from CRM)
   @Delete('radius/:username')
   async removeFromRadius(@Param('username') username: string) {
-    try {
-      await this.subscribersService['radiusSync'].removeSubscriberFromRadius(username);
-      return { message: `Subscriber ${username} removed from RADIUS` };
-    } catch (error: any) {
-      return { error: error.message };
-    }
+    await this.subscribersService.radiusSync.removeSubscriberFromRadius(username);
+    return { message: `Subscriber ${username} removed from RADIUS` };
   }
 
   // Get all subscribers that are missing from RADIUS
@@ -490,41 +493,37 @@ export class SubscribersController {
   async fixRadiusPassword(@Param('id') id: string) {
     const subscriber = await this.subscribersService.findOne(+id);
     if (!subscriber) {
-      return { error: 'Subscriber not found' };
+      throw new NotFoundException('Subscriber not found');
     }
     
     if (!subscriber.username || !subscriber.password) {
-      return { error: 'Subscriber missing username or password' };
+      throw new BadRequestException('Subscriber missing username or password');
     }
     
-    try {
-      // Remove and re-add with full profile
-      await this.subscribersService['radiusSync'].removeSubscriberFromRadius(subscriber.username);
-      const pkg = subscriber.package ?? null;
-      
-      // Build opts like syncToRadius does
-      const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
-      const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
-      
-      await this.subscribersService['radiusSync'].syncSubscriberProfile(
-        subscriber.username,
-        subscriber.password,
-        pkg,
-        {
-          serviceType: subscriber.authMethod as any,
-          staticIp,
-          macAddress: subscriber.serviceSettings?.macAddress ?? null,
-          sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
-          idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
-        },
-      );
-      return {
-        message: `RADIUS profile re-synced for ${subscriber.username}`,
-        username: subscriber.username,
-        package: pkg?.name || 'none',
-      };
-    } catch (error: any) {
-      return { error: error.message };
-    }
+    // Remove and re-add with full profile
+    await this.subscribersService.radiusSync.removeSubscriberFromRadius(subscriber.username);
+    const pkg = subscriber.package ?? null;
+    
+    // Build opts like syncToRadius does
+    const wantsStatic = subscriber.authMethod === 'STATIC' || subscriber.serviceSettings?.ipType === 'STATIC';
+    const staticIp = wantsStatic ? subscriber.serviceSettings?.ipAddress ?? null : null;
+    
+    await this.subscribersService.radiusSync.syncSubscriberProfile(
+      subscriber.username,
+      subscriber.password,
+      pkg,
+      {
+        serviceType: subscriber.authMethod as any,
+        staticIp,
+        macAddress: subscriber.serviceSettings?.macAddress ?? null,
+        sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+        idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+      },
+    );
+    return {
+      message: `RADIUS profile re-synced for ${subscriber.username}`,
+      username: subscriber.username,
+      package: pkg?.name || 'none',
+    };
   }
 }

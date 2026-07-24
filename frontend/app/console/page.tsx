@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
+import { silent } from "../components/silent";
 
 /**
  * Server Console — ISP owner only.
@@ -52,7 +53,7 @@ export default function ConsolePage() {
 
   React.useEffect(() => {
     if (!token || role !== "SUPER_ADMIN") return;
-    fetch(`${API}/console/info`, { headers }).then((r) => (r.ok ? r.json() : null)).then(setInfo).catch(() => {});
+    fetch(`${API}/console/info`, { headers }).then((r) => (r.ok ? r.json() : null)).then(setInfo).catch(silent("consoleInfoFetch"));
   }, [token, role]);
 
   const loadLog = React.useCallback(async (source: Tab) => {

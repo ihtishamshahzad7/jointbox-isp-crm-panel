@@ -1,7 +1,8 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { TraceMiddleware } from './common/trace.middleware';
 import { CommonModule } from './common/common.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { BillingModule } from './billing/billing.module';
@@ -39,6 +40,8 @@ import { TopologyModule } from './topology/topology.module';
 import { SetupModule } from './setup/setup.module';
 import { ConsoleModule } from './console/console.module';
 import { NotesModule } from './notes/notes.module';
+import { FiberModule } from './fiber/fiber.module';
+import { GroupsModule } from './groups/groups.module';
 
 @Module({
   imports: [
@@ -80,8 +83,14 @@ import { NotesModule } from './notes/notes.module';
     SetupModule,
     ConsoleModule,
     NotesModule,
+    FiberModule,
+    GroupsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(TraceMiddleware).forRoutes('*');
+  }
+}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "./currency";
+import { silent } from "./silent";
 
 const API =
   process.env.NEXT_PUBLIC_BACKEND_URL ||
@@ -34,7 +35,7 @@ export default function StaticIpBanner() {
       })
         .then((r) => (r.ok ? r.json() : null))
         .then(setData)
-        .catch(() => {});
+        .catch(silent("staticIpAlertsFetch"));
     };
 
     load();
