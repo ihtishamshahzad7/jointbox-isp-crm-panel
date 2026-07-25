@@ -397,7 +397,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setLatestNotice(data || null))
       .catch(() => setLatestNotice(null));
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     const tick = () => {
@@ -911,3 +911,4 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
 
   return <AppShell>{children}</AppShell>;
 }
+
