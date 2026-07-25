@@ -1,7 +1,20 @@
 import axios from 'axios';
 
+const getBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    // Browser: auto-detect protocol + hostname
+    // Works on localhost, 192.168.1.96, or any production domain
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3001/api`;
+  }
+  // Server-side rendering fallback
+  return process.env.NEXT_PUBLIC_API_URL
+    ? `${process.env.NEXT_PUBLIC_API_URL}/api`
+    : 'http://localhost:3001/api';
+};
+
 const api = axios.create({
-  baseURL: (typeof window!=="undefined"?`http://${window.location.hostname}:3001/api`:'http://localhost:3001/api'),
+  baseURL: getBaseUrl(),
 });
 
 // Add token to every request automatically
