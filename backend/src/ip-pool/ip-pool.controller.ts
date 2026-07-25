@@ -45,7 +45,7 @@ export class IpPoolController {
   // Must be declared BEFORE :id route or Express will treat "stats" as an ID
   @Get('stats')
   getStats(@Query() query: any) {
-    return this.ipPoolService.getStats(query);
+    return this.ipPoolService.getStats();
   }
 
   /**

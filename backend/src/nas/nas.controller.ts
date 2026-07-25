@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Put, Delete,
-  Body, Param, UseGuards, Patch, Req,
+  Body, Param, Query, UseGuards, Patch, Req,
 } from '@nestjs/common';
 import { NasService } from './nas.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';

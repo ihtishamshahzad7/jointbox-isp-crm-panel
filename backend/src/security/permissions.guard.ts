@@ -52,8 +52,8 @@ export class PermissionsGuard implements CanActivate {
     if (!role) return true; // unauthenticated routes are handled by their own guards
     if (role === 'SUPER_ADMIN') return true;
 
-    const path: string = (req.route?.path || req.url || '').split('?')[0];
-    const resource = path.split('/').filter(Boolean)[0] || '';
+    const requestPath = (req.url || '').split('?')[0] || String(req.route?.path || '');
+    const resource = requestPath.split('/').filter(Boolean)[0] || '';
     const action = req.method === 'GET' ? 'read' : 'write';
     const needed = `${resource}.${action}`;
 
