@@ -8,20 +8,7 @@ const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const SUPPORT = "ehtisham@jointbox.net";
 
 // Helper function to get backend URL - safely handles window object
-const getBackendUrl = () => {
-  // In production, use environment variable first
-  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
-    return process.env.NEXT_PUBLIC_BACKEND_URL;
-  }
-  
-  // For client-side only - check if window exists
-  if (typeof window !== 'undefined') {
-    return `http://${window.location.hostname}:3001`;
-  }
-  
-  // Fallback for server-side
-  return 'http://localhost:3001';
-};
+const getBackendUrl = () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -544,3 +531,4 @@ export default function LoginPage() {
     </div>
   );
 }
+
