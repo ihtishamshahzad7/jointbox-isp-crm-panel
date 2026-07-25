@@ -67,7 +67,7 @@ async function bootstrap() {
   app.getHttpAdapter().getInstance().set('etag', 'strong');
 
   // Enable CORS for frontend access
-  const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+  const corsOrigin = process.env.CORS_ORIGIN || '*';
   app.enableCors({
     origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((s) => s.trim()),
     credentials: true,
@@ -89,3 +89,4 @@ async function bootstrap() {
   console.log(`  - http://localhost:${port}`);
 }
 bootstrap();
+
