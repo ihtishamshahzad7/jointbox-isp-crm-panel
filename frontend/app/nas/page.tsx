@@ -240,6 +240,29 @@ export default function NasPage() {
     finally { setShareBusy(false); }
   };
 
+  const addLog = useCallback((level: NasLog['level'], message: string) => {
+    setLogs(p => [{ id: `${Date.now()}-${Math.random()}`, level, message, time: new Date() }, ...p].slice(0, 200));
+  }, []);
+
+  // ── Load all NAS + stats ───────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const query = groupFilter && groupFilter !== 'ALL' ? `?group=${encodeURIComponent(groupFilter)}` : '';
+      const [nasRes, statsRes, radRes, overviewRes] = await Promise.all([
+        fetch(`${API}/nas${query}`, { headers }),
+        fetch(`${API}/nas/stats`, { headers }),
+        fetch(`${API}/nas/radius/stats`, { headers }),
+        fetch(`${API}/nas/overview`, { headers }),
+      ]);
+      if (nasRes.ok)   setNasList(await nasRes.json());
+      if (statsRes.ok) setStats(await statsRes.json());
+      if (radRes.ok)   setRadiusStats(await radRes.json());
+      if (overviewRes.ok) setOverview(await overviewRes.json());
+    } catch { addLog('error', 'Failed to load NAS data'); }
+    setLoading(false);
+  }, [groupFilter, headers, addLog]);
+
   useEffect(() => {
     if (!token) return;
     fetch(`${API}/auth/profile`, { headers })
@@ -261,10 +284,6 @@ export default function NasPage() {
     if (!token) return;
     loadData();
   }, [token, loadData]);
-
-  const addLog = useCallback((level: NasLog['level'], message: string) => {
-    setLogs(p => [{ id: `${Date.now()}-${Math.random()}`, level, message, time: new Date() }, ...p].slice(0, 200));
-  }, []);
 
   // ── Theme ──────────────────────────────────────────────────────────
   const d = darkMode;
@@ -288,25 +307,6 @@ export default function NasPage() {
     purple:    '#8b5cf6',
     teal:      '#14b8a6',
   };
-
-  // ── Load all NAS + stats ───────────────────────────────────────────
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const query = groupFilter && groupFilter !== 'ALL' ? `?group=${encodeURIComponent(groupFilter)}` : '';
-      const [nasRes, statsRes, radRes, overviewRes] = await Promise.all([
-        fetch(`${API}/nas${query}`, { headers }),
-        fetch(`${API}/nas/stats`, { headers }),
-        fetch(`${API}/nas/radius/stats`, { headers }),
-        fetch(`${API}/nas/overview`, { headers }),
-      ]);
-      if (nasRes.ok)   setNasList(await nasRes.json());
-      if (statsRes.ok) setStats(await statsRes.json());
-      if (radRes.ok)   setRadiusStats(await radRes.json());
-      if (overviewRes.ok) setOverview(await overviewRes.json());
-    } catch { addLog('error', 'Failed to load NAS data'); }
-    setLoading(false);
-  }, [groupFilter, headers]);
 
   // ── Check one NAS reachability (NON-DISRUPTIVE: read-only API calls) ─
   // The backend /reachability calls quickCheck (read-only) + RADIUS DB queries.
