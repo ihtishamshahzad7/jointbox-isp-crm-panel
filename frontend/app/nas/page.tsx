@@ -166,6 +166,8 @@ export default function NasPage() {
   const [statusFilter, setStatusFilter] = useState<'ALL'|'ACTIVE'|'INACTIVE'>('ALL');
   const [typeFilter, setTypeFilter] = useState<'ALL'|'MIKROTIK'|'CISCO'|'HUAWEI'|'OTHER'>('ALL');
   const [siteFilter, setSiteFilter] = useState('ALL');
+  const [groupFilter, setGroupFilter] = useState('ALL');
+  const [groupOptions, setGroupOptions] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
   const [showRadiusSecret, setShowRadiusSecret] = useState(false);
   const [showApiPassword, setShowApiPassword] = useState(false);
 
@@ -194,7 +196,7 @@ export default function NasPage() {
   const [me, setMe] = useState<any>(null);
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : '';
-  const headers = { 'Content-Type':'application/json', Authorization:`Bearer ${token}` };
+  const headers = useMemo(() => ({ 'Content-Type':'application/json', Authorization:`Bearer ${token}` }), [token]);
 
   /** Router-sharing dialog: which NAS, and the downline accounts to offer. */
   const [shareFor, setShareFor] = useState<NasEntry|null>(null);
@@ -245,7 +247,20 @@ export default function NasPage() {
       // /auth/profile answers { user: {...} }, not the user itself.
       .then(d => setMe(d?.user ?? d))
       .catch(silent("authProfileFetch"));
-  }, [token]);
+  }, [token, headers]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API}/groups/options`, { headers })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setGroupOptions(Array.isArray(data) ? data : []))
+      .catch(silent("groupsFetch"));
+  }, [token, headers]);
+
+  useEffect(() => {
+    if (!token) return;
+    loadData();
+  }, [token, loadData]);
 
   const addLog = useCallback((level: NasLog['level'], message: string) => {
     setLogs(p => [{ id: `${Date.now()}-${Math.random()}`, level, message, time: new Date() }, ...p].slice(0, 200));
@@ -278,8 +293,9 @@ export default function NasPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      const query = groupFilter && groupFilter !== 'ALL' ? `?group=${encodeURIComponent(groupFilter)}` : '';
       const [nasRes, statsRes, radRes, overviewRes] = await Promise.all([
-        fetch(`${API}/nas`, { headers }),
+        fetch(`${API}/nas${query}`, { headers }),
         fetch(`${API}/nas/stats`, { headers }),
         fetch(`${API}/nas/radius/stats`, { headers }),
         fetch(`${API}/nas/overview`, { headers }),
@@ -290,8 +306,7 @@ export default function NasPage() {
       if (overviewRes.ok) setOverview(await overviewRes.json());
     } catch { addLog('error', 'Failed to load NAS data'); }
     setLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [groupFilter, headers]);
 
   // ── Check one NAS reachability (NON-DISRUPTIVE: read-only API calls) ─
   // The backend /reachability calls quickCheck (read-only) + RADIUS DB queries.
@@ -745,6 +760,13 @@ export default function NasPage() {
               <option value="CISCO">Cisco</option>
               <option value="HUAWEI">Huawei</option>
               <option value="OTHER">Other</option>
+            </select>
+            <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
+              <option value="ALL">All Groups</option>
+              <option value="UNGROUPED">Ungrouped</option>
+              {groupOptions.map((g) => (
+                <option key={g.id} value={String(g.id)}>{g.name}</option>
+              ))}
             </select>
             <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
               <option value="ALL">All Sites</option>

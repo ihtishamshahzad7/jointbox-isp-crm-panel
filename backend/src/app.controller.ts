@@ -1,8 +1,20 @@
-import { Body, Controller, Get, Post, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards, Req, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
 import { promises as fs } from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as path from 'path';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { PermissionsGuard } from './security/permissions.guard';
+
+const execAsync = promisify(exec);
+
+async function runGitCommand(command: string, cwd = process.cwd()) {
+  return execAsync(command, {
+    cwd,
+    env: process.env,
+    maxBuffer: 50 * 1024 * 1024,
+  });
+}
 
 const CHECKLIST_STATUS = ['yes', 'partial', 'no', 'unassessed'] as const;
 type ChecklistStatus = (typeof CHECKLIST_STATUS)[number];
@@ -328,6 +340,12 @@ export class AppController {
     return { ok: true };
   }
 
+  private assertSuperAdmin(req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only SUPER_ADMIN may access update operations.');
+    }
+  }
+
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('profile')
   profile(@Req() req: any) {
@@ -335,6 +353,149 @@ export class AppController {
       message: 'Protected Profile 🔐',
       user: req.user,
     };
+  }
+
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Get('update/check')
+  async checkForUpdate(@Req() req: any) {
+    this.assertSuperAdmin(req);
+
+    try {
+      const gitBranch = (await runGitCommand('git rev-parse --abbrev-ref HEAD')).stdout.trim();
+      const remoteBranch = `origin/${gitBranch}`;
+
+      await runGitCommand(`git fetch origin ${gitBranch}`);
+
+      const localHash = (await runGitCommand('git rev-parse HEAD')).stdout.trim();
+      const remoteHash = (await runGitCommand(`git rev-parse ${remoteBranch}`)).stdout.trim();
+      const latest = (await runGitCommand('git log -1 --pretty=format:%H%n%an%n%ar%n%s')).stdout.trim().split('\n');
+
+      return {
+        ok: true,
+        branch: gitBranch,
+        behind: localHash !== remoteHash,
+        localHash,
+        remoteHash,
+        latest: {
+          commit: latest[0] || '',
+          author: latest[1] || '',
+          age: latest[2] || '',
+          message: latest[3] || '',
+        },
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException(
+        `Update check failed: ${error?.message || String(error)}`,
+      );
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Post('update/pull')
+  async pullUpdate(@Req() req: any) {
+    this.assertSuperAdmin(req);
+
+    try {
+      const gitBranch = (await runGitCommand('git rev-parse --abbrev-ref HEAD')).stdout.trim();
+      const remoteBranch = `origin/${gitBranch}`;
+      const repoRoot = process.cwd();
+      const frontendDir = path.join(repoRoot, 'frontend');
+
+      const status = (await runGitCommand('git status --porcelain')).stdout.trim();
+      if (status) {
+        return {
+          ok: false,
+          message: 'Working tree is not clean. Commit or stash changes before updating.',
+          diff: status,
+        };
+      }
+
+      await runGitCommand(`git fetch origin ${gitBranch}`);
+      const localHash = (await runGitCommand('git rev-parse HEAD')).stdout.trim();
+      const remoteHash = (await runGitCommand(`git rev-parse ${remoteBranch}`)).stdout.trim();
+
+      if (localHash === remoteHash) {
+        return { ok: true, message: 'Already up to date.', branch: gitBranch };
+      }
+
+      const pull = (await runGitCommand(`git pull --ff-only origin ${gitBranch}`)).stdout.trim();
+      const changedFiles = (await runGitCommand('git diff --name-only HEAD@{1} HEAD')).stdout
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+
+      const backendInstallNeeded = changedFiles.some((file) => /(^package(-lock)?\.json$|^yarn\.lock$|^pnpm-lock\.yaml$)/.test(file));
+      const frontendChanged = changedFiles.some((file) => file.startsWith('frontend/'));
+      const frontendInstallNeeded = changedFiles.some((file) => /^frontend\/(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(file));
+
+      let installOutput = '';
+      let backendBuildOutput = '';
+      let frontendBuildOutput = '';
+      let frontendRestartOutput = '';
+
+      if (backendInstallNeeded) {
+        installOutput = (await runGitCommand('npm install --silent')).stdout.trim();
+      }
+
+      try {
+        backendBuildOutput = (await runGitCommand('npm run build')).stdout.trim();
+      } catch (buildError: any) {
+        return {
+          ok: false,
+          message: 'Backend updated, but backend build failed. Restart not performed.',
+          pullOutput: pull,
+          installOutput,
+          backendBuildError: buildError?.message || String(buildError),
+          changedFiles,
+        };
+      }
+
+      if (frontendChanged) {
+        try {
+          if (frontendInstallNeeded) {
+            frontendBuildOutput = (await runGitCommand('npm install --silent', frontendDir)).stdout.trim();
+          }
+          const frontendBuild = await runGitCommand('npm run build', frontendDir);
+          frontendBuildOutput += `\n${frontendBuild.stdout.trim()}`.trim();
+        } catch (frontendBuildError: any) {
+          return {
+            ok: false,
+            message: 'Backend updated, but frontend build failed. Restart not performed.',
+            pullOutput: pull,
+            installOutput,
+            backendBuildOutput,
+            frontendBuildError: frontendBuildError?.message || String(frontendBuildError),
+            changedFiles,
+          };
+        }
+
+        try {
+          const restartResult = await runGitCommand('pm2 restart jointbox-frontend');
+          frontendRestartOutput = restartResult.stdout.trim();
+        } catch (pm2Error: any) {
+          frontendRestartOutput = `Failed to restart frontend via PM2: ${pm2Error?.message || String(pm2Error)}`;
+        }
+      }
+
+      setTimeout(() => process.exit(0), 1000);
+
+      return {
+        ok: true,
+        message: 'Updated and restarting backend. Frontend rebuilt as needed.',
+        branch: gitBranch,
+        pullOutput: pull,
+        installOutput,
+        backendBuildOutput,
+        frontendBuildOutput,
+        frontendRestartOutput,
+        changedFiles,
+        restartScheduled: true,
+      };
+    } catch (error: any) {
+      throw new InternalServerErrorException(
+        `Update pull failed: ${error?.message || String(error)}`,
+      );
+    }
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)

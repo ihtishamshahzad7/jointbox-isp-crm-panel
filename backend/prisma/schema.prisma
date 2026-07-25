@@ -1043,6 +1043,7 @@ model IpPool {
   /// the ISP's address space too, but had no way to be given it — its pool
   /// list was simply empty, so static IPs could not be assigned by hand.
   assignments IpPoolAssignment[]
+  accessGroups AccessGroupIpPool[] @relation("AccessGroupIpPoolRel")
 
   createdAt DateTime @default(now())
 
@@ -2085,6 +2086,7 @@ model AccessGroup {
   members        AccessGroupMember[]
   nasResources   AccessGroupNas[]
   pkgResources   AccessGroupPackage[]
+  poolResources  AccessGroupIpPool[]
 
   @@index([isActive])
   @@map("access_group")
@@ -2137,6 +2139,19 @@ model AccessGroupPackage {
   @@unique([groupId, packageId])
   @@index([packageId])
   @@map("access_group_package")
+}
+
+model AccessGroupIpPool {
+  id      Int @id @default(autoincrement())
+  groupId Int
+  poolId  Int
+
+  group AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  pool  IpPool      @relation("AccessGroupIpPoolRel", fields: [poolId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, poolId])
+  @@index([poolId])
+  @@map("access_group_ip_pool")
 }
 
 /// Payment gateway configuration. Per-tenant — the same ISP can run JazzCash

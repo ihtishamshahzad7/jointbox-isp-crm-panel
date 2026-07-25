@@ -3,8 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
-
-const API = (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+import API from "../components/api";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -125,17 +124,32 @@ export default function LogsPage() {
       const fu = focusUser ? `&forUser=${focusUser}` : "";
       const fuq = focusUser ? `?forUser=${focusUser}` : "";
       const [loginRes, activityRes, networkRes, systemRes, sessionsRes] = await Promise.all([
-        fetch(`${API}/logs/login?limit=100${fu}`, { headers }).catch(() => null),
-        fetch(`${API}/logs/activity?limit=100${fu}`, { headers }).catch(() => null),
-        fetch(`${API}/logs/network?limit=100`, { headers }).catch(() => null),
-        fetch(`${API}/logs/system?limit=100`, { headers }).catch(() => null),
-        fetch(`${API}/logs/sessions${fuq}`, { headers }).catch(() => null),
+        fetch(`${API}/logs/login?limit=100${fu}`, { headers }).catch((err) => { console.error('Login logs fetch failed', err); return null; }),
+        fetch(`${API}/logs/activity?limit=100${fu}`, { headers }).catch((err) => { console.error('Activity logs fetch failed', err); return null; }),
+        fetch(`${API}/logs/network?limit=100`, { headers }).catch((err) => { console.error('Network logs fetch failed', err); return null; }),
+        fetch(`${API}/logs/system?limit=100`, { headers }).catch((err) => { console.error('System logs fetch failed', err); return null; }),
+        fetch(`${API}/logs/sessions${fuq}`, { headers }).catch((err) => { console.error('Session logs fetch failed', err); return null; }),
       ]);
-      if (loginRes?.ok) { const d = await loginRes.json(); setLoginLogs(d.logs || []); }
-      if (activityRes?.ok) { const d = await activityRes.json(); setActivityLogs(d.logs || []); }
-      if (networkRes?.ok) { const d = await networkRes.json(); setNetworkLogs(d.logs || []); }
-      if (systemRes?.ok) { const d = await systemRes.json(); setSystemLogs(d.logs || []); }
-      if (sessionsRes?.ok) { const d = await sessionsRes.json(); setSessions(Array.isArray(d) ? d : []); }
+      if (loginRes) {
+        if (loginRes.ok) { const d = await loginRes.json(); setLoginLogs(d.logs || []); }
+        else console.error('Login logs HTTP error', loginRes.status, await loginRes.text());
+      }
+      if (activityRes) {
+        if (activityRes.ok) { const d = await activityRes.json(); setActivityLogs(d.logs || []); }
+        else console.error('Activity logs HTTP error', activityRes.status, await activityRes.text());
+      }
+      if (networkRes) {
+        if (networkRes.ok) { const d = await networkRes.json(); setNetworkLogs(d.logs || []); }
+        else console.error('Network logs HTTP error', networkRes.status, await networkRes.text());
+      }
+      if (systemRes) {
+        if (systemRes.ok) { const d = await systemRes.json(); setSystemLogs(d.logs || []); }
+        else console.error('System logs HTTP error', systemRes.status, await systemRes.text());
+      }
+      if (sessionsRes) {
+        if (sessionsRes.ok) { const d = await sessionsRes.json(); setSessions(Array.isArray(d) ? d : []); }
+        else console.error('Session logs HTTP error', sessionsRes.status, await sessionsRes.text());
+      }
     } finally { setLoading(false); }
   }, [token, focusUser]);
 

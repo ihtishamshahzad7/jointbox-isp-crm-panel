@@ -271,6 +271,12 @@ export const Icons = {
       <line x1="12" y1="12" x2="12" y2="16" />
     </svg>
   ),
+  Bell: (props: IconProps) => (
+    <svg {...s16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  ),
 };
 
 export default Icons;

@@ -209,8 +209,9 @@ export default function PackagesPage() {
     if (statusFilter !== "ALL") q.set("status", statusFilter);
     if (serviceTypeFilter !== "ALL") q.set("serviceType", serviceTypeFilter);
     if (durationTypeFilter !== "ALL") q.set("durationType", durationTypeFilter);
+    if (groupFilter !== "ALL") q.set("group", groupFilter);
     return q.toString();
-  }, [searchQ, statusFilter, serviceTypeFilter, durationTypeFilter]);
+  }, [searchQ, statusFilter, serviceTypeFilter, durationTypeFilter, groupFilter]);
 
   const fetcher = useCallback(async (url: string) => {
     const res = await fetch(url, {

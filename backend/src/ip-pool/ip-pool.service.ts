@@ -272,11 +272,15 @@ export class IpPoolService {
     return { poolId, userId, shared: on };
   }
 
-  async findAll(actor?: Actor) {
-    return this.prisma.ipPool.findMany({
-      // poolWhere, not ownedWhere: pools can be SHARED down the chain now, and
-      // ownership alone hid every pool a franchise had been lent.
-      where: await this.scope.poolWhere(actor as any),
+  async findAll(query: any, actor?: Actor) {
+    const groupFilter = query?.group;
+    const groupId = groupFilter && groupFilter !== 'ALL' && groupFilter !== 'UNGROUPED'
+      ? Number(groupFilter)
+      : null;
+
+    const where = await this.scope.poolWhere(actor as any);
+    const options: any = {
+      where,
       include: {
         assignments: { select: { userId: true, user: { select: { id: true, name: true } } } },
         packages: {
@@ -291,7 +295,22 @@ export class IpPoolService {
         _count: { select: { packages: true } },
       },
       orderBy: { id: 'desc' },
-    });
+    };
+
+    if (groupFilter && groupFilter !== 'ALL') {
+      if (groupFilter === 'UNGROUPED') {
+        options.where = {
+          AND: [where, { accessGroups: { none: {} } }],
+        };
+      } else if (groupId !== null) {
+        options.where = {
+          AND: [where, { accessGroups: { some: { groupId } } }],
+        };
+      }
+      options.include.accessGroups = { select: { groupId: true } };
+    }
+
+    return this.prisma.ipPool.findMany(options);
   }
 
   // ─────────────────────────────────────────────────────────────

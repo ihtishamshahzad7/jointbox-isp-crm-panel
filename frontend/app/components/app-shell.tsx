@@ -178,8 +178,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [myRole, setMyRole] = useState<string | null>(null);
   const [switchQuery, setSwitchQuery] = useState('');
   const [switchView, setSwitchView] = useState<'list' | 'tree'>('tree');
+  const [updateInfo, setUpdateInfo] = useState<any>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
   const [light, setLight] = useState(false);
+  const [latestNotice, setLatestNotice] = useState<any | null>(null);
+  const [noticeOpen, setNoticeOpen] = useState(false);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -387,6 +392,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       })
       .then((data) => setUser(data?.user ?? data))
       .catch(() => router.replace('/login'));
+
+    fetch(`${API}/communication/latest`, { headers })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setLatestNotice(data || null))
+      .catch(() => setLatestNotice(null));
   }, [router]);
 
   useEffect(() => {
@@ -404,6 +414,60 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('token');
     router.replace('/login');
   };
+
+  const checkUpdate = async () => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('token');
+    if (!token || myRole !== 'SUPER_ADMIN') return;
+    setCheckingUpdate(true);
+    try {
+      const res = await fetch(`${API}/update/check`, {
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUpdateInfo(data);
+      } else {
+        setUpdateInfo({ error: data?.message || 'Failed to check for updates' });
+      }
+    } catch (error) {
+      setUpdateInfo({ error: String(error) });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const pullUpdate = async () => {
+    if (!window.confirm('Pull the latest update from git and restart the backend if available?')) return;
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setUpdating(true);
+    try {
+      const res = await fetch(`${API}/update/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Update failed: ${data?.message || 'Unknown error'}`);
+        setUpdateInfo({ error: data?.message || 'Update failed' });
+      } else {
+        alert(data?.message || 'Update completed. Restarting backend.');
+        setUpdateInfo(data);
+      }
+    } catch (error) {
+      alert(`Update failed: ${String(error)}`);
+      setUpdateInfo({ error: String(error) });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (myRole === 'SUPER_ADMIN') {
+      checkUpdate();
+    }
+  }, [myRole]);
 
   const title = menuItems.find((item) => item.id === activeMenu)?.label || 'Dashboard';
 
@@ -512,6 +576,52 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </form>
 
           <div className="topbar-right">
+            {latestNotice && (
+              <div style={{ position: 'relative', marginRight: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setNoticeOpen((p) => !p)}
+                  title="Latest notification"
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 38, height: 38, borderRadius: '50%', border: '1px solid var(--border)',
+                    background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer', position: 'relative',
+                  }}
+                >
+                  <Icons.Bell />
+                  <span style={{
+                    position: 'absolute', top: 6, right: 6, width: 8, height: 8,
+                    borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 0 2px var(--surface)',
+                  }} />
+                </button>
+                {noticeOpen && (
+                  <div style={{
+                    position: 'absolute', right: 0, top: 46, width: 320, zIndex: 40,
+                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
+                    boxShadow: '0 20px 60px rgba(0,0,0,.18)', overflow: 'hidden',
+                  }}>
+                    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>Latest notification</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(latestNotice.createdAt).toLocaleString()}</div>
+                      </div>
+                      <button type="button" onClick={() => setNoticeOpen(false)} style={{ border: 'none', background: 'transparent', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: 14 }}>
+                        ×
+                      </button>
+                    </div>
+                    <div style={{ padding: '14px 16px' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{latestNotice.title || 'Untitled notice'}</div>
+                      <div style={{ fontSize: 13, color: 'var(--text)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{latestNotice.body || 'No details available.'}</div>
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '10px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                      <button type="button" onClick={() => { setNoticeOpen(false); router.push('/communication'); }} style={{ border: '1px solid var(--border)', borderRadius: 9, background: 'transparent', color: 'var(--text)', fontSize: 12, padding: '8px 12px', cursor: 'pointer' }}>
+                        View all
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Wallet balance, always visible.
                 This is the number that decides whether the next activation
                 goes through. A reseller discovering they are empty only when
@@ -662,6 +772,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       </div>
                     </div>
                   </>
+                )}
+              </div>
+            )}
+            {user?.role === 'SUPER_ADMIN' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 8 }}>
+                <button
+                  type="button"
+                  onClick={updating ? undefined : pullUpdate}
+                  title={updateInfo?.behind ? 'Update available' : updateInfo?.message || 'Check for updates'}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 100, height: 32, background: updateInfo?.behind ? '#f59e0b' : 'var(--surface)', color: updateInfo?.behind ? '#1a1206' : 'var(--text)', border: '1px solid var(--border)', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: updating ? 'not-allowed' : 'pointer' }}
+                  disabled={updating}
+                >
+                  {checkingUpdate ? 'Checking…' : updating ? 'Updating…' : updateInfo?.behind ? 'Update available' : 'Update'}
+                </button>
+                {updateInfo?.behind && !checkingUpdate && !updating && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#b45309' }}>Update available</span>
                 )}
               </div>
             )}

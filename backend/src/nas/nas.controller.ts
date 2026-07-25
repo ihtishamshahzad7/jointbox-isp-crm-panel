@@ -13,7 +13,7 @@ export class NasController {
 
   // ── CRUD ────────────────────────────────────────────────────
   @Get()
-  findAll(@Req() req: any) { return this.nasService.findAll(req.user); }
+  findAll(@Query() query: any, @Req() req: any) { return this.nasService.findAll(query, req.user); }
 
   // ── Assign / unassign a router to a downline account ────────
   /** Bulk: give several routers to several accounts at once. */

@@ -50,7 +50,10 @@ export class NotificationsController {
       createdBy: req.user?.sub,
     });
   }
-
+  @Get('latest')
+  latest(@Request() req: any) {
+    return this.notifications.getLatestNotice(req.user);
+  }
   // ── Log ───────────────────────────────────────────────────────
   @Get('messages')
   messages(@Query() query: any) {

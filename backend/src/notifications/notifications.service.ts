@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../common/queue.service';
+import { ScopeService, Actor } from '../common/scope.service';
 
 /**
  * Phase 2 communication engine.
@@ -22,6 +23,7 @@ export class NotificationsService {
   constructor(
     private prisma: PrismaService,
     private queue: QueueService,
+    private scope: ScopeService,
   ) {
     this.queue.registerProcessor('send-message', (data) => this.processMessage(data.messageId));
   }
@@ -187,6 +189,18 @@ export class NotificationsService {
     const hasMore = rows.length > limit;
     const items = hasMore ? rows.slice(0, limit) : rows;
     return { items, nextCursor: hasMore ? items[items.length - 1].id : null, hasMore };
+  }
+
+  async getLatestNotice(actor?: Actor) {
+    const where: any = {};
+    if (!this.scope.isAdmin(actor?.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where.OR = [{ createdBy: { in: ids } }, { createdBy: null }];
+    }
+    return this.prisma.notice.findFirst({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async retryMessage(id: number) {

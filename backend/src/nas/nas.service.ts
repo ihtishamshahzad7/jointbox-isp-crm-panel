@@ -81,11 +81,16 @@ export class NasService implements OnModuleInit {
     }
   }
 
-  async findAll(actor?: any) {
+  async findAll(query: any, actor?: any) {
+    const groupFilter = query?.group;
+    const groupId = groupFilter && groupFilter !== 'ALL' && groupFilter !== 'UNGROUPED'
+      ? Number(groupFilter)
+      : null;
+
     // A reseller sees its own routers, its ancestors' routers, and any router
     // explicitly assigned to it. The ISP sees everything.
     const where = await this.scope.nasWhere(actor);
-    return this.prisma.nas.findMany({
+    const options: any = {
       where,
       orderBy: { id: 'desc' },
       include: {
@@ -93,7 +98,18 @@ export class NasService implements OnModuleInit {
         owner: { select: { id: true, name: true, role: true } },
         assignments: { select: { userId: true, user: { select: { id: true, name: true } } } },
       },
-    });
+    };
+
+    if (groupFilter && groupFilter !== 'ALL') {
+      if (groupFilter === 'UNGROUPED') {
+        options.where = { AND: [where, { accessGroups: { none: {} } }] };
+      } else if (groupId !== null && !Number.isNaN(groupId)) {
+        options.where = { AND: [where, { accessGroups: { some: { groupId } } }] };
+      }
+      options.include.accessGroups = { select: { groupId: true } };
+    }
+
+    return this.prisma.nas.findMany(options);
   }
 
   /**

@@ -170,6 +170,10 @@ export class PackagesService {
     const searchQ = (query?.q || '').trim().toLowerCase();
     const serviceType = query?.serviceType && query.serviceType !== 'ALL' ? String(query.serviceType) : null;
     const durationType = query?.durationType && query.durationType !== 'ALL' ? String(query.durationType) : null;
+    const groupFilter = query?.group;
+    const groupId = groupFilter && groupFilter !== 'ALL' && groupFilter !== 'UNGROUPED'
+      ? Number(groupFilter)
+      : null;
 
     // ⚡ Phase 0: DB hit cached for 30s (filters below run in-memory on the cached list)
     const packages = await this.cache.wrap('packages:list', 30, () =>
@@ -178,6 +182,7 @@ export class PackagesService {
         include: {
           pool:   true,
           _count: { select: { subscribers: true } },
+          accessGroups: { select: { groupId: true } },
         },
       }),
     );
@@ -226,8 +231,13 @@ export class PackagesService {
 
         const serviceTypePass = !serviceType || pkg.serviceType === serviceType;
         const durationTypePass = !durationType || pkg.durationType === durationType;
+        const groupPass = !groupFilter || groupFilter === 'ALL'
+          ? true
+          : groupFilter === 'UNGROUPED'
+            ? (pkg.accessGroups?.length || 0) === 0
+            : groupId !== null && pkg.accessGroups?.some((ag: any) => ag.groupId === groupId);
 
-        return statusPass && searchPass && serviceTypePass && durationTypePass;
+        return statusPass && searchPass && serviceTypePass && durationTypePass && groupPass;
       });
   }
 

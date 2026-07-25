@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Wizard, Field } from "../components/wizard";
 import { PoolTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
@@ -101,6 +101,8 @@ export default function IpPoolsPage() {
   const [loading, setLoading] = useState(true);
 
   const [searchQ, setSearchQ] = useState("");
+  const [groupFilter, setGroupFilter] = useState("ALL");
+  const [groupOptions, setGroupOptions] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
   const [showForm, setShowForm] = useState(false);
   const [editPool, setEditPool] = useState<IpPool | null>(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
@@ -116,7 +118,7 @@ export default function IpPoolsPage() {
   const [networkError, setNetworkError] = useState("");
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
-  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+  const headers = useMemo(() => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }), [token]);
 
   const d = darkMode;
   const t = {
@@ -151,8 +153,9 @@ export default function IpPoolsPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
+      const query = groupFilter && groupFilter !== "ALL" ? `?group=${encodeURIComponent(groupFilter)}` : "";
       const [poolRes, statsRes, verifyRes] = await Promise.all([
-        fetch(`${API}/ip-pools`, { headers }),
+        fetch(`${API}/ip-pools${query}`, { headers }),
         fetch(`${API}/ip-pools/stats`, { headers }),
         // Reads the routers — a pool name that doesn't exist on the MikroTik
         // drops every session on it while looking perfectly healthy here.
@@ -163,7 +166,7 @@ export default function IpPoolsPage() {
       if (verifyRes.ok) setVerify(await verifyRes.json());
     } catch { showToast("Failed to load IP pools", "err"); }
     setLoading(false);
-  }, []);
+  }, [groupFilter, headers]);
 
   const savePool = async () => {
     if (!form.name.trim()) { showToast("Pool name is required", "err"); return; }
@@ -247,7 +250,21 @@ export default function IpPoolsPage() {
       // /auth/profile returns { user: {...} }, not the user itself.
       .then(d => setMe(d?.user ?? d))
       .catch(silent("authProfileFetch"));
-  }, [token]);
+  }, [token, headers]);
+
+  useEffect(() => {
+    if (!token) return;
+    const url = `${API}/groups/options`;
+    fetch(url, { headers })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setGroupOptions(Array.isArray(data) ? data : []))
+      .catch(silent("groupsFetch"));
+  }, [token, headers]);
+
+  useEffect(() => {
+    if (!token) return;
+    loadAll();
+  }, [token, loadAll]);
 
   const openShare = async (pool: any) => {
     setShareFor(pool);
@@ -454,8 +471,17 @@ export default function IpPoolsPage() {
                 style={{ ...inputSt, paddingLeft:30, width:"100%" }}
               />
             </div>
-            
-            {/* ADD IP POOL BUTTON - NOW VISIBLE */}
+            <select
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
+              style={{ ...inputSt, width:220, cursor:'pointer' }}
+            >
+              <option value="ALL">All Groups</option>
+              <option value="UNGROUPED">Ungrouped</option>
+              {groupOptions.map((g) => (
+                <option key={g.id} value={String(g.id)}>{g.name}</option>
+              ))}
+            </select>
             <Btn variant="primary" onClick={openCreate} size="sm">
               <Ic.Plus /> Add IP Pool
             </Btn>
