@@ -630,6 +630,15 @@ export class AccountingService {
     return { pending: true, requestId: req.id, amount: refundAmt, threshold: refundApprovalThreshold };
   }
 
+  /** Counts for the approval badge — how much is waiting on the ISP owner. */
+  async getPendingApprovals() {
+    const [refunds, expenses] = await Promise.all([
+      this.prisma.refundRequest.count({ where: { status: 'PENDING' } }),
+      this.prisma.expense.count({ where: { status: 'PENDING' } as any }),
+    ]);
+    return { refunds, expenses, total: refunds + expenses };
+  }
+
   /** Pending refund requests for the approval queue. ISP owner only. */
   async listRefundRequests(status = 'PENDING') {
     const rows = await this.prisma.refundRequest.findMany({

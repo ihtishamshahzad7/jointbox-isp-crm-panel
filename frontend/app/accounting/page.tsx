@@ -327,6 +327,20 @@ export default function AccountingPage() {
     fontSize: 13,
   };
 
+  const downloadCsv = (filename: string, headerRow: string[], rows: (string | number)[][]) => {
+    const esc = (v: any) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const csv = [headerRow, ...rows].map((r) => r.map(esc).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportCollections = () => downloadCsv(
+    `collections-${colDate}.csv`,
+    ["Collected by", "Payments", "Net collected", "Methods"],
+    (collections?.byStaff || []).map((s: any) => [s.name, s.count, s.net, Object.entries(s.methods).map(([m, v]: any) => `${m} ${v}`).join(" | ")]),
+  );
+
   const cfMax = cashflow?.series?.length
     ? Math.max(...cashflow.series.map((r: any) => Math.max(r.inflow, r.outflow)), 1)
     : 1;
@@ -676,9 +690,14 @@ export default function AccountingPage() {
             <label style={{ fontSize: 12, color: T.muted }}>Day</label>
             <input type="date" value={colDate} onChange={(e) => setColDate(e.target.value)} style={input} />
             {collections && (
-              <span style={{ marginLeft: "auto", fontSize: 13, color: T.sub }}>
-                Collected <b style={{ color: T.green }}>{fmt(collections.net)}</b> in {collections.count} payment{collections.count === 1 ? "" : "s"}
-                {collections.refunded > 0 && <> · refunded <b style={{ color: T.red }}>{fmt(collections.refunded)}</b></>}
+              <span style={{ marginLeft: "auto", fontSize: 13, color: T.sub, display: "flex", alignItems: "center", gap: 10 }}>
+                <span>
+                  Collected <b style={{ color: T.green }}>{fmt(collections.net)}</b> in {collections.count} payment{collections.count === 1 ? "" : "s"}
+                  {collections.refunded > 0 && <> · refunded <b style={{ color: T.red }}>{fmt(collections.refunded)}</b></>}
+                </span>
+                {collections.byStaff?.length > 0 && (
+                  <button onClick={exportCollections} style={{ background: "transparent", color: T.accent, border: `1px solid ${T.border}`, borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer" }}>⤓ CSV</button>
+                )}
               </span>
             )}
           </div>

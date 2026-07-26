@@ -35,6 +35,8 @@ export default function ReversalsPage() {
   const [msg, setMsg] = React.useState("");
   const [form, setForm] = React.useState({ subscriberId: "", reasonCode: "DUPLICATE", reason: "", revertService: true });
   const [busy, setBusy] = React.useState(false);
+  const [audit, setAudit] = React.useState<any[]>([]);
+  const [commission, setCommission] = React.useState<any>(null);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = React.useMemo(() => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }), [token]);
@@ -45,6 +47,15 @@ export default function ReversalsPage() {
       const r = await fetch(`${API}/organization/pricing/reversals`, { headers });
       setRows(r.ok ? await r.json() : []);
     } catch { setRows([]); }
+    try {
+      const a = await fetch(`${API}/logs/activity?financial=1&limit=100`, { headers });
+      const d = a.ok ? await a.json() : { logs: [] };
+      setAudit(Array.isArray(d?.logs) ? d.logs : []);
+    } catch { setAudit([]); }
+    try {
+      const c = await fetch(`${API}/organization/commission-statement`, { headers });
+      setCommission(c.ok ? await c.json() : null);
+    } catch { setCommission(null); }
     setLoading(false);
   }, [headers]);
   React.useEffect(() => { load(); }, [load]);
@@ -68,6 +79,32 @@ export default function ReversalsPage() {
 
   const input: React.CSSProperties = { background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", color: T.text, fontSize: 13, fontFamily: "inherit" };
   const codeLabel = (c: string) => REASON_CODES.find((r) => r.v === c)?.label ?? c;
+
+  /** Turn an array of rows into a CSV file and trigger a download. */
+  const downloadCsv = (filename: string, headerRow: string[], rows: (string | number)[][]) => {
+    const esc = (v: any) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [headerRow, ...rows].map((r) => r.map(esc).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportCommission = () => downloadCsv(
+    `commission-statement-${new Date().toISOString().slice(0, 10)}.csv`,
+    ["Account", "Role", "Earned", "Clawed back", "Net"],
+    (commission?.accounts || []).map((a: any) => [a.name, a.role, a.earned, a.clawedBack, a.net]),
+  );
+  const exportAudit = () => downloadCsv(
+    `financial-audit-${new Date().toISOString().slice(0, 10)}.csv`,
+    ["When", "Action", "By", "Entity", "Detail"],
+    (audit || []).map((l) => [new Date(l.createdAt).toISOString(), l.action, l.user?.name || "", `${l.entity || ""}${l.entityId ? ` #${l.entityId}` : ""}`, l.details || ""]),
+  );
+
+  const exportBtn: React.CSSProperties = { background: "transparent", color: "#C4B5FD", border: `1px solid ${T.border}`, borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" };
 
   return (
     <div style={{ padding: 20, color: T.text, background: T.bg, minHeight: "100vh", fontFamily: "Inter, system-ui, sans-serif" }}>
@@ -132,6 +169,74 @@ export default function ReversalsPage() {
               ))}
               {!loading && rows.length === 0 && (
                 <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: T.muted }}>No reversals yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Commission statement */}
+      {commission && commission.accounts?.length > 0 && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, overflow: "hidden", marginTop: 18 }}>
+          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${T.border}`, fontSize: 12, color: T.muted, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <span>Commission statement — earned vs clawed back on refunds, per account</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span>Earned <b style={{ color: T.green }}>{commission.totalEarned}</b> · Clawed back <b style={{ color: T.red }}>{commission.totalClawedBack}</b> · Net <b>{commission.totalNet}</b></span>
+              <button style={exportBtn} onClick={exportCommission}>⤓ CSV</button>
+            </span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 560 }}>
+              <thead>
+                <tr style={{ background: "var(--surface-2,#1b1f2e)" }}>
+                  {["Account", "Earned", "Clawed back", "Net"].map((h) => (
+                    <th key={h} style={{ textAlign: h === "Account" ? "left" : "right", padding: "9px 12px", color: T.muted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {commission.accounts.map((a: any) => (
+                  <tr key={a.userId} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "9px 12px" }}>{a.name} <span style={{ color: T.muted, fontSize: 10.5 }}>({a.role})</span></td>
+                    <td style={{ padding: "9px 12px", textAlign: "right", color: T.green, fontVariantNumeric: "tabular-nums" }}>{a.earned}</td>
+                    <td style={{ padding: "9px 12px", textAlign: "right", color: a.clawedBack > 0 ? T.red : T.muted, fontVariantNumeric: "tabular-nums" }}>{a.clawedBack > 0 ? `−${a.clawedBack}` : "0"}</td>
+                    <td style={{ padding: "9px 12px", textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{a.net}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Financial audit trail */}
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, overflow: "hidden", marginTop: 18 }}>
+        <div style={{ padding: "10px 14px", borderBottom: `1px solid ${T.border}`, fontSize: 12, color: T.muted, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>Financial audit trail — every money action (refunds, reversals, period locks, approvals, credit-limit &amp; top-up changes) across your tree</span>
+          <button style={exportBtn} onClick={exportAudit}>⤓ CSV</button>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 640 }}>
+            <thead>
+              <tr style={{ background: "var(--surface-2,#1b1f2e)" }}>
+                {["When", "Action", "By", "Detail"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: "9px 12px", color: T.muted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {audit.map((l) => (
+                <tr key={l.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <td style={{ padding: "9px 12px", whiteSpace: "nowrap", color: T.muted }}>{new Date(l.createdAt).toLocaleString()}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <span style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 20, background: "rgba(108,60,225,0.18)", color: "#C4B5FD", whiteSpace: "nowrap" }}>{l.action}</span>
+                  </td>
+                  <td style={{ padding: "9px 12px", color: T.muted }}>{l.user?.name || "—"}</td>
+                  <td style={{ padding: "9px 12px", color: T.muted }}>{l.details || `${l.entity || ""}${l.entityId ? ` #${l.entityId}` : ""}`}</td>
+                </tr>
+              ))}
+              {!loading && audit.length === 0 && (
+                <tr><td colSpan={4} style={{ padding: 30, textAlign: "center", color: T.muted }}>No financial activity recorded yet.</td></tr>
               )}
             </tbody>
           </table>

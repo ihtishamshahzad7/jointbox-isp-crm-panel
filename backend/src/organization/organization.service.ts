@@ -162,6 +162,65 @@ export class OrganizationService {
   }
 
   /**
+   * Commission statement per account — what each reseller earned in commission,
+   * how much was clawed back when the underlying payment was refunded, and the
+   * net. Makes the refund commission-clawback visible and reconcilable. Scoped
+   * to the caller's subtree; ISP sees all. Optional date range.
+   */
+  async commissionStatement(actor?: Actor, opts: { from?: string; to?: string } = {}) {
+    const where: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const selfId = this.scope.actorId(actor);
+      const ids = (await this.scope.descendantIds(selfId)).filter((id) => id !== selfId);
+      where.userId = { in: ids.length ? ids : [-1] };
+    }
+    if (opts.from || opts.to) {
+      where.createdAt = {};
+      if (opts.from) where.createdAt.gte = new Date(opts.from);
+      if (opts.to) where.createdAt.lte = new Date(opts.to);
+    }
+    // COMMISSION credits, plus the REV#-referenced ADJUSTMENT clawbacks.
+    const rows = await this.prisma.userBalanceTransaction.findMany({
+      where: {
+        ...where,
+        OR: [
+          { type: 'COMMISSION' },
+          { type: 'ADJUSTMENT', reference: { startsWith: 'REV#' } },
+        ],
+      },
+      select: { userId: true, type: true, amount: true, reference: true },
+    });
+
+    const byUser = new Map<number, { userId: number; earned: number; clawedBack: number; net: number }>();
+    for (const r of rows) {
+      const isClawback = r.type === 'ADJUSTMENT';
+      // A clawback amount is stored negative; count it as positive clawback.
+      const row = byUser.get(r.userId) || { userId: r.userId, earned: 0, clawedBack: 0, net: 0 };
+      if (isClawback) row.clawedBack = round2(row.clawedBack + Math.abs(r.amount || 0));
+      else row.earned = round2(row.earned + (r.amount || 0));
+      row.net = round2(row.earned - row.clawedBack);
+      byUser.set(r.userId, row);
+    }
+
+    const ids = [...byUser.keys()];
+    const users = ids.length
+      ? await this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, role: true } })
+      : [];
+    const nameById = new Map(users.map((u) => [u.id, u]));
+    const accounts = [...byUser.values()]
+      .map((r) => ({ ...r, name: nameById.get(r.userId)?.name ?? `#${r.userId}`, role: nameById.get(r.userId)?.role ?? '' }))
+      .sort((a, b) => b.net - a.net);
+
+    return {
+      totalEarned: round2(accounts.reduce((s, a) => s + a.earned, 0)),
+      totalClawedBack: round2(accounts.reduce((s, a) => s + a.clawedBack, 0)),
+      totalNet: round2(accounts.reduce((s, a) => s + a.net, 0)),
+      accounts,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
    * Commission % is set BY THE PARENT, never by the account itself — it is the
    * cut this account earns on payments, so self-service would let a reseller
    * award itself any rate. The target must also sit inside the caller's own
@@ -504,11 +563,15 @@ export class OrganizationService {
     const funder = funderId ? await this.prisma.user.findUnique({ where: { id: funderId } }) : null;
     const funderIsSource = !funder || this.scope.isAdmin(funder.role) || funder.parentId == null;
 
+    // Shared reference links the receiver credit and funder debit so the whole
+    // top-up can be reversed atomically later if it was a mistake.
+    const topupRef = `TOP#${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
     const ops: any[] = [];
     // credit the receiver
     ops.push(this.prisma.user.update({ where: { id: targetUserId }, data: { balance: { increment: amount } } }));
     ops.push(this.prisma.userBalanceTransaction.create({
-      data: { userId: targetUserId, type: 'TOPUP', amount, balanceAfter: target.balance + amount,
+      data: { userId: targetUserId, type: 'TOPUP', amount, balanceAfter: target.balance + amount, reference: topupRef,
         notes: notes || `Top-up from ${funder?.name || actorUser?.name || 'upline'}${isAdminActor && funderId !== actorId ? ' (by ISP)' : ''}`,
         createdBy: actorId },
     }));
@@ -520,13 +583,55 @@ export class OrganizationService {
       }
       ops.push(this.prisma.user.update({ where: { id: funder.id }, data: { balance: { decrement: amount } } }));
       ops.push(this.prisma.userBalanceTransaction.create({
-        data: { userId: funder.id, type: 'DEDUCT', amount: -amount, balanceAfter: funder.balance - amount,
+        data: { userId: funder.id, type: 'DEDUCT', amount: -amount, balanceAfter: funder.balance - amount, reference: topupRef,
           notes: `Funded ${target.name}${isAdminActor && funder.id !== actorId ? ' (initiated by ISP)' : ''}`, createdBy: actorId },
       }));
     }
 
     const [receiver] = await this.prisma.$transaction(ops);
-    return { targetUserId, targetBalance: (receiver as any).balance, minted: funderIsSource };
+    return { targetUserId, targetBalance: (receiver as any).balance, minted: funderIsSource, reference: topupRef };
+  }
+
+  /**
+   * Reverse a wallet top-up done in error. Uses the shared reference to undo
+   * BOTH sides — pull the amount back off the receiver and refund the funder —
+   * with offsetting ADJUSTMENT rows (never editing the originals). Idempotent,
+   * subtree-scoped, and refuses if the receiver has already spent the money.
+   */
+  async reverseWalletTopup(actor: Actor, reference: string, reason?: string) {
+    if (!reference) throw new BadRequestException('Top-up reference is required');
+    const legs = await this.prisma.userBalanceTransaction.findMany({ where: { reference } });
+    if (!legs.length) throw new NotFoundException('Top-up not found — it may predate reversible top-ups.');
+    if (await this.prisma.userBalanceTransaction.findFirst({ where: { reference: `REV#${reference}` }, select: { id: true } })) {
+      throw new BadRequestException('This top-up has already been reversed.');
+    }
+    const credit = legs.find((l) => l.type === 'TOPUP');
+    if (!credit) throw new BadRequestException('No top-up credit found for this reference.');
+    await this.scope.assertUser(actor, credit.userId); // must be in the actor's subtree
+
+    const receiver = await this.prisma.user.findUnique({ where: { id: credit.userId }, select: { balance: true, name: true } });
+    if (!receiver) throw new NotFoundException('Receiver account not found');
+    if ((receiver.balance ?? 0) < credit.amount - 0.005) {
+      throw new BadRequestException(`${receiver.name} has already spent part of this top-up (balance ${round2(receiver.balance)} < ${round2(credit.amount)}). Reverse is unsafe.`);
+    }
+
+    const ops: any[] = [];
+    const note = `Reversal of top-up ${reference}${reason ? ` — ${reason}` : ''}`;
+    for (const leg of legs) {
+      // Undo each leg: apply the opposite of what it did.
+      const delta = -leg.amount; // TOPUP was +amount → pull back; DEDUCT was -amount → refund
+      const u = await this.prisma.user.findUnique({ where: { id: leg.userId }, select: { balance: true } });
+      const after = round2((u?.balance ?? 0) + delta);
+      ops.push(this.prisma.user.update({ where: { id: leg.userId }, data: { balance: { increment: delta } } }));
+      ops.push(this.prisma.userBalanceTransaction.create({
+        data: { userId: leg.userId, type: 'ADJUSTMENT', amount: delta, balanceAfter: after, reference: `REV#${reference}`, notes: note, createdBy: this.scope.actorId(actor) },
+      }));
+    }
+    await this.prisma.$transaction(ops);
+    await this.prisma.activityLog.create({
+      data: { userId: this.scope.actorId(actor), action: 'REVERSE_TOPUP', entity: 'User', entityId: credit.userId, details: note },
+    }).catch(() => null);
+    return { reversed: true, reference, amount: round2(credit.amount) };
   }
 
   // ── Commission distribution (called on every payment) ────────

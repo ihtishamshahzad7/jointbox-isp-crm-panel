@@ -147,6 +147,18 @@ export class OrganizationController {
   overdrawn(@Request() req: any) {
     return this.org.listOverdrawn(req.user);
   }
+
+  /** Commission earned vs clawed back (on refunds), per account. */
+  @Get('commission-statement')
+  commissionStatement(@Query('from') from: string, @Query('to') to: string, @Request() req: any) {
+    return this.org.commissionStatement(req.user, { from, to });
+  }
+
+  /** Reverse a wallet top-up made in error (undoes both credit and funding). */
+  @Post('wallet/reverse-topup')
+  reverseTopup(@Body() body: { reference: string; reason?: string }, @Request() req: any) {
+    return this.org.reverseWalletTopup(req.user, body?.reference, body?.reason);
+  }
   /** Display currency for this deployment (PKR / INR / BDT / USD …). */
   @Put('isps/:id/currency')
   setCurrency(

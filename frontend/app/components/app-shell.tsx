@@ -64,7 +64,6 @@ const menuGroups = [
     { id: 'reversals', label: 'Disputes & Reversals', href: '/reversals', Icon: navIcons.Invoices },
     { id: 'insights', label: 'Insights', href: '/insights', Icon: navIcons.Reports },
     { id: 'compliance', label: 'KYC & Data Usage', href: '/compliance', Icon: navIcons.Users },
-    { id: 'capability', label: 'Capability Checklist', href: '/reseller-capabilities', Icon: navIcons.Support },
   ]},
   { label: 'System', items: [
     { id: 'admin', label: 'Administration', href: '/admin-center', Icon: navIcons.Settings },
@@ -105,7 +104,6 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/billing-center', 'billing'],
   ['/service-catalog', 'catalog'],
   ['/jobs', 'jobs'],
-  ['/reseller-capabilities', 'capability'],
   ['/support-center', 'support'],
   ['/admin-center', 'admin'],
   ['/insights', 'insights'],
@@ -178,6 +176,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [search, setSearch] = useState('');
   const [imp, setImp] = useState<any>(null); // { by, byName, byRole } when acting as someone
   const [myRole, setMyRole] = useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
   const [switchQuery, setSwitchQuery] = useState('');
   const [switchView, setSwitchView] = useState<'list' | 'tree'>('tree');
   const [updateInfo, setUpdateInfo] = useState<any>(null);
@@ -289,6 +288,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setImp(payload?.imp ?? null);
     setMyRole(payload?.role ?? null);
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    // Approval badge: how many refunds/expenses are waiting on the ISP owner.
+    if (payload?.role === 'SUPER_ADMIN' || payload?.role === 'ADMIN') {
+      const loadApprovals = () => fetch(`${API}/accounting/pending-approvals`, { headers })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (d) setPendingApprovals(d.total || 0); })
+        .catch(() => {});
+      loadApprovals();
+      const t = setInterval(loadApprovals, 60000);
+      // best-effort cleanup if the component unmounts
+      if (typeof window !== 'undefined') (window as any).__jbApprovalTimer && clearInterval((window as any).__jbApprovalTimer);
+      if (typeof window !== 'undefined') (window as any).__jbApprovalTimer = t;
+    }
     fetch(`${API}/users`, { headers })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows) => {
@@ -523,6 +534,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   >
                     <span className="nav-icon"><Icon /></span>
                     {!collapsed && <span>{item.label}</span>}
+                    {item.id === 'billing' && pendingApprovals > 0 && (
+                      <span title={`${pendingApprovals} awaiting your approval`}
+                        style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
+                        {pendingApprovals}
+                      </span>
+                    )}
                   </button>
                 );
               })}

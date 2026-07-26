@@ -129,6 +129,12 @@ export class AccountingController {
     return this.accounting.setFinanceSettings(body || {}, req.user?.sub);
   }
 
+  @Get('pending-approvals')
+  getPendingApprovals(@Request() req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') return { refunds: 0, expenses: 0, total: 0 };
+    return this.accounting.getPendingApprovals();
+  }
+
   @Get('refund-requests')
   listRefundRequests(@Query('status') status: string, @Request() req: any) {
     this.assertOwner(req);

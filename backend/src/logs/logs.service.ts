@@ -89,13 +89,24 @@ export class LogsService {
 
   // ── Activity Logs ─────────────────────────────────────────────
 
+  /** Actions that touch money — used by the financial audit trail. */
+  static readonly FINANCIAL_ACTIONS = [
+    'REFUND', 'REVERSE', 'REFUND_REQUEST', 'EXPENSE_REQUEST',
+    'SET_PERIOD_LOCK', 'SET_CREDIT_LIMIT', 'TOPUP', 'REVERSE_TOPUP', 'COMMISSION', 'PAYMENT',
+  ];
+
   async getActivityLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; forUser?: number } = {},
+    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean } = {},
   ) {
     const ids = opts.forUser ? [opts.forUser] : await this.subtreeIds(actor);
     const where: any = {};
     if (ids) where.userId = { in: ids };
+    // Optional action filter: an explicit comma list, or the financial preset.
+    const actions = opts.action
+      ? opts.action.split(',').map((a) => a.trim()).filter(Boolean)
+      : opts.financial ? LogsService.FINANCIAL_ACTIONS : null;
+    if (actions && actions.length) where.action = { in: actions };
 
     const [logs, total] = await Promise.all([
       this.prisma.activityLog.findMany({

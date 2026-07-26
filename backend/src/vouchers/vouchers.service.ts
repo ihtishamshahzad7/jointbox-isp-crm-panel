@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -115,7 +115,7 @@ export class VouchersService {
     if (voucher.status !== 'UNUSED') {
       throw new Error(`Voucher is already ${voucher.status}`);
     }
-    
+
     if (voucher.expireDate && new Date() > voucher.expireDate) {
       await this.prisma.voucher.update({
         where: { id: voucher.id },
@@ -123,17 +123,26 @@ export class VouchersService {
       });
       throw new Error('Voucher has expired');
     }
-    
+
     const subscriber = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
     });
-    
+
     if (!subscriber) {
       throw new NotFoundException('Subscriber not found');
     }
-    
-    return this.prisma.voucher.update({
-      where: { id: voucher.id },
+
+    // ATOMIC CLAIM — the read above is advisory. Two concurrent redemptions can
+    // both see UNUSED, so the real guard is this conditional write: only the
+    // row that is STILL UNUSED (and not expired) flips to USED. Whoever loses
+    // the race updates zero rows and is told the voucher is already redeemed —
+    // preventing one code being spent twice.
+    const claim = await this.prisma.voucher.updateMany({
+      where: {
+        id: voucher.id,
+        status: 'UNUSED',
+        OR: [{ expireDate: null }, { expireDate: { gt: new Date() } }],
+      },
       data: {
         status: 'USED',
         usedBy: subscriberId,
@@ -141,6 +150,11 @@ export class VouchersService {
         activatedAt: new Date(),
       },
     });
+    if (claim.count === 0) {
+      throw new ConflictException('Voucher was just redeemed or expired — it is no longer available.');
+    }
+
+    return this.prisma.voucher.findUnique({ where: { id: voucher.id } });
   }
 
   async deleteVoucher(id: number) {

@@ -126,6 +126,16 @@ export default function OrganizationPage() {
       setMsg("Wallet updated");
     }
   }
+  async function reverseTopup(reference: string) {
+    if (!reference) return;
+    const reason = prompt("Reverse this top-up? Optionally give a reason:", "");
+    if (reason === null) return; // cancelled
+    if (await post(`/organization/wallet/reverse-topup`, { reference, reason })) {
+      setWalletHistory(await get(`/organization/resellers/${walletFor.id}/wallet`));
+      loadAll();
+      setMsg("Top-up reversed");
+    }
+  }
 
   const card: React.CSSProperties = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16 };
   const th: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: T.muted, fontSize: 11, textTransform: "uppercase" };
@@ -290,12 +300,18 @@ export default function OrganizationPage() {
                   <button style={btn(T.green)} disabled={busy} onClick={walletSubmit}>Apply</button>
                 </div>
                 {walletHistory.map((h) => (
-                  <div key={h.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "4px 0", color: T.sub, borderBottom: `1px solid ${T.border}` }}>
+                  <div key={h.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "4px 0", color: T.sub, borderBottom: `1px solid ${T.border}`, alignItems: "center" }}>
                     <span style={{ width: 120 }}>{fdt(h.createdAt)}</span>
                     <span style={{ width: 100 }}>{h.type}</span>
                     <span style={{ width: 80, textAlign: "right", color: h.amount >= 0 ? T.green : T.red }}>{fmt(h.amount)}</span>
                     <span style={{ width: 100, textAlign: "right" }}>bal {fmt(h.balanceAfter)}</span>
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.reference || h.notes || ""}</span>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.notes || h.reference || ""}</span>
+                    {h.type === "TOPUP" && h.reference?.startsWith("TOP#") && (
+                      <button onClick={() => reverseTopup(h.reference)}
+                        style={{ background: "transparent", color: T.red, border: `1px solid ${T.border}`, borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}>
+                        Reverse
+                      </button>
+                    )}
                   </div>
                 ))}
                 {!walletHistory.length && <div style={{ fontSize: 12, color: T.muted }}>No wallet history yet.</div>}

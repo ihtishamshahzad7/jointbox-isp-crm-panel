@@ -57,12 +57,16 @@ export class LogsController {
     @Query('limit') limit: string,
     @Query('offset') offset: string,
     @Query('forUser') forUser: string,
+    @Query('action') action: string,
+    @Query('financial') financial: string,
     @Req() req: any,
   ) {
     return this.logs.getActivityLogs(req.user, {
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
       forUser: forUser ? +forUser : undefined,
+      action: action || undefined,
+      financial: financial === '1' || financial === 'true',
     });
   }
 
