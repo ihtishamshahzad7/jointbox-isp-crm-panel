@@ -1991,8 +1991,16 @@ model Expense {
   createdBy   Int?
   createdAt   DateTime @default(now())
 
+  /// APPROVED expenses hit the ledger and cashflow immediately. A large one
+  /// raised by staff is held PENDING until the ISP owner approves it — nothing
+  /// posts until then. REJECTED is a closed request that never posted.
+  status      String    @default("APPROVED") // APPROVED | PENDING | REJECTED
+  approvedById Int?
+  approvedAt   DateTime?
+
   @@index([category])
   @@index([expenseDate])
+  @@index([status])
 }
 
 /// Subscriber wallet history (🔍 balanceAfter makes every row self-auditing)
@@ -2101,6 +2109,9 @@ model FinanceSettings {
   /// Refunds at or below this post immediately; above it queue for approval.
   /// 0 = every refund needs no approval (feature off).
   refundApprovalThreshold Float    @default(0)
+  /// Same idea for expenses: staff-raised expenses above this wait for the ISP
+  /// owner to approve before they post. 0 = off.
+  expenseApprovalThreshold Float   @default(0)
   updatedById             Int?
   updatedAt               DateTime @updatedAt
 }

@@ -142,6 +142,47 @@ export class AccountingService {
     });
   }
 
+  /**
+   * Trial balance — the fundamental double-entry integrity check. Every posting
+   * writes equal debits and credits, so across the WHOLE ledger total debits
+   * must equal total credits. If they don't, a posting was written unbalanced
+   * (a bug, a manual DB edit, a partial failure) and the books no longer add up.
+   * Report-only; it names the drift so a human can find the cause.
+   */
+  async getTrialBalance() {
+    return this.cache.wrap('accounting:trial-balance', 30, async () => {
+      const rows = await this.getLedgerSummary();
+      const totalDebit = round2(rows.reduce((s, r) => s + (r.debit || 0), 0));
+      const totalCredit = round2(rows.reduce((s, r) => s + (r.credit || 0), 0));
+      const difference = round2(totalDebit - totalCredit);
+      const balanced = Math.abs(difference) < 0.005;
+
+      // Also flag any individual ledger row that is itself unbalanced — a single
+      // entry that carries both a debit and a credit, or neither, is malformed.
+      const malformed = await this.prisma.ledgerEntry.count({
+        where: {
+          OR: [
+            { debit: { gt: 0 }, credit: { gt: 0 } },
+            { debit: { lte: 0 }, credit: { lte: 0 } },
+          ],
+        },
+      });
+
+      return {
+        balanced,
+        totalDebit,
+        totalCredit,
+        difference,
+        malformedEntries: malformed,
+        accounts: rows.sort((a, b) => a.account.localeCompare(b.account)),
+        checkedAt: new Date().toISOString(),
+        message: balanced
+          ? 'Books balance — total debits equal total credits.'
+          : `Ledger is out of balance by ${difference}. Debits ${totalDebit} ≠ credits ${totalCredit}.`,
+      };
+    });
+  }
+
   // ─────────────────────────────────────────────────────────────
   // CASHFLOW — payments in vs expenses out, grouped per day
   // ─────────────────────────────────────────────────────────────
@@ -163,7 +204,7 @@ export class AccountingService {
         this.prisma.$queryRaw<Array<{ day: Date; total: number }>>`
           SELECT date_trunc('day', "expenseDate") AS day, COALESCE(SUM(amount), 0)::float AS total
           FROM "Expense"
-          WHERE "expenseDate" >= ${from}
+          WHERE "expenseDate" >= ${from} AND "status" = 'APPROVED'
           GROUP BY 1 ORDER BY 1`,
       ]);
 
@@ -204,10 +245,19 @@ export class AccountingService {
     return this.prisma.expense.findMany({ where, orderBy: { expenseDate: 'desc' }, take: 500 });
   }
 
-  async createExpense(data: any, userId?: number) {
+  async createExpense(data: any, actor?: { sub?: number; role?: string }) {
     const amount = Number(data.amount);
     if (!amount || amount <= 0) throw new BadRequestException('Expense amount must be > 0');
     if (!data.category) throw new BadRequestException('Category is required');
+    // No backdating an expense into a closed period.
+    await this.assertPeriodOpen(data.expenseDate);
+    const userId = actor?.sub;
+
+    // Approval gate: a staff-raised expense above the threshold is held PENDING
+    // and posts nothing until the ISP owner approves it. Owners always bypass.
+    const { expenseApprovalThreshold } = await this.getFinanceSettings();
+    const needsApproval =
+      expenseApprovalThreshold > 0 && amount > expenseApprovalThreshold && !this.isOwner(actor?.role);
 
     const expense = await this.prisma.expense.create({
       data: {
@@ -216,24 +266,75 @@ export class AccountingService {
         description: data.description || null,
         expenseDate: data.expenseDate ? new Date(data.expenseDate) : new Date(),
         createdBy: userId,
-      },
+        status: needsApproval ? 'PENDING' : 'APPROVED',
+        ...(needsApproval ? {} : { approvedById: userId, approvedAt: new Date() }),
+      } as any,
     });
-    await this.post([
-      { account: 'EXPENSE', debit: amount, refType: 'EXPENSE', refId: expense.id, description: `${expense.category}`, createdBy: userId },
-      { account: 'CASH', credit: amount, refType: 'EXPENSE', refId: expense.id, description: `${expense.category}`, createdBy: userId },
-    ]);
+
+    if (needsApproval) {
+      await this.prisma.activityLog.create({
+        data: { userId, action: 'EXPENSE_REQUEST', entity: 'Expense', entityId: expense.id,
+          details: `Expense ${amount} (${expense.category}) awaiting approval (> ${expenseApprovalThreshold})` },
+      }).catch(() => null);
+      return { ...expense, pending: true, threshold: expenseApprovalThreshold };
+    }
+
+    await this.postExpenseEntries(expense, userId);
     return expense;
+  }
+
+  /** The Cash↔Expense posting, shared by direct create and approval. */
+  private async postExpenseEntries(expense: { id: number; amount: number; category: string }, userId?: number) {
+    await this.post([
+      { account: 'EXPENSE', debit: expense.amount, refType: 'EXPENSE', refId: expense.id, description: `${expense.category}`, createdBy: userId },
+      { account: 'CASH', credit: expense.amount, refType: 'EXPENSE', refId: expense.id, description: `${expense.category}`, createdBy: userId },
+    ]);
+  }
+
+  /** Expenses waiting on ISP sign-off. */
+  async listExpenseRequests(status = 'PENDING') {
+    return this.prisma.expense.findMany({
+      where: status === 'ALL' ? {} : { status } as any,
+      orderBy: { createdAt: 'desc' }, take: 100,
+    });
+  }
+
+  /** Approve a pending expense — this is where it hits the ledger. */
+  async approveExpense(id: number, actorId?: number) {
+    const e = await this.prisma.expense.findUnique({ where: { id } });
+    if (!e) throw new NotFoundException('Expense not found');
+    if ((e as any).status !== 'PENDING') throw new BadRequestException(`Expense is already ${(e as any).status?.toLowerCase?.() ?? 'processed'}`);
+    // Approval posts to the ledger — refuse if the expense's period has closed since it was raised.
+    await this.assertPeriodOpen(e.expenseDate);
+    await this.prisma.expense.update({ where: { id }, data: { status: 'APPROVED', approvedById: actorId ?? null, approvedAt: new Date() } as any });
+    await this.postExpenseEntries(e, actorId);
+    return { approved: true };
+  }
+
+  /** Reject a pending expense — nothing was posted, so just close it. */
+  async rejectExpense(id: number, actorId?: number) {
+    const e = await this.prisma.expense.findUnique({ where: { id } });
+    if (!e) throw new NotFoundException('Expense not found');
+    if ((e as any).status !== 'PENDING') throw new BadRequestException(`Expense is already ${(e as any).status?.toLowerCase?.() ?? 'processed'}`);
+    await this.prisma.expense.update({ where: { id }, data: { status: 'REJECTED', approvedById: actorId ?? null, approvedAt: new Date() } as any });
+    return { rejected: true };
   }
 
   async deleteExpense(id: number, userId?: number) {
     const expense = await this.prisma.expense.findUnique({ where: { id } });
     if (!expense) throw new NotFoundException('Expense not found');
+    // Deleting an approved expense posts a reversal — refuse if its period is closed.
+    if (((expense as any).status ?? 'APPROVED') === 'APPROVED') await this.assertPeriodOpen(expense.expenseDate);
+    const wasPosted = ((expense as any).status ?? 'APPROVED') === 'APPROVED';
     await this.prisma.expense.delete({ where: { id } });
-    // reverse the posting (🔍 never delete ledger rows)
-    await this.post([
-      { account: 'CASH', debit: expense.amount, refType: 'EXPENSE', refId: id, description: `Reversal: ${expense.category}`, createdBy: userId },
-      { account: 'EXPENSE', credit: expense.amount, refType: 'EXPENSE', refId: id, description: `Reversal: ${expense.category}`, createdBy: userId },
-    ]);
+    // Only reverse if it actually posted. A PENDING or REJECTED expense never
+    // touched the ledger, so posting a reversal would invent phantom rows.
+    if (wasPosted) {
+      await this.post([
+        { account: 'CASH', debit: expense.amount, refType: 'EXPENSE', refId: id, description: `Reversal: ${expense.category}`, createdBy: userId },
+        { account: 'EXPENSE', credit: expense.amount, refType: 'EXPENSE', refId: id, description: `Reversal: ${expense.category}`, createdBy: userId },
+      ]);
+    }
     return { deleted: true };
   }
 
@@ -326,6 +427,8 @@ export class AccountingService {
     const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status === 'CANCELLED') throw new BadRequestException('Invoice is already cancelled');
+    // Can't reverse an invoice whose accounting period is closed.
+    await this.assertPeriodOpen(invoice.invoiceDate);
     const activePayments = invoice.payments.filter((p) => !p.refundedAt);
     if (activePayments.length > 0) {
       throw new BadRequestException('Invoice has payments — refund them before reversing the invoice');
@@ -465,18 +568,24 @@ export class AccountingService {
   /** Current finance policy (creates the singleton on first read). */
   async getFinanceSettings() {
     const s = await this.prisma.financeSettings.findUnique({ where: { id: 1 } });
-    return { refundApprovalThreshold: s?.refundApprovalThreshold ?? 0, updatedAt: s?.updatedAt ?? null };
+    return {
+      refundApprovalThreshold: s?.refundApprovalThreshold ?? 0,
+      expenseApprovalThreshold: (s as any)?.expenseApprovalThreshold ?? 0,
+      updatedAt: s?.updatedAt ?? null,
+    };
   }
 
-  /** Set the refund approval threshold. ISP owner only (enforced in controller). */
-  async setFinanceSettings(refundApprovalThreshold: number, actorId?: number) {
-    const value = Math.max(0, Number(refundApprovalThreshold) || 0);
+  /** Set the finance approval thresholds. ISP owner only (enforced in controller). */
+  async setFinanceSettings(body: { refundApprovalThreshold?: number; expenseApprovalThreshold?: number }, actorId?: number) {
+    const cur = await this.getFinanceSettings();
+    const refund = Math.max(0, Number(body.refundApprovalThreshold ?? cur.refundApprovalThreshold) || 0);
+    const expense = Math.max(0, Number(body.expenseApprovalThreshold ?? cur.expenseApprovalThreshold) || 0);
     await this.prisma.financeSettings.upsert({
       where: { id: 1 },
-      update: { refundApprovalThreshold: value, updatedById: actorId ?? null },
-      create: { id: 1, refundApprovalThreshold: value, updatedById: actorId ?? null },
+      update: { refundApprovalThreshold: refund, expenseApprovalThreshold: expense, updatedById: actorId ?? null } as any,
+      create: { id: 1, refundApprovalThreshold: refund, expenseApprovalThreshold: expense, updatedById: actorId ?? null } as any,
     });
-    return { refundApprovalThreshold: value };
+    return { refundApprovalThreshold: refund, expenseApprovalThreshold: expense };
   }
 
   /**

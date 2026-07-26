@@ -4,6 +4,7 @@ import { AccountingService } from '../accounting/accounting.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
 const RESELLER_ROLES = ['RESELLER', 'SUB_RESELLER', 'RETAILER', 'SALES'];
+const round2 = (n: number) => Math.round(((n || 0) + Number.EPSILON) * 100) / 100;
 
 /**
  * Phase 4B: multi-tenancy (ISP → branches) + reseller economics.
@@ -124,6 +125,40 @@ export class OrganizationService {
       else roots.push(u);
     }
     return roots;
+  }
+
+  /**
+   * Overdrawn wallets — reseller accounts whose balance has gone below what
+   * their credit limit allows. balance of -500 with a 500 credit limit is fine;
+   * -600 is a genuine overdraft and means margin is being sold on money that
+   * isn't there. Scoped to the actor's downline; ISP sees all.
+   */
+  async listOverdrawn(actor?: Actor) {
+    const where: any = { role: { in: RESELLER_ROLES as any } };
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const selfId = this.scope.actorId(actor);
+      const ids = (await this.scope.descendantIds(selfId)).filter((id) => id !== selfId);
+      where.id = { in: ids.length ? ids : [-1] };
+    }
+    const users = await this.prisma.user.findMany({
+      where,
+      select: { id: true, name: true, email: true, role: true, parentId: true, balance: true, creditLimit: true },
+      orderBy: { balance: 'asc' },
+    });
+    const overdrawn = users
+      .map((u) => {
+        const limit = (u as any).creditLimit ?? 0;
+        // How far past the allowed floor (-limit) the balance sits.
+        const overBy = round2(-limit - u.balance);
+        return { ...u, creditLimit: limit, overBy };
+      })
+      .filter((u) => u.overBy > 0.005);
+    return {
+      count: overdrawn.length,
+      totalOverdraft: round2(overdrawn.reduce((s, u) => s + u.overBy, 0)),
+      accounts: overdrawn,
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   /**

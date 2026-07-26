@@ -29,6 +29,12 @@ export class PaymentsController {
     return this.paymentsService.getStats();
   }
 
+  /** Cash-collection reconciliation (who took how much, by method). */
+  @Get('collections')
+  async getCollections(@Query() query: any, @Req() req: any) {
+    return this.paymentsService.getCollections(query, req.user);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.paymentsService.findOne(+id);

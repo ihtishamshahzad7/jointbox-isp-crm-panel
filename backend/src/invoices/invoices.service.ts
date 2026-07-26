@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -187,6 +187,29 @@ export class InvoicesService {
   async recordPayment(invoiceId: number, data: any) {
     const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId } });
     if (!invoice) throw new Error('Invoice not found');
+
+    // Same period-lock guard as the direct payment path — no backdating a
+    // payment into a closed month through the invoice screen either.
+    await this.accounting.assertPeriodOpen(data.paymentDate);
+
+    // Duplicate guard: reject a payment matching a very recent one on this
+    // invoice (same amount + method) unless the caller confirms with force.
+    if (!data.force && data.amount != null) {
+      const recent = await this.prisma.payment.findFirst({
+        where: {
+          invoiceId, amount: data.amount, method: data.method,
+          refundedAt: null, createdAt: { gte: new Date(Date.now() - 90_000) },
+        },
+        orderBy: { createdAt: 'desc' }, select: { paymentNo: true, createdAt: true },
+      });
+      if (recent) {
+        const secs = Math.round((Date.now() - new Date(recent.createdAt).getTime()) / 1000);
+        throw new ConflictException(
+          `A matching payment (${recent.paymentNo}) for the same amount was recorded ${secs}s ago on this invoice. ` +
+          `If this is a genuine second payment, submit again to confirm.`,
+        );
+      }
+    }
 
     const newPaidAmount = invoice.paidAmount + data.amount;
     const newDueAmount  = invoice.total - newPaidAmount;

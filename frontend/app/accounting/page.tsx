@@ -22,7 +22,7 @@ const T = {
 };
 
 const ACCOUNTS = ["", "CASH", "ACCOUNTS_RECEIVABLE", "REVENUE", "EXPENSE", "SUBSCRIBER_BALANCE"];
-const TABS = ["Ledger", "Cashflow", "Expenses", "Balances", "Automation"] as const;
+const TABS = ["Ledger", "Cashflow", "Collections", "Expenses", "Balances", "Automation"] as const;
 type Tab = (typeof TABS)[number];
 
 const fmt = (n: number) =>
@@ -43,6 +43,9 @@ export default function AccountingPage() {
   // cashflow
   const [cashflow, setCashflow] = useState<any>(null);
   const [cfDays, setCfDays] = useState(30);
+  // collections (cash reconciliation)
+  const [collections, setCollections] = useState<any>(null);
+  const [colDate, setColDate] = useState(() => new Date().toISOString().slice(0, 10));
   // expenses
   const [expenses, setExpenses] = useState<any[]>([]);
   const [expForm, setExpForm] = useState({ category: "", amount: "", description: "" });
@@ -66,6 +69,17 @@ export default function AccountingPage() {
   const [refundThreshold, setRefundThreshold] = useState(0);
   const [thresholdDraft, setThresholdDraft] = useState("");
   const [refundRequests, setRefundRequests] = useState<any[]>([]);
+
+  // expense approval policy + queue
+  const [expenseThreshold, setExpenseThreshold] = useState(0);
+  const [expenseDraft, setExpenseDraft] = useState("");
+  const [expenseRequests, setExpenseRequests] = useState<any[]>([]);
+
+  // trial balance (double-entry integrity)
+  const [trial, setTrial] = useState<any>(null);
+
+  // overdrawn reseller wallets
+  const [overdrawn, setOverdrawn] = useState<any>(null);
   const role = (() => {
     try {
       const t = typeof window !== "undefined" ? localStorage.getItem("token") : "";
@@ -96,10 +110,16 @@ export default function AccountingPage() {
       return;
     }
     get("/accounting/ledger/summary").then(setSummary).catch(silent("loadLedgerSummary"));
+    get("/accounting/trial-balance").then(setTrial).catch(silent("loadTrialBalance"));
+    get("/organization/overdrawn").then(setOverdrawn).catch(silent("loadOverdrawn"));
     get("/accounting/period-lock").then((l) => { setLock(l); setLockDraft(l?.lockedThrough ? String(l.lockedThrough).slice(0, 10) : ""); }).catch(silent("loadPeriodLock"));
     if (isOwner) {
-      get("/accounting/finance-settings").then((s) => { setRefundThreshold(s?.refundApprovalThreshold || 0); setThresholdDraft(String(s?.refundApprovalThreshold || 0)); }).catch(silent("loadFinanceSettings"));
+      get("/accounting/finance-settings").then((s) => {
+        setRefundThreshold(s?.refundApprovalThreshold || 0); setThresholdDraft(String(s?.refundApprovalThreshold || 0));
+        setExpenseThreshold(s?.expenseApprovalThreshold || 0); setExpenseDraft(String(s?.expenseApprovalThreshold || 0));
+      }).catch(silent("loadFinanceSettings"));
       loadRefundRequests();
+      loadExpenseRequests();
     }
   }, []);
 
@@ -107,17 +127,35 @@ export default function AccountingPage() {
     get("/accounting/refund-requests?status=PENDING").then((rows) => setRefundRequests(Array.isArray(rows) ? rows : [])).catch(silent("loadRefundRequests"));
   }, [token]);
 
+  const loadExpenseRequests = useCallback(() => {
+    get("/accounting/expense-requests?status=PENDING").then((rows) => setExpenseRequests(Array.isArray(rows) ? rows : [])).catch(silent("loadExpenseRequests"));
+  }, [token]);
+
   const saveThreshold = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await fetch(`${API}/accounting/finance-settings`, { method: "PUT", headers, body: JSON.stringify({ refundApprovalThreshold: Number(thresholdDraft) || 0 }) });
+      const r = await fetch(`${API}/accounting/finance-settings`, { method: "PUT", headers, body: JSON.stringify({ refundApprovalThreshold: Number(thresholdDraft) || 0, expenseApprovalThreshold: Number(expenseDraft) || 0 }) });
       const data = await r.json();
-      if (!r.ok) { setMsg(data?.message || "Failed to save threshold"); return; }
+      if (!r.ok) { setMsg(data?.message || "Failed to save thresholds"); return; }
       setRefundThreshold(data.refundApprovalThreshold);
-      setMsg(data.refundApprovalThreshold > 0 ? `Refunds over ${fmt(data.refundApprovalThreshold)} now need approval` : "Refund approval turned off");
-    } catch { setMsg("Failed to save threshold"); }
+      setExpenseThreshold(data.expenseApprovalThreshold);
+      setMsg("Approval thresholds saved");
+    } catch { setMsg("Failed to save thresholds"); }
     finally { setBusy(false); }
-  }, [token, thresholdDraft]);
+  }, [token, thresholdDraft, expenseDraft]);
+
+  const decideExpense = useCallback(async (id: number, action: "approve" | "reject") => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/accounting/expense-requests/${id}/${action}`, { method: "POST", headers, body: JSON.stringify({}) });
+      const data = await r.json();
+      if (!r.ok) { setMsg(data?.message || `Failed to ${action} expense`); return; }
+      setMsg(action === "approve" ? "Expense approved and posted" : "Expense rejected");
+      loadExpenseRequests();
+      get("/accounting/ledger/summary").then(setSummary).catch(silent("reloadSummary"));
+    } catch { setMsg(`Failed to ${action} expense`); }
+    finally { setBusy(false); }
+  }, [token]);
 
   const decideRefund = useCallback(async (id: number, action: "approve" | "reject") => {
     setBusy(true);
@@ -184,20 +222,28 @@ export default function AccountingPage() {
     if (!token) return;
     if (tab === "Ledger") void loadLedger(true);
     if (tab === "Cashflow") get(`/accounting/cashflow?days=${cfDays}`).then(setCashflow).catch(silent("loadCashflow"));
+    if (tab === "Collections") get(`/payments/collections?from=${colDate}&to=${new Date(new Date(colDate).getTime() + 86400000).toISOString().slice(0, 10)}`).then(setCollections).catch(silent("loadCollections"));
     if (tab === "Expenses") get("/accounting/expenses").then(setExpenses).catch(silent("loadExpenses"));
     if (tab === "Balances") get("/accounting/balances").then(setBalances).catch(silent("loadBalances"));
     if (tab === "Automation") get("/billing/runs").then(setRuns).catch(silent("loadBillingRuns"));
-  }, [tab, ledgerAccount, cfDays]);
+  }, [tab, ledgerAccount, cfDays, colDate]);
 
   // ── actions ──────────────────────────────────────────────────
   async function addExpense() {
     if (!expForm.category || !expForm.amount) return setMsg("Category and amount are required");
     setBusy(true);
     try {
-      await fetch(`${API}/accounting/expenses`, { method: "POST", headers, body: JSON.stringify(expForm) });
+      const r = await fetch(`${API}/accounting/expenses`, { method: "POST", headers, body: JSON.stringify(expForm) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(data?.message || "Failed to add expense"); return; }
       setExpForm({ category: "", amount: "", description: "" });
       setExpenses(await get("/accounting/expenses"));
-      setMsg("Expense added");
+      if (data?.pending) {
+        setMsg(`Expense over ${fmt(data.threshold)} sent to the ISP owner for approval`);
+        if (isOwner) loadExpenseRequests();
+      } else {
+        setMsg("Expense added");
+      }
     } finally {
       setBusy(false);
     }
@@ -310,45 +356,120 @@ export default function AccountingPage() {
         ))}
       </div>
 
-      {/* accounting-period lock */}
-      <div style={{ ...card, marginBottom: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 18 }}>{lock?.lockedThrough ? "🔒" : "🔓"}</span>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Close the books</div>
+      {/* trial balance — double-entry integrity */}
+      {trial && (
+        <div style={{ ...card, marginBottom: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+          borderColor: trial.balanced ? T.border : T.red }}>
+          <span style={{ fontSize: 18 }}>{trial.balanced ? "⚖️" : "⚠️"}</span>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: trial.balanced ? T.text : T.red }}>
+              {trial.balanced ? "Books balance" : "Ledger out of balance"}
+            </div>
             <div style={{ fontSize: 11, color: T.muted }}>
-              {lock?.lockedThrough
-                ? `Locked through ${new Date(lock.lockedThrough).toLocaleDateString()} — payments can't be backdated into it`
-                : "Open — no period is locked"}
+              Debits {fmt(trial.totalDebit)} · Credits {fmt(trial.totalCredit)}
+              {!trial.balanced && ` · off by ${fmt(Math.abs(trial.difference))}`}
+              {trial.malformedEntries > 0 && ` · ${trial.malformedEntries} malformed entr${trial.malformedEntries === 1 ? "y" : "ies"}`}
             </div>
           </div>
+          {!trial.balanced && (
+            <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>Investigate — a posting was written unbalanced</span>
+          )}
         </div>
-        {isOwner && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-            <input
-              type="date"
-              value={lockDraft}
-              onChange={(e) => setLockDraft(e.target.value)}
-              style={{ background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
-            />
-            <button
-              disabled={busy || !lockDraft}
-              onClick={() => saveLock(lockDraft || null)}
-              style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer", opacity: busy || !lockDraft ? 0.5 : 1 }}
-            >
-              Close through date
-            </button>
-            {lock?.lockedThrough && (
-              <button
-                disabled={busy}
-                onClick={() => { if (confirm("Reopen the period? This allows financial entries to be dated into it again.")) saveLock(null); }}
-                style={{ background: "transparent", color: T.amber, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer" }}
-              >
-                Reopen
-              </button>
-            )}
+      )}
+
+      {/* overdrawn reseller wallets */}
+      {overdrawn && overdrawn.count > 0 && (
+        <div style={{ ...card, marginBottom: 16, borderColor: T.amber }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 18 }}>💸</span>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: T.amber }}>
+                {overdrawn.count} wallet{overdrawn.count === 1 ? "" : "s"} overdrawn past their credit limit
+              </div>
+              <div style={{ fontSize: 11, color: T.muted }}>
+                Total overdraft {fmt(overdrawn.totalOverdraft)} — margin is being sold on money that isn't there.
+              </div>
+            </div>
           </div>
-        )}
+          <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 8 }}>
+            {overdrawn.accounts.slice(0, 8).map((u: any) => (
+              <div key={u.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0", color: T.sub }}>
+                <span>{u.name} <span style={{ color: T.muted }}>({u.role})</span></span>
+                <span style={{ color: T.red }}>over by {fmt(u.overBy)} · bal {fmt(u.balance)}{u.creditLimit ? ` / limit ${fmt(u.creditLimit)}` : ""}</span>
+              </div>
+            ))}
+            {overdrawn.count > 8 && <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>…and {overdrawn.count - 8} more</div>}
+          </div>
+        </div>
+      )}
+
+      {/* accounting-period lock */}
+      <div style={{ ...card, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 18 }}>{lock?.lockedThrough ? "🔒" : "🔓"}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Close the books</div>
+              <div style={{ fontSize: 11, color: T.muted }}>
+                {lock?.lockedThrough
+                  ? `Locked through ${new Date(lock.lockedThrough).toLocaleDateString()} — payments can't be backdated into it`
+                  : "Open — no period is locked"}
+              </div>
+            </div>
+          </div>
+          {isOwner && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+              <input
+                type="date"
+                value={lockDraft}
+                onChange={(e) => setLockDraft(e.target.value)}
+                style={{ background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
+              />
+              <button
+                disabled={busy || !lockDraft}
+                onClick={() => saveLock(lockDraft || null)}
+                style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer", opacity: busy || !lockDraft ? 0.5 : 1 }}
+              >
+                Close through date
+              </button>
+              {lock?.lockedThrough && (
+                <button
+                  disabled={busy}
+                  onClick={() => { if (confirm("Reopen the period? This allows financial entries to be dated into it again.")) saveLock(null); }}
+                  style={{ background: "transparent", color: T.amber, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer" }}
+                >
+                  Reopen
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Month-end readiness — resolve these before closing a period. */}
+        {isOwner && (() => {
+          const checks = [
+            { ok: !!trial?.balanced, label: "Ledger balances (trial balance)", bad: "Ledger is out of balance — investigate before closing" },
+            { ok: !(trial?.malformedEntries > 0), label: "No malformed ledger entries", bad: `${trial?.malformedEntries || 0} malformed entr${trial?.malformedEntries === 1 ? "y" : "ies"}` },
+            { ok: refundRequests.length === 0, label: "No refunds awaiting approval", bad: `${refundRequests.length} refund${refundRequests.length === 1 ? "" : "s"} still pending` },
+            { ok: expenseRequests.length === 0, label: "No expenses awaiting approval", bad: `${expenseRequests.length} expense${expenseRequests.length === 1 ? "" : "s"} still pending` },
+            { ok: !(overdrawn?.count > 0), label: "No overdrawn wallets", bad: `${overdrawn?.count || 0} wallet${overdrawn?.count === 1 ? "" : "s"} overdrawn` },
+          ];
+          const ready = checks.every((c) => c.ok);
+          return (
+            <div style={{ marginTop: 12, borderTop: `1px solid ${T.border}`, paddingTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: ready ? T.green : T.amber }}>
+                {ready ? "✓ Month-end ready — nothing outstanding" : "Month-end checklist — resolve before closing"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "2px 14px" }}>
+                {checks.map((c, i) => (
+                  <div key={i} style={{ fontSize: 12, color: c.ok ? T.sub : T.red, padding: "2px 0" }}>
+                    {c.ok ? "✅" : "⚠️"} {c.ok ? c.label : c.bad}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* refund approval policy + queue (ISP owner only) */}
@@ -377,6 +498,52 @@ export default function AccountingPage() {
               </button>
             </div>
           </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+            <span style={{ fontSize: 18 }}>🧾</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Expense approval limit</div>
+              <div style={{ fontSize: 11, color: T.muted }}>
+                {expenseThreshold > 0
+                  ? `Staff expenses over ${fmt(expenseThreshold)} need your sign-off before they post`
+                  : "Off — staff can record any expense without approval"}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+              <input
+                type="number" min={0} step="1" value={expenseDraft}
+                onChange={(e) => setExpenseDraft(e.target.value)}
+                placeholder="0 = off"
+                style={{ width: 120, background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
+              />
+              <button disabled={busy} onClick={saveThreshold}
+                style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
+                Save
+              </button>
+            </div>
+          </div>
+
+          {expenseRequests.length > 0 && (
+            <div style={{ marginTop: 14, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Pending expenses ({expenseRequests.length})</div>
+              {expenseRequests.map((e: any) => (
+                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${T.border}`, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(e.amount)} · {e.category}</div>
+                    <div style={{ fontSize: 11, color: T.muted }}>{e.description || "No description"}</div>
+                  </div>
+                  <button disabled={busy} onClick={() => decideExpense(e.id, "approve")}
+                    style={{ background: T.green, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                    Approve
+                  </button>
+                  <button disabled={busy} onClick={() => decideExpense(e.id, "reject")}
+                    style={{ background: "transparent", color: T.red, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                    Reject
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {refundRequests.length > 0 && (
             <div style={{ marginTop: 14, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
@@ -499,6 +666,62 @@ export default function AccountingPage() {
             </div>
           ))}
           {!cashflow?.series?.length && <div style={{ color: T.muted, fontSize: 13 }}>No cash movement in this period.</div>}
+        </div>
+      )}
+
+      {/* ── COLLECTIONS (cash reconciliation) ── */}
+      {tab === "Collections" && (
+        <div style={card}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, color: T.muted }}>Day</label>
+            <input type="date" value={colDate} onChange={(e) => setColDate(e.target.value)} style={input} />
+            {collections && (
+              <span style={{ marginLeft: "auto", fontSize: 13, color: T.sub }}>
+                Collected <b style={{ color: T.green }}>{fmt(collections.net)}</b> in {collections.count} payment{collections.count === 1 ? "" : "s"}
+                {collections.refunded > 0 && <> · refunded <b style={{ color: T.red }}>{fmt(collections.refunded)}</b></>}
+              </span>
+            )}
+          </div>
+
+          {collections && (
+            <>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                {collections.byMethod.map((m: any) => (
+                  <div key={m.method} style={{ ...card, minWidth: 130, padding: 12 }}>
+                    <div style={{ fontSize: 11, color: T.muted, textTransform: "uppercase" }}>{m.method.replaceAll("_", " ")}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{fmt(m.net)}</div>
+                  </div>
+                ))}
+                {!collections.byMethod.length && <div style={{ color: T.muted, fontSize: 13 }}>No payments collected on this day.</div>}
+              </div>
+
+              {collections.byStaff.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                      <th style={th}>Collected by</th>
+                      <th style={{ ...th, textAlign: "right" }}>Payments</th>
+                      <th style={{ ...th, textAlign: "right" }}>Net collected</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {collections.byStaff.map((s: any, i: number) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <td style={td}>
+                          {s.name}
+                          <div style={{ fontSize: 11, color: T.muted }}>
+                            {Object.entries(s.methods).map(([m, v]: any) => `${m.replaceAll("_", " ")} ${fmt(v)}`).join(" · ")}
+                          </div>
+                        </td>
+                        <td style={{ ...td, textAlign: "right" }}>{s.count}</td>
+                        <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{fmt(s.net)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
         </div>
       )}
 

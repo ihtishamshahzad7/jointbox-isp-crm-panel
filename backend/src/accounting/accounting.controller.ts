@@ -19,6 +19,12 @@ export class AccountingController {
     return this.accounting.getLedgerSummary();
   }
 
+  /** Trial balance — total debits vs credits + malformed-entry count. */
+  @Get('trial-balance')
+  getTrialBalance() {
+    return this.accounting.getTrialBalance();
+  }
+
   /** Accounting-period lock — the date through which the books are closed. */
   @Get('period-lock')
   getPeriodLock() {
@@ -48,7 +54,25 @@ export class AccountingController {
 
   @Post('expenses')
   createExpense(@Body() body: any, @Request() req: any) {
-    return this.accounting.createExpense(body, req.user?.sub);
+    return this.accounting.createExpense(body, req.user);
+  }
+
+  @Get('expense-requests')
+  listExpenseRequests(@Query('status') status: string, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.listExpenseRequests(status || 'PENDING');
+  }
+
+  @Post('expense-requests/:id/approve')
+  approveExpense(@Param('id') id: string, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.approveExpense(+id, req.user?.sub);
+  }
+
+  @Post('expense-requests/:id/reject')
+  rejectExpense(@Param('id') id: string, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.rejectExpense(+id, req.user?.sub);
   }
 
   @Delete('expenses/:id')
@@ -100,9 +124,9 @@ export class AccountingController {
   }
 
   @Put('finance-settings')
-  setFinanceSettings(@Body() body: { refundApprovalThreshold: number }, @Request() req: any) {
+  setFinanceSettings(@Body() body: { refundApprovalThreshold?: number; expenseApprovalThreshold?: number }, @Request() req: any) {
     this.assertOwner(req);
-    return this.accounting.setFinanceSettings(body?.refundApprovalThreshold ?? 0, req.user?.sub);
+    return this.accounting.setFinanceSettings(body || {}, req.user?.sub);
   }
 
   @Get('refund-requests')

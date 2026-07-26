@@ -141,6 +141,12 @@ export class OrganizationController {
   resellers(@Request() req: any) {
     return this.org.resellerTree(req.user);
   }
+
+  /** Reseller wallets that have gone past their allowed overdraft. */
+  @Get('overdrawn')
+  overdrawn(@Request() req: any) {
+    return this.org.listOverdrawn(req.user);
+  }
   /** Display currency for this deployment (PKR / INR / BDT / USD …). */
   @Put('isps/:id/currency')
   setCurrency(

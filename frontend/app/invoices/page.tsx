@@ -185,18 +185,28 @@ const [reverseReason, setReverseReason] = useState("");
       return;
     }
     
-    const payload = {
+    const payload: any = {
       amount: parseFloat(paymentForm.amount),
       method: paymentForm.method,
       referenceNo: paymentForm.referenceNo,
       notes: paymentForm.notes,
       receivedBy: user?.id,
     };
-    
+
     try {
-      await fetch(`${API}/invoices/${invoiceId}/payment`, {
+      let res = await fetch(`${API}/invoices/${invoiceId}/payment`, {
         method: 'POST', headers, body: JSON.stringify(payload),
       });
+      // Duplicate guard: server returns 409 for a near-identical recent payment.
+      // Ask the user to confirm, then resend with force to override.
+      if (res.status === 409) {
+        const info = await res.json().catch(() => ({}));
+        if (!confirm(`${info.message || 'This looks like a duplicate payment.'}\n\nRecord it anyway?`)) return;
+        res = await fetch(`${API}/invoices/${invoiceId}/payment`, {
+          method: 'POST', headers, body: JSON.stringify({ ...payload, force: true }),
+        });
+      }
+      if (!res.ok) { alert('Failed to record payment'); return; }
       setShowPaymentModal(false);
       setPaymentForm({ amount: '', method: 'CASH', referenceNo: '', notes: '' });
       loadData();

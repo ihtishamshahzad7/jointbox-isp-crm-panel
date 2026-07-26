@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { JobsService } from '../jobs/jobs.service';
+import { AccountingService } from '../accounting/accounting.service';
 
 /**
  * IntegrityService — the two safety nets that catch silent drift.
@@ -29,17 +30,20 @@ export class IntegrityService implements OnModuleInit {
     private prisma: PrismaService,
     private radius: RadiusSyncService,
     private jobs: JobsService,
+    private accounting: AccountingService,
   ) {}
 
   /** Expose the full reconcile as a background job the ISP can run on demand. */
   onModuleInit() {
     this.jobs.register('integrity.reconcile', async (payload, update) => {
-      await update(0, 2);
+      await update(0, 3);
+      const trialBalance = await this.accounting.getTrialBalance();
+      await update(1, 3);
       const wallets = await this.reconcileWallets();
-      await update(1, 2);
+      await update(2, 3);
       const radius = await this.reconcileRadiusState(payload?.apply !== false);
-      await update(2, 2);
-      return { wallets, radius };
+      await update(3, 3);
+      return { trialBalance, wallets, radius };
     });
   }
 

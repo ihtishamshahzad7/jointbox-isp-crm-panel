@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
@@ -28,6 +28,57 @@ export class PaymentsService {
    * filtered page is its own leak: "showing 12 of 480" tells a dealer exactly
    * how much business everyone else is doing.
    */
+  /**
+   * Cash-collection reconciliation. Who took how much, by method, over a
+   * period — net of refunds — so the drawer can be balanced at day-end.
+   * Defaults to today. Subtree-scoped like every other money view.
+   */
+  async getCollections(query: any, actor?: any) {
+    const now = new Date();
+    const from = query?.from ? new Date(query.from) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const to = query?.to ? new Date(query.to) : new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1);
+
+    const where: any = { paymentDate: { gte: from, lt: to } };
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where.subscriber = { userId: { in: ids } };
+    }
+
+    const payments = await this.prisma.payment.findMany({
+      where,
+      select: { amount: true, method: true, refundedAt: true, refundedAmount: true, receivedBy: true, receivedByUser: { select: { name: true } } },
+    });
+
+    const round2 = (n: number) => Math.round(((n || 0) + Number.EPSILON) * 100) / 100;
+    const byStaff = new Map<string, any>();
+    const byMethod = new Map<string, number>();
+    let gross = 0, refunded = 0;
+
+    for (const p of payments) {
+      const net = round2((p.amount || 0) - (((p as any).refundedAmount) || 0));
+      gross += p.amount || 0;
+      refunded += ((p as any).refundedAmount) || 0;
+      byMethod.set(p.method, round2((byMethod.get(p.method) || 0) + net));
+      const key = String(p.receivedBy ?? 'unknown');
+      const row = byStaff.get(key) || { receivedBy: p.receivedBy ?? null, name: p.receivedByUser?.name || 'Unattributed', net: 0, count: 0, methods: {} as Record<string, number> };
+      row.net = round2(row.net + net);
+      row.count += 1;
+      row.methods[p.method] = round2((row.methods[p.method] || 0) + net);
+      byStaff.set(key, row);
+    }
+
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      gross: round2(gross),
+      refunded: round2(refunded),
+      net: round2(gross - refunded),
+      count: payments.length,
+      byMethod: [...byMethod.entries()].map(([method, net]) => ({ method, net })).sort((a, b) => b.net - a.net),
+      byStaff: [...byStaff.values()].sort((a, b) => b.net - a.net),
+    };
+  }
+
   async findAll(options?: { page?: number; limit?: number }, actor?: any) {
     const { page, limit } = options || {};
 
@@ -109,6 +160,33 @@ export class PaymentsService {
   async create(data: any) {
     // Refuse a payment dated into a closed accounting period (no backdating).
     await this.accounting.assertPeriodOpen(data.paymentDate);
+
+    // Duplicate guard. A double-click, a network retry, or two staff entering
+    // the same cash all post the money twice. Reject a payment that matches a
+    // very recent one (same subscriber/invoice, amount and method) unless the
+    // caller explicitly confirms it is a genuine second payment (force: true).
+    if (!data.force && data.amount != null && (data.subscriberId != null || data.invoiceId != null)) {
+      const WINDOW_MS = 90_000;
+      const recent = await this.prisma.payment.findFirst({
+        where: {
+          amount: data.amount,
+          method: data.method || PaymentMethod.CASH,
+          refundedAt: null,
+          createdAt: { gte: new Date(Date.now() - WINDOW_MS) },
+          ...(data.subscriberId != null ? { subscriberId: data.subscriberId } : {}),
+          ...(data.invoiceId != null ? { invoiceId: data.invoiceId } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, paymentNo: true, createdAt: true },
+      });
+      if (recent) {
+        const secs = Math.round((Date.now() - new Date(recent.createdAt).getTime()) / 1000);
+        throw new ConflictException(
+          `A matching payment (${recent.paymentNo}) for the same amount was recorded ${secs}s ago. ` +
+          `If this is a genuine second payment, submit again to confirm.`,
+        );
+      }
+    }
 
     const paymentNo = data.paymentNo || `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
