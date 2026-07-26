@@ -5,6 +5,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
+/** Round money to 2dp so partial-refund arithmetic never drifts on floats. */
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
 export interface LedgerLine {
   account: 'CASH' | 'ACCOUNTS_RECEIVABLE' | 'REVENUE' | 'EXPENSE' | 'SUBSCRIBER_BALANCE' | 'RESELLER_BALANCE' | 'COMMISSION';
   debit?: number;
@@ -54,6 +57,40 @@ export class AccountingService {
       })),
     });
     void this.cache.delPrefix('accounting:');
+  }
+
+  // ── Accounting-period lock (close-the-books) ─────────────────
+  /** Current lock state — the date through which the books are closed. */
+  async getPeriodLock() {
+    const lock = await this.prisma.accountingLock.findUnique({ where: { id: 1 } });
+    return { lockedThrough: lock?.lockedThrough ?? null, updatedAt: lock?.updatedAt ?? null };
+  }
+
+  /** Move the close-through date. ISP-only (enforced in the controller). */
+  async setPeriodLock(lockedThrough: string | null, actorId?: number) {
+    const value = lockedThrough ? new Date(lockedThrough) : null;
+    const lock = await this.prisma.accountingLock.upsert({
+      where: { id: 1 },
+      update: { lockedThrough: value, updatedById: actorId ?? null },
+      create: { id: 1, lockedThrough: value, updatedById: actorId ?? null },
+    });
+    await this.prisma.activityLog.create({
+      data: { userId: actorId ?? null, action: 'SET_PERIOD_LOCK', entity: 'AccountingLock', entityId: 1,
+        details: value ? `Books closed through ${value.toISOString().slice(0, 10)}` : 'Period lock cleared' },
+    }).catch(() => null);
+    return { lockedThrough: lock.lockedThrough };
+  }
+
+  /** Throw if `date` falls in a closed period. Call from any financial writer. */
+  async assertPeriodOpen(date?: Date | string | null) {
+    const d = date ? new Date(date) : new Date();
+    const lock = await this.prisma.accountingLock.findUnique({ where: { id: 1 } });
+    if (lock?.lockedThrough && d.getTime() <= new Date(lock.lockedThrough).getTime()) {
+      throw new BadRequestException(
+        `The accounting period through ${new Date(lock.lockedThrough).toLocaleDateString()} is closed. ` +
+        `You cannot record or backdate a financial entry into it — use a current date or ask the ISP to reopen the period.`,
+      );
+    }
   }
 
   /** Cursor-paginated ledger view with filters. */
@@ -308,21 +345,42 @@ export class AccountingService {
     return updated;
   }
 
-  async refundPayment(paymentId: number, reason: string, toBalance = false, userId?: number) {
+  async refundPayment(paymentId: number, reason: string, toBalance = false, userId?: number, amount?: number) {
     if (!reason?.trim()) throw new BadRequestException('Refund reason is required');
     const payment = await this.prisma.payment.findUnique({ where: { id: paymentId }, include: { invoice: true } });
     if (!payment) throw new NotFoundException('Payment not found');
-    if (payment.refundedAt) throw new BadRequestException('Payment is already refunded');
+    if (payment.refundedAt) throw new BadRequestException('Payment is already fully refunded');
+
+    // Can't refund into a closed accounting period (books already locked).
+    await this.assertPeriodOpen(payment.paymentDate);
+
+    // Partial-refund support: default to the full remaining amount. A caller
+    // may refund any slice up to what's left un-refunded on this payment.
+    const alreadyRefunded = (payment as any).refundedAmount || 0;
+    const remaining = round2(payment.amount - alreadyRefunded);
+    const refundAmt = amount == null ? remaining : round2(amount);
+    if (refundAmt <= 0) throw new BadRequestException('Refund amount must be greater than zero');
+    if (refundAmt > remaining + 0.005) {
+      throw new BadRequestException(
+        `Refund of ${refundAmt} exceeds the ${remaining} still refundable on payment ${payment.paymentNo}.`,
+      );
+    }
+    const fullyRefunded = round2(alreadyRefunded + refundAmt) >= round2(payment.amount) - 0.005;
 
     const invoice = payment.invoice;
-    const newPaid = Math.max(invoice.paidAmount - payment.amount, 0);
-    const newDue = invoice.total - newPaid;
+    const newPaid = Math.max(round2(invoice.paidAmount - refundAmt), 0);
+    const newDue = round2(invoice.total - newPaid);
     const newStatus = newPaid <= 0 ? 'UNPAID' : newPaid < invoice.total ? 'PARTIAL' : 'PAID';
 
     await this.prisma.$transaction([
       this.prisma.payment.update({
         where: { id: paymentId },
-        data: { refundedAt: new Date(), refundReason: reason.trim(), refundedBy: userId },
+        data: {
+          refundedAmount: round2(alreadyRefunded + refundAmt),
+          refundReason: reason.trim(),
+          refundedBy: userId,
+          ...(fullyRefunded ? { refundedAt: new Date() } : {}),
+        } as any,
       }),
       this.prisma.invoice.update({
         where: { id: invoice.id },
@@ -345,13 +403,13 @@ export class AccountingService {
       // credit the wallet instead of handing back cash
       const sub = await this.prisma.subscriber.findUnique({ where: { id: payment.subscriberId } });
       await this.prisma.$transaction([
-        this.prisma.subscriber.update({ where: { id: payment.subscriberId }, data: { balance: { increment: payment.amount } } }),
+        this.prisma.subscriber.update({ where: { id: payment.subscriberId }, data: { balance: { increment: refundAmt } } }),
         this.prisma.balanceTransaction.create({
           data: {
             subscriberId: payment.subscriberId,
             type: 'REFUND',
-            amount: payment.amount,
-            balanceAfter: (sub?.balance ?? 0) + payment.amount,
+            amount: refundAmt,
+            balanceAfter: (sub?.balance ?? 0) + refundAmt,
             reference: payment.paymentNo,
             notes: reason.trim(),
             createdBy: userId,
@@ -359,19 +417,145 @@ export class AccountingService {
         }),
       ]);
       await this.post([
-        { account: 'ACCOUNTS_RECEIVABLE', debit: payment.amount, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund→balance ${payment.paymentNo}: ${reason.trim()}`, createdBy: userId },
-        { account: 'SUBSCRIBER_BALANCE', credit: payment.amount, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund→balance ${payment.paymentNo}`, createdBy: userId },
+        { account: 'ACCOUNTS_RECEIVABLE', debit: refundAmt, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund→balance ${payment.paymentNo}: ${reason.trim()}`, createdBy: userId },
+        { account: 'SUBSCRIBER_BALANCE', credit: refundAmt, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund→balance ${payment.paymentNo}`, createdBy: userId },
       ]);
     } else {
       await this.post([
-        { account: 'ACCOUNTS_RECEIVABLE', debit: payment.amount, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund ${payment.paymentNo}: ${reason.trim()}`, createdBy: userId },
-        { account: 'CASH', credit: payment.amount, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund ${payment.paymentNo}`, createdBy: userId },
+        { account: 'ACCOUNTS_RECEIVABLE', debit: refundAmt, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund ${payment.paymentNo}: ${reason.trim()}`, createdBy: userId },
+        { account: 'CASH', credit: refundAmt, refType: 'REFUND', refId: paymentId, subscriberId: payment.subscriberId, description: `Refund ${payment.paymentNo}`, createdBy: userId },
       ]);
     }
+    // Reverse the reseller COMMISSION that cascaded up the chain on this payment
+    // — a refund gives the customer's money back, so the commission earned on it
+    // must be clawed back too. Offsetting entries, idempotent, never edits the
+    // originals. Best-effort so it can't block the refund itself.
+    try {
+      const payRef = payment.paymentNo || `PAY#${paymentId}`;
+      // Prorate the clawback to the slice being refunded, and key idempotency to
+      // the cumulative refunded total so each partial refund claws back once.
+      const fraction = payment.amount > 0 ? refundAmt / payment.amount : 1;
+      const revRef = `REV#${payRef}#${round2(alreadyRefunded + refundAmt)}`;
+      const already = await this.prisma.userBalanceTransaction.findFirst({ where: { reference: revRef }, select: { id: true } });
+      if (!already) {
+        const commRows = await this.prisma.userBalanceTransaction.findMany({ where: { reference: payRef, type: 'COMMISSION' } });
+        for (const cr of commRows) {
+          const signed = round2(Number(cr.amount || 0) * fraction);
+          if (!signed) continue;
+          const u = await this.prisma.user.update({ where: { id: cr.userId }, data: { balance: { increment: -signed } }, select: { balance: true } });
+          await this.prisma.userBalanceTransaction.create({
+            data: { userId: cr.userId, type: 'ADJUSTMENT', amount: -signed, balanceAfter: u.balance, reference: revRef, notes: `Commission clawed back on refund of ${round2(refundAmt)} on ${payRef}`, createdBy: userId ?? null } as any,
+          });
+        }
+      }
+    } catch { /* commission reversal is best-effort */ }
+
     await this.prisma.activityLog.create({
-      data: { userId, action: 'REFUND', entity: 'Payment', entityId: paymentId, details: reason.trim() },
+      data: { userId, action: 'REFUND', entity: 'Payment', entityId: paymentId,
+        details: `${fullyRefunded ? 'Full' : 'Partial'} refund ${round2(refundAmt)}${toBalance ? '→wallet' : ''}: ${reason.trim()}` },
     });
-    return { refunded: true, invoiceStatus: newStatus };
+    return { refunded: true, invoiceStatus: newStatus, amount: round2(refundAmt), fullyRefunded, remaining: round2(remaining - refundAmt) };
+  }
+
+  // ── Refund approval workflow (large refunds need ISP sign-off) ─────────────
+  private isOwner(role?: string) {
+    return role === 'SUPER_ADMIN' || role === 'ADMIN';
+  }
+
+  /** Current finance policy (creates the singleton on first read). */
+  async getFinanceSettings() {
+    const s = await this.prisma.financeSettings.findUnique({ where: { id: 1 } });
+    return { refundApprovalThreshold: s?.refundApprovalThreshold ?? 0, updatedAt: s?.updatedAt ?? null };
+  }
+
+  /** Set the refund approval threshold. ISP owner only (enforced in controller). */
+  async setFinanceSettings(refundApprovalThreshold: number, actorId?: number) {
+    const value = Math.max(0, Number(refundApprovalThreshold) || 0);
+    await this.prisma.financeSettings.upsert({
+      where: { id: 1 },
+      update: { refundApprovalThreshold: value, updatedById: actorId ?? null },
+      create: { id: 1, refundApprovalThreshold: value, updatedById: actorId ?? null },
+    });
+    return { refundApprovalThreshold: value };
+  }
+
+  /**
+   * Entry point the controller calls. Decides whether the refund can post now
+   * or must wait for ISP approval. Owners always bypass. A threshold of 0 means
+   * the gate is off. Returns either the refund result or a pending request.
+   */
+  async requestRefund(
+    paymentId: number,
+    body: { reason: string; toBalance?: boolean; amount?: number },
+    actor?: { sub?: number; role?: string; name?: string },
+  ) {
+    const reason = (body?.reason || '').trim();
+    if (!reason) throw new BadRequestException('Refund reason is required');
+    const payment = await this.prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) throw new NotFoundException('Payment not found');
+    if (payment.refundedAt) throw new BadRequestException('Payment is already fully refunded');
+
+    const already = (payment as any).refundedAmount || 0;
+    const remaining = round2(payment.amount - already);
+    const refundAmt = body.amount == null ? remaining : round2(body.amount);
+
+    const { refundApprovalThreshold } = await this.getFinanceSettings();
+    const needsApproval =
+      refundApprovalThreshold > 0 && refundAmt > refundApprovalThreshold && !this.isOwner(actor?.role);
+
+    if (!needsApproval) {
+      return this.refundPayment(paymentId, reason, body.toBalance === true, actor?.sub, body.amount);
+    }
+
+    // Over threshold and requester isn't the owner — queue it, post nothing.
+    const req = await this.prisma.refundRequest.create({
+      data: {
+        paymentId, amount: refundAmt, toBalance: body.toBalance === true, reason,
+        requestedById: actor?.sub ?? null, requestedByName: actor?.name ?? null,
+      },
+    });
+    await this.prisma.activityLog.create({
+      data: { userId: actor?.sub ?? null, action: 'REFUND_REQUEST', entity: 'Payment', entityId: paymentId,
+        details: `Refund ${refundAmt} on ${payment.paymentNo} awaiting approval (> ${refundApprovalThreshold})` },
+    }).catch(() => null);
+    return { pending: true, requestId: req.id, amount: refundAmt, threshold: refundApprovalThreshold };
+  }
+
+  /** Pending refund requests for the approval queue. ISP owner only. */
+  async listRefundRequests(status = 'PENDING') {
+    const rows = await this.prisma.refundRequest.findMany({
+      where: status === 'ALL' ? {} : { status },
+      orderBy: { createdAt: 'desc' }, take: 100,
+    });
+    const payIds = [...new Set(rows.map((r) => r.paymentId))];
+    const pays = await this.prisma.payment.findMany({ where: { id: { in: payIds } }, select: { id: true, paymentNo: true, subscriberName: true } });
+    const byId = new Map(pays.map((p) => [p.id, p]));
+    return rows.map((r) => ({ ...r, paymentNo: byId.get(r.paymentId)?.paymentNo ?? null, subscriberName: byId.get(r.paymentId)?.subscriberName ?? null }));
+  }
+
+  /** Approve a queued refund — this is where the money actually moves. */
+  async approveRefundRequest(requestId: number, actorId?: number, note?: string) {
+    const rr = await this.prisma.refundRequest.findUnique({ where: { id: requestId } });
+    if (!rr) throw new NotFoundException('Refund request not found');
+    if (rr.status !== 'PENDING') throw new BadRequestException(`Request is already ${rr.status.toLowerCase()}`);
+    const result = await this.refundPayment(rr.paymentId, rr.reason, rr.toBalance, actorId, rr.amount);
+    await this.prisma.refundRequest.update({
+      where: { id: requestId },
+      data: { status: 'APPROVED', decidedById: actorId ?? null, decidedAt: new Date(), decisionNote: note ?? null },
+    });
+    return { approved: true, ...result };
+  }
+
+  /** Reject a queued refund — nothing was ever posted, so just close it. */
+  async rejectRefundRequest(requestId: number, actorId?: number, note?: string) {
+    const rr = await this.prisma.refundRequest.findUnique({ where: { id: requestId } });
+    if (!rr) throw new NotFoundException('Refund request not found');
+    if (rr.status !== 'PENDING') throw new BadRequestException(`Request is already ${rr.status.toLowerCase()}`);
+    await this.prisma.refundRequest.update({
+      where: { id: requestId },
+      data: { status: 'REJECTED', decidedById: actorId ?? null, decidedAt: new Date(), decisionNote: note ?? null },
+    });
+    return { rejected: true };
   }
 
   // ─────────────────────────────────────────────────────────────

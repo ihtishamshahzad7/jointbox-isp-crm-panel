@@ -74,16 +74,24 @@ export class OrganizationController {
     });
   }
 
+  /** Consolidated reversals across the caller's dealer tree (Disputes module). */
+  @Get('pricing/reversals')
+  listReversals(@Request() req: any) {
+    return this.pricing.listReversals(req.user);
+  }
+
   @Post('pricing/reverse/:subscriberId')
   async reversePricing(
     @Param('subscriberId') subscriberId: string,
-    @Body() body: { reference?: string; reason?: string },
+    @Body() body: { reference?: string; reason?: string; reasonCode?: string; revertService?: boolean },
     @Request() req: any,
   ) {
     await this.scope.assertSubscriber(req.user, +subscriberId);
     return this.pricing.reverseActivation(+subscriberId, {
       reference: body?.reference,
       reason: body?.reason,
+      reasonCode: body?.reasonCode,   // DUPLICATE | DEALER_ERROR | SYSTEM_BUG | CUSTOMER_DISPUTE | CANCELLED
+      revertService: body?.revertService,
       actorId: req.user?.sub,
     });
   }
@@ -186,6 +194,11 @@ export class OrganizationController {
   @Put('resellers/:id/topup-permission')
   topupPermission(@Param('id') id: string, @Body() body: { allowed: boolean }, @Request() req: any) {
     return this.org.setTopupPermission(req.user, +id, !!body.allowed);
+  }
+  /** Set a dealer's credit limit (permitted overdraft). Parent/ISP only. */
+  @Put('resellers/:id/credit-limit')
+  creditLimit(@Param('id') id: string, @Body() body: { limit: number }, @Request() req: any) {
+    return this.org.setCreditLimit(req.user, +id, Number(body?.limit));
   }
   @Put('resellers/:id/nas-permission')
   nasPermission(@Param('id') id: string, @Body() body: { allowed: boolean }, @Request() req: any) {

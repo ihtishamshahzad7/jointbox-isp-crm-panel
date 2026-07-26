@@ -194,6 +194,11 @@ distinct from "bad signal".
 | Credit defaults | daily 06:30 | Flag unpaid credit extensions |
 | Database backup | daily 02:00 | `pg_dump -Fc`, 14-day retention |
 | Log pruning | daily 04:20 | Drop router logs older than 14 days |
+| Integrity reconcile | daily 03:20 | Wallet↔ledger + RADIUS↔billing drift (also runnable on demand) |
+
+Bulk and long-running work runs through a durable **background job queue**
+(`Job` table) rather than blocking the request. Jobs survive a restart — an
+interrupted `RUNNING` job is requeued on boot. See §11.
 
 ---
 
@@ -246,3 +251,58 @@ becomes `7.7e+251 GB`.
 
 In-app: **Help & Guide** in the sidebar, organised by task.
 Diagnostics: **Insights → Logs** for RADIUS checks and backup status.
+
+---
+
+## 11. Money-integrity controls
+
+These features protect the ledger from the everyday mistakes and disputes that
+otherwise create silent drift. All of them post **offsetting** entries and never
+edit an original record, so the audit trail always reconstructs the full history.
+
+### Refunds — full and partial
+**Where:** Billing → Payments → Refund. **When:** a customer overpaid, was
+double-charged, or cancelled.
+
+A reason is mandatory and logged. Leave the amount blank to refund the whole
+remaining balance, or enter a smaller figure for a partial refund; the same
+payment can be refunded in several slices until it is fully returned. Choose
+*refund to wallet* to credit the subscriber's balance or leave it off for cash.
+The invoice reverts to PARTIAL/UNPAID to match, and any reseller **commission**
+earned on the refunded money is clawed back proportionally. A refund is refused
+if the payment falls inside a closed accounting period.
+
+### Refund approval threshold
+**Where:** Billing → Accounting → *Refund approval limit* card (ISP owner only).
+**When:** you want a second pair of eyes on large refunds.
+
+Set a figure; any staff refund above it is **queued** instead of posting, and the
+staff member is told it needs sign-off. Pending refunds show on the same card —
+Approve posts the refund (and the commission clawback), Reject closes it with
+nothing posted. The ISP owner always bypasses the limit. Set it to 0 to disable.
+
+### Accounting-period lock (close the books)
+**Where:** Billing → Accounting → *Close the books* card (ISP owner only).
+**When:** month-end, once figures are final.
+
+Lock through a date and no one can record or backdate a payment or refund into
+that period. Reopen briefly to post a late correction, then close again. This is
+enforced server-side for every financial writer, not just in the UI.
+
+### Auditor role (read-only books)
+**Where:** Administration → Users → Add → *Auditor* account type (ISP owner only).
+**When:** an accountant, regulator, or new hire needs visibility without control.
+
+An auditor sees everything in the subtree it is attached to — attach at ISP level
+for the whole business, or under a franchise to scope it — but every write is
+refused on the server. Auditors have no wallet and cannot touch customers or money.
+
+### Background job queue
+**Where:** Administration → Background Jobs (ISP owner only).
+**When:** bulk or long-running work you don't want to block on.
+
+Jobs run off the request path with a live progress bar (Queued → Running → Done),
+are durable across restarts, and are tenant-scoped. The built-in
+`integrity.reconcile` job checks wallet-vs-ledger balances and cuts any RADIUS
+session billing says should be off; `demo.progress` is a harmless queue test.
+Other services register their own handlers via `JobsService.register(type, fn)`.

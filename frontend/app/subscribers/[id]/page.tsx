@@ -421,6 +421,25 @@ export default function SubscriberProfilePage() {
           <span style={{color:t.textMuted,fontSize:12}}>/</span>
           <span style={{fontWeight:700,fontSize:13,color:t.text}}>{sub.fullName}</span>
           <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:700,color:sc.color,background:sc.bg}}>{sub.status}</span>
+          {(sub as any).onHold && (
+            <span title={(sub as any).onHoldReason || "Under dispute"} style={{padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:700,color:"#FCD34D",background:"rgba(245,158,11,0.15)"}}>⏸ On hold</span>
+          )}
+          <button
+            onClick={async () => {
+              const onHold = !!(sub as any).onHold;
+              if (onHold) {
+                const r = await fetch(`${API}/subscribers/${sub.id}/unhold`, { method: "PATCH", headers });
+                if (r.ok) { showToast("Hold cleared", "ok"); setSub((p: any) => ({ ...p, onHold: false, onHoldReason: null })); }
+              } else {
+                const reason = prompt("Reason for putting this subscriber on dispute hold?", "Billing dispute — under review");
+                if (reason == null) return;
+                const r = await fetch(`${API}/subscribers/${sub.id}/hold`, { method: "PATCH", headers, body: JSON.stringify({ reason }) });
+                if (r.ok) { showToast("On hold — auto-suspend paused", "ok"); setSub((p: any) => ({ ...p, onHold: true, onHoldReason: reason })); }
+              }
+            }}
+            style={{ background: "transparent", border: `1px solid ${t.cardBorder}`, color: (sub as any).onHold ? "#6EE7B7" : "#FCD34D", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            {(sub as any).onHold ? "Release hold" : "Dispute / Hold"}
+          </button>
           {/* Online indicator */}
           {loadingLive ? (
             <span style={{fontSize:11,color:t.amber}}>⏳ Checking…</span>

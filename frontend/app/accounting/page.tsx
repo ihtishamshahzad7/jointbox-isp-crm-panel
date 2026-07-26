@@ -58,6 +58,23 @@ export default function AccountingPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // accounting-period lock (close the books)
+  const [lock, setLock] = useState<{ lockedThrough: string | null } | null>(null);
+  const [lockDraft, setLockDraft] = useState("");
+
+  // refund approval policy + queue
+  const [refundThreshold, setRefundThreshold] = useState(0);
+  const [thresholdDraft, setThresholdDraft] = useState("");
+  const [refundRequests, setRefundRequests] = useState<any[]>([]);
+  const role = (() => {
+    try {
+      const t = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+      if (!t) return "";
+      return JSON.parse(atob(t.split(".")[1] || ""))?.role || "";
+    } catch { return ""; }
+  })();
+  const isOwner = role === "SUPER_ADMIN" || role === "ADMIN";
+
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
@@ -79,7 +96,57 @@ export default function AccountingPage() {
       return;
     }
     get("/accounting/ledger/summary").then(setSummary).catch(silent("loadLedgerSummary"));
+    get("/accounting/period-lock").then((l) => { setLock(l); setLockDraft(l?.lockedThrough ? String(l.lockedThrough).slice(0, 10) : ""); }).catch(silent("loadPeriodLock"));
+    if (isOwner) {
+      get("/accounting/finance-settings").then((s) => { setRefundThreshold(s?.refundApprovalThreshold || 0); setThresholdDraft(String(s?.refundApprovalThreshold || 0)); }).catch(silent("loadFinanceSettings"));
+      loadRefundRequests();
+    }
   }, []);
+
+  const loadRefundRequests = useCallback(() => {
+    get("/accounting/refund-requests?status=PENDING").then((rows) => setRefundRequests(Array.isArray(rows) ? rows : [])).catch(silent("loadRefundRequests"));
+  }, [token]);
+
+  const saveThreshold = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/accounting/finance-settings`, { method: "PUT", headers, body: JSON.stringify({ refundApprovalThreshold: Number(thresholdDraft) || 0 }) });
+      const data = await r.json();
+      if (!r.ok) { setMsg(data?.message || "Failed to save threshold"); return; }
+      setRefundThreshold(data.refundApprovalThreshold);
+      setMsg(data.refundApprovalThreshold > 0 ? `Refunds over ${fmt(data.refundApprovalThreshold)} now need approval` : "Refund approval turned off");
+    } catch { setMsg("Failed to save threshold"); }
+    finally { setBusy(false); }
+  }, [token, thresholdDraft]);
+
+  const decideRefund = useCallback(async (id: number, action: "approve" | "reject") => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/accounting/refund-requests/${id}/${action}`, { method: "POST", headers, body: JSON.stringify({}) });
+      const data = await r.json();
+      if (!r.ok) { setMsg(data?.message || `Failed to ${action} refund`); return; }
+      setMsg(action === "approve" ? "Refund approved and posted" : "Refund request rejected");
+      loadRefundRequests();
+      get("/accounting/ledger/summary").then(setSummary).catch(silent("reloadSummary"));
+    } catch { setMsg(`Failed to ${action} refund`); }
+    finally { setBusy(false); }
+  }, [token]);
+
+  const saveLock = useCallback(
+    async (value: string | null) => {
+      setBusy(true);
+      try {
+        const r = await fetch(`${API}/accounting/period-lock`, { method: "PUT", headers, body: JSON.stringify({ lockedThrough: value }) });
+        const data = await r.json();
+        if (!r.ok) { setMsg(data?.message || "Failed to update period lock"); return; }
+        setLock(data);
+        setLockDraft(data?.lockedThrough ? String(data.lockedThrough).slice(0, 10) : "");
+        setMsg(value ? `Books closed through ${new Date(value).toLocaleDateString()}` : "Period lock cleared");
+      } catch { setMsg("Failed to update period lock"); }
+      finally { setBusy(false); }
+    },
+    [token],
+  );
 
   // ── per-tab loaders ──────────────────────────────────────────
   const loadLedger = useCallback(
@@ -242,6 +309,101 @@ export default function AccountingPage() {
           </div>
         ))}
       </div>
+
+      {/* accounting-period lock */}
+      <div style={{ ...card, marginBottom: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>{lock?.lockedThrough ? "🔒" : "🔓"}</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Close the books</div>
+            <div style={{ fontSize: 11, color: T.muted }}>
+              {lock?.lockedThrough
+                ? `Locked through ${new Date(lock.lockedThrough).toLocaleDateString()} — payments can't be backdated into it`
+                : "Open — no period is locked"}
+            </div>
+          </div>
+        </div>
+        {isOwner && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+            <input
+              type="date"
+              value={lockDraft}
+              onChange={(e) => setLockDraft(e.target.value)}
+              style={{ background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
+            />
+            <button
+              disabled={busy || !lockDraft}
+              onClick={() => saveLock(lockDraft || null)}
+              style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer", opacity: busy || !lockDraft ? 0.5 : 1 }}
+            >
+              Close through date
+            </button>
+            {lock?.lockedThrough && (
+              <button
+                disabled={busy}
+                onClick={() => { if (confirm("Reopen the period? This allows financial entries to be dated into it again.")) saveLock(null); }}
+                style={{ background: "transparent", color: T.amber, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer" }}
+              >
+                Reopen
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* refund approval policy + queue (ISP owner only) */}
+      {isOwner && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 18 }}>🛡️</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Refund approval limit</div>
+              <div style={{ fontSize: 11, color: T.muted }}>
+                {refundThreshold > 0
+                  ? `Staff refunds over ${fmt(refundThreshold)} need your sign-off before they post`
+                  : "Off — staff can post any refund without approval"}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+              <input
+                type="number" min={0} step="1" value={thresholdDraft}
+                onChange={(e) => setThresholdDraft(e.target.value)}
+                placeholder="0 = off"
+                style={{ width: 120, background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
+              />
+              <button disabled={busy} onClick={saveThreshold}
+                style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 13, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
+                Save
+              </button>
+            </div>
+          </div>
+
+          {refundRequests.length > 0 && (
+            <div style={{ marginTop: 14, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Pending refunds ({refundRequests.length})</div>
+              {refundRequests.map((r) => (
+                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${T.border}`, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(r.amount)} {r.toBalance ? "→ wallet" : "cash"} · {r.paymentNo || `#${r.paymentId}`}</div>
+                    <div style={{ fontSize: 11, color: T.muted }}>
+                      {r.subscriberName ? `${r.subscriberName} · ` : ""}{r.reason}
+                      {r.requestedByName ? ` · by ${r.requestedByName}` : ""}
+                    </div>
+                  </div>
+                  <button disabled={busy} onClick={() => decideRefund(r.id, "approve")}
+                    style={{ background: T.green, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                    Approve
+                  </button>
+                  <button disabled={busy} onClick={() => decideRefund(r.id, "reject")}
+                    style={{ background: "transparent", color: T.red, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                    Reject
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* tabs */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>

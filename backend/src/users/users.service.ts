@@ -564,8 +564,15 @@ export class UsersService {
       const labels: Record<string, string> = {
         RESELLER: 'Franchise', SUB_RESELLER: 'Dealer', RETAILER: 'Retailer', ADMIN: 'ISP',
       };
+      // AUDITOR is a read-only books account. Only the ISP owner may mint one,
+      // placed anywhere in their tree — it sees that subtree but writes nothing.
+      if (data.role === 'AUDITOR') {
+        if (parent.role !== 'SUPER_ADMIN' && parent.role !== 'ADMIN') {
+          throw new BadRequestException('Only the ISP owner can create an auditor (read-only) account.');
+        }
+      }
       // STAFF (SALES) can be created by ANY account to help run the business.
-      if (data.role !== 'SALES') {
+      else if (data.role !== 'SALES') {
         const allowed = nextRole[parent.role];
         if (allowed === null) {
           throw new BadRequestException(`A ${labels[parent.role] || parent.role} can only create Staff accounts, not sub-resellers.`);
@@ -896,7 +903,7 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
 
-    const validRoles = ['SUPER_ADMIN', 'ADMIN', 'SALES', 'RESELLER', 'SUB_RESELLER', 'RETAILER'];
+    const validRoles = ['SUPER_ADMIN', 'ADMIN', 'SALES', 'RESELLER', 'SUB_RESELLER', 'RETAILER', 'AUDITOR'];
     if (!validRoles.includes(role)) {
       throw new BadRequestException(`Invalid role. Must be one of: ${validRoles.join(', ')}`);
     }

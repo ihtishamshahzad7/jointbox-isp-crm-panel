@@ -107,6 +107,9 @@ export class PaymentsService {
   }
 
   async create(data: any) {
+    // Refuse a payment dated into a closed accounting period (no backdating).
+    await this.accounting.assertPeriodOpen(data.paymentDate);
+
     const paymentNo = data.paymentNo || `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     const payment = await this.prisma.payment.create({

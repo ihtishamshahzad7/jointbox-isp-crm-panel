@@ -396,6 +396,29 @@ export class OrganizationService {
    * the top of a tree (SUPER_ADMIN, or a user with no parent) who is the source
    * and may "mint" credit into the system.
    */
+  /**
+   * Set a child account's credit limit — the overdraft it may run before
+   * activations are blocked. Only the parent (or ISP) may set it, and only for
+   * accounts inside their subtree.
+   */
+  async setCreditLimit(actor: Actor, targetUserId: number, limit: number) {
+    const value = Math.max(0, Number(limit) || 0);
+    if (!this.scope.isAdmin(actor?.role)) {
+      await this.scope.assertUser(actor, targetUserId); // must be in my subtree
+    }
+    const before = await this.prisma.user.findUnique({ where: { id: targetUserId }, select: { name: true, creditLimit: true } });
+    const updated = await this.prisma.user.update({
+      where: { id: targetUserId }, data: { creditLimit: value }, select: { id: true, name: true, creditLimit: true },
+    });
+    await this.prisma.activityLog.create({
+      data: {
+        userId: this.scope.actorId(actor), action: 'SET_CREDIT_LIMIT', entity: 'User', entityId: targetUserId,
+        details: `Credit limit for ${before?.name ?? targetUserId}: ${before?.creditLimit ?? 0} → ${value}`,
+      },
+    }).catch(() => null);
+    return updated;
+  }
+
   async walletTopupScoped(actor: Actor, targetUserId: number, amount: number, notes?: string) {
     if (!amount || amount <= 0) throw new BadRequestException('Amount must be > 0');
     // Permission: the target must be inside the actor's subtree (and not the actor itself).
@@ -519,6 +542,39 @@ export class OrganizationService {
     } catch (e: any) {
       this.logger.error(`Commission distribution failed for payment#${payment.id}: ${e.message}`);
     }
+  }
+
+  /**
+   * Reverse the commission distributed for a payment — used on refund. Posts
+   * offsetting entries against every account that earned a cut, referenced to
+   * the payment, and idempotent (won't reverse the same payment's commission
+   * twice). Never edits the original commission rows.
+   */
+  async reverseCommission(payment: { id: number; paymentNo?: string | null }, actorId?: number) {
+    const ref = payment.paymentNo || `PAY#${payment.id}`;
+    const revRef = `REV#${ref}`;
+    const already = await this.prisma.userBalanceTransaction.findFirst({ where: { reference: revRef }, select: { id: true } });
+    if (already) return { reversed: false, alreadyReversed: true };
+
+    const rows = await this.prisma.userBalanceTransaction.findMany({
+      where: { reference: ref, type: 'COMMISSION' },
+    });
+    if (!rows.length) return { reversed: false, rows: 0 };
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const r of rows) {
+        const signed = Number(r.amount || 0);
+        if (!signed) continue;
+        const u = await tx.user.update({ where: { id: r.userId }, data: { balance: { increment: -signed } }, select: { balance: true } });
+        await tx.userBalanceTransaction.create({
+          data: {
+            userId: r.userId, type: 'ADJUSTMENT', amount: -signed, balanceAfter: u.balance,
+            reference: revRef, notes: `Commission reversed on refund of ${ref}`, createdBy: actorId ?? null,
+          } as any,
+        });
+      }
+    });
+    return { reversed: true, rows: rows.length, revRef };
   }
 
   // ── FRANCHISE GROUP PRICING (ISP sets wholesale price per franchise) ────

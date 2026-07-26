@@ -58,6 +58,18 @@ export class PermissionsGuard implements CanActivate {
     const needed = `${resource}.${action}`;
 
     /**
+     * AUDITOR is read-only everywhere. This floor is applied before the matrix
+     * so it can't be widened by RolePermission rows or an empty table — an
+     * accountant can inspect the whole subtree but never write, edit, refund,
+     * approve, or move money. GET (read) passes through to normal scoping.
+     */
+    if (role === 'AUDITOR' && action === 'write') {
+      throw new ForbiddenException(
+        'Your account has read-only (auditor) access. You can view the books and reports but cannot make changes.',
+      );
+    }
+
+    /**
      * HARD FLOOR — applied before the matrix is consulted, so an empty or
      * misconfigured RolePermission table cannot open these up.
      */

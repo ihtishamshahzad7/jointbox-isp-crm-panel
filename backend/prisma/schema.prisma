@@ -52,6 +52,10 @@ enum UserRole {
   RESELLER
   SUB_RESELLER
   RETAILER
+  /// Read-only books access. Can view everything in its subtree — ledger,
+  /// payments, subscribers, reports — but cannot write, edit, or move money.
+  /// Enforced globally in PermissionsGuard (every non-GET is refused).
+  AUDITOR
 }
 
 enum ServiceType {
@@ -382,6 +386,10 @@ model User {
   address  String?
   isActive Boolean  @default(true)
   balance  Float    @default(0)
+  /// How far this account may overdraw its wallet (post-paid headroom). 0 =
+  /// strict prepaid (default) — cannot spend below zero. 5000 = may go to
+  /// −5000 before activations are blocked. Set per dealer by their parent/ISP.
+  creditLimit Float  @default(0)
   parentId Int?
 
   // Contact preferences and location (from the Zal Ultra user profile spec).
@@ -1058,6 +1066,10 @@ model Subscriber {
   phone            String
   email            String?
   address          String?
+  /// Client-supplied idempotency key for the CREATE request. When present, a
+  /// retry / double-click carrying the same key returns the existing record
+  /// instead of creating a duplicate + double-charging.
+  idempotencyKey   String?        @unique
   username         String         @unique
   password         String
   // NOT unique. A CNIC is legitimately shared — a household on one document,
@@ -1101,6 +1113,11 @@ model Subscriber {
   // off. Cleared on renewal.
   fupApplied       Boolean   @default(false)
   fupAppliedAt     DateTime?
+  /// Billing hold — while an open dispute is under review, the daily sweep must
+  /// NOT auto-suspend this subscriber for expiry. Cleared when the dispute is
+  /// resolved (reversed, or dismissed).
+  onHold           Boolean   @default(false)
+  onHoldReason     String?
   installationDate DateTime?
   latitude         Float?
   longitude        Float?
@@ -1375,6 +1392,9 @@ model Payment {
   refundedAt   DateTime?
   refundReason String?
   refundedBy   Int?
+  /// Cumulative amount refunded so far. Supports partial refunds — a payment
+  /// is fully refunded only when this reaches `amount` (refundedAt is set then).
+  refundedAmount Float @default(0)
 
   paymentDate DateTime @default(now())
 
@@ -2036,6 +2056,72 @@ model PppoeSession {
   @@index([subscriberId])
   @@index([username])
   @@index([isActive, lastSeenAt])
+}
+
+/// Accounting-period lock — a single row (id = 1) holding the date through
+/// which the books are CLOSED. Any financial entry dated on or before
+/// `lockedThrough` is refused, so a closed month can't be silently backdated
+/// into. Only the ISP owner may move the lock, and only forward.
+model AccountingLock {
+  id            Int      @id @default(1)
+  lockedThrough DateTime?
+  updatedById   Int?
+  updatedAt     DateTime @updatedAt
+}
+
+/// Async job queue. Long-running or bulk work (mass activation, RADIUS sync,
+/// bulk notifications, backups) is enqueued here and processed in the
+/// background by a poller, so the HTTP request returns immediately and the
+/// operator can watch progress instead of the browser hanging.
+model Job {
+  id          Int       @id @default(autoincrement())
+  type        String    // registered handler key, e.g. "integrity.reconcile"
+  status      String    @default("QUEUED") // QUEUED | RUNNING | DONE | FAILED
+  progress    Int       @default(0)        // 0–100
+  total       Int       @default(0)        // optional item count for the UI
+  done        Int       @default(0)        // items processed so far
+  payload     Json?                        // handler input
+  result      Json?                        // handler output on success
+  error       String?                      // message on failure
+  label       String?                      // human title for the queue view
+  createdById Int?
+  rootId      Int?                         // tenant scoping — owning ISP subtree
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status])
+  @@index([rootId])
+}
+
+/// ISP-wide finance policy. Singleton (id=1). Holds the refund value above
+/// which a refund must be signed off by the ISP owner before it posts.
+model FinanceSettings {
+  id                      Int      @id @default(1)
+  /// Refunds at or below this post immediately; above it queue for approval.
+  /// 0 = every refund needs no approval (feature off).
+  refundApprovalThreshold Float    @default(0)
+  updatedById             Int?
+  updatedAt               DateTime @updatedAt
+}
+
+/// A refund awaiting ISP sign-off because it exceeded the approval threshold.
+/// Nothing is posted until it is APPROVED — approval runs the real refund.
+model RefundRequest {
+  id              Int       @id @default(autoincrement())
+  paymentId       Int
+  amount          Float
+  toBalance       Boolean   @default(false)
+  reason          String
+  status          String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  requestedById   Int?
+  requestedByName String?
+  decidedById     Int?
+  decidedAt       DateTime?
+  decisionNote    String?
+  createdAt       DateTime  @default(now())
+
+  @@index([status])
 }
 
 /// Free-text notes attachable to ANY record — subscribers, users, packages,

@@ -55,6 +55,11 @@ export function UserWizard({
   const child = myRole ? CHILD_ROLE[myRole] ?? null : CHILD_ROLE.SUPER_ADMIN;
   const myLabel = MY_LABEL[myRole ?? ""] ?? "your account";
   const isStaff = form.role === "SALES";
+  const isAuditor = form.role === "AUDITOR";
+  // Only the ISP owner hands out a read-only books account.
+  const canMakeAuditor = myRole === "SUPER_ADMIN" || myRole === "ADMIN";
+  // Neither staff nor auditors have a wallet of their own.
+  const noWallet = isStaff || isAuditor;
 
   /**
    * Keep the form honest: if the only thing this account may create is staff,
@@ -62,11 +67,9 @@ export function UserWizard({
    * letting the user submit something that cannot succeed.
    */
   React.useEffect(() => {
-    if (!child && form.role !== "SALES") setForm((p: any) => ({ ...p, role: "SALES" }));
-    else if (child && form.role !== "SALES" && form.role !== child.role) {
-      setForm((p: any) => ({ ...p, role: child.role }));
-    }
-  }, [child, form.role, setForm]);
+    const allowed = new Set(["SALES", ...(child ? [child.role] : []), ...(canMakeAuditor ? ["AUDITOR"] : [])]);
+    if (!allowed.has(form.role)) setForm((p: any) => ({ ...p, role: child ? child.role : "SALES" }));
+  }, [child, canMakeAuditor, form.role, setForm]);
 
   return (
     <Wizard
@@ -174,7 +177,7 @@ export function UserWizard({
           title: "Account type",
           hint: "This decides what the account can do and where it sits in your tree. It cannot be changed casually later.",
           summary: () => [
-            ["Type", isStaff ? "Staff (helper)" : "Reseller (downline)"],
+            ["Type", isAuditor ? "Auditor (read-only)" : isStaff ? "Staff (helper)" : "Reseller (downline)"],
             ["Sits under", "you"],
           ],
           render: () => (
@@ -188,6 +191,9 @@ export function UserWizard({
                     <option value={child.role}>{child.label} — sells on their own account</option>
                   )}
                   <option value="SALES">Staff — helps run YOUR account</option>
+                  {canMakeAuditor && (
+                    <option value="AUDITOR">Auditor — read-only access to the books</option>
+                  )}
                 </select>
               </Field>
 
@@ -198,7 +204,16 @@ export function UserWizard({
                 login into your own. Spelling it out at the point of choice.
               */}
               <div className="uw-note">
-                {isStaff ? (
+                {isAuditor ? (
+                  <>
+                    <b>An auditor can look but not touch.</b>
+                    <span>
+                      They see everything in your tree — ledger, payments, subscribers and
+                      reports — but cannot create, edit, refund, or move money. Use this for an
+                      accountant or external reviewer who needs to check the books.
+                    </span>
+                  </>
+                ) : isStaff ? (
                   <>
                     <b>Staff work inside YOUR account.</b>
                     <span>
@@ -242,10 +257,10 @@ export function UserWizard({
         {
           id: "money",
           title: "Wallet",
-          hint: isStaff
-            ? "Staff have no wallet of their own — they spend yours. Nothing to set here."
+          hint: noWallet
+            ? "This account type has no wallet of its own. Nothing to set here."
             : "Prepaid: they cannot activate a customer until this has balance.",
-          skip: isStaff,
+          skip: noWallet,
           summary: () => [["Opening balance", form.balance || "0"]],
           render: () => (
             <>

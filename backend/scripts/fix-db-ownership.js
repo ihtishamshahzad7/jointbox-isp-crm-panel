@@ -69,6 +69,15 @@ BEGIN
            WHERE ns.nspname = 'public' AND pg_get_userbyid(p.proowner) <> '${appUser}'
   LOOP EXECUTE format('ALTER FUNCTION %s OWNER TO %I', r.sig, '${appUser}'); n := n + 1; END LOOP;
 
+  -- Enum types. Only the type OWNER may ALTER TYPE ... ADD VALUE, so every
+  -- enum (UserRole, Status, …) must belong to the app user or Prisma cannot
+  -- add a new variant like AUDITOR.
+  FOR r IN SELECT t.typname
+           FROM pg_type t JOIN pg_namespace ns ON ns.oid = t.typnamespace
+           WHERE ns.nspname = 'public' AND t.typtype = 'e'
+             AND pg_get_userbyid(t.typowner) <> '${appUser}'
+  LOOP EXECUTE format('ALTER TYPE public.%I OWNER TO %I', r.typname, '${appUser}'); n := n + 1; END LOOP;
+
   RAISE NOTICE 'reassigned % object(s)', n;
 END $$;
 `;
@@ -80,6 +89,10 @@ const CHECK = `
   SELECT p.proname, 'function' FROM pg_proc p
     JOIN pg_namespace ns ON ns.oid = p.pronamespace
    WHERE ns.nspname='public' AND pg_get_userbyid(p.proowner) <> $1
+  UNION ALL
+  SELECT t.typname, 'enum type' FROM pg_type t
+    JOIN pg_namespace ns ON ns.oid = t.typnamespace
+   WHERE ns.nspname='public' AND t.typtype='e' AND pg_get_userbyid(t.typowner) <> $1
 `;
 
 (async () => {

@@ -34,6 +34,7 @@ const [error, setError] = useState("");
 const [showRefundModal, setShowRefundModal] = useState(false);
 const [refundReason, setRefundReason] = useState("");
 const [refundToBalance, setRefundToBalance] = useState(true);
+const [refundAmount, setRefundAmount] = useState("");
 const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
@@ -170,18 +171,27 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
       alert("Please provide a reason for the refund.");
       return;
     }
+    const amt = refundAmount.trim() ? Number(refundAmount) : undefined;
+    if (amt != null && (!isFinite(amt) || amt <= 0)) {
+      alert("Enter a valid refund amount, or leave it blank for a full refund.");
+      return;
+    }
     try {
       const res = await fetch(`${API}/accounting/payments/${paymentId}/refund`, {
-        method: 'POST', headers, body: JSON.stringify({ reason: refundReason, toBalance: refundToBalance }),
+        method: 'POST', headers, body: JSON.stringify({ reason: refundReason, toBalance: refundToBalance, ...(amt != null ? { amount: amt } : {}) }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        alert(err.message || 'Failed to refund payment');
+        alert(data.message || 'Failed to refund payment');
         return;
+      }
+      if (data.pending) {
+        alert(`This refund (PKR ${Number(data.amount).toLocaleString()}) exceeds the approval limit of PKR ${Number(data.threshold).toLocaleString()} and has been sent to the ISP owner for sign-off.`);
       }
       setShowRefundModal(false);
       setSelectedPayment(null);
       setRefundReason("");
+      setRefundAmount("");
       loadPayments();
     } catch (err) {
       alert('Failed to refund payment');
@@ -324,7 +334,16 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
             </div>
             <p style={{ fontSize: 11, color: t.textMuted, marginBottom: 6 }}>
               Refund payment <strong>{selectedPayment.paymentNo}</strong> — PKR {(selectedPayment.amount || 0).toLocaleString()}
+              {((selectedPayment as any).refundedAmount || 0) > 0 && (
+                <> · already refunded PKR {((selectedPayment as any).refundedAmount).toLocaleString()}</>
+              )}
             </p>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Amount (leave blank for full refund)</label>
+              <input type="number" min={0} step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)}
+                placeholder={`Full: PKR ${((selectedPayment.amount || 0) - ((selectedPayment as any).refundedAmount || 0)).toLocaleString()}`}
+                style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.card, color: t.text }} />
+            </div>
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Reason for refund *</label>
               <textarea value={refundReason} onChange={e => setRefundReason(e.target.value)} rows={3} placeholder="e.g. Customer requested cancellation, duplicate payment..."

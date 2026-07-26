@@ -720,68 +720,137 @@ export class ResellerPricingService {
    * Apply the cascade atomically: update wallets + write a UserBalanceTransaction
    * for each tier. `enforce` blocks the activator if their wallet can't cover it.
    */
+  /**
+   * Reverse an activation/renewal settlement — a proper credit-note, not an edit.
+   *
+   * For every ledger row of the original settlement it posts an OFFSETTING
+   * ADJUSTMENT to the SAME account, so the exact tier that was charged is
+   * credited back and the commission that cascaded up is clawed back too. The
+   * originals are never touched.
+   *
+   * Hardened for money-integrity:
+   *   • a REASON is required (audit + dispute classification);
+   *   • IDEMPOTENT — a settlement can be reversed once; a second attempt is
+   *     refused, so a double-clicked "Reverse" can't credit twice;
+   *   • balances may go negative (if the money was already spent) — that is the
+   *     correct state: the account now owes it back;
+   *   • optionally reverts the subscriber's service to INACTIVE so the ledger
+   *     and the service state agree (RADIUS cut-off is handled by the caller).
+   */
   async reverseActivation(
     subscriberId: number,
-    opts: { reference?: string; reason?: string; actorId?: number } = {},
+    opts: { reference?: string; reason?: string; actorId?: number; reasonCode?: string; revertService?: boolean } = {},
   ) {
+    const reason = (opts.reason || '').trim();
+    if (!reason) throw new ForbiddenException('A reason is required to reverse a settlement.');
+
     const reference = opts.reference || `SUB#${subscriberId}`;
     const reversalReference = `REV#${reference}`;
 
+    // IDEMPOTENCY: if this settlement was already reversed, refuse.
+    const already = await this.prisma.userBalanceTransaction.findFirst({
+      where: { reference: reversalReference },
+      select: { id: true, createdAt: true },
+    });
+    if (already) {
+      throw new ForbiddenException(
+        `This settlement was already reversed on ${already.createdAt.toISOString()}. It cannot be reversed twice.`,
+      );
+    }
+
     const rows = await this.prisma.userBalanceTransaction.findMany({
-      where: {
-        reference: {
-          in: [reference, `${reference}:RENEWAL`],
-        },
-      },
+      where: { reference: { in: [reference, `${reference}:RENEWAL`] } },
       orderBy: { id: 'asc' },
     });
-
     if (!rows.length) {
       throw new NotFoundException(`No activation settlement found for subscriber #${subscriberId}.`);
     }
+
+    const note = opts.reasonCode ? `[${opts.reasonCode}] ${reason}` : reason;
 
     await this.prisma.$transaction(async (tx) => {
       for (const row of rows) {
         const signed = Number(row.amount || 0);
         if (!signed) continue;
-
         const updated = await tx.user.update({
           where: { id: row.userId },
-          data: { balance: { increment: -signed } },
-          select: { id: true, balance: true },
+          data: { balance: { increment: -signed } }, // force — may go negative, correctly
+          select: { balance: true },
         });
-
         await tx.userBalanceTransaction.create({
           data: {
-            userId: row.userId,
-            type: 'ADJUSTMENT',
-            amount: -signed,
-            balanceAfter: updated.balance,
-            reference: reversalReference,
-            notes: opts.reason || `Activation reversal for ${reference}`,
-            createdBy: opts.actorId ?? null,
+            userId: row.userId, type: 'ADJUSTMENT', amount: -signed,
+            balanceAfter: updated.balance, reference: reversalReference,
+            notes: `Reversal of ${reference} — ${note}`, createdBy: opts.actorId ?? null,
           } as any,
         });
+      }
+      // Keep service state consistent with the ledger when asked.
+      if (opts.revertService) {
+        await tx.subscriber.update({ where: { id: subscriberId }, data: { status: 'INACTIVE' } }).catch(() => null);
       }
     });
 
     await this.prisma.activityLog.create({
       data: {
-        userId: opts.actorId ?? null,
-        action: 'REVERSE_ACTIVATION',
-        entity: 'Subscriber',
-        entityId: subscriberId,
-        details: opts.reason || `Reversed activation settlement for ${reference}`,
+        userId: opts.actorId ?? null, action: 'REVERSE_ACTIVATION',
+        entity: 'Subscriber', entityId: subscriberId,
+        details: `Reversed ${reference} — ${note}${opts.revertService ? ' (service set INACTIVE)' : ''}`,
       },
     }).catch(() => null);
 
-    return {
-      reversed: true,
-      subscriberId,
-      reference,
-      reversalReference,
-      reversedRows: rows.length,
-    };
+    return { reversed: true, subscriberId, reference, reversalReference, reversedRows: rows.length, revertedService: !!opts.revertService };
+  }
+
+  /**
+   * All reversals across the actor's tree, grouped into one row per credit-note
+   * (a reversal touches every tier, so we roll the per-tier rows up by their
+   * shared REV# reference). Scoped: a franchise sees its whole dealer tree's
+   * reversals, a dealer only its own.
+   */
+  async listReversals(actor: Actor, limit = 300) {
+    const where: any = { reference: { startsWith: 'REV#' } };
+    if (!this.scope.isAdmin(actor?.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where.userId = { in: ids.length ? ids : [-1] };
+    }
+    const rows = await this.prisma.userBalanceTransaction.findMany({
+      where, orderBy: { id: 'desc' }, take: Math.min(limit, 1000),
+      include: { user: { select: { id: true, name: true, role: true } } },
+    });
+
+    const byRef = new Map<string, any>();
+    for (const r of rows) {
+      const ref = r.reference as string;
+      const subMatch = /SUB#(\d+)/.exec(ref);
+      const subscriberId = subMatch ? Number(subMatch[1]) : null;
+      // notes look like: "Reversal of SUB#12 — [DUPLICATE] dealer double-clicked"
+      let reasonCode: string | null = null; let reason = r.notes || '';
+      const codeM = /—\s*\[([A-Z_]+)\]\s*(.*)$/.exec(r.notes || '');
+      if (codeM) { reasonCode = codeM[1]; reason = codeM[2]; }
+      const g = byRef.get(ref) || {
+        reference: ref, subscriberId, when: r.createdAt, reasonCode, reason,
+        by: r.createdBy, restored: 0, clawedBack: 0, tiers: [] as any[],
+      };
+      const amt = Number(r.amount || 0);
+      if (amt > 0) g.restored += amt; else g.clawedBack += -amt;
+      g.tiers.push({ userId: r.user?.id, name: r.user?.name, role: r.user?.role, amount: Math.round(amt * 100) / 100 });
+      byRef.set(ref, g);
+    }
+
+    // Attach subscriber names in one query.
+    const subIds = [...new Set([...byRef.values()].map((g) => g.subscriberId).filter(Boolean))] as number[];
+    const subs = subIds.length
+      ? await this.prisma.subscriber.findMany({ where: { id: { in: subIds } }, select: { id: true, fullName: true, username: true } })
+      : [];
+    const subMap = new Map(subs.map((s) => [s.id, s]));
+
+    return [...byRef.values()].map((g) => ({
+      ...g,
+      restored: Math.round(g.restored * 100) / 100,
+      clawedBack: Math.round(g.clawedBack * 100) / 100,
+      subscriber: g.subscriberId ? subMap.get(g.subscriberId) ?? null : null,
+    }));
   }
 
   async settleActivation(
@@ -847,20 +916,28 @@ export class ResellerPricingService {
         const activator = q.movements[0];
         if (activator && activator.delta < 0) {
           const need = -activator.delta;
+          // Credit limit = permitted overdraft. The account may spend down to
+          // −creditLimit, so the minimum balance it needs is (need − creditLimit).
+          const actUser = await tx.user.findUnique({
+            where: { id: activator.userId }, select: { creditLimit: true },
+          });
+          const threshold = need - (actUser?.creditLimit ?? 0);
           const hit = await tx.user.updateMany({
-            where: { id: activator.userId, balance: { gte: need } },
+            where: { id: activator.userId, balance: { gte: threshold } },
             data: { balance: { decrement: need } },
           });
           if (hit.count === 0) {
             const u = await tx.user.findUnique({
               where: { id: activator.userId },
-              select: { balance: true, name: true },
+              select: { balance: true, name: true, creditLimit: true },
             });
             const have = u?.balance ?? 0;
+            const limit = u?.creditLimit ?? 0;
             throw new ForbiddenException(
-              `Not enough wallet balance. ${u?.name ?? 'This account'} has ${have.toFixed(0)} ` +
-              `but this activation costs ${need.toFixed(0)} — short by ${(need - have).toFixed(0)}. ` +
-              `Ask your parent account to top up your wallet.`,
+              `Not enough balance. ${u?.name ?? 'This account'} has ${have.toFixed(0)}` +
+              (limit > 0 ? ` (+${limit.toFixed(0)} credit limit)` : '') +
+              ` but this activation costs ${need.toFixed(0)} — short by ${(threshold - have).toFixed(0)}. ` +
+              `Ask your parent account to top up or raise the credit limit.`,
             );
           }
           const after = await tx.user.findUnique({

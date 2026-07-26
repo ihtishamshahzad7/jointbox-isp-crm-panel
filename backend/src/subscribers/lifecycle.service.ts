@@ -52,7 +52,7 @@ export class LifecycleService {
           serviceSettings: { is: { expiryDate: { not: null, lte: horizon } } },
         },
         select: {
-          id: true, fullName: true, phone: true, username: true, status: true,
+          id: true, fullName: true, phone: true, username: true, status: true, onHold: true,
           serviceSettings: { select: { expiryDate: true } },
         },
       });
@@ -76,7 +76,9 @@ export class LifecycleService {
           }
 
           // 2. Expiry cut-off: past expiry (+ grace) and still ACTIVE → suspend.
-          if (s.status === 'ACTIVE' && exp < cutoff) {
+          //    A subscriber under dispute (onHold) is skipped — never cut while
+          //    the disagreement is being reviewed.
+          if (s.status === 'ACTIVE' && !s.onHold && exp < cutoff) {
             await this.prisma.subscriber.update({ where: { id: s.id }, data: { status: 'EXPIRED' } });
             if (this.autoSuspend && s.username) {
               await this.radius.removeSubscriberFromRadius(s.username).catch((e) =>

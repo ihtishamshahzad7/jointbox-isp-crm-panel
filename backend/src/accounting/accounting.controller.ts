@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Request, UseGuards, ForbiddenException } from '@nestjs/common';
 import { AccountingService } from './accounting.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
@@ -17,6 +17,21 @@ export class AccountingController {
   @Get('ledger/summary')
   getLedgerSummary() {
     return this.accounting.getLedgerSummary();
+  }
+
+  /** Accounting-period lock — the date through which the books are closed. */
+  @Get('period-lock')
+  getPeriodLock() {
+    return this.accounting.getPeriodLock();
+  }
+
+  /** Close/reopen the books through a date. ISP owner only. */
+  @Put('period-lock')
+  setPeriodLock(@Body() body: { lockedThrough: string | null }, @Request() req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') {
+      throw new ForbiddenException('Only the ISP owner can close or reopen an accounting period.');
+    }
+    return this.accounting.setPeriodLock(body?.lockedThrough ?? null, req.user?.sub);
   }
 
   // ── Cashflow ──────────────────────────────────────────────────
@@ -66,9 +81,45 @@ export class AccountingController {
   @Post('payments/:id/refund')
   refundPayment(
     @Param('id') id: string,
-    @Body() body: { reason: string; toBalance?: boolean },
+    @Body() body: { reason: string; toBalance?: boolean; amount?: number },
     @Request() req: any,
   ) {
-    return this.accounting.refundPayment(+id, body.reason, body.toBalance === true, req.user?.sub);
+    return this.accounting.requestRefund(+id, body, req.user);
+  }
+
+  // ── Refund approval workflow ──────────────────────────────────
+  private assertOwner(req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') {
+      throw new ForbiddenException('Only the ISP owner can manage refund policy and approvals.');
+    }
+  }
+
+  @Get('finance-settings')
+  getFinanceSettings() {
+    return this.accounting.getFinanceSettings();
+  }
+
+  @Put('finance-settings')
+  setFinanceSettings(@Body() body: { refundApprovalThreshold: number }, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.setFinanceSettings(body?.refundApprovalThreshold ?? 0, req.user?.sub);
+  }
+
+  @Get('refund-requests')
+  listRefundRequests(@Query('status') status: string, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.listRefundRequests(status || 'PENDING');
+  }
+
+  @Post('refund-requests/:id/approve')
+  approveRefundRequest(@Param('id') id: string, @Body() body: { note?: string }, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.approveRefundRequest(+id, req.user?.sub, body?.note);
+  }
+
+  @Post('refund-requests/:id/reject')
+  rejectRefundRequest(@Param('id') id: string, @Body() body: { note?: string }, @Request() req: any) {
+    this.assertOwner(req);
+    return this.accounting.rejectRefundRequest(+id, req.user?.sub, body?.note);
   }
 }

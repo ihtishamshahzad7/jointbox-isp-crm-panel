@@ -6,6 +6,7 @@ import { SubscribersService } from './subscribers.service';
 import { RenewalService } from './renewal.service';
 import { ExportService } from './export.service';
 import { LifecycleService } from './lifecycle.service';
+import { IntegrityService } from './integrity.service';
 import { PANEL_COLUMNS, CONNECTION_TYPE, PROFILE_STATUS, DISCOUNT_TYPE } from './panel-format';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
@@ -22,15 +23,46 @@ export class SubscribersController {
     private readonly renewal: RenewalService,
     private readonly exporter: ExportService,
     private readonly lifecycle: LifecycleService,
+    private readonly integrity: IntegrityService,
   ) {}
+
+  private assertIsp(req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') {
+      throw new ForbiddenException('Only the ISP account can run this.');
+    }
+  }
 
   /** Run the reminder + auto-suspend sweep now instead of waiting for 07:10. ISP only. */
   @Post('lifecycle/run')
   runLifecycle(@Req() req: any) {
-    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') {
-      throw new ForbiddenException('Only the ISP account can run the lifecycle sweep.');
-    }
+    this.assertIsp(req);
     return this.lifecycle.runNow();
+  }
+
+  /** Put a subscriber on billing hold (dispute) — pauses auto-suspension. */
+  @Patch(':id/hold')
+  hold(@Param('id') id: string, @Body() body: { reason?: string }, @Req() req: any) {
+    return this.subscribersService.setHold(+id, true, body?.reason, req.user);
+  }
+
+  /** Clear a billing hold. */
+  @Patch(':id/unhold')
+  unhold(@Param('id') id: string, @Req() req: any) {
+    return this.subscribersService.setHold(+id, false, undefined, req.user);
+  }
+
+  /** Wallet-vs-ledger drift report (money integrity). ISP only. */
+  @Get('integrity/wallets')
+  reconcileWallets(@Req() req: any) {
+    this.assertIsp(req);
+    return this.integrity.reconcileWallets();
+  }
+
+  /** RADIUS-vs-billing drift: inactive subscribers still online. `?apply=false` = dry run. ISP only. */
+  @Get('integrity/radius')
+  reconcileRadius(@Req() req: any, @Query('apply') apply?: string) {
+    this.assertIsp(req);
+    return this.integrity.reconcileRadiusState(apply !== 'false');
   }
 
   // ========== BASIC CRUD ENDPOINTS ==========

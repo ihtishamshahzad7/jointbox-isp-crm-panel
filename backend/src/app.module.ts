@@ -40,6 +40,7 @@ import { TopologyModule } from './topology/topology.module';
 import { SetupModule } from './setup/setup.module';
 import { ConsoleModule } from './console/console.module';
 import { NotesModule } from './notes/notes.module';
+import { JobsModule } from './jobs/jobs.module';
 import { FiberModule } from './fiber/fiber.module';
 import { GroupsModule } from './groups/groups.module';
 
@@ -83,6 +84,7 @@ import { GroupsModule } from './groups/groups.module';
     SetupModule,
     ConsoleModule,
     NotesModule,
+    JobsModule,
     FiberModule,
     GroupsModule,
   ],

@@ -58,16 +58,18 @@ const menuGroups = [
   { label: 'Operations', items: [
     { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
-    { id: 'advanced', label: 'Advanced Features', href: '/advanced-features', Icon: navIcons.Support },
   ]},
   { label: 'Business', items: [
     { id: 'billing', label: 'Billing', href: '/billing-center', Icon: navIcons.Payments },
+    { id: 'reversals', label: 'Disputes & Reversals', href: '/reversals', Icon: navIcons.Invoices },
     { id: 'insights', label: 'Insights', href: '/insights', Icon: navIcons.Reports },
     { id: 'compliance', label: 'KYC & Data Usage', href: '/compliance', Icon: navIcons.Users },
     { id: 'capability', label: 'Capability Checklist', href: '/reseller-capabilities', Icon: navIcons.Support },
   ]},
   { label: 'System', items: [
     { id: 'admin', label: 'Administration', href: '/admin-center', Icon: navIcons.Settings },
+    // ISP owner only — background job queue (bulk work + integrity reconcile).
+    { id: 'jobs', label: 'Background Jobs', href: '/jobs', Icon: navIcons.Reports, ispOnly: true },
     // Sits above Help deliberately: it answers "what do I do next", which is
     // the question people actually arrive with, and it checks itself.
     { id: 'setup', label: 'Setup Checklist', href: '/setup', Icon: navIcons.Dashboard },
@@ -102,7 +104,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/network-center', 'network'],
   ['/billing-center', 'billing'],
   ['/service-catalog', 'catalog'],
-  ['/advanced-features', 'advanced'],
+  ['/jobs', 'jobs'],
   ['/reseller-capabilities', 'capability'],
   ['/support-center', 'support'],
   ['/admin-center', 'admin'],

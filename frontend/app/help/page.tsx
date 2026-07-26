@@ -212,6 +212,71 @@ const SECTIONS: Section[] = [
     ],
     warn: "Watch disk space on the database server. Backups accumulate, and a full disk will stop PostgreSQL — which takes the whole panel and RADIUS down with it.",
   },
+
+  // ── Money integrity (new) ───────────────────────────────────
+  {
+    id: "refunds", title: "Refunding a payment (full or partial)", tag: "Money",
+    intro:
+      "Billing → Payments → the payment's Refund button. A refund never edits the original payment — it posts offsetting entries, so the audit trail stays intact — and it claws back any reseller commission that was earned on that money.",
+    steps: [
+      "Open Payments and press Refund on the row. Give a reason — it is mandatory and is logged.",
+      "Leave the Amount blank to refund the whole remaining balance, or type a smaller figure for a partial refund.",
+      "Choose 'Credit to wallet' to put the money back on the subscriber's balance, or leave it off to hand back cash.",
+      "The invoice moves back to PARTIAL or UNPAID automatically to match what was returned.",
+    ],
+    tip: "You can refund the same payment more than once until the full amount is returned — each slice is tracked, and the payment is only marked fully refunded when nothing is left.",
+    warn: "A payment dated inside a closed accounting period cannot be refunded until the period is reopened. See 'Closing the books'.",
+    link: { label: "Open Payments", href: "/payments" },
+  },
+  {
+    id: "refund-approval", title: "Requiring sign-off on large refunds", tag: "Money",
+    intro:
+      "Billing → Accounting shows a 'Refund approval limit' card (ISP owner only). Set a figure and any staff refund above it is held for your approval instead of posting immediately.",
+    steps: [
+      "Enter the limit and press Save. Set it to 0 to switch the check off.",
+      "When staff try to refund above the limit, nothing moves — the refund is queued and they are told it needs sign-off.",
+      "Pending refunds appear on the same card. Approve to post the refund and claw back commission, or Reject to close it with nothing posted.",
+    ],
+    tip: "The ISP owner always bypasses the limit — it only gates staff and downline accounts.",
+    link: { label: "Open Accounting", href: "/accounting" },
+  },
+  {
+    id: "period-lock", title: "Closing the books for a period", tag: "Money",
+    intro:
+      "Billing → Accounting has a 'Close the books' card (ISP owner only). Locking through a date stops anyone backdating a payment or refund into that month — the audit-integrity control an accountant expects at month end.",
+    steps: [
+      "Pick the date to close through and press 'Close through date'. Everything on or before it is now locked.",
+      "Any attempt to record or backdate a financial entry into the closed period is refused with a clear message.",
+      "Need to post a late correction? Press Reopen, make the entry, then close again.",
+    ],
+    warn: "Reopening a period lets entries flow into it again. Close it back up once the correction is done.",
+    link: { label: "Open Accounting", href: "/accounting" },
+  },
+  {
+    id: "auditor", title: "Giving an accountant read-only access", tag: "Admin",
+    intro:
+      "Administration → Users → Add. Choose the Auditor account type. An auditor can see everything in the subtree you attach them to — ledger, payments, subscribers, reports — but cannot create, edit, refund, or move money.",
+    bullets: [
+      "Attach the auditor at ISP level to review the whole business, or under a franchise to scope them to that branch.",
+      "Read-only is enforced on the server for every write, so it cannot be bypassed through the API.",
+      "Auditors have no wallet and cannot activate or change customers.",
+      "Only the ISP owner can create an auditor account.",
+    ],
+    tip: "Use this for an external accountant, a regulator review, or a new hire you want to give visibility before handing over control.",
+    link: { label: "Open Users", href: "/users" },
+  },
+  {
+    id: "jobs", title: "Running work in the background", tag: "Admin",
+    intro:
+      "Administration → Background Jobs (ISP owner only). Bulk and long-running work runs off the request path so the panel never hangs waiting — you watch a live progress bar instead.",
+    bullets: [
+      "Press 'Run reconcile' to check wallet balances against the ledger and cut any RADIUS session that billing says should be off.",
+      "Each job shows Queued → Running → Done with a percentage; failures show the reason inline.",
+      "Jobs are durable — if the server restarts mid-job it is requeued and resumes, rather than being lost.",
+      "'Run test job' is a harmless job that just counts up, for confirming the queue is working.",
+    ],
+    link: { label: "Open Background Jobs", href: "/jobs" },
+  },
 ];
 
 const TAGS = ["All", "Basics", "Daily", "Customers", "Network", "Money", "Admin"];

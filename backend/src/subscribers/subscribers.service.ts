@@ -1085,6 +1085,16 @@ export class SubscribersService implements OnModuleInit {
   }
 
   async create(data: any, actor?: Actor) {
+    // IDEMPOTENCY: if the request carries a key and a subscriber was already
+    // created with it (a retry or a double-clicked "Add"), return that record
+    // instead of creating a duplicate and charging the wallet twice.
+    if (data.idempotencyKey) {
+      const existing = await this.prisma.subscriber.findUnique({ where: { idempotencyKey: String(data.idempotencyKey) } });
+      if (existing) {
+        this.logger.log(`Idempotent create: key ${data.idempotencyKey} already produced subscriber #${existing.id} — returning it.`);
+        return existing;
+      }
+    }
     if (data.nasId) await this.assertNasAllowed(actor, parseInt(data.nasId));
     // Owner = the reseller creating this subscriber (so it lands in their subtree).
     // An ISP admin may pass an explicit userId to assign it to a specific reseller.
@@ -1147,11 +1157,13 @@ export class SubscribersService implements OnModuleInit {
         );
       }
 
-      // Prepaid guard: a reseller (non-admin) must have wallet ≥ its cost. ISP/admin never blocked.
+      // Prepaid guard: a reseller (non-admin) must have wallet ≥ cost − creditLimit.
+      // ISP/admin never blocked. The credit limit is the permitted overdraft.
       if (actor && !this.scope.isAdmin(actor.role) && costPrice > 0) {
-        const owner = await this.prisma.user.findUnique({ where: { id: ownerId }, select: { balance: true } });
-        if ((owner?.balance ?? 0) < costPrice) {
-          const reason = `Insufficient balance. Need ${costPrice}, wallet has ${owner?.balance ?? 0}.`;
+        const owner = await this.prisma.user.findUnique({ where: { id: ownerId }, select: { balance: true, creditLimit: true } });
+        const threshold = costPrice - (owner?.creditLimit ?? 0);
+        if ((owner?.balance ?? 0) < threshold) {
+          const reason = `Insufficient balance. Need ${costPrice}, wallet has ${owner?.balance ?? 0}${(owner?.creditLimit ?? 0) > 0 ? ` (+${owner?.creditLimit} credit)` : ''}.`;
           await this.prisma.failedActivation.create({
             data: { username: data.username, fullName: data.fullName, reason, createdById: ownerId },
           }).catch(() => null);
@@ -1193,6 +1205,7 @@ export class SubscribersService implements OnModuleInit {
           phone:            data.phone,
           email:            data.email,
           address:          data.address          || '',
+          idempotencyKey:   data.idempotencyKey ? String(data.idempotencyKey) : null,
           username:         data.username,
           password:         data.password,
           identity:         identity,
@@ -1411,6 +1424,29 @@ if (!unpaid && data.username && data.password) {
   //   C) Package changes      → re-sync profile (new speed + new pool)
   //   D) Any of A+B+C         → full re-sync always wins
   // ─────────────────────────────────────────────────────────────
+  /**
+   * Put a subscriber on (or off) a billing hold. While on hold, the daily
+   * expiry sweep will not auto-suspend them — used when a charge is disputed and
+   * you don't want service cut while it's reviewed.
+   */
+  async setHold(id: number, onHold: boolean, reason: string | undefined, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriber(actor, id);
+    const updated = await this.prisma.subscriber.update({
+      where: { id },
+      data: { onHold, onHoldReason: onHold ? (reason?.trim() || 'Under dispute') : null },
+      select: { id: true, fullName: true, onHold: true, onHoldReason: true },
+    });
+    await this.prisma.activityLog.create({
+      data: {
+        userId: actor ? this.scope.actorId(actor) : null,
+        action: onHold ? 'HOLD_SUBSCRIBER' : 'UNHOLD_SUBSCRIBER',
+        entity: 'Subscriber', entityId: id,
+        details: onHold ? `On hold — ${updated.onHoldReason}` : 'Hold cleared',
+      },
+    }).catch(() => null);
+    return updated;
+  }
+
   async update(id: number, data: any, actor?: Actor) {
     if (actor) {
       await this.scope.assertSubscriber(actor, id);
