@@ -36,14 +36,17 @@ export class IntegrityService implements OnModuleInit {
   /** Expose the full reconcile as a background job the ISP can run on demand. */
   onModuleInit() {
     this.jobs.register('integrity.reconcile', async (payload, update) => {
-      await update(0, 3);
+      const apply = payload?.apply !== false;
+      await update(0, 4);
       const trialBalance = await this.accounting.getTrialBalance();
-      await update(1, 3);
+      await update(1, 4);
       const wallets = await this.reconcileWallets();
-      await update(2, 3);
-      const radius = await this.reconcileRadiusState(payload?.apply !== false);
-      await update(3, 3);
-      return { trialBalance, wallets, radius };
+      await update(2, 4);
+      const radius = await this.reconcileRadiusState(apply);
+      await update(3, 4);
+      const radiusHeal = await this.healActiveCredentials(apply);
+      await update(4, 4);
+      return { trialBalance, wallets, radius, radiusHeal };
     });
   }
 
@@ -124,10 +127,52 @@ export class IntegrityService implements OnModuleInit {
     return { checked: 'radius', online: onlineUsernames.length, drift: leaking.length, cut, accounts: leaking };
   }
 
+  /**
+   * The other half of RADIUS drift: an ACTIVE subscriber whose credentials have
+   * vanished from radcheck can't authenticate at all — they're paying and
+   * offline through no fault of their own. Find them and re-push their
+   * credentials (same restore the password-change path uses). Self-healing.
+   */
+  async healActiveCredentials(apply = true) {
+    // ACTIVE subscribers with a username but no radcheck row = cannot log in.
+    const missing = await this.prisma.$queryRaw<Array<{ id: number; username: string; password: string }>>`
+      SELECT s.id, s.username, s.password
+      FROM "Subscriber" s
+      WHERE s.status = 'ACTIVE' AND s.username IS NOT NULL AND s.username <> ''
+        AND NOT EXISTS (SELECT 1 FROM radcheck r WHERE r.username = s.username)
+      LIMIT 500;`;
+
+    let healed = 0;
+    if (apply) {
+      for (const s of missing) {
+        if (!s.username || !s.password) continue;
+        try {
+          await this.radius.syncSubscriberProfile(s.username, s.password, null);
+          healed++;
+        } catch (e: any) {
+          this.logger.warn(`RADIUS heal failed for ${s.username}: ${e?.message || e}`);
+        }
+      }
+    }
+
+    if (missing.length) {
+      this.logger.warn(`RADIUS HEAL: ${missing.length} active subscriber(s) missing credentials${apply ? `, restored ${healed}` : ' (dry run)'}`);
+      await this.prisma.systemLog.create({
+        data: {
+          level: 'WARN', source: 'integrity',
+          message: `RADIUS credential drift: ${missing.length} active subscriber(s) had no radcheck entry` +
+            `${apply ? `, restored ${healed}` : ''}: ` + missing.slice(0, 15).map((s) => s.username).join(', '),
+        },
+      }).catch(() => null);
+    }
+    return { checked: 'radius-credentials', missing: missing.length, healed };
+  }
+
   /** Nightly at 03:20 — off-peak. */
   @Cron('20 3 * * *')
   async nightly() {
     try { await this.reconcileWallets(); } catch (e: any) { this.logger.warn(`Wallet reconcile failed: ${e?.message || e}`); }
     try { await this.reconcileRadiusState(true); } catch (e: any) { this.logger.warn(`RADIUS reconcile failed: ${e?.message || e}`); }
+    try { await this.healActiveCredentials(true); } catch (e: any) { this.logger.warn(`RADIUS heal failed: ${e?.message || e}`); }
   }
 }

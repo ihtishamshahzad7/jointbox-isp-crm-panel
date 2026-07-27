@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../common/queue.service';
@@ -16,7 +16,7 @@ import { ScopeService, Actor } from '../common/scope.service';
  * - Every message is stored in the Message table (🔍 per-subscriber communication log).
  */
 @Injectable()
-export class NotificationsService {
+export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
   private mailer: any = null;
 
@@ -26,6 +26,41 @@ export class NotificationsService {
     private scope: ScopeService,
   ) {
     this.queue.registerProcessor('send-message', (data) => this.processMessage(data.messageId));
+  }
+
+  async onModuleInit() {
+    await this.seedDefaultTemplates();
+  }
+
+  /**
+   * On a fresh install the event triggers fire but there are no templates, so
+   * nothing is ever sent. Seed a sensible default per event so customer
+   * notifications work the moment a gateway is configured. Only runs when the
+   * table is empty — it never overwrites or fights an operator's own edits.
+   */
+  private async seedDefaultTemplates() {
+    try {
+      const existing = await this.prisma.messageTemplate.count();
+      if (existing > 0) return;
+      const defaults = [
+        { name: 'Welcome (SMS)', event: 'WELCOME', channel: 'SMS',
+          body: 'Welcome to our network, {name}! Your username is {username} on the {package} plan. Thank you for joining us.' },
+        { name: 'Payment receipt (SMS)', event: 'PAYMENT_RECEIVED', channel: 'SMS',
+          body: 'Dear {name}, we have received your payment of {amount}. Your service is active until {expiry}. Thank you.' },
+        { name: 'Invoice created (SMS)', event: 'INVOICE_CREATED', channel: 'SMS',
+          body: 'Dear {name}, invoice {invoiceNo} for {amount} has been generated. Please pay to avoid interruption.' },
+        { name: 'Renewal confirmation (SMS)', event: 'RENEWAL', channel: 'SMS',
+          body: 'Dear {name}, your {package} plan has been renewed. New expiry: {expiry}. Thank you.' },
+        { name: 'Expiry reminder (SMS)', event: 'EXPIRY_REMINDER', channel: 'SMS',
+          body: 'Dear {name}, your internet expires on {expiry}. Please recharge to stay connected.' },
+        { name: 'Suspension notice (SMS)', event: 'SUSPENSION', channel: 'SMS',
+          body: 'Dear {name}, your service has been suspended for non-payment. Please clear your dues to restore it.' },
+      ];
+      await this.prisma.messageTemplate.createMany({ data: defaults as any });
+      this.logger.log(`Seeded ${defaults.length} default message templates.`);
+    } catch (e: any) {
+      this.logger.warn(`Default template seeding skipped: ${e.message}`);
+    }
   }
 
   // ── Gateway status ────────────────────────────────────────────

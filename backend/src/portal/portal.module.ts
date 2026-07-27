@@ -7,6 +7,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { GatewayModule } from '../gateway/gateway.module';
 import { NasModule } from '../nas/nas.module';
 import { VouchersModule } from '../vouchers/vouchers.module';
+import { ComplianceModule } from '../compliance/compliance.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { VouchersModule } from '../vouchers/vouchers.module';
     // VouchersModule → prepaid scratch-card top-ups
     NasModule,
     VouchersModule,
+    ComplianceModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'your-super-secret-key-change-this-in-production',
     }),

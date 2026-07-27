@@ -33,6 +33,8 @@ export default function ReportsPage() {
   const [grain, setGrain] = useState("day");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [aged, setAged] = useState<any>(null);
+  const [perf, setPerf] = useState<any>(null);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -44,6 +46,14 @@ export default function ReportsPage() {
       const r = await fetch(`${API}/reports/analytics?grain=${g.id}&points=${g.points}`, { headers });
       if (r.ok) setData(await r.json());
     } catch { /* keep the last good view */ }
+    try {
+      const [a, p] = await Promise.all([
+        fetch(`${API}/reports/aged-debt`, { headers }),
+        fetch(`${API}/reports/reseller-performance`, { headers }),
+      ]);
+      if (a.ok) setAged(await a.json());
+      if (p.ok) setPerf(await p.json());
+    } catch { /* optional sections */ }
     setLoading(false);
   }, [token, grain]);
 
@@ -222,6 +232,70 @@ export default function ReportsPage() {
                     <td className="r" style={{ color: ageColor(w.daysOverdue), fontWeight: 600 }}>
                       {w.daysOverdue === 0 ? "due" : `${w.daysOverdue}d`}
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {aged && aged.count > 0 && (
+        <section className="rp-card">
+          <header className="rp-head">
+            <div>
+              <h3>Aged receivables — {money(aged.total)} outstanding</h3>
+              <p>Unpaid invoices bucketed by how overdue they are, across {aged.count} invoice(s).</p>
+            </div>
+          </header>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "4px 20px 16px" }}>
+            {[["Current", aged.buckets.current], ["1–30 days", aged.buckets.d1_30], ["31–60", aged.buckets.d31_60], ["61–90", aged.buckets.d61_90], ["90+ days", aged.buckets.d90plus]].map(([label, val]: any) => (
+              <div key={label} style={{ minWidth: 110, padding: 12, borderRadius: 10, border: "1px solid var(--border)" }}>
+                <div style={{ fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{money(val)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="rp-tablewrap">
+            <table className="rp-table">
+              <thead><tr><th>Debtor</th><th className="r">Owed</th><th className="r">Invoices</th><th className="r">Oldest</th></tr></thead>
+              <tbody>
+                {aged.debtors.slice(0, 25).map((d: any) => (
+                  <tr key={d.subscriberId} onClick={() => d.subscriberId && router.push(`/subscribers/${d.subscriberId}`)}>
+                    <td><b>{d.name}</b><em>{d.username}</em></td>
+                    <td className="r strong">{money(d.owed)}</td>
+                    <td className="r muted">{d.invoices}</td>
+                    <td className="r" style={{ color: ageColor(d.oldestDays), fontWeight: 600 }}>{d.oldestDays}d</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {perf && perf.accounts.length > 0 && (
+        <section className="rp-card">
+          <header className="rp-head">
+            <div>
+              <h3>Reseller performance</h3>
+              <p>{perf.totals.active} active subscribers · {money(perf.totals.mrr)} monthly revenue · {money(perf.totals.profit)} profit across {perf.accounts.length} account(s).</p>
+            </div>
+          </header>
+          <div className="rp-tablewrap">
+            <table className="rp-table">
+              <thead>
+                <tr><th>Account</th><th className="r">Active</th><th className="r">MRR</th><th className="r">Cost</th><th className="r">Profit</th><th className="r">Wallet</th></tr>
+              </thead>
+              <tbody>
+                {perf.accounts.map((a: any) => (
+                  <tr key={a.userId} onClick={() => router.push(`/users/${a.userId}`)}>
+                    <td><b>{a.name}</b><em>{a.role}</em></td>
+                    <td className="r">{a.active}/{a.subscribers}</td>
+                    <td className="r strong">{money(a.mrr)}</td>
+                    <td className="r muted">{money(a.cost)}</td>
+                    <td className="r" style={{ color: a.profit >= 0 ? "#22c55e" : "#ef4444", fontWeight: 600 }}>{money(a.profit)}</td>
+                    <td className="r" style={{ color: a.balance < 0 ? "#ef4444" : "var(--text)" }}>{money(a.balance)}</td>
                   </tr>
                 ))}
               </tbody>

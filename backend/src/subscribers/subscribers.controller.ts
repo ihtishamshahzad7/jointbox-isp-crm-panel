@@ -65,6 +65,13 @@ export class SubscribersController {
     return this.integrity.reconcileRadiusState(apply !== 'false');
   }
 
+  /** Auto-heal: re-push credentials for ACTIVE subscribers missing from RADIUS. `?apply=false` = dry run. ISP only. */
+  @Get('integrity/radius-heal')
+  healRadius(@Req() req: any, @Query('apply') apply?: string) {
+    this.assertIsp(req);
+    return this.integrity.healActiveCredentials(apply !== 'false');
+  }
+
   // ========== BASIC CRUD ENDPOINTS ==========
 
   @Get()

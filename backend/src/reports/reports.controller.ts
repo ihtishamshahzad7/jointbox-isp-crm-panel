@@ -71,4 +71,16 @@ export class ReportsController {
   getTicketReport(@Req() req: any) {
     return this.reportsService.getTicketReport(req.user);
   }
+
+  /** Aged receivables — unpaid invoices bucketed by how overdue they are. */
+  @Get('aged-debt')
+  getAgedDebt(@Req() req: any) {
+    return this.reportsService.getAgedDebt(req.user);
+  }
+
+  /** Per-reseller performance: active subs, MRR, cost, profit, wallet. */
+  @Get('reseller-performance')
+  getResellerPerformance(@Req() req: any) {
+    return this.reportsService.getResellerPerformance(req.user);
+  }
 }

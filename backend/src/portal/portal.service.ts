@@ -5,6 +5,7 @@ import { CacheService } from '../common/cache.service';
 import { GatewayService } from '../gateway/gateway.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { VouchersService } from '../vouchers/vouchers.service';
+import { FupService } from '../compliance/fup.service';
 
 /**
  * Phase 3 subscriber self-service portal API.
@@ -26,6 +27,7 @@ export class PortalService {
     // Password changes must reach RADIUS, and vouchers are the main top-up path.
     private radiusSync: RadiusSyncService,
     private vouchers: VouchersService,
+    private fup: FupService,
   ) {}
 
   // ── Auth ──────────────────────────────────────────────────────
@@ -100,8 +102,13 @@ export class PortalService {
       { download: 0, upload: 0, seconds: 0 },
     );
     const online = sessions.some((s) => !s.acctstoptime);
+    // Data-cap / FUP status so the customer can see their allowance and how
+    // much is left this cycle. Null when the plan has no cap. Never fatal.
+    let quota: any = null;
+    try { quota = await this.fup.usageFor(id); } catch { quota = null; }
     return {
       online,
+      quota,
       totals,
       sessions: sessions.map((s) => ({
         start: s.acctstarttime,

@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "clean": "node -e \"const fs=require('fs');const p='dist';if(fs.existsSync(p))fs.rmSync(p,{recursive:true,force:true});const t='tsconfig.build.tsbuildinfo';if(fs.existsSync(t))fs.rmSync(t,{force:true});\"",
-    "build": "npm run clean && nest build",
+    "build": "npm run clean && prisma generate && nest build",
     "db:fix-ownership": "node scripts/fix-db-ownership.js",
     "db:push": "node scripts/fix-db-ownership.js && prisma db push --accept-data-loss && prisma generate",
     "db:setup": "npm run db:push",

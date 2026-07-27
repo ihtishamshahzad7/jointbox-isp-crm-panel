@@ -140,4 +140,87 @@ export class ReportsService {
       byCategory,
     };
   }
+
+  /**
+   * Aged receivables — unpaid/partial invoices bucketed by how overdue they
+   * are. The oldest debt is rarely the largest, so this ranks buckets by amount
+   * and lists the biggest debtors, which is what actually hurts cash flow.
+   */
+  async getAgedDebt(actor?: Actor) {
+    const where: any = { status: { in: ['UNPAID', 'PARTIAL', 'OVERDUE'] }, dueAmount: { gt: 0 } };
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where.subscriber = { userId: { in: ids } };
+    }
+    const invoices = await this.prisma.invoice.findMany({
+      where,
+      select: { id: true, invoiceNo: true, dueAmount: true, dueDate: true, invoiceDate: true,
+        subscriber: { select: { id: true, fullName: true, username: true } } },
+    });
+
+    const now = Date.now();
+    const buckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+    const byDebtor = new Map<number, any>();
+    let total = 0;
+    for (const inv of invoices) {
+      const due = inv.dueAmount || 0;
+      total += due;
+      const ageDays = Math.floor((now - new Date(inv.dueDate || inv.invoiceDate).getTime()) / 86400000);
+      const b = ageDays <= 0 ? 'current' : ageDays <= 30 ? 'd1_30' : ageDays <= 60 ? 'd31_60' : ageDays <= 90 ? 'd61_90' : 'd90plus';
+      (buckets as any)[b] += due;
+      const key = inv.subscriber?.id ?? 0;
+      const row = byDebtor.get(key) || { subscriberId: key, name: inv.subscriber?.fullName || 'Unknown', username: inv.subscriber?.username || '', owed: 0, oldestDays: 0, invoices: 0 };
+      row.owed = Math.round((row.owed + due) * 100) / 100;
+      row.oldestDays = Math.max(row.oldestDays, ageDays);
+      row.invoices += 1;
+      byDebtor.set(key, row);
+    }
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    Object.keys(buckets).forEach((k) => ((buckets as any)[k] = round2((buckets as any)[k])));
+    const debtors = [...byDebtor.values()].sort((a, b) => b.owed - a.owed).slice(0, 100);
+    return { total: round2(total), buckets, count: invoices.length, debtors };
+  }
+
+  /**
+   * Reseller performance — per account in the caller's subtree: active
+   * subscribers, monthly recurring revenue (sell price), cost, profit, and
+   * current wallet balance. The picture of who is actually earning.
+   */
+  async getResellerPerformance(actor?: Actor) {
+    const userWhere: any = { role: { in: ['RESELLER', 'SUB_RESELLER', 'RETAILER', 'SALES'] } };
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      userWhere.id = { in: ids };
+    }
+    const users = await this.prisma.user.findMany({
+      where: userWhere,
+      select: { id: true, name: true, role: true, balance: true },
+    });
+    const round2 = (n: number) => Math.round(((n || 0) + Number.EPSILON) * 100) / 100;
+    const rows: any[] = [];
+    for (const u of users) {
+      const subs = await this.prisma.subscriber.findMany({
+        where: { userId: u.id },
+        select: { status: true, sellPrice: true, costPrice: true, profit: true },
+      });
+      const active = subs.filter((s) => s.status === 'ACTIVE');
+      const mrr = round2(active.reduce((t, s) => t + (s.sellPrice || 0), 0));
+      const cost = round2(active.reduce((t, s) => t + (s.costPrice || 0), 0));
+      rows.push({
+        userId: u.id, name: u.name, role: u.role, balance: round2(u.balance),
+        subscribers: subs.length, active: active.length,
+        mrr, cost, profit: round2(mrr - cost),
+      });
+    }
+    rows.sort((a, b) => b.mrr - a.mrr);
+    return {
+      accounts: rows,
+      totals: {
+        subscribers: rows.reduce((t, r) => t + r.subscribers, 0),
+        active: rows.reduce((t, r) => t + r.active, 0),
+        mrr: round2(rows.reduce((t, r) => t + r.mrr, 0)),
+        profit: round2(rows.reduce((t, r) => t + r.profit, 0)),
+      },
+    };
+  }
 }

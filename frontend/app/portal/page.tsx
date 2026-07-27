@@ -230,6 +230,31 @@ export default function PortalPage() {
                   <span style={chip(usage.online ? T.green : T.muted, usage.online ? "#22c55e22" : "var(--muted)22")}>{usage.online ? "● ONLINE NOW" : "○ OFFLINE"}</span>
                   <span style={{ fontSize: 13, color: T.sub }}>↓ {gb(usage.totals.download)} · ↑ {gb(usage.totals.upload)} · {hms(usage.totals.seconds)} (last {usage.sessions.length} sessions)</span>
                 </div>
+
+                {/* Data cap / FUP allowance for the current cycle */}
+                {usage.quota && usage.quota.quotaGb ? (() => {
+                  const q = usage.quota;
+                  const pct = Math.min(100, q.percentUsed ?? 0);
+                  const bar = q.state === "BLOCKED" ? "#ef4444" : q.state === "THROTTLED" || pct >= 80 ? "#f59e0b" : "#22c55e";
+                  return (
+                    <div style={{ marginBottom: 16, padding: 14, borderRadius: 12, border: `1px solid var(--border,#2a2f3e)` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+                        <span style={{ fontWeight: 600 }}>Data used this cycle</span>
+                        <span style={{ color: T.sub }}>
+                          {q.usedGb} GB of {q.quotaGb} GB{q.bonusGb ? ` (incl. ${q.bonusGb} GB bonus)` : ""} · {q.remainingGb} GB left
+                        </span>
+                      </div>
+                      <div style={{ background: "var(--muted)22", borderRadius: 6, height: 10, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: 10, background: bar, transition: "width .3s" }} />
+                      </div>
+                      {q.state !== "OK" && (
+                        <div style={{ fontSize: 12, color: bar, marginTop: 6 }}>
+                          {q.state === "BLOCKED" ? "Your data allowance is used up — service is paused until renewal or a top-up." : `Fair-use speed reduction is active${q.throttledTo ? ` (${q.throttledTo})` : ""}.`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })() : null}
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead><tr style={{ color: T.muted, fontSize: 11, textAlign: "left" }}>
