@@ -346,6 +346,10 @@ model Nas {
   description String? @db.VarChar(200)
 
   nasIp        String? @unique @db.Inet
+  /// Value the BNG/router sends in the RADIUS NAS-Identifier attribute. Some
+  /// BNGs (vBNG/BiSON, etc.) match a CoA/Disconnect on this rather than on the
+  /// IP, so we include it in CoA requests when set.
+  nasIdentifier String?
   apiPort      Int     @default(8728)
   incomingPort Int     @default(3799)
   apiUsername  String?
@@ -1216,6 +1220,12 @@ model ServiceSettings {
   ipAddress  String?
   ipType     IpType  @default(DYNAMIC)
   macAddress String?
+
+  /// IPv6 dual-stack (standard RADIUS attributes, vendor-agnostic).
+  /// ipv6Prefix → Framed-IPv6-Prefix (the WAN /64); ipv6DelegatedPrefix →
+  /// Delegated-IPv6-Prefix for DHCPv6-PD (the /56–/60 routed to the customer LAN).
+  ipv6Prefix          String?
+  ipv6DelegatedPrefix String?
 
   quota     String?
   quotaUsed Float?  @default(0)

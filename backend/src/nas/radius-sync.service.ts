@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'pg';
+import { allocateIpv6, ipv6AutoConfig } from './ipv6-alloc';
 
 /**
  * Resolved policy attributes from a package's linked RADIUS policies.
@@ -216,6 +217,9 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       sessionTimeout?: number | null; // seconds — hotspot time limits
       idleTimeout?: number | null;    // seconds — free idle sessions
       macAddress?: string | null;     // DHCP/MAC-based auth
+      // IPv6 dual-stack. Standard RADIUS attributes, so vendor-agnostic:
+      ipv6Prefix?: string | null;          // Framed-IPv6-Prefix, e.g. 2401:db8:1::/64
+      ipv6DelegatedPrefix?: string | null; // Delegated-IPv6-Prefix (DHCPv6-PD), e.g. 2401:db8:100::/56
     },
   ): Promise<void> {
     this.ensureConnected();
@@ -250,6 +254,40 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
           `INSERT INTO radreply (username, attribute, op, value) VALUES ($1, $2, $3, $4)`,
           [username, attr, op, value],
         );
+
+      // IPv6 dual-stack — standard attributes returned in the Access-Accept, so
+      // MikroTik, Cisco, Juniper, vBNG etc. all honour them. Coexists with the
+      // IPv4 addressing below (true dual-stack). Values come from opts, or are
+      // looked up from the subscriber's ServiceSettings so EVERY sync path gets
+      // IPv6 without changing each caller.
+      let ipv6Prefix = opts?.ipv6Prefix ?? null;
+      let ipv6Delegated = opts?.ipv6DelegatedPrefix ?? null;
+      // Manual per-subscriber values take priority; otherwise auto-allocate a
+      // unique, stable prefix from the configured base using the subscriber id.
+      try {
+        const r = await this.pgClient.query(
+          `SELECT s.id AS id, ss."ipv6Prefix" AS p, ss."ipv6DelegatedPrefix" AS d
+           FROM "Subscriber" s LEFT JOIN "ServiceSettings" ss ON ss."subscriberId" = s.id
+           WHERE s.username = $1 LIMIT 1`, [username]);
+        const row = r.rows[0];
+        if (row) {
+          if (!ipv6Prefix && row.p) ipv6Prefix = row.p;
+          if (!ipv6Delegated && row.d) ipv6Delegated = row.d;
+          if ((!ipv6Prefix || !ipv6Delegated) && row.id != null) {
+            const cfg = ipv6AutoConfig();
+            if (cfg.enabled) {
+              if (!ipv6Prefix && cfg.framedBase) {
+                ipv6Prefix = allocateIpv6(cfg.framedBase, cfg.framedBaseBits, cfg.framedSize, Number(row.id));
+              }
+              if (!ipv6Delegated && cfg.delegatedBase) {
+                ipv6Delegated = allocateIpv6(cfg.delegatedBase, cfg.delegatedBaseBits, cfg.delegatedSize, Number(row.id));
+              }
+            }
+          }
+        }
+      } catch { /* IPv6 optional / pre-migration — ignore */ }
+      if (ipv6Prefix) await addReply('Framed-IPv6-Prefix', ipv6Prefix);
+      if (ipv6Delegated) await addReply('Delegated-IPv6-Prefix', ipv6Delegated);
 
       // If the package has linked RADIUS policies, use them as the source of truth
       // and skip the auto-computed speed/rate-limit entirely. This lets operators

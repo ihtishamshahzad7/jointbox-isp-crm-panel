@@ -99,7 +99,14 @@ export class JobsService implements OnModuleInit {
       await this.prisma.job.update({ where: { id: job.id }, data: { status: 'FAILED', error: `No handler for ${job.type}`, finishedAt: new Date() } });
       return;
     }
-    await this.prisma.job.update({ where: { id: job.id }, data: { status: 'RUNNING', startedAt: new Date(), progress: 0, done: 0 } });
+    // ATOMIC CLAIM — flip QUEUED→RUNNING only if it's still QUEUED. If another
+    // worker (cluster mode) already grabbed it, count is 0 and we skip. This is
+    // what makes the queue safe to run on multiple instances.
+    const claim = await this.prisma.job.updateMany({
+      where: { id: job.id, status: 'QUEUED' },
+      data: { status: 'RUNNING', startedAt: new Date(), progress: 0, done: 0 },
+    });
+    if (claim.count === 0) return; // lost the race — another worker has it
 
     const update = async (done: number, total?: number) => {
       const t = total ?? job.total ?? 0;

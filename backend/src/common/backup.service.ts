@@ -38,6 +38,18 @@ export class BackupService implements OnModuleInit {
   private get retainDays() {
     return Number(process.env.BACKUP_RETAIN_DAYS || 14);
   }
+  /**
+   * Off-site upload command. Runs after every successful dump so a dead server
+   * or full disk can't wipe out the only copy. Use {file} for the dump path.
+   * Works with whatever tool the operator has, e.g.:
+   *   BACKUP_UPLOAD_CMD='scp -i /root/.ssh/backup {file} user@host:/backups/'
+   *   BACKUP_UPLOAD_CMD='rclone copy {file} s3remote:jointbox-backups'
+   *   BACKUP_UPLOAD_CMD='aws s3 cp {file} s3://my-bucket/jointbox/'
+   */
+  private get uploadCmd() {
+    return (process.env.BACKUP_UPLOAD_CMD || '').trim();
+  }
+  private lastOffsite: { at: Date; ok: boolean; message: string } | null = null;
 
   constructor(private prisma: PrismaService) {}
 
@@ -99,8 +111,11 @@ export class BackupService implements OnModuleInit {
       const sizeMb = Math.round((size / 1024 / 1024) * 100) / 100;
       this.logger.log(`✅ Backup ${file} (${sizeMb} MB) in ${Date.now() - started}ms`);
 
+      // Push the fresh dump off the server (if configured).
+      await this.uploadOffsite(file);
+
       await this.prune();
-      return { ok: true, file, sizeMb };
+      return { ok: true, file, sizeMb, offsite: this.lastOffsite ?? undefined } as any;
     } catch (e: any) {
       const msg = e?.message || String(e);
       // The most common cause by far is pg_dump not being installed.
@@ -110,6 +125,21 @@ export class BackupService implements OnModuleInit {
         this.logger.error(`Backup failed: ${msg.split('\n')[0]}`);
       }
       return { ok: false, error: msg };
+    }
+  }
+
+  /** Copy a dump off the server using the operator's configured command. */
+  private async uploadOffsite(file: string) {
+    if (!this.uploadCmd) return; // off-site not configured — local-only
+    const cmd = this.uploadCmd.replace(/\{file\}/g, `"${file}"`);
+    try {
+      await execAsync(cmd, { timeout: 30 * 60 * 1000, maxBuffer: 1024 * 1024 * 16 });
+      this.lastOffsite = { at: new Date(), ok: true, message: 'Uploaded off-site' };
+      this.logger.log(`☁️  Backup pushed off-site`);
+    } catch (e: any) {
+      const msg = (e?.message || String(e)).split('\n')[0];
+      this.lastOffsite = { at: new Date(), ok: false, message: msg };
+      this.logger.error(`Off-site backup upload failed: ${msg}`);
     }
   }
 
@@ -169,6 +199,7 @@ export class BackupService implements OnModuleInit {
     const ageHours = latest
       ? Math.round((Date.now() - latest.takenAt.getTime()) / 3_600_000)
       : null;
+    const offsiteConfigured = !!this.uploadCmd;
     return {
       enabled: this.enabled,
       directory: this.dir,
@@ -182,6 +213,16 @@ export class BackupService implements OnModuleInit {
         : (ageHours ?? 0) >= 48
           ? `Newest backup is ${ageHours}h old — the nightly job may be failing.`
           : null,
+      // Off-site copy — the real protection against losing the whole server.
+      offsite: {
+        configured: offsiteConfigured,
+        lastUpload: this.lastOffsite,
+        warning: !offsiteConfigured
+          ? 'Backups are stored ONLY on this server. Set BACKUP_UPLOAD_CMD to push them off-site (a dead server or full disk loses everything).'
+          : this.lastOffsite && !this.lastOffsite.ok
+            ? `Last off-site upload failed: ${this.lastOffsite.message}`
+            : null,
+      },
     };
   }
 

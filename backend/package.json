@@ -7,7 +7,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "clean": "node -e \"const fs=require('fs');const p='dist';if(fs.existsSync(p))fs.rmSync(p,{recursive:true,force:true});const t='tsconfig.build.tsbuildinfo';if(fs.existsSync(t))fs.rmSync(t,{force:true});\"",
-    "build": "npm run clean && prisma generate && nest build",
+    "build": "npm run clean && prisma generate && nest build && node scripts/flatten-dist.js",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "db:fix-ownership": "node scripts/fix-db-ownership.js",
     "db:push": "node scripts/fix-db-ownership.js && prisma db push --accept-data-loss && prisma generate",
     "db:setup": "npm run db:push",
@@ -58,6 +59,8 @@
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
+    "@swc/cli": "^0.5.2",
+    "@swc/core": "^1.10.1",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
     "@types/bcrypt": "^6.0.0",

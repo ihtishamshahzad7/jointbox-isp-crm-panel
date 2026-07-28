@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { allocateIpv6, ipv6AutoConfig } from '../nas/ipv6-alloc';
 
 @Injectable()
 export class ServiceSettingsService {
@@ -9,6 +10,32 @@ export class ServiceSettingsService {
     return this.prisma.serviceSettings.findUnique({ where: { subscriberId } });
   }
 
+  /**
+   * The IPv6 the subscriber will actually receive: a manual override if set,
+   * otherwise the auto-allocated prefix from the configured pool (or none if
+   * IPv6 is off). Shown read-only on the profile so staff can see it.
+   */
+  async resolveIpv6(subscriberId: number) {
+    const ss = await this.prisma.serviceSettings.findUnique({
+      where: { subscriberId },
+      select: { ipv6Prefix: true, ipv6DelegatedPrefix: true } as any,
+    }).catch(() => null) as any;
+    let framed = ss?.ipv6Prefix || null;
+    let delegated = ss?.ipv6DelegatedPrefix || null;
+    const manual = !!(framed || delegated);
+    const cfg = ipv6AutoConfig();
+    if (cfg.enabled) {
+      if (!framed && cfg.framedBase) framed = allocateIpv6(cfg.framedBase, cfg.framedBaseBits, cfg.framedSize, subscriberId);
+      if (!delegated && cfg.delegatedBase) delegated = allocateIpv6(cfg.delegatedBase, cfg.delegatedBaseBits, cfg.delegatedSize, subscriberId);
+    }
+    return {
+      framedPrefix: framed,
+      delegatedPrefix: delegated,
+      source: manual ? 'manual' : (framed || delegated) ? 'auto' : 'none',
+      autoEnabled: cfg.enabled,
+    };
+  }
+
   async create(subscriberId: number, data: any) {
     return this.prisma.serviceSettings.create({
       data: {
@@ -16,6 +43,8 @@ export class ServiceSettingsService {
         ipAddress:      data.ipAddress,
         ipType:         data.ipType         || 'DYNAMIC',
         macAddress:     data.macAddress,
+        ipv6Prefix:          data.ipv6Prefix || null,
+        ipv6DelegatedPrefix: data.ipv6DelegatedPrefix || null,
         quota:          data.quota,
         quotaUsed:      data.quotaUsed      ? parseFloat(data.quotaUsed)  : 0,
         quotaResetDate: data.quotaResetDate ? new Date(data.quotaResetDate) : null,
@@ -50,6 +79,8 @@ export class ServiceSettingsService {
         ipAddress:      data.ipAddress,
         ipType:         data.ipType,
         macAddress:     data.macAddress,
+        ipv6Prefix:          data.ipv6Prefix ?? undefined,
+        ipv6DelegatedPrefix: data.ipv6DelegatedPrefix ?? undefined,
         quota:          data.quota,
         quotaUsed:      data.quotaUsed      ? parseFloat(data.quotaUsed)  : 0,
         quotaResetDate: data.quotaResetDate ? new Date(data.quotaResetDate) : null,

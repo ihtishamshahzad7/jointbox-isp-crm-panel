@@ -26,8 +26,9 @@ export class UploadsController {
       }),
       limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
       fileFilter: (_req, file, cb) => {
-        if (/^image\/(png|jpe?g|webp|gif|heic|heif)$/i.test(file.mimetype)) cb(null, true);
-        else cb(new BadRequestException('Only image files are allowed'), false);
+        // Images (photo/CNIC scans) + PDF (uploaded identity documents).
+        if (/^image\/(png|jpe?g|webp|gif|heic|heif)$/i.test(file.mimetype) || file.mimetype === 'application/pdf') cb(null, true);
+        else cb(new BadRequestException('Only image or PDF files are allowed'), false);
       },
     }),
   )

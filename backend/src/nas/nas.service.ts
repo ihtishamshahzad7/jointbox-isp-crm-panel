@@ -254,6 +254,7 @@ export class NasService implements OnModuleInit {
     apiPort?: number; incomingPort?: number;
     apiUsername?: string; apiPassword?: string;
     nasType?: string; isActive?: boolean; description?: string;
+    nasIdentifier?: string;
   }, actor?: any) {
     // Self-registration is permission-gated (see assertMayAddNas).
     await this.assertMayAddNas(actor);
@@ -284,6 +285,7 @@ export class NasService implements OnModuleInit {
         secret:       data.secret,
         apiPort:      data.apiPort      ?? 8728,
         incomingPort: data.incomingPort ?? 3799,
+        nasIdentifier: data.nasIdentifier?.trim() || null,
         apiUsername:  data.apiUsername,
         apiPassword:  data.apiPassword,
         type:         this.resolveNasType(data.nasType),
@@ -313,6 +315,7 @@ export class NasService implements OnModuleInit {
     apiPort?: number; incomingPort?: number;
     apiUsername?: string; apiPassword?: string;
     nasType?: string; isActive?: boolean; description?: string;
+    nasIdentifier?: string;
   }) {
     const existingNas = await this.prisma.nas.findUnique({ where: { id } });
     if (!existingNas) throw new NotFoundException(`NAS with ID ${id} not found`);
@@ -335,6 +338,7 @@ export class NasService implements OnModuleInit {
     if (data.secret !== undefined)      updateData.secret       = data.secret;
     if (data.apiPort !== undefined)     updateData.apiPort      = data.apiPort;
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
+    if (data.nasIdentifier !== undefined) updateData.nasIdentifier = (data.nasIdentifier || '').trim() || null;
     if (data.apiUsername !== undefined) updateData.apiUsername  = data.apiUsername;
     if (data.apiPassword !== undefined) updateData.apiPassword  = data.apiPassword;
     if (data.nasType !== undefined)     updateData.type         = this.resolveNasType(data.nasType);

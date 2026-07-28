@@ -1,73 +1,197 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
 
+/**
+ * Dynamic session control via standard RFC 3576/5176 RADIUS CoA/Disconnect.
+ *
+ * VENDOR-AGNOSTIC: the same Disconnect-Request / CoA-Request works on MikroTik,
+ * Cisco, Juniper, pfSense, vBNG/BiSON and any RADIUS OLT/BNG — no per-vendor
+ * API needed. For MikroTik we additionally keep the router-API path as a
+ * fallback (some setups don't open the CoA port), so it degrades gracefully.
+ */
 @Injectable()
 export class CoaService {
   private readonly logger = new Logger(CoaService.name);
 
   constructor(private prisma: PrismaService) {}
 
-  /**
-   * Disconnect a subscriber by sending a RADIUS Disconnect-Request (DM/CoA).
-   * Returns { success: boolean, message: string }.
-   */
-  async disconnectSubscriber(subscriberId: number): Promise<{ success: boolean; message: string }> {
+  /** Look up the subscriber's current live session + its NAS (with CoA creds). */
+  private async resolve(subscriberId: number) {
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
-      select: { id: true, username: true, nasId: true, nas: { select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true } } },
+      select: {
+        id: true, username: true, nasId: true,
+        nas: { select: { nasIp: true, nasIdentifier: true, secret: true, incomingPort: true, apiPort: true, apiUsername: true, apiPassword: true } },
+      },
     });
-    if (!sub) return { success: false, message: 'Subscriber not found' };
-    if (!sub.nasId || !sub.nas) return { success: false, message: 'No NAS assigned to this subscriber' };
+    if (!sub?.username) return null;
+    const session = await this.liveSession(sub.username);
+    if (session && sub.nas?.nasIdentifier) session.nasIdentifier = sub.nas.nasIdentifier;
+    return { sub, session };
+  }
 
+  private async liveSession(username: string): Promise<(CoaSession & { nas?: any }) | null> {
+    const rows = await this.prisma.$queryRaw<Array<any>>`
+      SELECT acctsessionid, nasipaddress, framedipaddress, callingstationid
+      FROM radacct WHERE username = ${username} AND acctstoptime IS NULL
+      ORDER BY acctstarttime DESC LIMIT 1`;
+    if (!rows.length) return null;
+    const r = rows[0];
+    return {
+      username,
+      acctSessionId: r.acctsessionid,
+      nasIp: r.nasipaddress,
+      framedIp: r.framedipaddress,
+      callingStationId: r.callingstationid,
+    };
+  }
+
+  /**
+   * Disconnect a subscriber's live session. Tries standard RADIUS Disconnect
+   * first (works on every vendor); falls back to the MikroTik API when present.
+   */
+  async disconnectSubscriber(subscriberId: number): Promise<{ success: boolean; message: string; method?: string }> {
+    const r = await this.resolve(subscriberId);
+    if (!r) return { success: false, message: 'Subscriber not found or has no username' };
+    const { sub, session } = r;
+    if (!sub.nas?.nasIp) return { success: false, message: 'No NAS assigned to this subscriber' };
+    if (!session) return { success: false, message: 'No active session to disconnect' };
+
+    // 1) Standard RADIUS Disconnect-Request — vendor-agnostic.
+    const secret = sub.nas.secret;
+    if (secret) {
+      const res = await sendCoa({
+        host: sub.nas.nasIp,
+        port: coaPort(sub.nas.incomingPort),
+        secret,
+        code: RadiusCode.DisconnectRequest,
+        attributes: sessionAttributes(session),
+      });
+      if (res.ok) {
+        this.logger.log(`✅ RADIUS disconnect (CoA): ${sub.username} → ${sub.nas.nasIp}`);
+        return { success: true, message: 'Disconnected via RADIUS CoA', method: 'radius-coa' };
+      }
+      this.logger.warn(`RADIUS disconnect ${res.type} for ${sub.username}: ${res.message}`);
+    } else {
+      this.logger.warn(`NAS for ${sub.username} has no shared secret set — cannot send CoA`);
+    }
+
+    // 2) MikroTik API fallback (only if the router exposes the API).
     try {
-      // Try MikroTik API disconnect first (more reliable)
       if (sub.nas.apiUsername && sub.nas.apiPassword) {
         const { MikrotikService } = await import('../mikrotik/mikrotik.service');
         const mikrotik = new MikrotikService();
         await mikrotik.disconnectPppoeUser(
-          sub.nas.nasIp || '127.0.0.1', sub.nas.apiPort ?? 8728,
-          sub.nas.apiUsername || 'admin', sub.nas.apiPassword || '',
-          sub.username!,
+          sub.nas.nasIp, sub.nas.apiPort ?? 8728, sub.nas.apiUsername, sub.nas.apiPassword, sub.username!,
         );
-        this.logger.log(`✅ CoA disconnect: ${sub.username} via MikroTik API`);
-        return { success: true, message: 'Subscriber disconnected via router API' };
+        this.logger.log(`✅ Disconnect via MikroTik API: ${sub.username}`);
+        return { success: true, message: 'Disconnected via router API (CoA unavailable)', method: 'mikrotik-api' };
       }
-
-      return { success: false, message: 'NAS does not support API disconnect' };
     } catch (e: any) {
-      this.logger.error(`CoA disconnect failed for ${sub.username}: ${e.message}`);
-      return { success: false, message: `Disconnect failed: ${e.message}` };
+      this.logger.error(`MikroTik API disconnect failed for ${sub.username}: ${e.message}`);
     }
+    return { success: false, message: 'Could not disconnect — no CoA acknowledgement and no working router API. Check the NAS shared secret and that the CoA port (3799) is reachable.' };
   }
 
   /**
-   * Change bandwidth for a subscriber by updating RADIUS check attributes.
-   * Uses MikroTik API when available, otherwise updates RADIUS and waits for next re-auth.
+   * Change a subscriber's bandwidth LIVE. Persists the new rate to radcheck
+   * (so it survives re-auth) AND pushes a CoA-Request so it applies now without
+   * a reconnect. The persisted attribute is standard; the live CoA carries the
+   * MikroTik rate VSA (extend `rateAttributes` for other vendors as needed).
    */
-  async changeBandwidth(subscriberId: number, downloadSpeed: number, uploadSpeed: number): Promise<{ success: boolean; message: string }> {
-    const sub = await this.prisma.subscriber.findUnique({
-      where: { id: subscriberId },
-      select: { id: true, username: true, nasId: true },
-    });
-    if (!sub) return { success: false, message: 'Subscriber not found' };
-    if (!sub.username) return { success: false, message: 'Subscriber has no username' };
+  async changeBandwidth(subscriberId: number, downloadSpeed: number, uploadSpeed: number): Promise<{ success: boolean; message: string; live?: boolean }> {
+    const r = await this.resolve(subscriberId);
+    if (!r || !r.sub.username) return { success: false, message: 'Subscriber not found' };
+    const { sub, session } = r;
+    const rate = `${downloadSpeed}M/${uploadSpeed}M`;
 
+    // Persist for the next authentication (works on every vendor via RADIUS).
     try {
-      // Update RADIUS rate-limit attributes
-      const rateLimit = `${downloadSpeed}M/${uploadSpeed}M`;
-      
-      // Upsert the MikroTik-Rate-Limit check attribute
-      await this.prisma.$executeRawUnsafe(`
-        INSERT INTO radcheck (username, attribute, op, value)
-        VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)
-        ON CONFLICT (username, attribute) DO UPDATE SET value = $2
-      `, sub.username, rateLimit);
-
-      this.logger.log(`✅ Bandwidth changed for ${sub.username}: ${rateLimit}`);
-      return { success: true, message: `Bandwidth updated to DL ${downloadSpeed}M / UL ${uploadSpeed}M` };
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO radcheck (username, attribute, op, value)
+         VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)
+         ON CONFLICT (username, attribute) DO UPDATE SET value = $2`,
+        sub.username, rate,
+      );
     } catch (e: any) {
-      this.logger.error(`Bandwidth change failed for ${sub.username}: ${e.message}`);
-      return { success: false, message: `Bandwidth change failed: ${e.message}` };
+      return { success: false, message: `Could not save the new rate: ${e.message}` };
     }
+
+    // Push it live via CoA if we have a session + secret.
+    let live = false;
+    if (session && sub.nas?.nasIp && sub.nas.secret) {
+      const res = await sendCoa({
+        host: sub.nas.nasIp,
+        port: coaPort(sub.nas.incomingPort),
+        secret: sub.nas.secret,
+        code: RadiusCode.CoaRequest,
+        attributes: [...sessionAttributes(session), mikrotikRateLimit(rate)],
+      });
+      live = res.ok;
+      if (!res.ok) this.logger.warn(`Live CoA re-rate ${res.type} for ${sub.username}: ${res.message}`);
+    }
+    return {
+      success: true,
+      live,
+      message: live
+        ? `Bandwidth changed live to ${rate} (applied without reconnect)`
+        : `Bandwidth set to ${rate} — applies on next reconnect (live CoA not acknowledged)`,
+    };
   }
+
+  /**
+   * Reachability probe for a NAS's CoA channel. Sends a harmless Disconnect
+   * for a non-existent session: ANY reply (ACK or NAK) proves the CoA port is
+   * open and the shared secret is accepted; a timeout means the port is blocked
+   * or the secret/identifier is wrong. Changes nothing on the router.
+   */
+  async testCoa(nasId: number): Promise<{ reachable: boolean; message: string }> {
+    const nas = await this.prisma.nas.findUnique({
+      where: { id: nasId },
+      select: { nasIp: true, secret: true, incomingPort: true, nasIdentifier: true },
+    });
+    if (!nas?.nasIp) return { reachable: false, message: 'NAS has no IP address' };
+    if (!nas.secret) return { reachable: false, message: 'Set the RADIUS shared secret first' };
+    const res = await sendCoa({
+      host: nas.nasIp,
+      port: coaPort(nas.incomingPort),
+      secret: nas.secret,
+      code: RadiusCode.DisconnectRequest,
+      attributes: sessionAttributes({ acctSessionId: 'jointbox-coa-test', nasIdentifier: nas.nasIdentifier, nasIp: nas.nasIp }),
+      timeoutMs: 4000,
+    });
+    if (res.type === 'timeout') {
+      return { reachable: false, message: `No CoA reply on ${nas.nasIp}:${coaPort(nas.incomingPort)} — check the CoA port is open and the shared secret matches` };
+    }
+    if (res.type === 'error') return { reachable: false, message: res.message };
+    // ACK or NAK both mean the router received and processed our request.
+    return { reachable: true, message: `CoA reachable — router responded (${res.type}). Session control will work on this NAS.` };
+  }
+
+  /** Disconnect by username (used by NetworkService). Returns method used. */
+  async disconnectByUsername(username: string): Promise<{ ok: boolean; method: string; message: string }> {
+    const session = await this.liveSession(username);
+    if (!session) return { ok: false, method: 'none', message: 'No active session' };
+    const nas = await this.prisma.nas.findFirst({
+      where: { nasIp: session.nasIp as string },
+      select: { secret: true, incomingPort: true, nasIdentifier: true },
+    });
+    if (!nas?.secret) return { ok: false, method: 'none', message: 'NAS has no shared secret configured' };
+    if (nas.nasIdentifier) session.nasIdentifier = nas.nasIdentifier;
+    const res = await sendCoa({
+      host: session.nasIp as string,
+      port: coaPort(nas.incomingPort),
+      secret: nas.secret,
+      code: RadiusCode.DisconnectRequest,
+      attributes: sessionAttributes(session),
+    });
+    return { ok: res.ok, method: 'radius-coa', message: res.message };
+  }
+}
+
+/** Pick the CoA port — never the auth/acct ports; default 3799. */
+function coaPort(p?: number | null): number {
+  if (p && p !== 1812 && p !== 1813) return p;
+  return 3799;
 }

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
+import AiAssistant from './ai-assistant';
+import CommandPalette from './command-palette';
 import { NovaStyles } from './ui';
 import { usePathname, useRouter } from 'next/navigation';
 import { silent } from './silent';
@@ -57,6 +59,7 @@ const menuGroups = [
   ]},
   { label: 'Operations', items: [
     { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
+    { id: 'noc', label: 'NOC / Uptime', href: '/noc', Icon: navIcons.Network },
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
   ]},
   { label: 'Business', items: [
@@ -75,11 +78,24 @@ const menuGroups = [
     // ISP owner only — root server console (logs + terminal). Hidden for
     // everyone else, and the backend refuses the routes for non-owners anyway.
     { id: 'console', label: 'Server Console', href: '/console', Icon: navIcons.NAS, ispOnly: true },
-    { id: 'help', label: 'Help & Guide', href: '/help', Icon: navIcons.Support },
+    // Help is now the ✦ assistant (bottom-right) — clicking here opens it.
+    { id: 'help', label: 'Help (ask assistant)', href: '#assistant', Icon: navIcons.Support },
   ]},
 ];
 // Flat list kept for title lookup / active-menu detection.
 const menuItems = menuGroups.flatMap((g) => g.items);
+
+// Selectable dark themes (palettes defined in globals.css by data-theme id).
+const THEMES = [
+  { id: 'night-tower', name: 'Night tower', dot: '#378ADD' },
+  { id: 'signal-room', name: 'Signal room', dot: '#1D9E75' },
+  { id: 'fiber-glass', name: 'Fiber glass', dot: '#7F77DD' },
+  { id: 'copper-clay', name: 'Copper and clay', dot: '#D85A30' },
+  { id: 'terminal-phosphor', name: 'Terminal phosphor', dot: '#639922' },
+  { id: 'dusk-bazaar', name: 'Dusk bazaar', dot: '#EF9F27' },
+  { id: 'cold-steel', name: 'Cold steel', dot: '#378ADD' },
+  { id: 'monsoon-sky', name: 'Monsoon sky', dot: '#85B7EB' },
+];
 
 function getInitials(name = ''): string {
   if (!name) return 'U';
@@ -104,6 +120,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/billing-center', 'billing'],
   ['/service-catalog', 'catalog'],
   ['/jobs', 'jobs'],
+  ['/noc', 'noc'],
   ['/support-center', 'support'],
   ['/admin-center', 'admin'],
   ['/insights', 'insights'],
@@ -111,7 +128,6 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/trace', 'trace'],
   ['/subscribers', 'subscribers'],
   ['/compliance', 'compliance'],
-  ['/help', 'help'],
 
   // Network hub
   ['/network', 'network'],
@@ -184,21 +200,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [updating, setUpdating] = useState(false);
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
   const [light, setLight] = useState(false);
+  const [theme, setThemeState] = useState('night-tower');
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    const saved = localStorage.getItem('jb_theme') === 'light';
-    setLight(saved);
-    document.documentElement.setAttribute('data-theme', saved ? 'light' : 'dark');
+    const saved = localStorage.getItem('jb_theme') || 'night-tower';
+    const isLight = saved === 'light';
+    setLight(isLight);
+    setThemeState(isLight ? 'night-tower' : saved);
+    document.documentElement.setAttribute('data-theme', saved);
   }, []);
-  const toggleTheme = () => {
-    const next = !light;
-    setLight(next);
-    localStorage.setItem('jb_theme', next ? 'light' : 'dark');
-    document.documentElement.setAttribute('data-theme', next ? 'light' : 'dark');
+  const applyTheme = (id: string) => {
+    setThemeMenuOpen(false);
+    if (id === 'light') { setLight(true); }
+    else { setLight(false); setThemeState(id); }
+    localStorage.setItem('jb_theme', id);
+    document.documentElement.setAttribute('data-theme', id);
   };
+  const toggleTheme = () => applyTheme(light ? theme : 'light');
   const activeMenu = useMemo(() => getActiveMenu(pathname || '/dashboard'), [pathname]);
 
   /**
@@ -529,7 +551,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     key={item.href}
                     type="button"
                     className={`nav-item ${isActive ? 'active' : ''}`}
-                    onClick={() => router.push(item.href)}
+                    onClick={() => item.href === '#assistant'
+                      ? window.dispatchEvent(new Event('open-assistant'))
+                      : router.push(item.href)}
                     title={collapsed ? item.label : ''}
                   >
                     <span className="nav-icon"><Icon /></span>
@@ -569,6 +593,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <div className="topbar-title">{title}</div>
             <div className="topbar-sub">{date || 'Unified control panel'}</div>
             </div>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event('open-command-palette'))}
+              title="Find any feature or action"
+              style={{ marginLeft: 14, display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, cursor: 'pointer' }}
+            >
+              <span>🔎 Find features</span>
+              <kbd style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, padding: '1px 6px', fontSize: 11 }}>Ctrl K</kbd>
+            </button>
           </div>
 
           {/* Global search. Routes into Trace, which already searches across
@@ -810,14 +843,38 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 )}
               </div>
             )}
-            <button
-              type="button"
-              onClick={toggleTheme}
-              title={light ? 'Switch to dark' : 'Switch to light'}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '50%', fontSize: 14, cursor: 'pointer' }}
-            >
-              {light ? '🌙' : '☀️'}
-            </button>
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => setThemeMenuOpen((o) => !o)}
+                title="Theme"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '50%', fontSize: 14, cursor: 'pointer' }}
+              >
+                {light ? '🌙' : '🎨'}
+              </button>
+              {themeMenuOpen && (
+                <>
+                  <div onClick={() => setThemeMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', right: 0, top: 40, zIndex: 41, width: 210, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 8, boxShadow: '0 20px 50px rgba(0,0,0,.45)' }}>
+                    <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '4px 8px' }}>Dark themes</div>
+                    {THEMES.map((t) => (
+                      <button key={t.id} onClick={() => applyTheme(t.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', background: (!light && theme === t.id) ? 'var(--surface-2)' : 'transparent', border: 'none', color: 'var(--text)', borderRadius: 8, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}>
+                        <span style={{ width: 12, height: 12, borderRadius: '50%', background: t.dot, flexShrink: 0 }} />
+                        {t.name}
+                        {!light && theme === t.id && <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>✓</span>}
+                      </button>
+                    ))}
+                    <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0' }} />
+                    <button onClick={() => applyTheme('light')}
+                      style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', background: light ? 'var(--surface-2)' : 'transparent', border: 'none', color: 'var(--text)', borderRadius: 8, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}>
+                      <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#eef2f7', border: '1px solid var(--border)', flexShrink: 0 }} />
+                      Light {light && <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>✓</span>}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
             <div className="status-pill">
               <span className="status-dot" />
               Online
@@ -910,6 +967,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {children}
           </div>
         </main>
+
+        {/* Floating AI assistant — available on every screen. */}
+        <AiAssistant />
+        {/* Global feature finder — Ctrl/⌘+K on any screen. */}
+        <CommandPalette />
 
         {/* Footer removed. It said nothing that changes, and it cost a strip
             of vertical space on every screen — the version number belongs in

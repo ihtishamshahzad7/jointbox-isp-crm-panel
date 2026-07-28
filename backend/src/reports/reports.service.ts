@@ -197,21 +197,33 @@ export class ReportsService {
       select: { id: true, name: true, role: true, balance: true },
     });
     const round2 = (n: number) => Math.round(((n || 0) + Number.EPSILON) * 100) / 100;
-    const rows: any[] = [];
-    for (const u of users) {
-      const subs = await this.prisma.subscriber.findMany({
-        where: { userId: u.id },
-        select: { status: true, sellPrice: true, costPrice: true, profit: true },
+
+    // Aggregate ALL subscribers in TWO grouped queries instead of one query per
+    // reseller (was N+1 — 100 resellers = 100 round-trips). Now it's constant.
+    const ids = users.map((u) => u.id);
+    const byOwner = new Map<number, { subscribers: number; active: number; mrr: number; cost: number }>();
+    if (ids.length) {
+      const totalCounts = await this.prisma.subscriber.groupBy({
+        by: ['userId'], where: { userId: { in: ids } }, _count: { _all: true },
       });
-      const active = subs.filter((s) => s.status === 'ACTIVE');
-      const mrr = round2(active.reduce((t, s) => t + (s.sellPrice || 0), 0));
-      const cost = round2(active.reduce((t, s) => t + (s.costPrice || 0), 0));
-      rows.push({
-        userId: u.id, name: u.name, role: u.role, balance: round2(u.balance),
-        subscribers: subs.length, active: active.length,
-        mrr, cost, profit: round2(mrr - cost),
+      const activeAgg = await this.prisma.subscriber.groupBy({
+        by: ['userId'], where: { userId: { in: ids }, status: 'ACTIVE' },
+        _count: { _all: true }, _sum: { sellPrice: true, costPrice: true },
       });
+      for (const r of totalCounts) byOwner.set(r.userId!, { subscribers: r._count._all, active: 0, mrr: 0, cost: 0 });
+      for (const r of activeAgg) {
+        const e = byOwner.get(r.userId!) || { subscribers: 0, active: 0, mrr: 0, cost: 0 };
+        e.active = r._count._all;
+        e.mrr = round2(r._sum.sellPrice || 0);
+        e.cost = round2(r._sum.costPrice || 0);
+        byOwner.set(r.userId!, e);
+      }
     }
+    const rows = users.map((u) => {
+      const e = byOwner.get(u.id) || { subscribers: 0, active: 0, mrr: 0, cost: 0 };
+      return { userId: u.id, name: u.name, role: u.role, balance: round2(u.balance),
+        subscribers: e.subscribers, active: e.active, mrr: e.mrr, cost: e.cost, profit: round2(e.mrr - e.cost) };
+    });
     rows.sort((a, b) => b.mrr - a.mrr);
     return {
       accounts: rows,

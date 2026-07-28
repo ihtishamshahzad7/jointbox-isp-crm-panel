@@ -125,6 +125,41 @@ export default function NetworkPage() {
     load();
   }
 
+  async function changeSpeed(s: any) {
+    if (!s.subscriberId) { setMsg("This session isn't linked to a subscriber."); return; }
+    const dl = prompt(`New DOWNLOAD speed (Mbps) for ${s.username}:`, "10");
+    if (dl === null) return;
+    const ul = prompt(`New UPLOAD speed (Mbps) for ${s.username}:`, "10");
+    if (ul === null) return;
+    const d = Number(dl), u = Number(ul);
+    if (!(d > 0) || !(u > 0)) { setMsg("Enter valid speeds in Mbps."); return; }
+    try {
+      const r = await fetch(`${API}/network/bandwidth/${s.subscriberId}`, {
+        method: "POST", headers, body: JSON.stringify({ downloadSpeed: d, uploadSpeed: u }),
+      });
+      const data = await r.json();
+      setMsg(data?.message || (r.ok ? "Speed updated" : "Speed change failed"));
+      load();
+    } catch { setMsg("Speed change failed"); }
+  }
+
+  const [syncing, setSyncing] = useState(false);
+  async function syncSessions() {
+    setSyncing(true);
+    setMsg("Checking routers…");
+    try {
+      const r = await fetch(`${API}/subscribers/integrity/sessions`, { headers });
+      const d = await r.json();
+      if (!r.ok) { setMsg(d?.message || "Sync failed"); return; }
+      setMsg(
+        `Synced ${d.routers} router(s): closed ${d.closed} ghost session(s)` +
+        (d.skipped ? `, skipped ${d.skipped} unreachable` : "") + ".",
+      );
+      load();
+    } catch { setMsg("Sync failed — check router API credentials"); }
+    finally { setSyncing(false); }
+  }
+
   async function openMac(s: any) {
     setMacFor(s);
     setMacInput(s.mac || "");
@@ -171,6 +206,14 @@ export default function NetworkPage() {
           </button>
           <button style={{ border: "none", background: "transparent", color: T.sub, cursor: "pointer", borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600 }} onClick={load}>Refresh</button>
         </div>
+        <button
+          onClick={syncSessions}
+          disabled={syncing}
+          title="Ask the routers who is really connected and close any ghost sessions the panel still shows as online"
+          style={{ border: `1px solid ${T.border}`, background: T.card, color: T.sub, cursor: syncing ? "default" : "pointer", borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 600, opacity: syncing ? 0.6 : 1 }}
+        >
+          {syncing ? "Syncing…" : "⟳ Sync sessions"}
+        </button>
       </div>
 
       <LiveTraffic hist={rateHist} T={T} />
@@ -211,6 +254,7 @@ export default function NetworkPage() {
                 <td style={{ ...td, textAlign: "right", color: T.green }}>{rate(s.rateBps)}</td>
                 <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
                   {s.subscriberId && <button style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, marginRight: 6 }} onClick={() => openMac(s)}>MAC</button>}
+                  {s.subscriberId && <button title="Change this customer's speed live via RADIUS CoA (no reconnect)" style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, marginRight: 6 }} onClick={() => changeSpeed(s)}>Speed</button>}
                   <button style={btn(T.red)} onClick={() => disconnect(s.username)}>Disconnect</button>
                 </td>
               </tr>

@@ -5,6 +5,7 @@ import { money } from "../../components/currency";
 import { RecordNotes } from "../../components/record-notes";
 import { Icons as SIcons } from "../../components/icons";
 import { BandwidthChart } from "../../components/bandwidth-chart";
+import DailyUsageBars from "./bandwidth-panel";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Subscriber {
@@ -133,6 +134,7 @@ export default function SubscriberProfilePage() {
   const [routerBusy, setRouterBusy] = useState(false);
   /** Live data allowance — used, quota and throttle state from RADIUS. */
   const [usage, setUsage] = useState<any>(null);
+  const [ipv6, setIpv6] = useState<any>(null);
   const liveRef = useRef<NodeJS.Timeout|null>(null);
 
   const token   = typeof window !== "undefined" ? localStorage.getItem("token") : "";
@@ -166,6 +168,8 @@ export default function SubscriberProfilePage() {
         setInvoices(data.invoices || []);
         setPayments(data.payments || []);
         setTickets(data.tickets || []);
+        fetch(`${API}/service-settings/subscriber/${id}/ipv6`, { headers })
+          .then((r) => (r.ok ? r.json() : null)).then(setIpv6).catch(() => {});
       } else {
         showToast("Subscriber not found","err");
       }
@@ -645,6 +649,12 @@ export default function SubscriberProfilePage() {
               <InfoRow label="IP Address" value={serviceSettings?.ipAddress || "—"}/>
               <InfoRow label="IP Type" value={serviceSettings?.ipType}/>
               <InfoRow label="MAC Address" value={serviceSettings?.macAddress || "—"} mono/>
+              {ipv6?.framedPrefix && (
+                <InfoRow label={`IPv6 Prefix${ipv6.source === "auto" ? " (auto)" : ipv6.source === "manual" ? " (manual)" : ""}`} value={ipv6.framedPrefix} mono/>
+              )}
+              {ipv6?.delegatedPrefix && (
+                <InfoRow label="IPv6 Delegated (PD)" value={ipv6.delegatedPrefix} mono/>
+              )}
               <InfoRow label="MAC Lock" value={serviceSettings?.macLockEnabled ? "Enabled" : "Disabled"}/>
               <InfoRow label="VLAN ID" value={serviceSettings?.vlanId}/>
               {/* Live figures from RADIUS, not the stored counter — quotaUsed
@@ -1074,6 +1084,7 @@ export default function SubscriberProfilePage() {
             <Card>
               <SectionTitle icon={<Ic.Activity/>} label="Live Bandwidth (last 60 min)" color="#60a5fa"/>
               {sub?.username && <BandwidthChart username={sub.username} minutes={60} darkMode={d} />}
+              {sub?.username && <DailyUsageBars username={sub.username} />}
             </Card>
           </div>
         </>)}

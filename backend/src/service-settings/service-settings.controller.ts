@@ -15,6 +15,12 @@ export class ServiceSettingsController {
     return this.serviceSettingsService.findBySubscriber(+subscriberId);
   }
 
+  /** Effective IPv6 (manual override or auto-allocated) for this subscriber. */
+  @Get('subscriber/:subscriberId/ipv6')
+  resolveIpv6(@Param('subscriberId') subscriberId: string) {
+    return this.serviceSettingsService.resolveIpv6(+subscriberId);
+  }
+
   @Post('subscriber/:subscriberId')
   create(@Param('subscriberId') subscriberId: string, @Body() body: any) {
     return this.serviceSettingsService.create(+subscriberId, body);

@@ -65,14 +65,32 @@ body {
      compounded into progressively lighter boxes. These values are the exact
      colours that rgba(255,255,255,.04) and .07 RESOLVE TO over #0B0E1A, so
      the glass look is preserved with none of the stacking problems. */
-  --bg: #0B0E1A;
-  --surface: #151823;
-  --surface-2: #1B1F2E;
-  --border: #252A3C;
-  --text: #E9EDF5;
-  --muted: #A0AEC0;
+  /* Default dark palette = "Night tower". Switchable via the theme picker
+     (adds a data-theme="<id>" on <html>). Named blocks below define the others. */
+  --bg: #0C0F1A;
+  --surface: #141826;
+  --surface-2: #1B2032; --surface2: #1B2032;
+  --border: #262D42;
+  --text: #DEE3F0;
+  --muted: #8D96B0;
+  --accent: #378ADD; --accent-2: #FAC775; --accent2: #FAC775;
   --card-shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 30px rgba(0,0,0,.28);
+  /* Semantic status colours stay constant across every theme. */
+  --online: #639922; --warning: #BA7517; --danger: #E24B4A;
 }
+
+/* ── Selectable dark themes (mapped onto the app's token names) ── */
+html[data-theme="night-tower"] { --bg:#0C0F1A; --surface:#141826; --surface-2:#1B2032; --surface2:#1B2032; --border:#262D42; --text:#DEE3F0; --muted:#8D96B0; --accent:#378ADD; --accent-2:#FAC775; --accent2:#FAC775; }
+html[data-theme="signal-room"] { --bg:#0E1418; --surface:#161D23; --surface-2:#1D252C; --surface2:#1D252C; --border:#2A343C; --text:#DCE3E7; --muted:#8B99A3; --accent:#1D9E75; --accent-2:#378ADD; --accent2:#378ADD; }
+html[data-theme="fiber-glass"] { --bg:#120E1C; --surface:#1B1530; --surface-2:#241C3D; --surface2:#241C3D; --border:#34294F; --text:#E8E4F5; --muted:#A79FC7; --accent:#7F77DD; --accent-2:#22D3EE; --accent2:#22D3EE; }
+html[data-theme="copper-clay"] { --bg:#171310; --surface:#211B15; --surface-2:#2A231B; --surface2:#2A231B; --border:#3D3226; --text:#EDE4D8; --muted:#B3A594; --accent:#D85A30; --accent-2:#FAC775; --accent2:#FAC775; }
+html[data-theme="terminal-phosphor"] { --bg:#0A0B0A; --surface:#121312; --surface-2:#191A18; --surface2:#191A18; --border:#262722; --text:#D6DAD6; --muted:#8A8F8A; --accent:#639922; --accent-2:#97C459; --accent2:#97C459; }
+html[data-theme="dusk-bazaar"] { --bg:#150F1A; --surface:#201828; --surface-2:#2A2035; --surface2:#2A2035; --border:#3D2F4D; --text:#F0E7F5; --muted:#B7A3C7; --accent:#EF9F27; --accent-2:#D4537E; --accent2:#D4537E; }
+html[data-theme="cold-steel"] { --bg:#101112; --surface:#18191B; --surface-2:#202224; --surface2:#202224; --border:#2E3033; --text:#E4E6E8; --muted:#9AA0A6; --accent:#378ADD; --accent-2:#85B7EB; --accent2:#85B7EB; }
+html[data-theme="monsoon-sky"] { --bg:#0D131A; --surface:#161F29; --surface-2:#1E2A38; --surface2:#1E2A38; --border:#2B3B4D; --text:#DCE6F0; --muted:#8FA3B8; --accent:#85B7EB; --accent-2:#1D9E75; --accent2:#1D9E75; }
+/* Accent follows the theme on the active nav pill (was a fixed gradient). */
+html:not([data-theme="light"]) .nav-item.active { background: var(--accent); color: var(--bg); box-shadow: none; }
+
 html[data-theme="light"] {
   --bg: #eef2f7;
   --surface: #ffffff;
@@ -1725,3 +1743,119 @@ div[style*="position: fixed"] > div:not([style*="max-width"]):not([style*="maxWi
 .app-shell-footer {
   display: none !important;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   DYNAMIC POLISH — motion & responsiveness only. No colours are changed;
+   this layer just makes the existing dark theme feel fast and alive:
+   snappy hover/active feedback, gentle lifts, quick content entrances.
+   Everything respects prefers-reduced-motion at the bottom.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 1. Snappy, consistent transitions on everything interactive. Short
+      durations (120–160ms) read as "fast", not floaty. */
+button, a, .nav-item, input, select, textarea,
+[role="button"], .card, .db-card, .rp-card, .panel, .stat-card, .stat, .metric-card {
+  transition: background-color .14s ease, border-color .14s ease,
+              color .14s ease, box-shadow .18s ease, transform .16s ease;
+}
+
+/* 2. Tactile press — every button dips slightly when clicked. This single
+      cue is most of what makes a UI feel responsive. */
+button:not(:disabled):active,
+[role="button"]:active {
+  transform: scale(.97);
+}
+
+/* 3. Buttons lift a touch on hover (kept subtle so layouts don't shift). */
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+/* 4. Cards rise and gain depth on hover — makes dashboards feel interactive. */
+.card:hover, .db-card:hover, .rp-card:hover, .panel:hover,
+.stat-card:hover, .metric-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 34px -20px rgba(108,60,225,.45);
+}
+
+/* 5. Table rows respond to the cursor so long lists don't feel dead. */
+tbody tr {
+  transition: background-color .12s ease;
+}
+tbody tr:hover {
+  background: var(--surface-2);
+}
+
+/* 6. Clear, on-brand focus ring for keyboard users (accessibility + polish). */
+button:focus-visible, a:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(108,60,225,.45);
+}
+
+/* 7. Quick content entrance — each page/section fades up as it mounts, so
+      navigation feels immediate and alive rather than a hard swap. */
+/* Entrance fade only — NO lingering transform. A persisted transform (from
+   `both` fill-mode) turns these elements into the containing block for any
+   position:fixed descendant, which pinned overlays (assistant, palette) to
+   .main and clipped them off-screen. Fixed overlays are also portalled to
+   <body>, but keeping this transform-free avoids the trap for future ones. */
+.app-shell-page-content, .main, .db-root {
+  animation: jbFadeUp .28s ease;
+}
+@keyframes jbFadeUp {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* 8. Active nav pill gets a gentle springy pop when selected. */
+.nav-item.active {
+  animation: jbPop .22s ease;
+}
+@keyframes jbPop {
+  0% { transform: scale(.96); }
+  60% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+/* 9. Honour reduced-motion — no animations/transforms for those users. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .card:hover, .db-card:hover, .rp-card:hover, .panel:hover,
+  button:not(:disabled):hover { transform: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   LEGIBILITY — larger, bolder, crisper text in BOTH light and dark.
+   Most screens set font-size inline in px, so we bump the common small
+   sizes up ~1.5px and raise the base weight. Sharper rendering + a little
+   more contrast on muted text makes everything easier to read.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Crisper glyph rendering only — no weight change, keeps the normal look. */
+html, body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Gentle +1px on the smallest inline sizes so nothing feels cramped —
+   comfortably visible, not attention-grabbing. Anything ≥13.5px is left as-is. */
+[style*="font-size:10px"],  [style*="font-size: 10px"]   { font-size: 11px   !important; }
+[style*="font-size:10.5px"],[style*="font-size: 10.5px"] { font-size: 11.5px !important; }
+[style*="font-size:11px"],  [style*="font-size: 11px"]   { font-size: 12px   !important; }
+[style*="font-size:11.5px"],[style*="font-size: 11.5px"] { font-size: 12.5px !important; }
+[style*="font-size:12px"],  [style*="font-size: 12px"]   { font-size: 13px   !important; }
+[style*="font-size:12.5px"],[style*="font-size: 12.5px"] { font-size: 13px   !important; }
+[style*="font-size:13px"],  [style*="font-size: 13px"]   { font-size: 13.5px !important; }
+
+/* Very slight, subtle contrast lift for muted text — same greys, just a
+   touch less washed out so it's readable at a glance. */
+:root                    { --muted: #AEB7CC; }
+html[data-theme="light"] { --muted: #586074; }

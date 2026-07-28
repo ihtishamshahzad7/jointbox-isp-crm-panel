@@ -73,6 +73,68 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
     return res.redirect(`${frontend}/portal?paid=0`);
   }
 
+  /** PayPal return callback — capture the approved order, then redirect. */
+  @Get('callback/paypal')
+  async paypalCallback(@Query('key') key: string, @Query('result') result: string, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    if (result === 'cancel') {
+      await this.gateway.handleFailure(key, 'cancelled');
+      return res.redirect(`${frontend}/portal?paid=0`);
+    }
+    const ok = await this.gateway.paypalCapture(key);
+    return res.redirect(`${frontend}/portal?paid=${ok ? 1 : 0}`);
+  }
+
+  /** Razorpay hosted checkout page — opens the Razorpay modal for this order. */
+  @Get('razorpay/form/:key')
+  async razorpayForm(@Param('key') key: string, @Res() res: Response) {
+    const tx = await this.gateway.findTransactionByIdempotencyKey(key);
+    if (!tx) return res.status(404).send('Transaction not found');
+    const keyId = process.env.RAZORPAY_KEY_ID || '';
+    const backend = process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001';
+    res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Razorpay</title></head>
+<body style="font-family:system-ui;background:#0c1220;color:#e2e8f0;display:flex;align-items:center;justify-content:center;height:100vh">
+<div style="text-align:center"><p>Opening secure payment…</p></div>
+<form id="f" method="POST" action="${backend}/gateway/callback/razorpay?key=${key}">
+  <input type="hidden" name="razorpay_payment_id" id="pid"><input type="hidden" name="razorpay_order_id" id="oid"><input type="hidden" name="razorpay_signature" id="sig">
+</form>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+  var rzp = new Razorpay({
+    key: ${JSON.stringify(keyId)},
+    order_id: ${JSON.stringify(tx.gatewayRef || '')},
+    amount: ${Math.round(tx.amount * 100)},
+    name: 'Internet Service',
+    description: 'Invoice payment',
+    handler: function (r) {
+      document.getElementById('pid').value = r.razorpay_payment_id;
+      document.getElementById('oid').value = r.razorpay_order_id;
+      document.getElementById('sig').value = r.razorpay_signature;
+      document.getElementById('f').submit();
+    },
+    modal: { ondismiss: function () { window.location = '${backend}/gateway/callback/razorpay?key=${key}&cancel=1'; } }
+  });
+  rzp.open();
+</script></body></html>`);
+  }
+
+  /** Razorpay callback — verify the signature, then record + redirect. */
+  @Post('callback/razorpay')
+  async razorpayCallback(@Query('key') key: string, @Body() body: any, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    const ok = this.gateway.verifyRazorpaySignature(body?.razorpay_order_id, body?.razorpay_payment_id, body?.razorpay_signature);
+    if (ok) { await this.gateway.handleSuccess(key, body?.razorpay_payment_id, JSON.stringify(body).slice(0, 2000)); return res.redirect(`${frontend}/portal?paid=1`); }
+    await this.gateway.handleFailure(key, 'signature-mismatch');
+    return res.redirect(`${frontend}/portal?paid=0`);
+  }
+
+  @Get('callback/razorpay')
+  async razorpayCancel(@Query('key') key: string, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    await this.gateway.handleFailure(key, 'cancelled');
+    return res.redirect(`${frontend}/portal?paid=0`);
+  }
+
   /** bKash redirect callback: status=success requires an execute call. */
   @Get('callback/bkash')
   async bkashCallback(

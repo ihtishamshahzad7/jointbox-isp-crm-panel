@@ -27,6 +27,37 @@ connect, so even a reconnect storm is thousands/sec, which FreeRADIUS eats easil
 
 ---
 
+## Step 0 — pm2 cluster mode (use every CPU core)
+
+By default the backend runs as ONE process = one core. To use the whole box, run
+it in **cluster mode** — pm2 forks N identical workers and load-balances requests
+across them. The `ecosystem.config.js` reads two env vars:
+
+```bash
+# On the server, before ./update-jointbox.sh (or export in the shell):
+export BACKEND_INSTANCES=max     # or a number, e.g. 4
+export FRONTEND_INSTANCES=2
+pm2 startOrReload ecosystem.config.js && pm2 save
+```
+
+`max` = one worker per core. This is **safe** because the app was made
+cluster-aware:
+- **Crons run on worker 0 only** (`isPrimaryInstance()` / `NODE_APP_INSTANCE`), so
+  reminders, reconciles and session-syncs don't fire N times.
+- **The background-job queue claims each job atomically** (`QUEUED→RUNNING`), so two
+  workers never run the same job.
+- **In-flight guards** stop any cron from overlapping itself under load.
+
+BEFORE you cluster the backend:
+1. Set **`REDIS_URL`** in `backend/.env` so the cache and job queue are SHARED across
+   workers (without it each worker caches separately — correct, just less efficient).
+2. Put Postgres behind **PgBouncer** (Step 1) — each worker opens its own pool
+   (`connection_limit=10`), so 4 workers = 40 connections; pooling avoids exhausting
+   Postgres `max_connections`.
+Set `CRON_DISABLED=true` on any extra/standby box that should never run scheduled work.
+
+---
+
 ## Step 1 — PgBouncer (the single most important change)
 
 100k sessions must NEVER become 100k database connections. PgBouncer (transaction mode)

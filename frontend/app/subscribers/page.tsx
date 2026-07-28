@@ -967,6 +967,13 @@ export default function SubscribersPage() {
     setShowForm(true);
   };
 
+  // Deep-link: /subscribers?add=1 (from the command palette) opens the form.
+  useEffect(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("add") === "1") {
+      openCreate();
+    }
+  }, []);
+
   const openEdit = async (sub: Subscriber) => {
     setForm({
       fullName: sub.fullName || "",
@@ -1947,13 +1954,9 @@ export default function SubscribersPage() {
                 />
               </div>
               <div style={{ gridColumn: "span 2" }}>
-                <label style={labelSt}>Document URL</label>
-                <input
-                  style={inputSt}
-                  placeholder="https://…"
-                  value={form.documentUrl}
-                  onChange={(e) => setForm((p) => ({ ...p, documentUrl: e.target.value }))}
-                />
+                <label style={labelSt}>Document (scan or PDF)</label>
+                <ImageUpload label="Upload identity document" allowPdf value={form.documentUrl}
+                  onChange={(url) => setForm((p) => ({ ...p, documentUrl: url }))} />
               </div>
               <div style={{ gridColumn: "span 2", borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 4 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>📷 Photo &amp; Identity (CNIC)</div>

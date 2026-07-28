@@ -45,6 +45,8 @@ export class GatewayService {
     if (process.env.SSLCZ_STORE_ID) list.push('SSLCOMMERZ');
     if (process.env.JAZZCASH_MERCHANT_ID) list.push('JAZZCASH');
     if (process.env.EASYPAISA_STORE_ID) list.push('EASYPAISA');
+    if (process.env.PAYPAL_CLIENT_ID) list.push('PAYPAL');
+    if (process.env.RAZORPAY_KEY_ID) list.push('RAZORPAY');
     return list;
   }
 
@@ -106,6 +108,12 @@ export class GatewayService {
         break;
       case 'EASYPAISA':
         paymentUrl = await this.epCheckout(tx, invoice);
+        break;
+      case 'PAYPAL':
+        paymentUrl = await this.paypalCheckout(tx, invoice);
+        break;
+      case 'RAZORPAY':
+        paymentUrl = await this.razorpayCheckout(tx, invoice);
         break;
       default:
         throw new BadRequestException('Unknown gateway');
@@ -260,6 +268,97 @@ export class GatewayService {
     if (!res.ok) throw new BadRequestException(`Stripe: ${data?.error?.message || res.status}`);
     await this.prisma.gatewayTransaction.update({ where: { id: tx.id }, data: { gatewayRef: data.id } });
     return data.url;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // DRIVER: PAYPAL (global — REST v2 orders, redirect + capture)
+  // ─────────────────────────────────────────────────────────────
+  private get paypalBase() {
+    return process.env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+  }
+  private async paypalToken(): Promise<string> {
+    const basic = Buffer.from(`${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_SECRET}`).toString('base64');
+    const res = await fetch(`${this.paypalBase}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=client_credentials',
+    });
+    const data: any = await res.json();
+    if (!res.ok) throw new BadRequestException(`PayPal auth failed: ${data?.error_description || res.status}`);
+    return data.access_token;
+  }
+  private async paypalCheckout(tx: any, invoice: any): Promise<string> {
+    const token = await this.paypalToken();
+    const currency = (process.env.PAYPAL_CURRENCY || process.env.GATEWAY_CURRENCY || 'USD').toUpperCase();
+    const res = await fetch(`${this.paypalBase}/v2/checkout/orders`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [{
+          reference_id: tx.idempotencyKey,
+          description: `Invoice ${invoice.invoiceNo}`,
+          amount: { currency_code: currency, value: tx.amount.toFixed(2) },
+        }],
+        application_context: {
+          brand_name: 'Internet Service',
+          user_action: 'PAY_NOW',
+          return_url: `${this.backendUrl}/gateway/callback/paypal?key=${tx.idempotencyKey}`,
+          cancel_url: `${this.backendUrl}/gateway/callback/paypal?key=${tx.idempotencyKey}&result=cancel`,
+        },
+      }),
+    });
+    const data: any = await res.json();
+    if (!res.ok) throw new BadRequestException(`PayPal order failed: ${data?.message || res.status}`);
+    await this.prisma.gatewayTransaction.update({ where: { id: tx.id }, data: { gatewayRef: data.id } });
+    const approve = (data.links || []).find((l: any) => l.rel === 'approve' || l.rel === 'payer-action');
+    if (!approve?.href) throw new BadRequestException('PayPal did not return an approval link');
+    return approve.href;
+  }
+  /** Capture a PayPal order after the payer approves. Returns true on success. */
+  async paypalCapture(key: string): Promise<boolean> {
+    const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+    if (!tx?.gatewayRef) return false;
+    const token = await this.paypalToken();
+    const res = await fetch(`${this.paypalBase}/v2/checkout/orders/${tx.gatewayRef}/capture`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.ok && data?.status === 'COMPLETED') {
+      await this.handleSuccess(key, data.id, JSON.stringify(data).slice(0, 4000));
+      return true;
+    }
+    await this.handleFailure(key, data?.message || 'paypal-not-completed');
+    return false;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // DRIVER: RAZORPAY (India — order + hosted checkout page)
+  // ─────────────────────────────────────────────────────────────
+  private async razorpayCheckout(tx: any, invoice: any): Promise<string> {
+    const basic = Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+    const res = await fetch('https://api.razorpay.com/v1/orders', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: Math.round(tx.amount * 100), // paise
+        currency: (process.env.RAZORPAY_CURRENCY || 'INR').toUpperCase(),
+        receipt: invoice.invoiceNo,
+        notes: { key: tx.idempotencyKey },
+      }),
+    });
+    const data: any = await res.json();
+    if (!res.ok) throw new BadRequestException(`Razorpay order failed: ${data?.error?.description || res.status}`);
+    await this.prisma.gatewayTransaction.update({ where: { id: tx.id }, data: { gatewayRef: data.id } });
+    // We serve a small hosted page that opens Razorpay Checkout with this order.
+    return `${this.backendUrl}/gateway/razorpay/form/${tx.idempotencyKey}`;
+  }
+  /** Verify Razorpay's payment signature (HMAC-SHA256 of order_id|payment_id). */
+  verifyRazorpaySignature(orderId: string, paymentId: string, signature: string): boolean {
+    const secret = process.env.RAZORPAY_KEY_SECRET || '';
+    const expected = createHmac('sha256', secret).update(`${orderId}|${paymentId}`).digest('hex');
+    return expected === signature;
   }
 
   /** Verify a Stripe webhook signature (t=...,v1=... header format). */

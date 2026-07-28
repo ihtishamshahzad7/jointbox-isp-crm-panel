@@ -3138,6 +3138,33 @@ if (!unpaid && data.username && data.password) {
     }
   }
 
+  /**
+   * Daily data usage for the last N days — powers the historical usage bar
+   * chart on the subscriber profile. Bytes are attributed to the day the
+   * session started (a good-enough MRTG-style view for support/upsell).
+   */
+  async getDailyUsage(username: string, days = 14) {
+    try {
+      const pg = this.radiusSync.getPgClient();
+      if (!pg) return { days: [] };
+      const res = await pg.query(`
+        SELECT to_char(date_trunc('day', acctstarttime), 'YYYY-MM-DD') AS day,
+               COALESCE(SUM(acctinputoctets), 0)::float8  AS up,
+               COALESCE(SUM(acctoutputoctets), 0)::float8 AS down
+        FROM radacct
+        WHERE username = $1 AND acctstarttime >= NOW() - ($2 || ' days')::interval
+        GROUP BY 1 ORDER BY 1
+      `, [username, days]);
+      const gb = (b: number) => Math.round((b / 1024 ** 3) * 100) / 100;
+      return {
+        days: res.rows.map((r: any) => ({ day: r.day, uploadGb: gb(Number(r.up)), downloadGb: gb(Number(r.down)) })),
+      };
+    } catch (error: any) {
+      this.logger.error(`getDailyUsage error: ${error.message}`);
+      return { days: [] };
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // GET RADIUS AUTH LOG (from radpostauth)
   // Called by profile page — Login Log tab

@@ -195,6 +195,7 @@ distinct from "bad signal".
 | Database backup | daily 02:00 | `pg_dump -Fc`, 14-day retention |
 | Log pruning | daily 04:20 | Drop router logs older than 14 days |
 | Integrity reconcile | daily 03:20 | Wallet↔ledger + RADIUS↔billing drift (also runnable on demand) |
+| Session truth-sync | every 5 min | Close ghost sessions vs the router; heal missing credentials |
 
 Bulk and long-running work runs through a durable **background job queue**
 (`Job` table) rather than blocking the request. Jobs survive a restart — an
@@ -306,3 +307,73 @@ are durable across restarts, and are tenant-scoped. The built-in
 `integrity.reconcile` job checks wallet-vs-ledger balances and cuts any RADIUS
 session billing says should be off; `demo.progress` is a harmless queue test.
 Other services register their own handlers via `JobsService.register(type, fn)`.
+
+---
+
+## 12. Vendor-agnostic session control (RADIUS CoA)
+
+Live disconnect and speed changes use standard **RFC 3576/5176 CoA/Disconnect**
+(`backend/src/network/radius-coa.ts`) — pure UDP, no external tool — so the same
+code controls **MikroTik, Cisco/vBNG, Juniper, pfSense, BiSON BNG and RADIUS
+OLTs**. It matches a session on Acct-Session-Id + NAS-Identifier + NAS-IP.
+
+- **Disconnect:** Network → Live Network → Disconnect. Falls back to the MikroTik
+  API, then a DB-close, and reports the method used.
+- **Live speed change:** Network → Live Network → Speed (persists to radcheck and
+  pushes a CoA-Request so it applies without a reconnect).
+- **Per-NAS setup:** set the NAS shared secret, CoA port (3799) and, for BNGs, the
+  **NAS Identifier**. Use **Test CoA** (NAS → Overview) to confirm the router
+  accepts it. On the router, enable CoA/dynamic-authorization pointing at the panel.
+
+## 13. IPv6 dual-stack
+
+Standard RADIUS attributes (`Framed-IPv6-Prefix`, `Delegated-IPv6-Prefix`) written
+to radreply — vendor-agnostic. Per subscriber it uses a manual override if set,
+else a **deterministic auto-allocation** from the id (stable, collision-free). The
+assigned prefix shows on the subscriber profile. Enable the pool with env:
+`IPV6_FRAMED_BASE`, `IPV6_FRAMED_BASE_BITS`, `IPV6_FRAMED_SIZE`,
+`IPV6_DELEGATED_BASE`, `IPV6_DELEGATED_BASE_BITS`, `IPV6_DELEGATED_SIZE`.
+
+## 14. Backups & disaster recovery
+
+Nightly `pg_dump -Fc`, 14-day retention. Set **`BACKUP_UPLOAD_CMD`** in `.env` to
+push each dump off-site (`scp`/`rclone`/`aws s3`) — a dead server or full disk
+otherwise loses everything. Status (incl. off-site health) shows on Insights → Logs
+and warns if backups are local-only or an upload failed.
+
+## 15. Payment gateways
+
+Configure keys in `.env`; enabled gateways appear on the customer portal. Supported:
+Stripe, bKash, SSLCommerz, JazzCash, Easypaisa, **PayPal** (REST order + capture),
+**Razorpay** (order + hosted checkout, signature-verified). All run the same
+`handleSuccess` chain: record payment → post ledger → receipt notification →
+extend service.
+
+## 16. NOC / uptime & per-subscriber bandwidth
+
+- **Operations → NOC / Uptime:** online/total, problem areas, ISP vs
+  customer-experienced uptime % (power/load-shedding separated from network faults),
+  per-area segment health, outage timeline.
+- **Subscriber profile:** live throughput chart + a 14-day daily-usage bar graph
+  (`GET /subscribers/usage-daily/:username`).
+- **Session truth-sync:** a 5-minute cron (and Live Network → Sync sessions) closes
+  ghost "online" rows the router no longer has; a heal step re-pushes credentials
+  for ACTIVE subscribers missing from RADIUS.
+
+## 17. Built-in assistant
+
+A floating ✦ guide on every screen. Default mode is a **local knowledge-base search**
+— zero extra RAM, fully private (nothing leaves the server), free forever — that
+answers how-to, where-is, and "what happens if…" questions with the exact menu path.
+Optional: set `AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL` (self-hosted Ollama for privacy,
+or Groq free API) to switch to a generative model using the same knowledge base.
+
+## 18. Performance & horizontal scaling
+
+- **pm2 cluster mode** — set `BACKEND_INSTANCES`/`FRONTEND_INSTANCES` (number or
+  `max`) to use every core. Made safe by: crons on worker 0 only
+  (`isPrimaryInstance()`), atomic job claims, and cron in-flight guards.
+- **Prerequisites for clustering:** `REDIS_URL` (shared cache + BullMQ), and
+  PgBouncer (each worker opens its own pool). See `SCALING.md`.
+- Reports use grouped aggregate queries (no N+1). Router polling and provisioning
+  are bounded with `mapLimit` so a large fleet never opens all sockets at once.

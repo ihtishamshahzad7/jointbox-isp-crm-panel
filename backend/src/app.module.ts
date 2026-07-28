@@ -41,6 +41,7 @@ import { SetupModule } from './setup/setup.module';
 import { ConsoleModule } from './console/console.module';
 import { NotesModule } from './notes/notes.module';
 import { JobsModule } from './jobs/jobs.module';
+import { AiModule } from './ai/ai.module';
 import { FiberModule } from './fiber/fiber.module';
 import { GroupsModule } from './groups/groups.module';
 
@@ -85,6 +86,7 @@ import { GroupsModule } from './groups/groups.module';
     ConsoleModule,
     NotesModule,
     JobsModule,
+    AiModule,
     FiberModule,
     GroupsModule,
   ],

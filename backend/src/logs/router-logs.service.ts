@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { createHash } from 'crypto';
+import { isPrimaryInstance } from '../common/cluster-util';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
@@ -130,9 +131,16 @@ export class RouterLogsService {
    * Every two minutes. Routers are polled in parallel but bounded — 200 NAS
    * opening API sockets at once would be worse than the problem it solves.
    */
+  private collectBusy = false;
   @Cron('0 */2 * * * *')
   async collectAll() {
     if (process.env.ROUTER_LOGS_ENABLED === 'false') return;
+    if (!isPrimaryInstance()) return;              // cluster-safe: primary worker only
+    if (this.collectBusy) {                        // overlap-safe: don't pile up
+      this.logger.warn('Router-log poll still running (slow/large fleet) — skipping this tick');
+      return;
+    }
+    this.collectBusy = true;
     try {
       const nasList = await this.prisma.nas.findMany({
         where: { isActive: true, nasIp: { not: null }, apiUsername: { not: null } },
@@ -151,12 +159,15 @@ export class RouterLogsService {
       if (total) this.logger.debug(`Router logs: ${total} new line(s) from ${nasList.length} router(s)`);
     } catch (e: any) {
       this.logger.warn(`Router log collection failed: ${e?.message || e}`);
+    } finally {
+      this.collectBusy = false;
     }
   }
 
   /** Keep a fortnight. Routers are chatty and this table is for diagnosis. */
   @Cron('20 4 * * *')
   async prune() {
+    if (!isPrimaryInstance()) return;
     try {
       const cutoff = new Date(Date.now() - 14 * 86400_000);
       const res = await this.prisma.routerLog.deleteMany({ where: { loggedAt: { lt: cutoff } } });

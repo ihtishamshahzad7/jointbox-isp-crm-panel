@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { JobsService } from '../jobs/jobs.service';
 import { AccountingService } from '../accounting/accounting.service';
+import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * IntegrityService — the two safety nets that catch silent drift.
@@ -31,6 +33,7 @@ export class IntegrityService implements OnModuleInit {
     private radius: RadiusSyncService,
     private jobs: JobsService,
     private accounting: AccountingService,
+    private mikrotik: MikrotikSyncService,
   ) {}
 
   /** Expose the full reconcile as a background job the ISP can run on demand. */
@@ -43,11 +46,32 @@ export class IntegrityService implements OnModuleInit {
       const wallets = await this.reconcileWallets();
       await update(2, 4);
       const radius = await this.reconcileRadiusState(apply);
-      await update(3, 4);
+      await update(3, 5);
       const radiusHeal = await this.healActiveCredentials(apply);
-      await update(4, 4);
-      return { trialBalance, wallets, radius, radiusHeal };
+      await update(4, 5);
+      const sessions = await this.reconcileSessionsWithRouter(apply);
+      await update(5, 5);
+      return { trialBalance, wallets, radius, radiusHeal, sessions };
     });
+  }
+
+  /**
+   * Keep the panel's online state honest automatically — every 5 minutes ask
+   * the routers who is really connected and close ghost sessions. This is what
+   * makes a stale "online" self-heal within minutes after a reboot.
+   */
+  private sessionSyncBusy = false;
+  @Cron('*/5 * * * *')
+  async sessionSyncCron() {
+    // Cluster-safe: only the primary worker runs scheduled jobs.
+    if (!isPrimaryInstance()) return;
+    // Overlap-safe: skip if the previous run (e.g. many unreachable routers) is
+    // still going, so runs never pile up under load.
+    if (this.sessionSyncBusy) { this.logger.warn('Session sync still running — skipping this tick'); return; }
+    this.sessionSyncBusy = true;
+    try { await this.reconcileSessionsWithRouter(true); }
+    catch (e: any) { this.logger.warn(`Session sync cron failed: ${e?.message || e}`); }
+    finally { this.sessionSyncBusy = false; }
   }
 
   /** Wallet balance vs sum of ledger entries, per account. Report-only. */
@@ -168,9 +192,68 @@ export class IntegrityService implements OnModuleInit {
     return { checked: 'radius-credentials', missing: missing.length, healed };
   }
 
+  /**
+   * SESSION TRUTH SYNC — make the panel's "online" match the router's reality.
+   *
+   * A radacct row is "open" (online) until an Accounting-Stop arrives. If that
+   * Stop is lost — e.g. the panel/DB was down during a reboot while a customer
+   * disconnected — the row stays open forever and the panel shows a ghost
+   * "online" user. Here we ask each MikroTik who is ACTUALLY connected
+   * (/ppp/active) and close any open row the router no longer has.
+   *
+   * SAFETY: if a router is unreachable we SKIP it entirely and touch none of
+   * its sessions — an unreachable router must never be read as "everyone off".
+   */
+  async reconcileSessionsWithRouter(apply = true) {
+    const nases = await this.prisma.nas.findMany({
+      where: { isActive: true, nasIp: { not: null }, apiUsername: { not: null } },
+      select: { nasname: true, nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+    });
+
+    let closed = 0; let checkedNas = 0; let skippedNas = 0; const details: any[] = [];
+    for (const nas of nases) {
+      const ip = nas.nasIp as string;
+      let live: any[];
+      try {
+        live = await this.mikrotik.getPppoeActiveConnections(ip, nas.apiPort, nas.apiUsername as string, nas.apiPassword || '');
+      } catch {
+        skippedNas++; continue; // unreachable → do NOT touch its sessions
+      }
+      // getPppoeActiveConnections returns [] both for "nobody online" AND for a
+      // failed call. Guard against the failure case: if the router has open
+      // rows in radacct but returned an empty list, treat as unreachable/ambiguous
+      // and skip, so a blip can't mass-close everyone.
+      const liveNames = new Set(live.map((c) => (c.name || '').trim()).filter(Boolean));
+      checkedNas++;
+
+      const open = await this.prisma.$queryRaw<Array<{ username: string; acctsessionid: string }>>`
+        SELECT username, acctsessionid FROM radacct
+        WHERE acctstoptime IS NULL AND nasipaddress = ${ip}::inet AND username IS NOT NULL`;
+      if (!open.length) continue;
+      if (!liveNames.size && open.length) { skippedNas++; checkedNas--; continue; }
+
+      const ghosts = open.filter((r) => !liveNames.has((r.username || '').trim()));
+      if (apply) {
+        for (const g of ghosts) {
+          await this.prisma.$executeRaw`
+            UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Reconciled-NotOnRouter'
+            WHERE acctsessionid = ${g.acctsessionid} AND acctstoptime IS NULL`;
+          closed++;
+        }
+      }
+      if (ghosts.length) details.push({ nas: nas.nasname || ip, ghosts: ghosts.length });
+    }
+
+    if (closed || skippedNas) {
+      this.logger.warn(`Session sync: closed ${closed} ghost session(s) across ${checkedNas} router(s)${skippedNas ? `, skipped ${skippedNas} unreachable` : ''}`);
+    }
+    return { checked: 'router-sessions', routers: checkedNas, skipped: skippedNas, closed, details };
+  }
+
   /** Nightly at 03:20 — off-peak. */
   @Cron('20 3 * * *')
   async nightly() {
+    if (!isPrimaryInstance()) return;
     try { await this.reconcileWallets(); } catch (e: any) { this.logger.warn(`Wallet reconcile failed: ${e?.message || e}`); }
     try { await this.reconcileRadiusState(true); } catch (e: any) { this.logger.warn(`RADIUS reconcile failed: ${e?.message || e}`); }
     try { await this.healActiveCredentials(true); } catch (e: any) { this.logger.warn(`RADIUS heal failed: ${e?.message || e}`); }

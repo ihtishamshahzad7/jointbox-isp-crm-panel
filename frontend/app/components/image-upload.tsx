@@ -19,9 +19,11 @@ type Props = {
   onChange: (url: string) => void;
   /** "avatar" = round, small; "card" = wide rectangle (for CNIC). */
   shape?: "avatar" | "card";
+  /** Allow PDFs too (e.g. uploaded identity documents), not just images. */
+  allowPdf?: boolean;
 };
 
-export default function ImageUpload({ label, value, onChange, shape = "card" }: Props) {
+export default function ImageUpload({ label, value, onChange, shape = "card", allowPdf = false }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -77,12 +79,16 @@ export default function ImageUpload({ label, value, onChange, shape = "card" }: 
           }}
         >
           {value ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={fileUrl(value)} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            /\.pdf($|\?)/i.test(value) ? (
+              <span style={{ fontSize: 22 }}>📄<br /><span style={{ fontSize: 10 }}>PDF</span></span>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={fileUrl(value)} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            )
           ) : busy ? (
             "Uploading…"
           ) : (
-            <span>+ Upload<br />image</span>
+            <span>+ Upload<br />{allowPdf ? "file" : "image"}</span>
           )}
         </div>
         {value && (
@@ -107,7 +113,7 @@ export default function ImageUpload({ label, value, onChange, shape = "card" }: 
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept={allowPdf ? "image/*,application/pdf" : "image/*"}
         style={{ display: "none" }}
         onChange={(e) => pick(e.target.files?.[0])}
       />

@@ -72,6 +72,13 @@ export class SubscribersController {
     return this.integrity.healActiveCredentials(apply !== 'false');
   }
 
+  /** Sync online state with the routers: close ghost sessions the router no longer has. `?apply=false` = dry run. ISP only. */
+  @Get('integrity/sessions')
+  reconcileSessions(@Req() req: any, @Query('apply') apply?: string) {
+    this.assertIsp(req);
+    return this.integrity.reconcileSessionsWithRouter(apply !== 'false');
+  }
+
   // ========== BASIC CRUD ENDPOINTS ==========
 
   @Get()
@@ -319,6 +326,12 @@ export class SubscribersController {
     @Query('minutes') minutes?: string,
   ) {
     return this.subscribersService.getBandwidthHistory(username, Number(minutes) || 60);
+  }
+
+  /** Daily up/down usage (GB) for the historical bandwidth graph. */
+  @Get('usage-daily/:username')
+  async getDailyUsage(@Param('username') username: string, @Query('days') days?: string) {
+    return this.subscribersService.getDailyUsage(username, Number(days) || 14);
   }
 
   @Get('radius-auth-log/:username')

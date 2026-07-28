@@ -188,7 +188,7 @@ export default function NasPage() {
   const sessionPollRef  = useRef<NodeJS.Timeout|null>(null);
 
   const [form, setForm] = useState({
-    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK',
+    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true
   });
 
@@ -480,6 +480,7 @@ export default function NasPage() {
       // FIX: send the actual ports from the form, not hardcoded values
       apiPort:      Number(form.apiPort),
       incomingPort: Number(form.incomingPort),
+      nasIdentifier: form.nasIdentifier.trim(),
       apiUsername:  form.apiUsername.trim() || undefined,
       apiPassword:  form.apiPassword.trim() || undefined,
       description:  form.description.trim() || undefined,
@@ -513,6 +514,19 @@ export default function NasPage() {
     setDeleteConfirm(null);
   };
 
+  const [coaTesting, setCoaTesting] = useState(false);
+  // Probe whether this NAS accepts RADIUS CoA — harmless, changes nothing.
+  const testCoa = async (id: number) => {
+    setCoaTesting(true);
+    addLog('info', `Testing CoA reachability for NAS #${id}…`);
+    try {
+      const res = await fetch(`${API}/network/nas/${id}/test-coa`, { headers });
+      const data = await res.json();
+      addLog(data?.reachable ? 'info' : 'error', `CoA test: ${data?.message || (res.ok ? 'ok' : 'failed')}`);
+    } catch (e: any) { addLog('error', `CoA test error: ${e.message}`); }
+    setCoaTesting(false);
+  };
+
   const toggleNas = async (id: number) => {
     try {
       const res = await fetch(`${API}/nas/${id}/toggle`, { method:'PATCH', headers });
@@ -522,7 +536,7 @@ export default function NasPage() {
   };
 
   const resetForm = () => setForm({
-    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK',
+    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true
   });
 
@@ -534,6 +548,7 @@ export default function NasPage() {
       nasIp:       nas.nasIp       || '',
       radiusSecret:nas.secret      || '',
       nasType:     nas.type        || 'MIKROTIK',
+      nasIdentifier: (nas as any).nasIdentifier || '',
       apiPort:     nas.apiPort     || 8728,   // use actual stored port
       incomingPort:nas.incomingPort|| 3799,   // use actual stored port
       apiUsername: nas.apiUsername || '',
@@ -998,6 +1013,14 @@ export default function NasPage() {
                     <div style={{ fontSize:12, color:t.text, fontWeight:700, wordBreak:'break-all' }}>{v}</div>
                   </div>
                 ))}
+                <div style={{ gridColumn:'1/-1', marginTop:6 }}>
+                  <button onClick={() => testCoa(viewDetail.nas.id)} disabled={coaTesting}
+                    title="Send a harmless RADIUS CoA probe to confirm this router/BNG accepts session control (disconnect & live speed change). Changes nothing."
+                    style={{ background:'transparent', color:t.accent, border:`1px solid ${t.cardBorder}`, borderRadius:8, padding:'7px 13px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+                    {coaTesting ? 'Testing CoA…' : '⚡ Test CoA'}
+                  </button>
+                  <span style={{ fontSize:11, color:t.textMuted, marginLeft:10 }}>Confirms disconnect &amp; live speed-change will work on this NAS.</span>
+                </div>
               </div>
             )}
 
@@ -1406,6 +1429,11 @@ export default function NasPage() {
                           hint="3799 by default. Used to disconnect a live session — leave it unless your router differs.">
                           <input type="number" value={form.incomingPort}
                             onChange={e => setForm(p => ({ ...p, incomingPort: +e.target.value }))} />
+                        </Field>
+                        <Field label="NAS Identifier (optional)"
+                          hint="Only for BNGs that identify by NAS-Identifier (vBNG/BiSON, etc.). Must match the value the BNG sends. Leave blank for MikroTik.">
+                          <input value={form.nasIdentifier} placeholder="e.g. zalultra-bng-01"
+                            onChange={e => setForm(p => ({ ...p, nasIdentifier: e.target.value }))} />
                         </Field>
                       </>
                     ),

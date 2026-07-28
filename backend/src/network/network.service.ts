@@ -1,10 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
-
-const execAsync = promisify(exec);
+import { CoaService } from './coa.service';
 
 /**
  * Phase 5 network operations. RADIUS tables live in the same Postgres DB,
@@ -21,6 +18,7 @@ export class NetworkService {
   constructor(
     private prisma: PrismaService,
     private radiusSync: RadiusSyncService,
+    private coa: CoaService,
   ) {}
 
   // ── Live sessions ─────────────────────────────────────────────
@@ -80,23 +78,19 @@ export class NetworkService {
     if (!rows.length) throw new BadRequestException('No active session for this user');
     const session = rows[0];
 
-    const nas = await this.prisma.nas.findFirst({ where: { nasIp: session.nasipaddress } });
-    const secret = nas?.secret || 'testing123';
-    const coaPort = nas?.incomingPort && nas.incomingPort !== 1812 && nas.incomingPort !== 1813 ? nas.incomingPort : 3799;
-
     let method = 'radacct-only';
     try {
-      const payload = [
-        `User-Name=${username}`,
-        `Acct-Session-Id=${session.acctsessionid}`,
-        `NAS-IP-Address=${session.nasipaddress}`,
-      ].join(',');
-      const cmd = `echo "${payload}" | radclient -x ${session.nasipaddress}:${coaPort} disconnect "${secret}"`;
-      await execAsync(cmd, { timeout: 8000 });
-      method = 'coa';
-      this.logger.log(`CoA disconnect sent for ${username} → ${session.nasipaddress}:${coaPort}`);
+      // Standard RFC 3576 RADIUS Disconnect — vendor-agnostic (MikroTik, Cisco,
+      // Juniper, pfSense, vBNG, OLTs). No external tool required.
+      const res = await this.coa.disconnectByUsername(username);
+      if (res.ok) {
+        method = 'radius-coa';
+        this.logger.log(`CoA disconnect ACK for ${username} → ${session.nasipaddress}`);
+      } else {
+        this.logger.warn(`CoA disconnect not acknowledged for ${username}: ${res.message}; closing session in DB only`);
+      }
     } catch (e: any) {
-      this.logger.warn(`radclient CoA unavailable (${e.message?.split('\n')[0]}); closing session in DB only`);
+      this.logger.warn(`CoA disconnect error for ${username} (${e.message}); closing session in DB only`);
     }
 
     // always close the session record so dashboards reflect reality
