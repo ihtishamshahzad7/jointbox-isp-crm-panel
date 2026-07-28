@@ -14,10 +14,13 @@ cd "$REPO"
 echo "⬇️  Pulling latest code..."
 git pull
 
-echo "🗄️  Syncing database schema..."
+echo "🗄️  Applying database migrations + reconcile..."
 cd "$REPO/backend"
 npm install --no-audit --no-fund
-npm run db:push          # fix ownership + prisma db push + generate (idempotent)
+# migrate deploy (versioned) + idempotent db push safety net. Guarantees the DB
+# always matches schema.prisma, on a fresh, drifted, or clean server. See
+# scripts/db-deploy.sh and MIGRATIONS.md.
+npm run db:deploy
 
 echo "🔧 Building backend..."
 npm run build            # produces backend/dist/main.js
@@ -34,6 +37,15 @@ cd "$REPO"
 # the port freed before the new one binds — no EADDRINUSE loop.
 pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
+# Make pm2 (and therefore both apps) come back automatically after any reboot or
+# power loss. Idempotent — safe to run every deploy. Needs root for the systemd
+# unit; falls back silently when not root (already configured on prior runs).
+if [ "$(id -u)" -eq 0 ]; then
+  pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
+else
+  sudo env PATH="$PATH" pm2 startup systemd -u "$USER" --hp "$HOME" >/dev/null 2>&1 || true
+fi
+pm2 save >/dev/null 2>&1 || true
 
 echo ""
 echo "✅ Done. Status:"

@@ -140,19 +140,16 @@ RADACCT_RETAIN_DAYS=90
 EOF
 chmod 600 .env
 
-npm ci --omit=dev >/dev/null 2>&1 || npm install >/dev/null 2>&1
-npx prisma generate >/dev/null 2>&1
-# Creates every table AND (via DatabaseSetupService on boot) the indexes,
-# FreeRADIUS accounting columns, nasreload table and archival helpers.
+# Full install (dev deps included) — nest/swc/prisma CLI are devDependencies and
+# are needed to migrate and build. Runtime is still lean because we build to dist.
+npm ci >/dev/null 2>&1 || npm install >/dev/null 2>&1
 # Ownership first — anything created earlier as the postgres superuser would
-# otherwise make `prisma db push` fail with "permission denied for table ...".
+# otherwise make Prisma fail with "permission denied for table ...".
 sudo -u postgres psql -d "$DB_NAME" -qc "REASSIGN OWNED BY postgres TO $DB_USER;" >/dev/null 2>&1
-npx prisma db push --accept-data-loss >/dev/null 2>&1 && ok "Schema applied"
+# Versioned migrations + idempotent reconcile. Same command every server runs,
+# so a fresh clone ends up byte-identical to an updated one. See MIGRATIONS.md.
+npm run db:deploy >/dev/null 2>&1 && ok "Schema migrated & in sync" || warn "db:deploy had warnings — run: cd $APP_DIR/backend && npm run db:deploy"
 npm run build >/dev/null 2>&1 && ok "Backend built"
-
-pm2 delete jointbox-api >/dev/null 2>&1
-pm2 start dist/main.js -i max --name jointbox-api >/dev/null
-ok "Backend running in cluster mode ($(nproc) workers)"
 
 # -----------------------------------------------------------------------------
 step "7/9  Frontend"
@@ -161,13 +158,22 @@ if [ -d "$APP_DIR/frontend" ]; then
   echo "NEXT_PUBLIC_BACKEND_URL=http://$SERVER_IP:$API_PORT" > .env.local
   npm ci >/dev/null 2>&1 || npm install >/dev/null 2>&1
   npm run build >/dev/null 2>&1 && ok "Frontend built"
-  pm2 delete jointbox-web >/dev/null 2>&1
-  pm2 start npm --name jointbox-web -- start >/dev/null
-  ok "Frontend running on :$WEB_PORT"
 else
   warn "frontend/ not found — skipped"
 fi
 
+# Start BOTH apps through the committed ecosystem.config.js — pm2 owns the real
+# entrypoints (backend dist/main.js and the next binary) directly, never an
+# `npm run start` wrapper. That wrapper is what orphaned the port and caused the
+# EADDRINUSE restart loop; launching the real process means a restart cleanly
+# frees the port. Cluster mode: set BACKEND_INSTANCES/FRONTEND_INSTANCES=max.
+cd "$APP_DIR"
+# retire any processes from older installs that used the buggy names/wrappers
+pm2 delete jointbox-api jointbox-web >/dev/null 2>&1 || true
+pm2 startOrReload ecosystem.config.js --update-env >/dev/null 2>&1
+ok "Backend + frontend running via ecosystem.config.js"
+
+# Auto-start on every boot / power loss.
 pm2 save >/dev/null 2>&1
 pm2 startup systemd -u root --hp /root >/dev/null 2>&1
 ok "PM2 will restart everything on boot"
@@ -191,7 +197,7 @@ systemctl restart freeradius && sleep 2
 systemctl is-active --quiet freeradius && ok "FreeRADIUS running" || err "FreeRADIUS failed — run: freeradius -XC"
 ss -ulnp 2>/dev/null | grep -q ':1812' && ok "Listening on 1812 (auth)" || warn "Not listening on 1812"
 ss -ulnp 2>/dev/null | grep -q ':1813' && ok "Listening on 1813 (accounting)" || warn "Not listening on 1813"
-curl -fsS "http://localhost:$API_PORT/health" >/dev/null 2>&1 && ok "API responding" || warn "API not responding yet — pm2 logs jointbox-api"
+curl -fsS "http://localhost:$API_PORT/health" >/dev/null 2>&1 && ok "API responding" || warn "API not responding yet — pm2 logs jointbox-backend"
 
 cat <<EOF
 
@@ -215,7 +221,7 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
   Then add the NAS in the panel using the router's IP and that same secret.
 
   Useful:
-    pm2 status / pm2 logs jointbox-api
+    pm2 status / pm2 logs jointbox-backend
     sudo systemctl stop freeradius && sudo freeradius -X    # debug a dial-up
     (afterwards: sudo systemctl start freeradius)
 
