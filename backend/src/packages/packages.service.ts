@@ -326,6 +326,23 @@ export class PackagesService {
   //   1. The pool exists
   //   2. The pool is not already assigned to another package
   // ─────────────────────────────────────────────────────────────
+  /** Loop-create for bulk import — validate-and-continue, report per-row errors. */
+  async importMany(rows: any[]) {
+    let success = 0, failed = 0;
+    const errors: Array<{ index: number; name?: string; error: string }> = [];
+    for (let i = 0; i < rows.length; i++) {
+      try {
+        if (!rows[i]?.name) throw new Error('name is required');
+        await this.create(rows[i]);
+        success++;
+      } catch (e: any) {
+        failed++;
+        errors.push({ index: i, name: rows[i]?.name, error: e?.message || 'Import failed' });
+      }
+    }
+    return { total: rows.length, success, failed, errors };
+  }
+
   async create(data: any) {
     const poolId = data.poolId ? parseInt(data.poolId) : null;
 

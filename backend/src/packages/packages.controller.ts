@@ -108,6 +108,12 @@ export class PackagesController {
     return this.packagesService.create(body);
   }
 
+  /** Bulk import packages from a file (used by the Import dialog). */
+  @Post('import')
+  importMany(@Body() body: { rows: any[] }): any {
+    return this.packagesService.importMany(body?.rows || []);
+  }
+
   @Put(':id')
   update(@Param('id') id: string, @Body() body: any): any {
     return this.packagesService.update(+id, body);

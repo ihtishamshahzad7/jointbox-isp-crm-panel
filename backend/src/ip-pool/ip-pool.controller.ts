@@ -85,6 +85,11 @@ export class IpPoolController {
   // ── POST /ip-pools
   // Body: { name, network, subnet }
   // nasId is intentionally NOT accepted — NAS is not required for IP pools
+  @Post('import')
+  importMany(@Body() body: any, @Req() req: any) {
+    return this.ipPoolService.importMany(body?.rows || [], req.user);
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@Body() body: any, @Req() req: any) {

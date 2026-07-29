@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Wizard, Field } from "../components/wizard";
+import ImportWizard from "../components/import-wizard";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -176,6 +177,7 @@ export default function NasPage() {
   const [checkingIds, setCheckingIds] = useState<Set<number>>(new Set());
 
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editItem, setEditItem] = useState<NasEntry|null>(null);
   const [viewDetail, setViewDetail] = useState<ViewDetail|null>(null);
   const [logs, setLogs] = useState<NasLog[]>([]);
@@ -738,6 +740,30 @@ export default function NasPage() {
             </div>
             {(!me || isAdminRole(me.role) || me.canAddNas) && (
               <Btn onClick={() => { resetForm(); setEditItem(null); setShowForm(true); }} variant="primary" style={{ padding:'9px 14px', fontSize:13 }}><Icons.Plus /> Add NAS</Btn>
+            )}
+            {(!me || isAdminRole(me.role) || me.canAddNas) && (
+              <Btn onClick={() => setShowImport(true)} variant="ghost" style={{ padding:'9px 14px', fontSize:13 }}>⬆ Import</Btn>
+            )}
+            {showImport && (
+              <ImportWizard
+                onClose={() => setShowImport(false)}
+                onDone={() => { loadData(); }}
+                config={{
+                  title: "Import NAS / Routers",
+                  endpoint: "/nas/import",
+                  required: [{ label: "NAS IP", field: "nasIp" }, { label: "Name", field: "nasName" }, { label: "RADIUS secret", field: "secret" }],
+                  optional: [{ label: "API port", field: "apiPort" }, { label: "API user", field: "apiUsername" }],
+                  alias: {
+                    nas_ip: "nasIp", ip: "nasIp", nasip: "nasIp",
+                    nas_name: "nasName", name: "nasName", shortname: "shortname",
+                    radius_secret: "secret", secret: "secret",
+                    api_port: "apiPort", api_username: "apiUsername", api_user: "apiUsername", api_password: "apiPassword",
+                    nas_type: "nasType", type: "nasType", device_type: "deviceType", description: "description",
+                  },
+                  drop: ["id", "isp_id", "branch_id"],
+                  sample: "nasName,nasIp,secret,apiPort,nasType\nMain-MikroTik,192.168.1.1,mysecret,8728,MIKROTIK",
+                }}
+              />
             )}
           </div>
 

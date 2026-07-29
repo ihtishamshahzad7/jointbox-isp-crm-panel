@@ -248,6 +248,36 @@ export class NasService implements OnModuleInit {
     return map[raw?.toUpperCase() ?? ''] ?? NasType.MIKROTIK;
   }
 
+  /** Bulk import routers/NAS from a file. Each row loops through create(). */
+  async importMany(rows: any[], actor?: any) {
+    let success = 0, failed = 0;
+    const errors: Array<{ index: number; name?: string; error: string }> = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || {};
+      try {
+        await this.create({
+          nasIp: r.nasIp || r.nasName,
+          nasName: r.nasName || r.nasIp,
+          secret: r.secret,
+          shortname: r.shortname,
+          apiPort: r.apiPort ? Number(r.apiPort) : undefined,
+          incomingPort: r.incomingPort ? Number(r.incomingPort) : undefined,
+          apiUsername: r.apiUsername,
+          apiPassword: r.apiPassword,
+          nasType: r.nasType,
+          description: r.description,
+          nasIdentifier: r.nasIdentifier,
+          deviceType: r.deviceType,
+        }, actor);
+        success++;
+      } catch (e: any) {
+        failed++;
+        errors.push({ index: i, name: r.nasName || r.nasIp, error: e?.message || 'Import failed' });
+      }
+    }
+    return { total: rows.length, success, failed, errors };
+  }
+
   async create(data: {
     nasIp: string; nasName: string; secret: string;
     shortname?: string;

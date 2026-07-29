@@ -80,6 +80,7 @@ const durationTypes: DurationType[] = ["DAILY", "WEEKLY", "MONTHLY", "QUARTERLY"
 
 // Own file so a mistake here cannot take down the packages page.
 import { PackageWizard } from "./package-wizard";
+import ImportWizard from "../components/import-wizard";
 import { PackageTable } from "../components/network-tables";
 
 const packageDefaults = {
@@ -150,6 +151,7 @@ export default function PackagesPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [sharePackage, setSharePackage] = useState<PackageRow | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   // Group-based package filters used by the package list UI
   const [franchiseGroups, setFranchiseGroups] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
@@ -616,6 +618,33 @@ export default function PackagesPage() {
         >
           Add New Package
         </button>}
+        {isIsp && <button
+          style={{ padding: "8px 18px", borderRadius: "10px", fontSize: "12px", fontWeight: 600, border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface)", color: "var(--text)" }}
+          onClick={() => setShowImport(true)}
+        >
+          ⬆ Import
+        </button>}
+        {showImport && (
+          <ImportWizard
+            onClose={() => setShowImport(false)}
+            onDone={() => { mutatePackages(); mutateStats(); }}
+            config={{
+              title: "Import Packages",
+              endpoint: "/packages/import",
+              required: [{ label: "Name", field: "name" }, { label: "Price", field: "price" }],
+              optional: [{ label: "Download (Mbps)", field: "downloadSpeed" }, { label: "Upload (Mbps)", field: "uploadSpeed" }],
+              alias: {
+                package_name: "name", plan: "name", plan_name: "name", name: "name",
+                monthly_price: "price", amount: "price", price: "price",
+                download: "downloadSpeed", download_speed: "downloadSpeed", dl: "downloadSpeed",
+                upload: "uploadSpeed", upload_speed: "uploadSpeed", ul: "uploadSpeed",
+                rate_limit: "rateLimit", validity: "validity", validity_days: "validity",
+              },
+              drop: ["id", "isp_id", "branch_id"],
+              sample: "name,price,downloadSpeed,uploadSpeed\n10MB Home,1500,10,10",
+            }}
+          />
+        )}
         {isIsp && <button
           style={{
             padding: "8px 18px",

@@ -362,6 +362,23 @@ export class IpPoolService {
   //   3. Subnet must be a number between 8 and 30
   //   4. No NAS required — NAS field is intentionally ignored
   // ─────────────────────────────────────────────────────────────
+  /** Bulk import IP pools from a file. Subnet defaults to /24 if not supplied. */
+  async importMany(rows: any[], actor?: Actor) {
+    let success = 0, failed = 0;
+    const errors: Array<{ index: number; name?: string; error: string }> = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || {};
+      try {
+        await this.create({ name: r.name, network: r.network, subnet: String(r.subnet || '24').replace('/', '').trim() }, actor);
+        success++;
+      } catch (e: any) {
+        failed++;
+        errors.push({ index: i, name: r.name, error: e?.message || 'Import failed' });
+      }
+    }
+    return { total: rows.length, success, failed, errors };
+  }
+
   async create(data: {
     name:    string;
     network: string;

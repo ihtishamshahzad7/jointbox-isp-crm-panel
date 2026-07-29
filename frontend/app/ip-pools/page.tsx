@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Wizard, Field } from "../components/wizard";
+import ImportWizard from "../components/import-wizard";
 import { PoolTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -104,6 +105,7 @@ export default function IpPoolsPage() {
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [groupOptions, setGroupOptions] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editPool, setEditPool] = useState<IpPool | null>(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [formSaving, setFormSaving] = useState(false);
@@ -485,7 +487,27 @@ export default function IpPoolsPage() {
             <Btn variant="primary" onClick={openCreate} size="sm">
               <Ic.Plus /> Add IP Pool
             </Btn>
+            <Btn variant="ghost" onClick={() => setShowImport(true)} size="sm">⬆ Import</Btn>
           </div>
+          {showImport && (
+            <ImportWizard
+              onClose={() => setShowImport(false)}
+              onDone={() => { loadAll(); }}
+              config={{
+                title: "Import IP Pools",
+                endpoint: "/ip-pools/import",
+                required: [{ label: "Name", field: "name" }, { label: "Network", field: "network" }],
+                optional: [{ label: "Subnet (CIDR /nn)", field: "subnet" }],
+                alias: {
+                  pool_name: "name", name: "name",
+                  network: "network", range: "network", ranges: "network", subnet_network: "network",
+                  subnet: "subnet", cidr: "subnet", mask: "subnet",
+                },
+                drop: ["id", "nas_id", "isp_id", "branch_id"],
+                sample: "name,network,subnet\npppoe-pool,192.168.10.0,24",
+              }}
+            />
+          )}
 
           {/* Table */}
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:10, overflow:"hidden" }}>

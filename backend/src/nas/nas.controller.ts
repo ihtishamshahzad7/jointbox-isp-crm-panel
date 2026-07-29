@@ -54,6 +54,9 @@ export class NasController {
   @Post()
   create(@Body() body: any, @Req() req: any) { return this.nasService.create(body, req.user); }
 
+  @Post('import')
+  importMany(@Body() body: any, @Req() req: any) { return this.nasService.importMany(body?.rows || [], req.user); }
+
   @Put(':id')
   update(@Param('id') id: string, @Body() body: any) {
     return this.nasService.update(+id, body);
