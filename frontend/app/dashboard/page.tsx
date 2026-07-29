@@ -6,6 +6,7 @@ import { NovaArea, NovaBars, NovaDonut, dailySeries } from "../components/nova-c
 import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
 import { useSSE } from "../components/use-sse";
+import OverviewCharts from "./overview-charts";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -294,6 +295,7 @@ export default function DashboardPage() {
   const router = useRouter();
 
   const [mounted, setMounted] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [tab, setTab] = useState<DashboardTab>("home");
   const [busyAction, setBusyAction] = useState<string>("");
   const [toast, setToast] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
@@ -380,6 +382,7 @@ export default function DashboardPage() {
 
   const refreshAll = async () => {
     await Promise.all([mutateSubscribers(), mutateInvoices(), mutatePayments(), mutateUsers(), mutateNas()]);
+    setRefreshKey((k) => k + 1);
   };
 
   useEffect(() => {
@@ -781,6 +784,9 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+
+          {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
+          <OverviewCharts refreshKey={refreshKey} />
 
           <div style={{ ...cardStyle }}>
             <div style={{ fontWeight: 800, marginBottom: 10 }}>Quick Actions</div>

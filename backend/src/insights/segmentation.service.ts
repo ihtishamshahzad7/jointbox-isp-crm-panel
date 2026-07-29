@@ -398,6 +398,18 @@ export class SegmentationService {
     const dealers = subs.filter((s) => s.user && !ownerIds.has(s.user.parentId as any));
     const subDealers = subs.filter((s) => s.user && ownerIds.has(s.user.parentId as any));
 
+    // Role-based tier counts (subscribers owned by each account type) — feeds
+    // the dashboard's franchise / dealer / sub-dealer tiles.
+    const tiers = { franchise: 0, dealer: 0, subDealer: 0, direct: 0 };
+    for (const s of subs) {
+      switch (s.user?.role) {
+        case 'RESELLER': tiers.franchise++; break;
+        case 'SUB_RESELLER': tiers.dealer++; break;
+        case 'RETAILER': tiers.subDealer++; break;
+        default: if (!s.user) tiers.direct++; break;
+      }
+    }
+
     const ticketMap: Record<string, number> = {};
     tickets.forEach((t: any) => (ticketMap[t.status] = t._count._all));
 
@@ -461,6 +473,7 @@ export class SegmentationService {
         subDealerSubscribers: subDealers.length,
         directSubscribers: subs.filter((s) => !s.user).length,
       },
+      tiers,
       tickets: {
         open: ticketMap.OPEN ?? 0,
         inProgress: ticketMap.IN_PROGRESS ?? 0,
