@@ -2941,14 +2941,15 @@ export default function SubscribersPage() {
                   ? setNasMap((m) => ({ ...m, [val]: id }))
                   : setPkgMap((m) => ({ ...m, [val]: id }));
                 const opts = kind === "nas" ? nasList : packages;
+                const count = rows.filter((r) => (kind === "nas" ? rowNasVal(r) : rowPkgVal(r)) === val).length;
                 return (
-                  <div style={{ display: "grid", gridTemplateColumns: "150px 20px 1fr", alignItems: "center", gap: 8, marginTop: 6 }}>
-                    <span style={{ fontSize: 12, color: t.text, overflow: "hidden", textOverflow: "ellipsis" }} title={val}>
-                      <b style={{ color: "#f59e0b" }}>{val}</b>
+                  <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", alignItems: "center", gap: 8, marginTop: 6 }}>
+                    <span style={{ fontSize: 12, color: t.text }} title={val}>
+                      File&apos;s {kind === "nas" ? "NAS" : "package"} <b style={{ color: "#f59e0b" }}>{val}</b>
+                      <span style={{ color: t.textMuted }}> ({count} row{count === 1 ? "" : "s"}) →</span>
                     </span>
-                    <span style={{ color: t.textMuted }}>→</span>
                     <select style={{ ...inputSt, cursor: "pointer" }} value={cur} onChange={(e) => set(e.target.value)}>
-                      <option value="">— pick this panel&apos;s {kind === "nas" ? "NAS" : "package"} —</option>
+                      <option value="">— choose the matching {kind === "nas" ? "NAS" : "package"} in this panel —</option>
                       {opts.map((o: any) => (
                         <option key={o.id} value={o.id}>
                           {kind === "nas" ? `${o.nasname}${o.nasIp ? ` (${o.nasIp})` : ""}` : `${o.name}`} — id {o.id}
@@ -2962,6 +2963,15 @@ export default function SubscribersPage() {
               return (
                 <div style={{ marginTop: 12, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: 12 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Check &amp; map before import ({rows.length} row{rows.length === 1 ? "" : "s"})</div>
+
+                  {(nasBad.length > 0 || pkgBad.length > 0) && (
+                    <div style={{ fontSize: 11.5, color: t.textSub, background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.3)", borderRadius: 8, padding: "8px 10px", marginBottom: 6, lineHeight: 1.5 }}>
+                      Your file came from another panel, so its NAS/package id numbers don&apos;t exist here.
+                      For each old number below, pick the matching NAS or package <b>in this panel</b>. Every row using
+                      that old number will be switched to your id automatically. (Tip: to skip this, set the correct
+                      nas_id / package_id in the Excel before uploading.)
+                    </div>
+                  )}
 
                   {/* required (block) + recommended (info) field checks */}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center" }}>
@@ -2983,8 +2993,8 @@ export default function SubscribersPage() {
                   {nasVals.length > 0 && (
                     <div style={{ marginTop: 10 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>
-                        NAS: {nasVals.length - nasBad.length}/{nasVals.length} matched automatically
-                        {nasBad.length > 0 && <span style={{ color: "#f59e0b" }}> · {nasBad.length} need a pick</span>}
+                        NAS/router: {nasVals.length - nasBad.length}/{nasVals.length} already match this panel
+                        {nasBad.length > 0 && <span style={{ color: "#f59e0b" }}> · {nasBad.length} need you to pick below</span>}
                       </div>
                       {nasBad.map((v) => <MapRow key={`n${v}`} val={v} kind="nas" />)}
                     </div>
@@ -2994,8 +3004,8 @@ export default function SubscribersPage() {
                   {pkgVals.length > 0 && (
                     <div style={{ marginTop: 10 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>
-                        Package: {pkgVals.length - pkgBad.length}/{pkgVals.length} matched automatically
-                        {pkgBad.length > 0 && <span style={{ color: "#f59e0b" }}> · {pkgBad.length} need a pick</span>}
+                        Package/plan: {pkgVals.length - pkgBad.length}/{pkgVals.length} already match this panel
+                        {pkgBad.length > 0 && <span style={{ color: "#f59e0b" }}> · {pkgBad.length} need you to pick below</span>}
                       </div>
                       {pkgBad.map((v) => <MapRow key={`p${v}`} val={v} kind="pkg" />)}
                     </div>
