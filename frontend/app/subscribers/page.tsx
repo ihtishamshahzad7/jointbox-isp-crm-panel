@@ -267,11 +267,12 @@ export default function SubscribersPage() {
   const [importRaw, setImportRaw] = useState("");
   const [importFileName, setImportFileName] = useState("");
   const importFileRef = useRef<HTMLInputElement>(null);
-  // Map a FOREIGN panel's ids to THIS panel. When set, every imported row's
-  // nasId / packageId is overridden — the safe way to bring rows across when
-  // the exporting panel numbered its NAS and packages differently.
-  const [importMapNasId, setImportMapNasId] = useState("");
-  const [importMapPackageId, setImportMapPackageId] = useState("");
+  // Per-VALUE mapping of a foreign panel's ids/names to THIS panel. Keyed by the
+  // raw value found in the file ("1", "5MB Home", "10.10.10.10"), each maps to a
+  // local id. Values that already match locally (by id, name or IP) auto-resolve;
+  // only the genuine mismatches need a manual pick.
+  const [nasMap, setNasMap] = useState<Record<string, string>>({});
+  const [pkgMap, setPkgMap] = useState<Record<string, string>>({});
   const [importSalespersonId, setImportSalespersonId] = useState("");
   const [massSettingsForm, setMassSettingsForm] = useState<any>({ profileStatus: "ACTIVE", connectionType: "FTTH", discountAmountType: "PERCENTAGE" });
   const [exportType, setExportType] = useState<"CSV" | "EXCEL">("CSV");
@@ -783,6 +784,30 @@ export default function SubscribersPage() {
     }
   };
 
+  // ---- Foreign id/name → local id resolution -------------------------------
+  const normVal = (v: any) => String(v ?? "").trim().toLowerCase();
+  /** The NAS reference a row carries, whatever column the source panel used. */
+  const rowNasVal = (r: any) => String(r.nasId ?? r.nas ?? r.nasName ?? r.nas_name ?? r.nasIp ?? r.nas_ip ?? "").trim();
+  const rowPkgVal = (r: any) => String(r.packageId ?? r.package ?? r.packageName ?? r.package_name ?? r.plan ?? r.planName ?? "").trim();
+  /** Auto-match a file value to a local NAS by id, name/shortname, or IP. */
+  const autoNas = (val: string): string | null => {
+    const v = normVal(val);
+    if (!v) return null;
+    const hit = nasList.find((n) =>
+      String(n.id) === v || normVal(n.nasname) === v ||
+      normVal((n as any).shortname) === v || normVal((n as any).nasIp) === v);
+    return hit ? String(hit.id) : null;
+  };
+  const autoPkg = (val: string): string | null => {
+    const v = normVal(val);
+    if (!v) return null;
+    const hit = packages.find((p) => String(p.id) === v || normVal(p.name) === v);
+    return hit ? String(hit.id) : null;
+  };
+  /** Final resolution = manual pick if any, else auto-match. */
+  const resolveNas = (val: string) => nasMap[val] || autoNas(val);
+  const resolvePkg = (val: string) => pkgMap[val] || autoPkg(val);
+
   /** Parse the import box (JSON array or CSV) into row objects. Returns null on error. */
   const parseImportRows = (): any[] | null => {
     const raw = importRaw.trim();
@@ -814,13 +839,29 @@ export default function SubscribersPage() {
       return;
     }
 
-    // Apply the id-mapping overrides so foreign panel ids don't leak in.
-    if (importMapNasId || importMapPackageId) {
-      rows = rows.map((r) => ({
-        ...r,
-        ...(importMapNasId ? { nasId: Number(importMapNasId), nas: Number(importMapNasId) } : {}),
-        ...(importMapPackageId ? { packageId: Number(importMapPackageId), package: Number(importMapPackageId) } : {}),
-      }));
+    // Translate each row's NAS and package reference to THIS panel's id, using
+    // the auto-match + any manual mapping. Rows whose value can't be resolved
+    // are blocked below so nothing foreign reaches the database.
+    const unresolved: string[] = [];
+    rows = rows.map((r, i) => {
+      const out = { ...r };
+      const nv = rowNasVal(r);
+      if (nv) {
+        const id = resolveNas(nv);
+        if (id) { out.nasId = Number(id); out.nas = Number(id); }
+        else unresolved.push(`row ${i + 2}: NAS "${nv}"`);
+      }
+      const pv = rowPkgVal(r);
+      if (pv) {
+        const id = resolvePkg(pv);
+        if (id) { out.packageId = Number(id); out.package = Number(id); }
+        else unresolved.push(`row ${i + 2}: package "${pv}"`);
+      }
+      return out;
+    });
+    if (unresolved.length) {
+      showToast(`Map these first: ${unresolved.slice(0, 4).join("; ")}${unresolved.length > 4 ? "…" : ""}`, "err");
+      return;
     }
 
     try {
@@ -2807,7 +2848,7 @@ export default function SubscribersPage() {
               </button>
             </div>
 
-            {/* ── Map foreign ids to THIS panel + pre-import checks ── */}
+            {/* ── Per-value mapping to THIS panel + pre-import checks ── */}
             {(() => {
               const rows = parseImportRows();
               if (rows === null) return <div style={{ marginTop: 12, fontSize: 12, color: "#ef4444" }}>⚠ Could not parse — check the CSV/JSON format.</div>;
@@ -2822,35 +2863,42 @@ export default function SubscribersPage() {
                 { label: "phone", ok: has(["phone"]) },
                 { label: "email", ok: has(["email"]) },
               ];
-              const localNasIds = new Set(nasList.map((n) => String(n.id)));
-              const localPkgIds = new Set(packages.map((p) => String(p.id)));
-              const foreignNas = !importMapNasId && has(["nasId", "nas"])
-                ? [...new Set(rows.map((r) => String(r.nasId ?? r.nas ?? "")).filter(Boolean))].filter((v) => !localNasIds.has(v))
-                : [];
-              const foreignPkg = !importMapPackageId && has(["packageId", "package"])
-                ? [...new Set(rows.map((r) => String(r.packageId ?? r.package ?? "")).filter(Boolean))].filter((v) => !localPkgIds.has(v))
-                : [];
+              // Distinct NAS / package values actually present in the file.
+              const nasVals = [...new Set(rows.map(rowNasVal).filter(Boolean))];
+              const pkgVals = [...new Set(rows.map(rowPkgVal).filter(Boolean))];
+              const nasBad = nasVals.filter((v) => !resolveNas(v));
+              const pkgBad = pkgVals.filter((v) => !resolvePkg(v));
+
+              const MapRow = ({ val, kind }: { val: string; kind: "nas" | "pkg" }) => {
+                const cur = kind === "nas" ? (nasMap[val] || "") : (pkgMap[val] || "");
+                const set = (id: string) => kind === "nas"
+                  ? setNasMap((m) => ({ ...m, [val]: id }))
+                  : setPkgMap((m) => ({ ...m, [val]: id }));
+                const opts = kind === "nas" ? nasList : packages;
+                return (
+                  <div style={{ display: "grid", gridTemplateColumns: "150px 20px 1fr", alignItems: "center", gap: 8, marginTop: 6 }}>
+                    <span style={{ fontSize: 12, color: t.text, overflow: "hidden", textOverflow: "ellipsis" }} title={val}>
+                      <b style={{ color: "#f59e0b" }}>{val}</b>
+                    </span>
+                    <span style={{ color: t.textMuted }}>→</span>
+                    <select style={{ ...inputSt, cursor: "pointer" }} value={cur} onChange={(e) => set(e.target.value)}>
+                      <option value="">— pick this panel&apos;s {kind === "nas" ? "NAS" : "package"} —</option>
+                      {opts.map((o: any) => (
+                        <option key={o.id} value={o.id}>
+                          {kind === "nas" ? `${o.nasname}${o.nasIp ? ` (${o.nasIp})` : ""}` : `${o.name}`} — id {o.id}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              };
+
               return (
                 <div style={{ marginTop: 12, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Map to this panel &amp; check ({rows.length} row{rows.length === 1 ? "" : "s"})</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div>
-                      <label style={labelSt}>Assign all rows to NAS</label>
-                      <select style={{ ...inputSt, cursor: "pointer" }} value={importMapNasId} onChange={(e) => setImportMapNasId(e.target.value)}>
-                        <option value="">Keep nasId from file</option>
-                        {nasList.map((n) => <option key={n.id} value={n.id}>{n.nasname}{(n as any).nasIp ? ` (${(n as any).nasIp})` : ""} — id {n.id}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label style={labelSt}>Assign all rows to package</label>
-                      <select style={{ ...inputSt, cursor: "pointer" }} value={importMapPackageId} onChange={(e) => setImportMapPackageId(e.target.value)}>
-                        <option value="">Keep packageId from file</option>
-                        {packages.map((p) => <option key={p.id} value={p.id}>{p.name} — id {p.id}</option>)}
-                      </select>
-                    </div>
-                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Check &amp; map before import ({rows.length} row{rows.length === 1 ? "" : "s"})</div>
 
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                  {/* required fields */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4 }}>
                     {required.map((r) => (
                       <span key={r.label} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 999, background: r.ok ? "rgba(34,197,94,.14)" : "rgba(239,68,68,.14)", color: r.ok ? "#16a34a" : "#ef4444", fontWeight: 600 }}>
                         {r.ok ? "✓" : "✕"} {r.label}
@@ -2858,18 +2906,34 @@ export default function SubscribersPage() {
                     ))}
                   </div>
 
-                  {foreignNas.length > 0 && (
-                    <div style={{ marginTop: 8, fontSize: 11.5, color: "#f59e0b" }}>
-                      ⚠ The file has nasId {foreignNas.slice(0, 6).join(", ")}{foreignNas.length > 6 ? "…" : ""} which don't exist here. Pick a NAS above to remap all rows, or the import will fail those rows.
-                    </div>
-                  )}
-                  {foreignPkg.length > 0 && (
-                    <div style={{ marginTop: 6, fontSize: 11.5, color: "#f59e0b" }}>
-                      ⚠ The file has packageId {foreignPkg.slice(0, 6).join(", ")}{foreignPkg.length > 6 ? "…" : ""} not in this panel. Pick a package above to remap all rows.
+                  {/* NAS mapping — only the values that don't match this panel */}
+                  {nasVals.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>
+                        NAS: {nasVals.length - nasBad.length}/{nasVals.length} matched automatically
+                        {nasBad.length > 0 && <span style={{ color: "#f59e0b" }}> · {nasBad.length} need a pick</span>}
+                      </div>
+                      {nasBad.map((v) => <MapRow key={`n${v}`} val={v} kind="nas" />)}
                     </div>
                   )}
 
-                  <div style={{ overflowX: "auto", marginTop: 10 }}>
+                  {/* Package mapping — only mismatches */}
+                  {pkgVals.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>
+                        Package: {pkgVals.length - pkgBad.length}/{pkgVals.length} matched automatically
+                        {pkgBad.length > 0 && <span style={{ color: "#f59e0b" }}> · {pkgBad.length} need a pick</span>}
+                      </div>
+                      {pkgBad.map((v) => <MapRow key={`p${v}`} val={v} kind="pkg" />)}
+                    </div>
+                  )}
+
+                  {nasBad.length === 0 && pkgBad.length === 0 && (nasVals.length > 0 || pkgVals.length > 0) && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "#16a34a" }}>✓ All NAS and packages resolved to this panel.</div>
+                  )}
+
+                  {/* preview */}
+                  <div style={{ overflowX: "auto", marginTop: 12 }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                       <thead>
                         <tr>{cols.slice(0, 6).map((c) => <th key={c} style={{ textAlign: "left", padding: "4px 6px", color: t.textMuted, borderBottom: `1px solid ${t.cardBorder}` }}>{c}</th>)}</tr>
