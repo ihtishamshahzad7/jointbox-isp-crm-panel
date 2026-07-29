@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import LiveFeed from "../components/live-feed";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
 
@@ -71,6 +72,11 @@ export default function NocPage() {
         {uptime && metric("ISP uptime", `${uptime.ispUptimePercent}%`, uptime.ispUptimePercent >= 99 ? "#22c55e" : "#f59e0b")}
         {uptime && metric("Customer-experienced", `${uptime.customerExperiencedUptimePercent}%`)}
         {uptime && metric("Network downtime", `${uptime.networkMinutes} min`, uptime.networkMinutes ? "#ef4444" : "#22c55e")}
+      </div>
+
+      {/* Live link-tracing feed (SNMP + Syslog) */}
+      <div style={{ marginBottom: 18 }}>
+        <LiveFeed limit={40} />
       </div>
 
       {/* Segment health */}

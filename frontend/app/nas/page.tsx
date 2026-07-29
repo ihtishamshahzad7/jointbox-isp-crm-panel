@@ -189,7 +189,12 @@ export default function NasPage() {
 
   const [form, setForm] = useState({
     nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
-    apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true
+    apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
+    // Link-tracing collectors (each optional, independent per NAS)
+    deviceType:'MIKROTIK',
+    apiEnabled:true,
+    snmpEnabled:false, snmpPort:161, snmpCommunity:'public', snmpVersion:'V2C', snmpPollSec:30,
+    syslogEnabled:false, syslogPort:514,
   });
 
   /** The signed-in account — decides whether router registration is offered. */
@@ -485,6 +490,15 @@ export default function NasPage() {
       apiPassword:  form.apiPassword.trim() || undefined,
       description:  form.description.trim() || undefined,
       isActive:     form.isActive,
+      deviceType:    form.deviceType,
+      apiEnabled:    form.apiEnabled,
+      snmpEnabled:   form.snmpEnabled,
+      snmpPort:      Number(form.snmpPort),
+      snmpCommunity: form.snmpCommunity.trim() || 'public',
+      snmpVersion:   form.snmpVersion,
+      snmpPollSec:   Number(form.snmpPollSec),
+      syslogEnabled: form.syslogEnabled,
+      syslogPort:    Number(form.syslogPort),
     };
     try {
       const res = await fetch(url, { method, headers, body: JSON.stringify(body) });
@@ -537,7 +551,10 @@ export default function NasPage() {
 
   const resetForm = () => setForm({
     nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
-    apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true
+    apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
+    deviceType:'MIKROTIK', apiEnabled:true,
+    snmpEnabled:false, snmpPort:161, snmpCommunity:'public', snmpVersion:'V2C', snmpPollSec:30,
+    syslogEnabled:false, syslogPort:514,
   });
 
   // FIX: populate form with actual stored ports from the NAS record
@@ -555,6 +572,15 @@ export default function NasPage() {
       apiPassword: nas.apiPassword || '',
       description: nas.description || '',
       isActive:    nas.isActive,
+      deviceType:    (nas as any).deviceType    ?? 'MIKROTIK',
+      apiEnabled:    (nas as any).apiEnabled    ?? true,
+      snmpEnabled:   (nas as any).snmpEnabled   ?? false,
+      snmpPort:      (nas as any).snmpPort       ?? 161,
+      snmpCommunity: (nas as any).snmpCommunity ?? 'public',
+      snmpVersion:   (nas as any).snmpVersion   ?? 'V2C',
+      snmpPollSec:   (nas as any).snmpPollSec   ?? 30,
+      syslogEnabled: (nas as any).syslogEnabled ?? false,
+      syslogPort:    (nas as any).syslogPort     ?? 514,
     });
     setEditItem(nas); setShowForm(true);
   };
@@ -1466,6 +1492,60 @@ export default function NasPage() {
                         <Field label="Description" hint="Optional note — location, site, anything useful.">
                           <input value={form.description}
                             onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
+                        </Field>
+
+                        {/* ── Link tracing — each method optional & independent ── */}
+                        <Field label="Device type" hint="Selects the right SNMP OIDs / syslog parser. VSOL for your OLTs.">
+                          <select value={form.deviceType}
+                            onChange={e => setForm(p => ({ ...p, deviceType: e.target.value }))}>
+                            <option value="MIKROTIK">MikroTik</option>
+                            <option value="OLT_VSOL">OLT — VSOL</option>
+                            <option value="OLT_ZTE">OLT — ZTE</option>
+                            <option value="OLT_HUAWEI">OLT — Huawei</option>
+                            <option value="OLT_FIBERHOME">OLT — FiberHome</option>
+                            <option value="OLT_BDCOM">OLT — BDCOM</option>
+                            <option value="SWITCH">Switch</option>
+                            <option value="OTHER">Other</option>
+                          </select>
+                        </Field>
+                        <Field label="MikroTik API polling" hint="Uses the API above for PPPoE sessions & interfaces.">
+                          <label style={{ display:'flex', gap:8, alignItems:'center' }}>
+                            <input type="checkbox" checked={form.apiEnabled}
+                              onChange={e => setForm(p => ({ ...p, apiEnabled: e.target.checked }))} />
+                            <span>Enable API polling</span>
+                          </label>
+                        </Field>
+                        <Field label="SNMP" hint="Works on ANY device — port status, errors, traffic, OLT ONT signal.">
+                          <label style={{ display:'flex', gap:8, alignItems:'center' }}>
+                            <input type="checkbox" checked={form.snmpEnabled}
+                              onChange={e => setForm(p => ({ ...p, snmpEnabled: e.target.checked }))} />
+                            <span>Enable SNMP polling</span>
+                          </label>
+                        </Field>
+                        {form.snmpEnabled && (
+                          <>
+                            <Field label="SNMP community"><input value={form.snmpCommunity}
+                              onChange={e => setForm(p => ({ ...p, snmpCommunity: e.target.value }))} /></Field>
+                            <Field label="SNMP port"><input type="number" value={form.snmpPort}
+                              onChange={e => setForm(p => ({ ...p, snmpPort: +e.target.value }))} /></Field>
+                            <Field label="SNMP version">
+                              <select value={form.snmpVersion}
+                                onChange={e => setForm(p => ({ ...p, snmpVersion: e.target.value }))}>
+                                <option value="V1">v1</option>
+                                <option value="V2C">v2c</option>
+                                <option value="V3">v3</option>
+                              </select>
+                            </Field>
+                            <Field label="SNMP poll interval (s)"><input type="number" value={form.snmpPollSec}
+                              onChange={e => setForm(p => ({ ...p, snmpPollSec: +e.target.value }))} /></Field>
+                          </>
+                        )}
+                        <Field label="Syslog" hint={`Point the device's syslog at this panel (UDP ${form.syslogPort}) for real-time events.`}>
+                          <label style={{ display:'flex', gap:8, alignItems:'center' }}>
+                            <input type="checkbox" checked={form.syslogEnabled}
+                              onChange={e => setForm(p => ({ ...p, syslogEnabled: e.target.checked }))} />
+                            <span>Receive syslog from this device</span>
+                          </label>
                         </Field>
                       </>
                     ),

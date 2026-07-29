@@ -6,6 +6,7 @@ import { RecordNotes } from "../../components/record-notes";
 import { Icons as SIcons } from "../../components/icons";
 import { BandwidthChart } from "../../components/bandwidth-chart";
 import DailyUsageBars from "./bandwidth-panel";
+import LinkPath from "./link-path";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Subscriber {
@@ -1085,6 +1086,7 @@ export default function SubscriberProfilePage() {
               <SectionTitle icon={<Ic.Activity/>} label="Live Bandwidth (last 60 min)" color="#60a5fa"/>
               {sub?.username && <BandwidthChart username={sub.username} minutes={60} darkMode={d} />}
               {sub?.username && <DailyUsageBars username={sub.username} />}
+              {sub?.id && <LinkPath subscriberId={sub.id} />}
             </Card>
           </div>
         </>)}

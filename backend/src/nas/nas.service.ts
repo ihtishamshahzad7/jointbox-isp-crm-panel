@@ -255,6 +255,10 @@ export class NasService implements OnModuleInit {
     apiUsername?: string; apiPassword?: string;
     nasType?: string; isActive?: boolean; description?: string;
     nasIdentifier?: string;
+    deviceType?: string;
+    apiEnabled?: boolean; apiPollSec?: number;
+    snmpEnabled?: boolean; snmpPort?: number; snmpCommunity?: string; snmpVersion?: string; snmpPollSec?: number;
+    syslogEnabled?: boolean; syslogPort?: number;
   }, actor?: any) {
     // Self-registration is permission-gated (see assertMayAddNas).
     await this.assertMayAddNas(actor);
@@ -291,6 +295,18 @@ export class NasService implements OnModuleInit {
         type:         this.resolveNasType(data.nasType),
         isActive:     data.isActive ?? true,
         description:  data.description,
+        // Optional link-tracing collectors (each independent, off by default
+        // except the MikroTik API which stays on to preserve current behaviour).
+        deviceType:    (data.deviceType as any) ?? undefined,
+        apiEnabled:    data.apiEnabled ?? undefined,
+        apiPollSec:    data.apiPollSec ?? undefined,
+        snmpEnabled:   data.snmpEnabled ?? undefined,
+        snmpPort:      data.snmpPort ?? undefined,
+        snmpCommunity: data.snmpCommunity ?? undefined,
+        snmpVersion:   (data.snmpVersion as any) ?? undefined,
+        snmpPollSec:   data.snmpPollSec ?? undefined,
+        syslogEnabled: data.syslogEnabled ?? undefined,
+        syslogPort:    data.syslogPort ?? undefined,
         // Stamp ownership so scoping and edit-rights work.
         ownerId:      actor ? this.scope.actorId(actor) : null,
       },
@@ -316,6 +332,10 @@ export class NasService implements OnModuleInit {
     apiUsername?: string; apiPassword?: string;
     nasType?: string; isActive?: boolean; description?: string;
     nasIdentifier?: string;
+    deviceType?: string;
+    apiEnabled?: boolean; apiPollSec?: number;
+    snmpEnabled?: boolean; snmpPort?: number; snmpCommunity?: string; snmpVersion?: string; snmpPollSec?: number;
+    syslogEnabled?: boolean; syslogPort?: number;
   }) {
     const existingNas = await this.prisma.nas.findUnique({ where: { id } });
     if (!existingNas) throw new NotFoundException(`NAS with ID ${id} not found`);
@@ -344,6 +364,16 @@ export class NasService implements OnModuleInit {
     if (data.nasType !== undefined)     updateData.type         = this.resolveNasType(data.nasType);
     if (data.isActive !== undefined)    updateData.isActive     = data.isActive;
     if (data.description !== undefined) updateData.description  = data.description;
+    if (data.deviceType !== undefined)    updateData.deviceType    = data.deviceType as any;
+    if (data.apiEnabled !== undefined)    updateData.apiEnabled    = data.apiEnabled;
+    if (data.apiPollSec !== undefined)    updateData.apiPollSec    = data.apiPollSec;
+    if (data.snmpEnabled !== undefined)   updateData.snmpEnabled   = data.snmpEnabled;
+    if (data.snmpPort !== undefined)      updateData.snmpPort      = data.snmpPort;
+    if (data.snmpCommunity !== undefined) updateData.snmpCommunity = data.snmpCommunity;
+    if (data.snmpVersion !== undefined)   updateData.snmpVersion   = data.snmpVersion as any;
+    if (data.snmpPollSec !== undefined)   updateData.snmpPollSec   = data.snmpPollSec;
+    if (data.syslogEnabled !== undefined) updateData.syslogEnabled = data.syslogEnabled;
+    if (data.syslogPort !== undefined)    updateData.syslogPort    = data.syslogPort;
 
     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
 

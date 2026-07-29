@@ -188,7 +188,8 @@ else
   ufw allow $WEB_PORT/tcp >/dev/null 2>&1
   ufw allow 1812,1813/udp >/dev/null 2>&1
   ufw allow 3799/udp >/dev/null 2>&1
-  ok "Ports opened (SSH, API, web, RADIUS, CoA)"
+  ufw allow 514/udp  >/dev/null 2>&1   # syslog receiver (link tracing)
+  ok "Ports opened (SSH, API, web, RADIUS, CoA, syslog)"
 fi
 
 # -----------------------------------------------------------------------------

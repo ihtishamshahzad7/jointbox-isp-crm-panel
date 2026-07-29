@@ -199,6 +199,34 @@ enum NetworkEventType {
   NAS_OFFLINE
   NAS_ONLINE
   RADIUS_TIMEOUT
+  // Link-tracing events (SNMP / Syslog)
+  LINK_UP
+  LINK_DOWN
+  LINK_FLAP
+  SIGNAL_WEAK
+  SIGNAL_CRITICAL
+  PORT_ERROR
+  SYSLOG
+}
+
+/// How the panel talks SNMP to a device. Optional per NAS.
+enum SnmpVersion {
+  V1
+  V2C
+  V3
+}
+
+/// What kind of box this NAS is — drives which SNMP OIDs and syslog parsers
+/// apply (e.g. OLT ONT-signal OIDs vs a plain switch's interface table).
+enum DeviceType {
+  MIKROTIK
+  OLT_VSOL
+  OLT_ZTE
+  OLT_HUAWEI
+  OLT_FIBERHOME
+  OLT_BDCOM
+  SWITCH
+  OTHER
 }
 
 //////////////////////////////////////
@@ -356,6 +384,24 @@ model Nas {
   apiPassword  String?
   isActive     Boolean @default(true)
 
+  /// What kind of device this is — selects the right SNMP OIDs / syslog parser.
+  deviceType   DeviceType @default(MIKROTIK)
+
+  /// --- Data collection methods, EACH optional and independent per NAS. ---
+  /// The panel only uses a method that is explicitly enabled here, so a plain
+  /// OLT can run on SNMP+Syslog alone with no MikroTik API, and vice-versa.
+  apiEnabled     Boolean @default(true)   // MikroTik RouterOS API polling
+  apiPollSec     Int     @default(60)
+
+  snmpEnabled    Boolean     @default(false)
+  snmpPort       Int         @default(161)
+  snmpCommunity  String?     @default("public")
+  snmpVersion    SnmpVersion @default(V2C)
+  snmpPollSec    Int         @default(30)
+
+  syslogEnabled  Boolean @default(false)  // receive device syslog on UDP 514
+  syslogPort     Int     @default(514)
+
   // Who owns this router. A NAS is visible to its owner, to everyone ABOVE the
   // owner (the ISP can always see what a franchise added), and to any downline
   // it has been explicitly assigned to. Only the owner may edit or delete it.
@@ -371,9 +417,37 @@ model Nas {
   pppoeSessions PppoeSession[] @relation("PppoeSessionNas")
   ipPools       IpPool[]      @relation("IpPoolNas")
   accessGroups  AccessGroupNas[] @relation("AccessGroupNasRel")
+  linkSignals   LinkSignal[]  @relation("NasLinkSignals")
 
   @@index([nasname])
   @@map("nas")
+}
+
+/// One optical/interface signal reading (SFP or ONT, Rx or Tx), captured by the
+/// SNMP poller or parsed from syslog. Kept as time-series so a subscriber's
+/// profile can chart dBm over the last 24h and the aggregator can spot a slow
+/// degradation before the link actually drops.
+model LinkSignal {
+  id           Int      @id @default(autoincrement())
+  nasId        Int
+  subscriberId Int?
+  username     String?
+  /// SFP_RX | SFP_TX | ONT_RX | ONT_TX
+  kind         String
+  ifIndex      Int?
+  /// Human port label, e.g. "sfp1", "pon3", "ge1/0/3".
+  port         String?
+  dbm          Float
+  /// GOOD | WEAK | CRITICAL — precomputed against the NAS thresholds.
+  status       String?
+  readAt       DateTime @default(now())
+
+  nas        Nas         @relation("NasLinkSignals", fields: [nasId], references: [id], onDelete: Cascade)
+  subscriber Subscriber? @relation("SubscriberLinkSignals", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([nasId])
+  @@index([subscriberId, readAt])
+  @@index([readAt])
 }
 
 //////////////////////////////////////
@@ -1155,6 +1229,7 @@ model Subscriber {
   vouchers        Voucher[]        @relation("SubscriberVouchers")
   networkLogs     NetworkLog[]     @relation("SubscriberNetworkLogs")
   pppoeSessions   PppoeSession[]   @relation("SubscriberPppoeSessions")
+  linkSignals     LinkSignal[]     @relation("SubscriberLinkSignals")
   radUserGroups   RadUserGroup[]   @relation("radUserGroups")
   radChecks       RadCheck[]       @relation("radChecks")
   radReplies      RadReply[]       @relation("radReplies")
