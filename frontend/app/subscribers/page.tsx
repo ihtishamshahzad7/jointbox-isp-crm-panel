@@ -265,6 +265,8 @@ export default function SubscribersPage() {
   const [quote, setQuote] = useState<any>(null);
   const [importType, setImportType] = useState<"CSV" | "EXCEL">("CSV");
   const [importRaw, setImportRaw] = useState("");
+  const [importFileName, setImportFileName] = useState("");
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [importSalespersonId, setImportSalespersonId] = useState("");
   const [massSettingsForm, setMassSettingsForm] = useState<any>({ profileStatus: "ACTIVE", connectionType: "FTTH", discountAmountType: "PERCENTAGE" });
   const [exportType, setExportType] = useState<"CSV" | "EXCEL">("CSV");
@@ -745,6 +747,34 @@ export default function SubscribersPage() {
       await loadAll();
     } catch (error: any) {
       showToast(error.message || "Activation failed", "err");
+    }
+  };
+
+  /**
+   * Read an uploaded file into the import box. CSV/TXT/JSON are read as text;
+   * Excel (.xlsx/.xls) is parsed to CSV in the browser (SheetJS) so the rest of
+   * the import flow is unchanged. This is what "upload a file" should mean —
+   * no copy-paste.
+   */
+  const onImportFile = async (file?: File | null) => {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    try {
+      if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+        const XLSX: any = await import("xlsx");
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        setImportRaw(XLSX.utils.sheet_to_csv(ws));
+        setImportType("EXCEL");
+      } else {
+        setImportRaw(await file.text());
+        setImportType("CSV");
+      }
+      setImportFileName(file.name);
+      showToast(`Loaded "${file.name}"`, "ok");
+    } catch (e: any) {
+      showToast(`Could not read file: ${e?.message || e}`, "err");
     }
   };
 
@@ -2734,8 +2764,23 @@ export default function SubscribersPage() {
                 </select>
               </div>
             </div>
-            <div style={{ marginTop: 10, fontSize: 11, color: t.textMuted }}>Paste CSV or JSON array data. Required fields: fullName/fullname, username, connectionPassword/password, identity, phone, email.</div>
-            <textarea style={{ ...inputSt, marginTop: 8, minHeight: 180, resize: "vertical" }} value={importRaw} onChange={(e) => setImportRaw(e.target.value)} placeholder="fullName,username,connectionPassword,identity,phone,email,packageId,nasId,connectionType" />
+            {/* Upload a real file — the easy way. CSV/Excel/JSON all supported. */}
+            <input ref={importFileRef} type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls" style={{ display: "none" }}
+              onChange={(e) => { onImportFile(e.target.files?.[0]); e.target.value = ""; }} />
+            <div
+              onClick={() => importFileRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); onImportFile(e.dataTransfer.files?.[0]); }}
+              style={{ marginTop: 12, border: `2px dashed ${t.cardBorder}`, borderRadius: 10, padding: "18px 14px", textAlign: "center", cursor: "pointer", background: d ? "var(--surface-2)" : "#f8fafc" }}>
+              <div style={{ fontSize: 22, marginBottom: 4 }}>📄⬆️</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>
+                {importFileName ? `Selected: ${importFileName}` : "Click to upload, or drag a file here"}
+              </div>
+              <div style={{ fontSize: 11, color: t.textMuted, marginTop: 3 }}>CSV, Excel (.xlsx/.xls) or JSON — the file is read for you.</div>
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 11, color: t.textMuted }}>…or paste CSV / JSON below. Required fields: fullName/fullname, username, connectionPassword/password, identity, phone, email.</div>
+            <textarea style={{ ...inputSt, marginTop: 8, minHeight: 140, resize: "vertical" }} value={importRaw} onChange={(e) => { setImportRaw(e.target.value); setImportFileName(""); }} placeholder="fullName,username,connectionPassword,identity,phone,email,packageId,nasId,connectionType" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
               <span style={{ fontSize: 11, color: t.textMuted }}>Preview rows: {Math.max(importRaw.split("\n").filter(Boolean).length - 1, 0)}</span>
               <button onClick={() => setImportRaw("fullName,username,connectionPassword,identity,phone,email,packageId,nasId,connectionType\nJohn Doe,jdoe,jdoe123,123456789,+123456789,john@example.com,1,1,FTTH")}
