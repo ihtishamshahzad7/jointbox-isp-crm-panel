@@ -267,6 +267,11 @@ export default function SubscribersPage() {
   const [importRaw, setImportRaw] = useState("");
   const [importFileName, setImportFileName] = useState("");
   const importFileRef = useRef<HTMLInputElement>(null);
+  // Map a FOREIGN panel's ids to THIS panel. When set, every imported row's
+  // nasId / packageId is overridden — the safe way to bring rows across when
+  // the exporting panel numbered its NAS and packages differently.
+  const [importMapNasId, setImportMapNasId] = useState("");
+  const [importMapPackageId, setImportMapPackageId] = useState("");
   const [importSalespersonId, setImportSalespersonId] = useState("");
   const [massSettingsForm, setMassSettingsForm] = useState<any>({ profileStatus: "ACTIVE", connectionType: "FTTH", discountAmountType: "PERCENTAGE" });
   const [exportType, setExportType] = useState<"CSV" | "EXCEL">("CSV");
@@ -778,31 +783,44 @@ export default function SubscribersPage() {
     }
   };
 
+  /** Parse the import box (JSON array or CSV) into row objects. Returns null on error. */
+  const parseImportRows = (): any[] | null => {
+    const raw = importRaw.trim();
+    if (!raw) return [];
+    try {
+      if (raw.startsWith("[")) return JSON.parse(raw);
+      const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+      const headersRow = lines[0].split(",").map((h) => h.trim());
+      return lines.slice(1).map((line) => {
+        const cols = line.split(",");
+        const obj: Record<string, string> = {};
+        headersRow.forEach((h, idx) => { obj[h] = (cols[idx] || "").trim(); });
+        return obj;
+      });
+    } catch {
+      return null;
+    }
+  };
+
   const runImport = async () => {
     if (!importRaw.trim()) {
-      showToast("Paste CSV/JSON import data first", "warn");
+      showToast("Upload a file or paste CSV/JSON first", "warn");
       return;
     }
 
-    let rows: any[] = [];
-    try {
-      if (importRaw.trim().startsWith("[")) {
-        rows = JSON.parse(importRaw);
-      } else {
-        const lines = importRaw.split("\n").map((l) => l.trim()).filter(Boolean);
-        const headersRow = lines[0].split(",").map((h) => h.trim());
-        rows = lines.slice(1).map((line) => {
-          const cols = line.split(",");
-          const obj: Record<string, string> = {};
-          headersRow.forEach((h, idx) => {
-            obj[h] = (cols[idx] || "").trim();
-          });
-          return obj;
-        });
-      }
-    } catch {
+    let rows = parseImportRows();
+    if (rows === null) {
       showToast("Invalid import payload. Use CSV or JSON array", "err");
       return;
+    }
+
+    // Apply the id-mapping overrides so foreign panel ids don't leak in.
+    if (importMapNasId || importMapPackageId) {
+      rows = rows.map((r) => ({
+        ...r,
+        ...(importMapNasId ? { nasId: Number(importMapNasId), nas: Number(importMapNasId) } : {}),
+        ...(importMapPackageId ? { packageId: Number(importMapPackageId), package: Number(importMapPackageId) } : {}),
+      }));
     }
 
     try {
@@ -2788,6 +2806,86 @@ export default function SubscribersPage() {
                 Load Sample Template
               </button>
             </div>
+
+            {/* ── Map foreign ids to THIS panel + pre-import checks ── */}
+            {(() => {
+              const rows = parseImportRows();
+              if (rows === null) return <div style={{ marginTop: 12, fontSize: 12, color: "#ef4444" }}>⚠ Could not parse — check the CSV/JSON format.</div>;
+              if (rows.length === 0) return null;
+              const cols = Object.keys(rows[0] || {});
+              const has = (names: string[]) => names.some((n) => cols.includes(n));
+              const required = [
+                { label: "fullName", ok: has(["fullName", "fullname"]) },
+                { label: "username", ok: has(["username"]) },
+                { label: "password", ok: has(["connectionPassword", "password"]) },
+                { label: "identity (CNIC)", ok: has(["identity"]) },
+                { label: "phone", ok: has(["phone"]) },
+                { label: "email", ok: has(["email"]) },
+              ];
+              const localNasIds = new Set(nasList.map((n) => String(n.id)));
+              const localPkgIds = new Set(packages.map((p) => String(p.id)));
+              const foreignNas = !importMapNasId && has(["nasId", "nas"])
+                ? [...new Set(rows.map((r) => String(r.nasId ?? r.nas ?? "")).filter(Boolean))].filter((v) => !localNasIds.has(v))
+                : [];
+              const foreignPkg = !importMapPackageId && has(["packageId", "package"])
+                ? [...new Set(rows.map((r) => String(r.packageId ?? r.package ?? "")).filter(Boolean))].filter((v) => !localPkgIds.has(v))
+                : [];
+              return (
+                <div style={{ marginTop: 12, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Map to this panel &amp; check ({rows.length} row{rows.length === 1 ? "" : "s"})</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <label style={labelSt}>Assign all rows to NAS</label>
+                      <select style={{ ...inputSt, cursor: "pointer" }} value={importMapNasId} onChange={(e) => setImportMapNasId(e.target.value)}>
+                        <option value="">Keep nasId from file</option>
+                        {nasList.map((n) => <option key={n.id} value={n.id}>{n.nasname}{(n as any).nasIp ? ` (${(n as any).nasIp})` : ""} — id {n.id}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelSt}>Assign all rows to package</label>
+                      <select style={{ ...inputSt, cursor: "pointer" }} value={importMapPackageId} onChange={(e) => setImportMapPackageId(e.target.value)}>
+                        <option value="">Keep packageId from file</option>
+                        {packages.map((p) => <option key={p.id} value={p.id}>{p.name} — id {p.id}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                    {required.map((r) => (
+                      <span key={r.label} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 999, background: r.ok ? "rgba(34,197,94,.14)" : "rgba(239,68,68,.14)", color: r.ok ? "#16a34a" : "#ef4444", fontWeight: 600 }}>
+                        {r.ok ? "✓" : "✕"} {r.label}
+                      </span>
+                    ))}
+                  </div>
+
+                  {foreignNas.length > 0 && (
+                    <div style={{ marginTop: 8, fontSize: 11.5, color: "#f59e0b" }}>
+                      ⚠ The file has nasId {foreignNas.slice(0, 6).join(", ")}{foreignNas.length > 6 ? "…" : ""} which don't exist here. Pick a NAS above to remap all rows, or the import will fail those rows.
+                    </div>
+                  )}
+                  {foreignPkg.length > 0 && (
+                    <div style={{ marginTop: 6, fontSize: 11.5, color: "#f59e0b" }}>
+                      ⚠ The file has packageId {foreignPkg.slice(0, 6).join(", ")}{foreignPkg.length > 6 ? "…" : ""} not in this panel. Pick a package above to remap all rows.
+                    </div>
+                  )}
+
+                  <div style={{ overflowX: "auto", marginTop: 10 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                      <thead>
+                        <tr>{cols.slice(0, 6).map((c) => <th key={c} style={{ textAlign: "left", padding: "4px 6px", color: t.textMuted, borderBottom: `1px solid ${t.cardBorder}` }}>{c}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {rows.slice(0, 3).map((r, i) => (
+                          <tr key={i}>{cols.slice(0, 6).map((c) => <td key={c} style={{ padding: "4px 6px", color: t.text, borderBottom: `1px solid ${t.cardBorder}` }}>{String(r[c] ?? "")}</td>)}</tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {rows.length > 3 && <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 4 }}>…and {rows.length - 3} more</div>}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
               <Btn variant="ghost" onClick={() => setShowImportModal(false)}>Cancel</Btn>
               <Btn variant="primary" onClick={runImport}>Import</Btn>
