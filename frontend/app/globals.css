@@ -1826,7 +1826,7 @@ select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
 }
 .jb-assist-row-user { justify-content: flex-end; }
 .jb-assist-bubble {
-  max-width: 85% !important;
+  max-width: calc(100% - 8px) !important;
   box-sizing: border-box !important;
   font-size: 13px;
   line-height: 1.55;

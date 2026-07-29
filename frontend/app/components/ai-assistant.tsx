@@ -81,7 +81,7 @@ export default function AiAssistant() {
         }}>
           <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,#6C3CE1,#8B5CF6)", color: "#fff" }}>
             <div style={{ fontWeight: 800, fontSize: 14 }}>✦ Jointbox Assistant</div>
-            <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel</div>
+            <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v3</div>
           </div>
 
           <div ref={bodyRef} className="jb-assist-body" style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
