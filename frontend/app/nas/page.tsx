@@ -1605,6 +1605,77 @@ export default function NasPage() {
               <input value={form.description} onChange={e => setForm(p=>({...p,description:e.target.value}))}
                 placeholder="Optional notes" style={inputSt} />
             </div>
+
+            {/* ── Link tracing — optional & independent per NAS ── */}
+            <div style={{ marginTop:16, paddingTop:14, borderTop:`1px solid ${t.inputBorder}` }}>
+              <div style={{ fontWeight:800, color:t.text, fontSize:13, marginBottom:2 }}>📡 Link tracing (optional)</div>
+              <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:12 }}>Turn on only what this device supports. Each method works on its own.</div>
+
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                <div>
+                  <label style={labelSt}>Device type</label>
+                  <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>Selects the right SNMP OIDs / syslog parser. VSOL for your OLTs.</div>
+                  <select value={form.deviceType} onChange={e => setForm(p => ({ ...p, deviceType: e.target.value }))} style={{ ...inputSt, cursor:'pointer' }}>
+                    <option value="MIKROTIK">MikroTik</option>
+                    <option value="OLT_VSOL">OLT — VSOL</option>
+                    <option value="OLT_ZTE">OLT — ZTE</option>
+                    <option value="OLT_HUAWEI">OLT — Huawei</option>
+                    <option value="OLT_FIBERHOME">OLT — FiberHome</option>
+                    <option value="OLT_BDCOM">OLT — BDCOM</option>
+                    <option value="SWITCH">Switch</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelSt}>MikroTik API polling</label>
+                  <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>PPPoE sessions & interface status via the API above.</div>
+                  <Btn onClick={() => setForm(p => ({ ...p, apiEnabled: !p.apiEnabled }))} variant={form.apiEnabled ? 'success' : 'ghost'} size="xs">
+                    {form.apiEnabled ? '✓ Enabled' : 'Disabled'}
+                  </Btn>
+                </div>
+              </div>
+
+              {/* SNMP */}
+              <div style={{ marginTop:14, background:d?'var(--surface-2)':'#f8fafc', border:`1px solid ${t.inputBorder}`, borderRadius:8, padding:'10px 12px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:700, color:t.text, fontSize:12 }}>SNMP</div>
+                    <div style={{ fontSize:10.5, color:t.textMuted }}>Works on ANY device — port status, errors, traffic, OLT ONT signal.</div>
+                  </div>
+                  <Btn onClick={() => setForm(p => ({ ...p, snmpEnabled: !p.snmpEnabled }))} variant={form.snmpEnabled ? 'success' : 'ghost'} size="xs">
+                    {form.snmpEnabled ? '✓ Enabled' : 'Enable'}
+                  </Btn>
+                </div>
+                {form.snmpEnabled && (
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:10, marginTop:10 }}>
+                    <div><label style={labelSt}>Community</label>
+                      <input value={form.snmpCommunity} onChange={e => setForm(p => ({ ...p, snmpCommunity: e.target.value }))} style={inputSt} /></div>
+                    <div><label style={labelSt}>Port</label>
+                      <input type="number" value={form.snmpPort} onChange={e => setForm(p => ({ ...p, snmpPort: +e.target.value }))} style={inputSt} /></div>
+                    <div><label style={labelSt}>Version</label>
+                      <select value={form.snmpVersion} onChange={e => setForm(p => ({ ...p, snmpVersion: e.target.value }))} style={{ ...inputSt, cursor:'pointer' }}>
+                        <option value="V1">v1</option><option value="V2C">v2c</option><option value="V3">v3</option>
+                      </select></div>
+                    <div><label style={labelSt}>Poll (s)</label>
+                      <input type="number" value={form.snmpPollSec} onChange={e => setForm(p => ({ ...p, snmpPollSec: +e.target.value }))} style={inputSt} /></div>
+                  </div>
+                )}
+              </div>
+
+              {/* Syslog */}
+              <div style={{ marginTop:10, background:d?'var(--surface-2)':'#f8fafc', border:`1px solid ${t.inputBorder}`, borderRadius:8, padding:'10px 12px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:700, color:t.text, fontSize:12 }}>Syslog</div>
+                    <div style={{ fontSize:10.5, color:t.textMuted }}>Real-time events. Point the device's syslog target at this panel on UDP {form.syslogPort}.</div>
+                  </div>
+                  <Btn onClick={() => setForm(p => ({ ...p, syslogEnabled: !p.syslogEnabled }))} variant={form.syslogEnabled ? 'success' : 'ghost'} size="xs">
+                    {form.syslogEnabled ? '✓ Enabled' : 'Enable'}
+                  </Btn>
+                </div>
+              </div>
+            </div>
+
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, background:d?'var(--bg)':'#f8fafc', borderRadius:8, padding:'10px 12px', marginTop:14, fontSize:11, color:t.textMuted, border:`1px solid ${t.inputBorder}` }}>
               <div>
                 <div style={{ fontWeight:700, color:t.text, marginBottom:2 }}>Status</div>
