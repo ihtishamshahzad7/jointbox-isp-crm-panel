@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import "./dashboard.css";
 import { AppShellGate } from "./components/app-shell";
 
-const inter = Inter({ subsets: ["latin"] });
+// NOTE: We deliberately do NOT use next/font/google. That fetches the font from
+// fonts.googleapis.com AT BUILD TIME, which fails on servers with no access to
+// Google (the Ubuntu box). Instead we use a native system-font stack (defined
+// as .app-font in globals.css) — identical look on every OS, zero network.
 
 export const metadata: Metadata = {
   title: "Jointbox — ISP Management",
@@ -23,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className="app-font">
         <AppShellGate>{children}</AppShellGate>
       </body>
     </html>
