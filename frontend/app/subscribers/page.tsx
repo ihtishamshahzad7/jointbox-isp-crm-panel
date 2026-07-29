@@ -808,19 +808,70 @@ export default function SubscribersPage() {
   const resolveNas = (val: string) => nasMap[val] || autoNas(val);
   const resolvePkg = (val: string) => pkgMap[val] || autoPkg(val);
 
-  /** Parse the import box (JSON array or CSV) into row objects. Returns null on error. */
+  /** Map the many header spellings other panels use → our canonical fields. */
+  const IMPORT_ALIAS: Record<string, string> = {
+    full_name: "fullName", fullname: "fullName", name: "fullName", customer_name: "fullName",
+    user_name: "username", login: "username", username: "username",
+    connection_password: "password", connectionpassword: "password", connection_pass: "password", pass: "password", password: "password",
+    cnic: "identity", cnic_number: "identity", nic: "identity", national_id: "identity", identity: "identity",
+    mobile: "phone", contact: "phone", phone_number: "phone", phone: "phone",
+    email: "email", e_mail: "email",
+    nas_id: "nasId", nasid: "nasId", nas: "nasId", nas_name: "nasId", nas_ip: "nasId",
+    package_id: "packageId", packageid: "packageId", plan_id: "packageId", plan: "packageId", package_name: "packageId", package: "packageId",
+    connection_type: "connectionType", conn_type: "connectionType",
+    profile_status: "status", profilestatus: "status", status: "status",
+    static_ip: "staticIp", mac_address: "macAddress", previous_balance: "previousBalance",
+    address: "address", expiration_date: "expiryDate", expiry_date: "expiryDate", join_date: "joinDate",
+  };
+  // Foreign panel tree/geo ids that mean nothing here — dropped so they can't
+  // leak in. The salesperson chosen in the dialog anchors the tree instead.
+  const IMPORT_DROP = new Set([
+    "isp_id", "branch_id", "salesperson_id", "subarea_id", "area_id", "city_id",
+    "province_id", "country_id", "department_id", "id", "subscriber_id",
+  ]);
+
+  /** RFC-ish CSV parser: handles quoted fields, escaped quotes and commas inside quotes. */
+  const parseCsv = (text: string): string[][] => {
+    const rows: string[][] = [];
+    let row: string[] = [], field = "", inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQ) {
+        if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+        else field += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (c !== "\r") field += c;
+    }
+    if (field !== "" || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  };
+
+  /** Parse the import box (JSON array or CSV) into canonical row objects. */
   const parseImportRows = (): any[] | null => {
     const raw = importRaw.trim();
     if (!raw) return [];
     try {
-      if (raw.startsWith("[")) return JSON.parse(raw);
-      const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
-      const headersRow = lines[0].split(",").map((h) => h.trim());
-      return lines.slice(1).map((line) => {
-        const cols = line.split(",");
-        const obj: Record<string, string> = {};
-        headersRow.forEach((h, idx) => { obj[h] = (cols[idx] || "").trim(); });
+      const canon = (r: Record<string, any>) => {
+        const obj: Record<string, any> = {};
+        for (const k of Object.keys(r)) {
+          const key = k.trim().toLowerCase();
+          if (IMPORT_DROP.has(key)) continue;
+          const dest = IMPORT_ALIAS[key] || k.trim();
+          const v = typeof r[k] === "string" ? r[k].trim() : r[k];
+          if (obj[dest] === undefined || obj[dest] === "") obj[dest] = v;
+        }
         return obj;
+      };
+      if (raw.startsWith("[")) return (JSON.parse(raw) as any[]).map(canon);
+      const grid = parseCsv(raw).filter((r) => r.some((c) => c.trim() !== ""));
+      if (grid.length < 2) return [];
+      const headers = grid[0].map((h) => h.trim());
+      return grid.slice(1).map((cols) => {
+        const o: Record<string, string> = {};
+        headers.forEach((h, idx) => { o[h] = (cols[idx] ?? "").trim(); });
+        return canon(o);
       });
     } catch {
       return null;
@@ -836,6 +887,18 @@ export default function SubscribersPage() {
     let rows = parseImportRows();
     if (rows === null) {
       showToast("Invalid import payload. Use CSV or JSON array", "err");
+      return;
+    }
+    if (rows.length === 0) { showToast("No rows found in the file", "warn"); return; }
+
+    // Only the essentials are enforced. If any are missing, stop with a clear
+    // pointer to the first offending spreadsheet row — otherwise proceed.
+    const REQ = ["fullName", "username", "password"];
+    const missing = rows
+      .map((r, i) => ({ i, bad: REQ.filter((f) => !String(r[f] ?? "").trim()) }))
+      .filter((x) => x.bad.length);
+    if (missing.length) {
+      showToast(`${missing.length} row(s) missing required fields — e.g. row ${missing[0].i + 2}: ${missing[0].bad.join(", ")}`, "err");
       return;
     }
 
@@ -2854,15 +2917,18 @@ export default function SubscribersPage() {
               if (rows === null) return <div style={{ marginTop: 12, fontSize: 12, color: "#ef4444" }}>⚠ Could not parse — check the CSV/JSON format.</div>;
               if (rows.length === 0) return null;
               const cols = Object.keys(rows[0] || {});
-              const has = (names: string[]) => names.some((n) => cols.includes(n));
+              const blanks = (f: string) => rows.filter((r) => !String(r[f] ?? "").trim()).length;
+              // Required = enforced on import; recommended = nice to have, never blocks.
               const required = [
-                { label: "fullName", ok: has(["fullName", "fullname"]) },
-                { label: "username", ok: has(["username"]) },
-                { label: "password", ok: has(["connectionPassword", "password"]) },
-                { label: "identity (CNIC)", ok: has(["identity"]) },
-                { label: "phone", ok: has(["phone"]) },
-                { label: "email", ok: has(["email"]) },
-              ];
+                { label: "fullName", f: "fullName" },
+                { label: "username", f: "username" },
+                { label: "password", f: "password" },
+              ].map((x) => ({ ...x, miss: blanks(x.f) }));
+              const recommended = [
+                { label: "identity (CNIC)", f: "identity" },
+                { label: "phone", f: "phone" },
+                { label: "email", f: "email" },
+              ].map((x) => ({ ...x, miss: blanks(x.f) }));
               // Distinct NAS / package values actually present in the file.
               const nasVals = [...new Set(rows.map(rowNasVal).filter(Boolean))];
               const pkgVals = [...new Set(rows.map(rowPkgVal).filter(Boolean))];
@@ -2897,11 +2963,18 @@ export default function SubscribersPage() {
                 <div style={{ marginTop: 12, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: 12 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Check &amp; map before import ({rows.length} row{rows.length === 1 ? "" : "s"})</div>
 
-                  {/* required fields */}
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4 }}>
+                  {/* required (block) + recommended (info) field checks */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center" }}>
+                    <span style={{ fontSize: 10.5, color: t.textMuted, fontWeight: 700 }}>REQUIRED:</span>
                     {required.map((r) => (
-                      <span key={r.label} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 999, background: r.ok ? "rgba(34,197,94,.14)" : "rgba(239,68,68,.14)", color: r.ok ? "#16a34a" : "#ef4444", fontWeight: 600 }}>
-                        {r.ok ? "✓" : "✕"} {r.label}
+                      <span key={r.label} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 999, background: r.miss === 0 ? "rgba(34,197,94,.14)" : "rgba(239,68,68,.14)", color: r.miss === 0 ? "#16a34a" : "#ef4444", fontWeight: 600 }}>
+                        {r.miss === 0 ? "✓" : "✕"} {r.label}{r.miss > 0 ? ` (${r.miss} blank)` : ""}
+                      </span>
+                    ))}
+                    <span style={{ fontSize: 10.5, color: t.textMuted, fontWeight: 700, marginLeft: 6 }}>OPTIONAL:</span>
+                    {recommended.map((r) => (
+                      <span key={r.label} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 999, background: r.miss === 0 ? "rgba(34,197,94,.14)" : "rgba(245,158,11,.14)", color: r.miss === 0 ? "#16a34a" : "#f59e0b", fontWeight: 600 }}>
+                        {r.miss === 0 ? "✓" : "◦"} {r.label}{r.miss > 0 ? ` (${r.miss} blank)` : ""}
                       </span>
                     ))}
                   </div>
