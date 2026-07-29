@@ -74,7 +74,7 @@ export default function AiAssistant() {
       </button>
 
       {open && (
-        <div style={{
+        <div className="jb-assist-panel" style={{
           position: "fixed", right: 22, bottom: 88, zIndex: 2000, width: 400, maxWidth: "calc(100vw - 32px)", height: 560, maxHeight: "78vh",
           background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 16, display: "flex", flexDirection: "column", overflow: "hidden",
           boxShadow: "0 24px 60px rgba(0,0,0,0.4)",
@@ -84,18 +84,15 @@ export default function AiAssistant() {
             <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel</div>
           </div>
 
-          <div ref={bodyRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div ref={bodyRef} className="jb-assist-body" style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
             {!configured && (
               <div style={{ fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.3)", borderRadius: 10, padding: 10 }}>
                 Assistant not configured. An admin should set <code>AI_API_KEY</code> in the server .env (free key at console.groq.com) and restart the backend.
               </div>
             )}
             {msgs.map((m, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", width: "100%" }}>
-                <div style={{
-                  maxWidth: "85%", boxSizing: "border-box",
-                  fontSize: 13, lineHeight: 1.55, padding: "9px 12px", borderRadius: 12,
-                  whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word",
+              <div key={i} className={`jb-assist-row ${m.role === "user" ? "jb-assist-row-user" : ""}`}>
+                <div className="jb-assist-bubble" style={{
                   background: m.role === "user" ? "var(--accent,#378ADD)" : "var(--surface-2)",
                   color: m.role === "user" ? "#fff" : "var(--text)",
                   border: m.role === "user" ? "none" : "1px solid var(--border)",
