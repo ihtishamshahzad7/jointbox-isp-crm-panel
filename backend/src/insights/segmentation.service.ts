@@ -91,15 +91,46 @@ export class SegmentationService {
         where,
         select: {
           id: true, fullName: true, username: true, status: true, authMethod: true,
+          kycStatus: true, cnicNumber: true,
           nas: { select: { id: true, nasname: true, nasIp: true } },
           area: { select: { id: true, name: true, city: true } },
           package: { select: { id: true, name: true, price: true } },
-          user: { select: { id: true, name: true, role: true } },
+          user: { select: { id: true, name: true, role: true, parentId: true } },
           serviceSettings: { select: { vlanId: true, expiryDate: true } },
         },
       }),
       this.liveSessions(),
     ]);
+
+    // --- Context for the advanced classifications, one query each so the whole
+    // page still costs a handful of round trips regardless of base size. ---
+    const since24h = new Date(Date.now() - 24 * 3600_000);
+    const [activeOutages, flapRows, weakRows] = await Promise.all([
+      this.prisma.powerOutage.findMany({ where: { endedAt: null }, select: { areaId: true } }).catch(() => [] as any[]),
+      this.prisma.networkLog.findMany({
+        where: { eventType: { in: ['LINK_FLAP', 'DISCONNECTION'] as any }, loggedAt: { gte: since24h }, username: { not: null } },
+        select: { username: true },
+      }).catch(() => [] as any[]),
+      this.prisma.linkSignal.findMany({
+        where: { status: { in: ['WEAK', 'CRITICAL'] }, readAt: { gte: since24h } },
+        select: { username: true, subscriberId: true, status: true },
+      }).catch(() => [] as any[]),
+    ]);
+    const outageAreas = new Set(activeOutages.map((o) => o.areaId).filter((v) => v != null));
+    const flapCount = new Map<string, number>();
+    for (const r of flapRows) if (r.username) flapCount.set(r.username, (flapCount.get(r.username) || 0) + 1);
+    const worstSignal = new Map<string, string>(); // key: username|sub:<id> → WEAK|CRITICAL
+    for (const r of weakRows) {
+      const keys = [r.username, r.subscriberId != null ? `sub:${r.subscriberId}` : null].filter(Boolean) as string[];
+      for (const k of keys) {
+        if (worstSignal.get(k) === 'CRITICAL') continue;
+        worstSignal.set(k, r.status === 'CRITICAL' ? 'CRITICAL' : (worstSignal.get(k) || r.status));
+      }
+    }
+    const cnicCount = new Map<string, number>();
+    for (const s of subs) if (s.cnicNumber) cnicCount.set(s.cnicNumber, (cnicCount.get(s.cnicNumber) || 0) + 1);
+    const signalOf = (s: any) =>
+      (s.username && worstSignal.get(s.username)) || worstSignal.get(`sub:${s.id}`) || null;
 
     type Bucket = {
       key: string; label: string; sub?: string;
@@ -113,7 +144,16 @@ export class SegmentationService {
     const dims: Record<string, Map<string, Bucket>> = {
       nas: new Map(), vlan: new Map(), area: new Map(),
       reseller: new Map(), package: new Map(), authMethod: new Map(),
+      cnic: new Map(), tier: new Map(), uptime: new Map(), outage: new Map(),
     };
+
+    // Advanced flagged-reason tallies — WHY a customer needs attention, not just
+    // that a segment looks short. Each subscriber can raise several reasons.
+    const reason: Record<string, number> = {
+      expired: 0, suspended: 0, offlineActive: 0, neverConnected: 0, expiringSoon: 0,
+      kycMissing: 0, dupCnic: 0, criticalSignal: 0, weakSignal: 0, flapping: 0, inOutage: 0,
+    };
+    const now = Date.now(), soon = now + 7 * 86400_000;
 
     const add = (dim: string, key: string, label: string, sub: string | undefined, s: any, sess: any) => {
       const m = dims[dim];
@@ -148,6 +188,48 @@ export class SegmentationService {
           s.package?.name ?? 'No package', undefined, s, sess);
 
       add('authMethod', `auth:${s.authMethod}`, String(s.authMethod), undefined, s, sess);
+
+      // CNIC / KYC classification
+      const cnicKey = !s.cnicNumber ? 'cnic:none' : `cnic:${s.kycStatus}`;
+      const cnicLabel = !s.cnicNumber
+        ? 'No CNIC on file'
+        : s.kycStatus === 'VERIFIED' ? 'CNIC verified'
+        : s.kycStatus === 'PENDING'  ? 'CNIC pending review'
+        : s.kycStatus === 'REJECTED' ? 'CNIC rejected'
+        : 'CNIC expired';
+      add('cnic', cnicKey, cnicLabel, undefined, s, sess);
+
+      // Franchise / dealer / sub-dealer tier (by owning account's role)
+      const tierKey = !s.user ? 'tier:direct' : `tier:${s.user.role}`;
+      add('tier', tierKey, this.tierLabel(s.user?.role), s.user?.name ?? undefined, s, sess);
+
+      // Uptime band
+      const flaps = s.username ? (flapCount.get(s.username) || 0) : 0;
+      const ub = this.uptimeBand(s.status, !!sess, flaps);
+      add('uptime', ub.key, ub.label, undefined, s, sess);
+
+      // Outage exposure
+      const inOutage = !!(s.area && outageAreas.has(s.area.id));
+      add('outage', inOutage ? 'outage:active' : 'outage:none',
+          inOutage ? 'In active outage area' : 'No active outage', undefined, s, sess);
+
+      // ---- advanced flagged reasons ----
+      if (s.status === 'EXPIRED') reason.expired++;
+      if (s.status === 'SUSPENDED') reason.suspended++;
+      if (s.status === 'ACTIVE' && !sess) reason.offlineActive++;
+      if (!sess && !s.serviceSettings?.expiryDate) reason.neverConnected++;
+      const exp = s.serviceSettings?.expiryDate;
+      if (exp && s.status === 'ACTIVE') {
+        const t = new Date(exp).getTime();
+        if (t > now && t <= soon) reason.expiringSoon++;
+      }
+      if (!s.cnicNumber || s.kycStatus === 'PENDING') reason.kycMissing++;
+      if (s.cnicNumber && (cnicCount.get(s.cnicNumber) || 0) > 1) reason.dupCnic++;
+      const sig = signalOf(s);
+      if (sig === 'CRITICAL') reason.criticalSignal++;
+      else if (sig === 'WEAK') reason.weakSignal++;
+      if (flaps >= 3) reason.flapping++;
+      if (inOutage) reason.inOutage++;
     }
 
     // Health is judged on ACTIVE customers only — an expired customer being
@@ -181,8 +263,49 @@ export class SegmentationService {
         reseller: finish(dims.reseller),
         package: finish(dims.package),
         authMethod: finish(dims.authMethod),
+        cnic: finish(dims.cnic),
+        tier: finish(dims.tier),
+        uptime: finish(dims.uptime),
+        outage: finish(dims.outage),
       },
+      // Advanced flagged reasons — the "why", ordered worst first, for the
+      // reasons panel and its bar/pie chart.
+      reasons: [
+        { key: 'criticalSignal', label: 'Critical fibre signal', count: reason.criticalSignal, tone: 'bad' },
+        { key: 'flapping',       label: 'Flapping link (unstable)', count: reason.flapping, tone: 'bad' },
+        { key: 'inOutage',       label: 'In active outage area', count: reason.inOutage, tone: 'bad' },
+        { key: 'offlineActive',  label: 'Offline but active', count: reason.offlineActive, tone: 'bad' },
+        { key: 'expired',        label: 'Expired', count: reason.expired, tone: 'warn' },
+        { key: 'suspended',      label: 'Suspended', count: reason.suspended, tone: 'warn' },
+        { key: 'weakSignal',     label: 'Weak fibre signal', count: reason.weakSignal, tone: 'warn' },
+        { key: 'expiringSoon',   label: 'Expiring within 7 days', count: reason.expiringSoon, tone: 'warn' },
+        { key: 'dupCnic',        label: 'Duplicate CNIC (possible resale)', count: reason.dupCnic, tone: 'warn' },
+        { key: 'kycMissing',     label: 'No CNIC / KYC pending', count: reason.kycMissing, tone: 'muted' },
+        { key: 'neverConnected', label: 'Never connected', count: reason.neverConnected, tone: 'muted' },
+      ].filter((r) => r.count > 0),
     };
+  }
+
+  /** Human label for a franchise/dealer tier from the owning account's role. */
+  private tierLabel(role?: string | null): string {
+    switch (role) {
+      case 'SUPER_ADMIN':
+      case 'ADMIN':        return 'ISP (direct)';
+      case 'RESELLER':     return 'Franchise';
+      case 'SUB_RESELLER': return 'Dealer';
+      case 'RETAILER':     return 'Sub-dealer';
+      case 'SALES':        return 'Sales';
+      case 'AUDITOR':      return 'Auditor';
+      default:             return 'Direct (ISP)';
+    }
+  }
+
+  /** Bucket a subscriber's connectivity into an uptime band. */
+  private uptimeBand(status: string, online: boolean, flaps: number): { key: string; label: string } {
+    if (status !== 'ACTIVE') return { key: 'uptime:na', label: 'Not active (expected offline)' };
+    if (online && flaps >= 3) return { key: 'uptime:flapping', label: 'Unstable — flapping' };
+    if (online) return { key: 'uptime:stable', label: 'Stable — online' };
+    return { key: 'uptime:down', label: 'Down — active but offline' };
   }
 
   /**
@@ -390,6 +513,26 @@ export class SegmentationService {
           ? { is: { vlanId: null } }
           : { is: { vlanId: Number(id) } };
         break;
+      case 'cnic':
+        if (id === 'none') where.cnicNumber = null;
+        else { where.cnicNumber = { not: null }; where.kycStatus = id as any; }
+        break;
+      case 'tier':
+        if (id === 'direct') where.userId = null;
+        else where.user = { is: { role: id as any } };
+        break;
+      case 'outage': {
+        const outs = await this.prisma.powerOutage.findMany({ where: { endedAt: null }, select: { areaId: true } }).catch(() => [] as any[]);
+        const areas = outs.map((o) => o.areaId).filter((v) => v != null) as number[];
+        if (id === 'active') where.areaId = { in: areas.length ? areas : [-1] };
+        else if (areas.length) where.areaId = { notIn: areas };
+        break;
+      }
+      case 'uptime':
+        // Band is finished off in memory below (needs live status); here we just
+        // narrow to the right status set.
+        where.status = id === 'na' ? { not: 'ACTIVE' } : 'ACTIVE';
+        break;
     }
 
     const [subs, live] = await Promise.all([
@@ -431,6 +574,14 @@ export class SegmentationService {
       });
       const seen = new Set(rows.map((r) => r.id));
       rows = [...rows, ...inferred.filter((r) => !seen.has(r.id))];
+    }
+
+    // Uptime bands need live status, so finish the split here.
+    if (dimension === 'uptime' && id !== 'na') {
+      rows = rows.filter((s) => {
+        const on = !!(s.username && live.has(s.username));
+        return id === 'down' ? !on : on; // 'stable' and 'flapping' are online
+      });
     }
 
     const usernames = rows.map((r) => r.username).filter(Boolean) as string[];

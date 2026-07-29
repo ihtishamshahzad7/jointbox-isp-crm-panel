@@ -29,9 +29,15 @@ const DIMENSIONS = [
   { id: "nas",        label: "Router",    hint: "How subscribers are spread across your MikroTiks." },
   { id: "area",       label: "Area",      hint: "Coverage areas — a quiet area usually means an outage." },
   { id: "reseller",   label: "Reseller",  hint: "Who owns which customers down the chain." },
+  { id: "tier",       label: "Franchise / Dealer", hint: "Base split across ISP, franchise, dealer and sub-dealer tiers." },
   { id: "package",    label: "Package",   hint: "Which plans are actually selling." },
+  { id: "cnic",       label: "CNIC / KYC", hint: "Identity coverage — verified, pending, missing. PTA compliance at a glance." },
+  { id: "uptime",     label: "Uptime",    hint: "Stable vs down vs flapping — connection quality across the base." },
+  { id: "outage",     label: "Outage",    hint: "How many customers sit inside an area with an active outage right now." },
   { id: "authMethod", label: "Auth Type", hint: "PPPoE, hotspot, static or DHCP." },
 ];
+
+const REASON_TONE: Record<string, string> = { bad: "#ef4444", warn: "#f59e0b", muted: "#64748b" };
 
 const PALETTE = [
   "#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ec4899", "#14b8a6",
@@ -249,6 +255,42 @@ export default function SegmentsPage() {
               ))}
             </div>
           )}
+
+          {/* Advanced flagged reasons — the "why", across the whole scope */}
+          {Array.isArray(data?.reasons) && data.reasons.length > 0 && (() => {
+            const reasons = data.reasons as Array<{ key: string; label: string; count: number; tone: string }>;
+            const rmax = Math.max(...reasons.map((r) => r.count), 1);
+            const rtot = reasons.reduce((a, r) => a + r.count, 0);
+            return (
+              <section className="sg-card" style={{ marginBottom: 16 }}>
+                <header className="sg-card-h bordered">
+                  <h3>Why customers need attention</h3>
+                  <p>Every flag raised across your scope right now — worst first. Click a reason to see who.</p>
+                </header>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 20, padding: "8px 4px 4px", alignItems: "center" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {reasons.map((r) => {
+                      const c = REASON_TONE[r.tone] || REASON_TONE.muted;
+                      return (
+                        <div key={r.key}
+                          style={{ display: "grid", gridTemplateColumns: "180px 1fr 44px", alignItems: "center", gap: 10, padding: 0 }}>
+                          <span style={{ fontSize: 12.5, color: "var(--text)" }}>{r.label}</span>
+                          <span style={{ height: 14, borderRadius: 7, background: "var(--surface-2)", overflow: "hidden" }}>
+                            <span style={{ display: "block", height: "100%", width: `${(r.count / rmax) * 100}%`, background: c, borderRadius: 7, transition: "width .5s ease" }} />
+                          </span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: c, textAlign: "right" }}>{nf(r.count)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ textAlign: "center", minWidth: 130 }}>
+                    <div style={{ fontSize: 34, fontWeight: 800, color: "#ef4444", lineHeight: 1 }}>{nf(rtot)}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>total flags raised</div>
+                  </div>
+                </div>
+              </section>
+            );
+          })()}
 
           {/* Charts + table */}
           <div className="sg-grid">
