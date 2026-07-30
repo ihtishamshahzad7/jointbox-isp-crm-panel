@@ -46,7 +46,9 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 3000,
       max_memory_restart: '600M', // recycle a worker if it leaks past 600MB
-      env: { NODE_ENV: 'production' },
+      // Cap V8 heap so a worker can't balloon RAM on a small VM, and so the GC
+      // runs sooner. 512MB is plenty for the API; raise if you cluster heavily.
+      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512' },
     },
     {
       name: 'jointbox-frontend',
@@ -61,7 +63,7 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 3000,
       max_memory_restart: '500M',
-      env: { NODE_ENV: 'production' },
+      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512' },
     },
   ],
 };

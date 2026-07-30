@@ -84,7 +84,7 @@ export default function AiAssistant() {
             <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v3</div>
           </div>
 
-          <div ref={bodyRef} className="jb-assist-body" style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div ref={bodyRef} className="jb-assist-body" style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: 12 }}>
             {!configured && (
               <div style={{ fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.3)", borderRadius: 10, padding: 10 }}>
                 Assistant not configured. An admin should set <code>AI_API_KEY</code> in the server .env (free key at console.groq.com) and restart the backend.

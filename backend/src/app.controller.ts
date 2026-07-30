@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Post, UseGuards, Req, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
 import { promises as fs } from 'fs';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -395,101 +395,46 @@ export class AppController {
   async pullUpdate(@Req() req: any) {
     this.assertSuperAdmin(req);
 
+    // WHY delegate to update-jointbox.sh instead of running git/build inline:
+    //  • the old inline version computed the frontend path from the backend's
+    //    cwd, so it looked for backend/frontend and never rebuilt the UI;
+    //  • it never ran DB migrations, so new columns were missing after update
+    //    (the "panel breaks after update" bug);
+    //  • committed build artifacts made `git status` dirty and blocked it.
+    // The committed script already handles clean-up, `npm run db:deploy`,
+    // both builds and a pm2 reload correctly. We run it DETACHED (nohup) so it
+    // survives the backend restart it performs mid-run, and log to a file the
+    // UI can poll.
     try {
-      const gitBranch = (await runGitCommand('git rev-parse --abbrev-ref HEAD')).stdout.trim();
-      const remoteBranch = `origin/${gitBranch}`;
-      const repoRoot = process.cwd();
-      const frontendDir = path.join(repoRoot, 'frontend');
-
-      const status = (await runGitCommand('git status --porcelain')).stdout.trim();
-      if (status) {
-        return {
-          ok: false,
-          message: 'Working tree is not clean. Commit or stash changes before updating.',
-          diff: status,
-        };
+      const repoRoot = (await runGitCommand('git rev-parse --show-toplevel')).stdout.trim();
+      const script = path.join(repoRoot, 'update-jointbox.sh');
+      if (!(await fs.stat(script).then(() => true).catch(() => false))) {
+        return { ok: false, message: `update-jointbox.sh not found at ${repoRoot}. Run it from the server shell instead.` };
       }
 
-      await runGitCommand(`git fetch origin ${gitBranch}`);
+      const gitBranch = (await runGitCommand('git rev-parse --abbrev-ref HEAD')).stdout.trim();
+      await runGitCommand(`git fetch origin ${gitBranch}`).catch(() => undefined);
       const localHash = (await runGitCommand('git rev-parse HEAD')).stdout.trim();
-      const remoteHash = (await runGitCommand(`git rev-parse ${remoteBranch}`)).stdout.trim();
-
+      const remoteHash = (await runGitCommand(`git rev-parse origin/${gitBranch}`).catch(() => ({ stdout: localHash }) as any)).stdout.trim();
       if (localHash === remoteHash) {
         return { ok: true, message: 'Already up to date.', branch: gitBranch };
       }
 
-      const pull = (await runGitCommand(`git pull --ff-only origin ${gitBranch}`)).stdout.trim();
-      const changedFiles = (await runGitCommand('git diff --name-only HEAD@{1} HEAD')).stdout
-        .trim()
-        .split('\n')
-        .filter(Boolean);
-
-      const backendInstallNeeded = changedFiles.some((file) => /(^package(-lock)?\.json$|^yarn\.lock$|^pnpm-lock\.yaml$)/.test(file));
-      const frontendChanged = changedFiles.some((file) => file.startsWith('frontend/'));
-      const frontendInstallNeeded = changedFiles.some((file) => /^frontend\/(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(file));
-
-      let installOutput = '';
-      let backendBuildOutput = '';
-      let frontendBuildOutput = '';
-      let frontendRestartOutput = '';
-
-      if (backendInstallNeeded) {
-        installOutput = (await runGitCommand('npm install --silent')).stdout.trim();
-      }
-
-      try {
-        backendBuildOutput = (await runGitCommand('npm run build')).stdout.trim();
-      } catch (buildError: any) {
-        return {
-          ok: false,
-          message: 'Backend updated, but backend build failed. Restart not performed.',
-          pullOutput: pull,
-          installOutput,
-          backendBuildError: buildError?.message || String(buildError),
-          changedFiles,
-        };
-      }
-
-      if (frontendChanged) {
-        try {
-          if (frontendInstallNeeded) {
-            frontendBuildOutput = (await runGitCommand('npm install --silent', frontendDir)).stdout.trim();
-          }
-          const frontendBuild = await runGitCommand('npm run build', frontendDir);
-          frontendBuildOutput += `\n${frontendBuild.stdout.trim()}`.trim();
-        } catch (frontendBuildError: any) {
-          return {
-            ok: false,
-            message: 'Backend updated, but frontend build failed. Restart not performed.',
-            pullOutput: pull,
-            installOutput,
-            backendBuildOutput,
-            frontendBuildError: frontendBuildError?.message || String(frontendBuildError),
-            changedFiles,
-          };
-        }
-
-        try {
-          const restartResult = await runGitCommand('pm2 restart jointbox-frontend');
-          frontendRestartOutput = restartResult.stdout.trim();
-        } catch (pm2Error: any) {
-          frontendRestartOutput = `Failed to restart frontend via PM2: ${pm2Error?.message || String(pm2Error)}`;
-        }
-      }
-
-      setTimeout(() => process.exit(0), 1000);
+      // Fire-and-forget: nohup + detached so killing the backend (which the
+      // script does via pm2) can't abort the update. Output goes to a log.
+      const logFile = path.join(repoRoot, 'update.log');
+      const child = spawn('bash', ['-lc', `cd "${repoRoot}" && bash update-jointbox.sh > "${logFile}" 2>&1`], {
+        detached: true,
+        stdio: 'ignore',
+        env: process.env,
+      });
+      child.unref();
 
       return {
         ok: true,
-        message: 'Updated and restarting backend. Frontend rebuilt as needed.',
+        started: true,
         branch: gitBranch,
-        pullOutput: pull,
-        installOutput,
-        backendBuildOutput,
-        frontendBuildOutput,
-        frontendRestartOutput,
-        changedFiles,
-        restartScheduled: true,
+        message: 'Update started. The panel will pull the latest code, migrate the database, rebuild and restart automatically (about 1–2 minutes). Refresh the page shortly. Progress is logged to update.log on the server.',
       };
     } catch (error: any) {
       throw new InternalServerErrorException(

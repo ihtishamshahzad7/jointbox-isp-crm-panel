@@ -1825,18 +1825,23 @@ select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
    wrap inside the panel and never clip off the right edge. !important so
    nothing downstream can undo it.
    ===================================================================== */
+/* Block layout (no flexbox). A row is a full-width block; the bubble is an
+   inline-block sized to its content and aligned with text-align. No flex
+   min-size to fight, so the bubble can never exceed the row and never clips. */
 .jb-assist-panel { box-sizing: border-box !important; overflow: hidden !important; }
-.jb-assist-body  { min-width: 0 !important; overflow-x: hidden !important; }
+.jb-assist-body  { min-width: 0 !important; overflow-x: hidden !important; overflow-y: auto !important; }
 .jb-assist-row {
-  display: flex !important;
+  display: block !important;
   width: 100% !important;
-  min-width: 0 !important;
-  justify-content: flex-start;
+  text-align: left;
+  margin-bottom: 10px;
 }
-.jb-assist-row-user { justify-content: flex-end; }
+.jb-assist-row-user { text-align: right; }
 .jb-assist-bubble {
-  max-width: calc(100% - 8px) !important;
+  display: inline-block !important;
+  max-width: calc(100% - 6px) !important;
   box-sizing: border-box !important;
+  text-align: left;
   font-size: 13px;
   line-height: 1.55;
   padding: 9px 12px;

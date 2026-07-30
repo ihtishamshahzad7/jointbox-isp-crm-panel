@@ -30,6 +30,14 @@ cd "$REPO/frontend"
 npm install --no-audit --no-fund
 npm run build
 
+# Slim down: the Next build cache and webpack cache are only needed DURING the
+# build and can grow to several GB. Removing them after a successful build keeps
+# the deployed footprint small without affecting the running app.
+echo "🧹 Trimming build caches to save disk..."
+rm -rf "$REPO/frontend/.next/cache" 2>/dev/null || true
+rm -rf "$REPO/backend/tsconfig.build.tsbuildinfo" 2>/dev/null || true
+npm cache clean --force >/dev/null 2>&1 || true
+
 echo "🚀 (Re)starting via pm2 ecosystem (direct entrypoints, no npm wrappers)..."
 cd "$REPO"
 # startOrReload: starts if not running, cleanly reloads if running. Because pm2
