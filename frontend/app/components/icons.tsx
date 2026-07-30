@@ -8,11 +8,15 @@ import React from "react";
 
 type IconProps = React.SVGProps<SVGSVGElement>;
 
-const s16: React.CSSProperties = { width: 16, height: 16 };
-const s15: React.CSSProperties = { width: 15, height: 15 };
-const s14: React.CSSProperties = { width: 14, height: 14 };
-const s13: React.CSSProperties = { width: 13, height: 13 };
-const s12: React.CSSProperties = { width: 12, height: 12 };
+// These are spread as SVG ATTRIBUTES (<svg {...s16} />), not as `style`, so they
+// must be typed as SVG props — not React.CSSProperties (which leaks 1000+ style
+// keys and fails type-check when spread onto an <svg>).
+type SizeProps = Pick<React.SVGProps<SVGSVGElement>, "width" | "height">;
+const s16: SizeProps = { width: 16, height: 16 };
+const s15: SizeProps = { width: 15, height: 15 };
+const s14: SizeProps = { width: 14, height: 14 };
+const s13: SizeProps = { width: 13, height: 13 };
+const s12: SizeProps = { width: 12, height: 12 };
 
 export const Icons = {
   // ── Navigation (16×16, strokeWidth 1.8, round linecaps/joins) ───────────

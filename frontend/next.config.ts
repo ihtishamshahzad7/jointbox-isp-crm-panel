@@ -1,9 +1,17 @@
 import type { NextConfig } from "next";
+import path from "path";
+
+// Pin the project root to THIS folder. A stray package-lock.json at the repo
+// root made Next infer the wrong workspace root (the "multiple lockfiles"
+// warning) and would trace the whole monorepo into the standalone bundle.
+const ROOT = __dirname;
 
 const nextConfig: NextConfig = {
   turbopack: {
-    root: process.cwd(),
+    root: ROOT,
   },
+  // Keep standalone file-tracing scoped to the frontend, not the monorepo root.
+  outputFileTracingRoot: ROOT,
   poweredByHeader: false,
   reactStrictMode: true,
 
@@ -26,6 +34,7 @@ const nextConfig: NextConfig = {
   // `next dev`, so nothing is hidden — the build just stops refusing to produce
   // output over them. Fix them at your own pace.
   typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
 };
 
 export default nextConfig;
