@@ -6,6 +6,13 @@ const nextConfig: NextConfig = {
   },
   poweredByHeader: false,
   reactStrictMode: true,
+
+  // Standalone output: `next build` traces ONLY the modules the server actually
+  // uses into .next/standalone, so the deployed footprint is a fraction of the
+  // full node_modules. We run node .next/standalone/server.js in production
+  // (see ecosystem.config.js) and copy .next/static + public in after build
+  // (handled by update-jointbox.sh / install.sh).
+  output: "standalone",
   // Allow the dev server to be opened from these LAN hosts (add more IPs as needed)
   allowedDevOrigins: ["192.168.51.253"],
 

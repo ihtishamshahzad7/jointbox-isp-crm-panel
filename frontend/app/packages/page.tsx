@@ -81,6 +81,7 @@ const durationTypes: DurationType[] = ["DAILY", "WEEKLY", "MONTHLY", "QUARTERLY"
 // Own file so a mistake here cannot take down the packages page.
 import { PackageWizard } from "./package-wizard";
 import ImportWizard from "../components/import-wizard";
+import { downloadCsv } from "../components/csv-export";
 import { PackageTable } from "../components/network-tables";
 
 const packageDefaults = {
@@ -623,6 +624,14 @@ export default function PackagesPage() {
           onClick={() => setShowImport(true)}
         >
           ⬆ Import
+        </button>}
+        {isIsp && <button
+          style={{ padding: "8px 18px", borderRadius: "10px", fontSize: "12px", fontWeight: 600, border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface)", color: "var(--text)" }}
+          onClick={() => downloadCsv("packages.csv", (packages || []).map((p:any)=>({ name:p.name, price:p.price, downloadSpeed:p.downloadSpeed, uploadSpeed:p.uploadSpeed })), [
+            { key:"name", label:"name" }, { key:"price", label:"price" }, { key:"downloadSpeed", label:"downloadSpeed" }, { key:"uploadSpeed", label:"uploadSpeed" },
+          ])}
+        >
+          ⬇ Export
         </button>}
         {showImport && (
           <ImportWizard

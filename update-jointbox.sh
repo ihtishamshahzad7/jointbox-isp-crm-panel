@@ -30,6 +30,15 @@ cd "$REPO/frontend"
 npm install --no-audit --no-fund
 npm run build
 
+# Standalone output (next.config output:'standalone') traces the server into
+# .next/standalone, but static assets and /public must be copied in beside it.
+echo "📦 Assembling standalone frontend..."
+if [ -d "$REPO/frontend/.next/standalone" ]; then
+  mkdir -p "$REPO/frontend/.next/standalone/.next"
+  cp -r "$REPO/frontend/.next/static" "$REPO/frontend/.next/standalone/.next/static"
+  [ -d "$REPO/frontend/public" ] && cp -r "$REPO/frontend/public" "$REPO/frontend/.next/standalone/public"
+fi
+
 # Slim down: the Next build cache and webpack cache are only needed DURING the
 # build and can grow to several GB. Removing them after a successful build keeps
 # the deployed footprint small without affecting the running app.

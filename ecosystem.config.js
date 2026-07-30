@@ -52,10 +52,11 @@ module.exports = {
     },
     {
       name: 'jointbox-frontend',
-      // Run Next's own binary directly — never `npm run start` (wrapper orphans the port).
-      script: path.join(__dirname, 'frontend', 'node_modules', 'next', 'dist', 'bin', 'next'),
-      args: 'start -H 0.0.0.0 -p 3000',
-      cwd: path.join(__dirname, 'frontend'),
+      // Standalone server produced by `next build` (output:'standalone'). Runs
+      // the traced server.js directly — tiny footprint, no npm wrapper to orphan
+      // the port. update-jointbox.sh copies .next/static + public in after build.
+      script: path.join(__dirname, 'frontend', '.next', 'standalone', 'server.js'),
+      cwd: path.join(__dirname, 'frontend', '.next', 'standalone'),
       exec_mode: modeFor(frontendInstances),
       instances: asCount(frontendInstances),
       autorestart: true,
@@ -63,7 +64,7 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 3000,
       max_memory_restart: '500M',
-      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512' },
+      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', PORT: '3000', HOSTNAME: '0.0.0.0' },
     },
   ],
 };

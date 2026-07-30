@@ -69,7 +69,13 @@ export class IntegrityService implements OnModuleInit {
     // still going, so runs never pile up under load.
     if (this.sessionSyncBusy) { this.logger.warn('Session sync still running — skipping this tick'); return; }
     this.sessionSyncBusy = true;
-    try { await this.reconcileSessionsWithRouter(true); }
+    try {
+      await this.reconcileSessionsWithRouter(true);
+      // Enforce panel-dependency: kick any live session whose account is gone.
+      if ((process.env.ENFORCE_PANEL_DEPENDENCY ?? '1') !== '0') {
+        await this.disconnectUnknownRouterSessions(true);
+      }
+    }
     catch (e: any) { this.logger.warn(`Session sync cron failed: ${e?.message || e}`); }
     finally { this.sessionSyncBusy = false; }
   }
@@ -248,6 +254,45 @@ export class IntegrityService implements OnModuleInit {
       this.logger.warn(`Session sync: closed ${closed} ghost session(s) across ${checkedNas} router(s)${skippedNas ? `, skipped ${skippedNas} unreachable` : ''}`);
     }
     return { checked: 'router-sessions', routers: checkedNas, skipped: skippedNas, closed, details };
+  }
+
+  /**
+   * Enforce panel-dependency: disconnect any LIVE router session whose username
+   * is not a valid credential in the panel (no radcheck row) — i.e. a customer
+   * who was deleted or whose data was wiped but whose PPPoE session is still up
+   * on the router. This is the safety net behind Session-Timeout: it drops
+   * orphaned sessions within the cron interval instead of waiting for the
+   * timeout. Unreachable routers are skipped (never assumed empty).
+   */
+  async disconnectUnknownRouterSessions(apply = true) {
+    const nases = await this.prisma.nas.findMany({
+      where: { isActive: true, nasIp: { not: null }, apiUsername: { not: null } },
+      select: { nasname: true, nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+    });
+    let kicked = 0; const details: any[] = [];
+    for (const nas of nases) {
+      const ip = nas.nasIp as string;
+      let live: any[];
+      try {
+        live = await this.mikrotik.getPppoeActiveConnections(ip, nas.apiPort, nas.apiUsername as string, nas.apiPassword || '');
+      } catch { continue; }
+      if (!live.length) continue;
+      const names = [...new Set(live.map((c) => (c.name || '').trim()).filter(Boolean))];
+      // Which of these usernames actually have a valid credential?
+      const known = await this.prisma.$queryRaw<Array<{ username: string }>>`
+        SELECT DISTINCT username FROM radcheck WHERE username = ANY(${names}::text[])`;
+      const knownSet = new Set(known.map((r) => r.username.trim()));
+      const orphans = names.filter((n) => !knownSet.has(n));
+      for (const user of orphans) {
+        if (apply) {
+          const n = await this.mikrotik.removePppoeActive(ip, nas.apiPort, nas.apiUsername as string, nas.apiPassword || '', user);
+          if (n > 0) kicked += n;
+        }
+        details.push({ nas: nas.nasname || ip, user });
+      }
+    }
+    if (kicked) this.logger.warn(`Panel-dependency: disconnected ${kicked} orphaned router session(s) with no credential`);
+    return { kicked, details };
   }
 
   /** Nightly at 03:20 — off-peak. */

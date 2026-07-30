@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
+import { downloadCsv } from "../components/csv-export";
 import { PoolTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -488,6 +489,9 @@ export default function IpPoolsPage() {
               <Ic.Plus /> Add IP Pool
             </Btn>
             <Btn variant="ghost" onClick={() => setShowImport(true)} size="sm">⬆ Import</Btn>
+            <Btn variant="ghost" size="sm" onClick={() => downloadCsv("ip-pools.csv", (pools || []).map((p:any)=>({ name:p.name, network:p.network, subnet:p.subnet })), [
+              { key:"name", label:"name" }, { key:"network", label:"network" }, { key:"subnet", label:"subnet" },
+            ])}>⬇ Export</Btn>
           </div>
           {showImport && (
             <ImportWizard

@@ -158,6 +158,13 @@ if [ -d "$APP_DIR/frontend" ]; then
   echo "NEXT_PUBLIC_BACKEND_URL=http://$SERVER_IP:$API_PORT" > .env.local
   npm ci >/dev/null 2>&1 || npm install >/dev/null 2>&1
   npm run build >/dev/null 2>&1 && ok "Frontend built"
+  # Assemble the standalone server bundle (output:'standalone').
+  if [ -d "$APP_DIR/frontend/.next/standalone" ]; then
+    mkdir -p "$APP_DIR/frontend/.next/standalone/.next"
+    cp -r "$APP_DIR/frontend/.next/static" "$APP_DIR/frontend/.next/standalone/.next/static"
+    [ -d "$APP_DIR/frontend/public" ] && cp -r "$APP_DIR/frontend/public" "$APP_DIR/frontend/.next/standalone/public"
+    ok "Standalone frontend assembled"
+  fi
 else
   warn "frontend/ not found — skipped"
 fi

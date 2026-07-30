@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
+import { downloadCsv } from "../components/csv-export";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -744,6 +745,10 @@ export default function NasPage() {
             {(!me || isAdminRole(me.role) || me.canAddNas) && (
               <Btn onClick={() => setShowImport(true)} variant="ghost" style={{ padding:'9px 14px', fontSize:13 }}>⬆ Import</Btn>
             )}
+            <Btn onClick={() => downloadCsv("nas.csv", nasList.map((n:any)=>({ nasName:n.shortname||n.nasname, nasIp:n.nasIp||n.nasname, secret:n.secret, apiPort:n.apiPort, nasType:n.type, deviceType:(n as any).deviceType })), [
+              { key:"nasName", label:"nasName" }, { key:"nasIp", label:"nasIp" }, { key:"secret", label:"secret" },
+              { key:"apiPort", label:"apiPort" }, { key:"nasType", label:"nasType" }, { key:"deviceType", label:"deviceType" },
+            ])} variant="ghost" style={{ padding:'9px 14px', fontSize:13 }}>⬇ Export</Btn>
             {showImport && (
               <ImportWizard
                 onClose={() => setShowImport(false)}

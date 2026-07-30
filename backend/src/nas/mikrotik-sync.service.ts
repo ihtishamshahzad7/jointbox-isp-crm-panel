@@ -621,6 +621,41 @@ export class MikrotikSyncService {
     }
   }
 
+  /**
+   * Kick a live PPPoE session off the router by username. Used to enforce
+   * panel-dependency: a session whose account no longer exists (deleted/wiped)
+   * is removed from /ppp/active so the customer actually goes offline instead of
+   * staying up forever. Returns how many active sessions were removed.
+   */
+  async removePppoeActive(
+    nasIp: string,
+    apiPort: number,
+    apiUsername: string,
+    apiPassword: string,
+    username: string,
+  ): Promise<number> {
+    try {
+      return await withMikrotik(
+        { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
+        async (client) => {
+          const active = await client.send(['/ppp/active/print']);
+          const targets = active.filter((c: any) => (c.name || '').trim() === username.trim());
+          let removed = 0;
+          for (const t of targets) {
+            const id = t['.id'];
+            if (!id) continue;
+            await client.send(['/ppp/active/remove', `=.id=${id}`]).catch(() => undefined);
+            removed++;
+          }
+          return removed;
+        },
+      );
+    } catch (error: any) {
+      this.logger.warn(`Failed to remove PPPoE active ${username} on ${nasIp}: ${error.message}`);
+      return 0;
+    }
+  }
+
   // Disconnect a PPPoE user from Mikrotik
   /**
    * Read the router's own log.

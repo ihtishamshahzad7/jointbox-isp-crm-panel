@@ -248,6 +248,23 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
         [username, String(interim)],
       );
 
+      // Session-Timeout makes the customer's connection DEPEND ON THE PANEL.
+      // Without it, a PPPoE session, once up, lives on the router forever — even
+      // if you delete the subscriber or the panel/RADIUS is down (RADIUS only
+      // gates the initial login). With it, the NAS tears the session down every
+      // N seconds and re-authenticates; if the account is gone or RADIUS is
+      // unreachable at that moment, the customer is dropped and cannot return.
+      // Default 24h (86400s) — a good balance of security vs. reconnect churn.
+      // Set RADIUS_SESSION_TIMEOUT=0 to disable (old behaviour).
+      const sessionTimeout = Number(process.env.RADIUS_SESSION_TIMEOUT ?? 86400);
+      if (sessionTimeout > 0) {
+        await this.pgClient.query(
+          `INSERT INTO radreply (username, attribute, op, value)
+           VALUES ($1, 'Session-Timeout', ':=', $2)`,
+          [username, String(sessionTimeout)],
+        );
+      }
+
       const serviceType = opts?.serviceType || 'PPPOE';
       const addReply = (attr: string, value: string, op = ':=') =>
         this.pgClient.query(
