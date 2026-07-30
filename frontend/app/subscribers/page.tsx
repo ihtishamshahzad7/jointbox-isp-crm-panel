@@ -51,6 +51,9 @@ interface Subscriber {
   serviceSettings?: {
     expiryDate?: string | null;
   } | null;
+  // Runtime-only flags added by the API / live-status merge (not columns).
+  isStaleSession?: boolean;
+  isOnline?: boolean;
 }
 
 interface RadiusSession {

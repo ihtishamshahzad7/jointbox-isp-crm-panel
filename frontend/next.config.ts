@@ -1,10 +1,9 @@
 import type { NextConfig } from "next";
-import path from "path";
 
-// Pin the project root to THIS folder. A stray package-lock.json at the repo
-// root made Next infer the wrong workspace root (the "multiple lockfiles"
-// warning) and would trace the whole monorepo into the standalone bundle.
-const ROOT = __dirname;
+// Pin the project root to the frontend dir. The stray root package-lock.json was
+// removed from the repo, so Next now infers this folder correctly; we still set
+// the root explicitly to keep standalone tracing scoped and silence the warning.
+const ROOT = process.cwd();
 
 const nextConfig: NextConfig = {
   turbopack: {
