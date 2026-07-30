@@ -15,8 +15,15 @@
 # =============================================================================
 set -uo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/YOUR_USERNAME/jointbox-panel.git}"
-APP_DIR="${APP_DIR:-/opt/jointbox}"
+REPO_URL="${REPO_URL:-https://github.com/ihtishamshahzad7/jointbox-isp-crm-panel.git}"
+# If this script is already run from inside a cloned checkout (git clone … && cd …
+# && sudo bash install.sh), install IN PLACE there instead of re-cloning to /opt.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -d "$SCRIPT_DIR/backend" ] && [ -d "$SCRIPT_DIR/frontend" ]; then
+  APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
+else
+  APP_DIR="${APP_DIR:-/opt/jointbox}"
+fi
 DB_NAME="${DB_NAME:-jointbox}"
 DB_USER="${DB_USER:-jointbox}"
 DB_PASS="${DB_PASS:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
@@ -116,7 +123,9 @@ ok "FreeRADIUS configured (SQL clients, auth logging, 60s interim updates)"
 
 # -----------------------------------------------------------------------------
 step "5/9  Application source"
-if [ -d "$APP_DIR/.git" ]; then
+if [ "$APP_DIR" = "$SCRIPT_DIR" ]; then
+  ok "Using the checkout you ran this from: $APP_DIR"
+elif [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" pull --ff-only && ok "Repository updated"
 else
   git clone --depth 1 "$REPO_URL" "$APP_DIR" && ok "Repository cloned to $APP_DIR"
@@ -131,6 +140,12 @@ DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME?connection_
 RADIUS_DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
 PORT=$API_PORT
 JWT_SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
+# Default web login created automatically on first boot. Change the password
+# after logging in. (The backend refuses to start without ADMIN_PASSWORD set.)
+ADMIN_EMAIL=admin@jointbox.com
+ADMIN_PASSWORD=admin123
+# Sessions re-authenticate against the panel on this interval (see docs).
+RADIUS_SESSION_TIMEOUT=86400
 # Scale tuning — see scripts/SCALING.md
 NAS_POLL_CONCURRENCY=20
 NAS_FAST_POLL_MS=30000
