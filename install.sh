@@ -36,6 +36,10 @@ err(){ echo "${R}  ✖${N} $*"; }; step(){ echo; echo "${B}▶ $*${N}"; }
 
 [ "$(id -u)" -eq 0 ] || { err "Run with sudo: sudo bash $0"; exit 1; }
 SERVER_IP="$(hostname -I | awk '{print $1}')"
+# Run from a world-accessible dir so `sudo -u postgres psql` doesn't print
+# "could not change directory to <repo>: Permission denied" (the postgres user
+# can't chdir into a 700 home checkout). All app paths below are absolute.
+cd /tmp 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 step "1/9  System packages"
@@ -93,20 +97,55 @@ apt-get install -y -qq freeradius freeradius-postgresql freeradius-utils >/dev/n
 RAD=/etc/freeradius/3.0
 
 [ -e "$RAD/mods-enabled/sql" ] || ln -s ../mods-available/sql "$RAD/mods-enabled/sql"
+# COMPLETE sql module. Two things the old minimal version got wrong and that
+# stopped FreeRADIUS from starting:
+#   1) the connection pool MUST be multi-line — one `key = value` per line, or
+#      the parser errors ("Expected comma after '16'");
+#   2) queries.conf references ${client_table}, ${authcheck_table}, ${acct_table1}
+#      etc, so those table-name variables MUST be defined here BEFORE the
+#      $INCLUDE, or every one reads as "not found".
 cat > "$RAD/mods-available/sql" <<EOF
 sql {
     dialect = "postgresql"
-    driver  = "rlm_sql_\${dialect}"
+    driver  = "rlm_sql_postgresql"
+
     server   = "localhost"
     port     = 5432
     login    = "$DB_USER"
     password = "$DB_PASS"
     radius_db = "$DB_NAME"
-    # Clients (NAS) are read from the panel's own nas table.
+
+    # Read RADIUS clients (NAS) straight from the panel's own table.
     read_clients = yes
+    client_table = "nas"
     client_query = "SELECT id, nasname, shortname, type, secret, server FROM nas"
+
+    # Table names referenced by queries.conf — required, or parsing fails.
+    sql_user_name    = "%{User-Name}"
+    authcheck_table  = "radcheck"
+    authreply_table  = "radreply"
+    groupcheck_table = "radgroupcheck"
+    groupreply_table = "radgroupreply"
+    usergroup_table  = "radusergroup"
+    acct_table1      = "radacct"
+    acct_table2      = "radacct"
+    postauth_table   = "radpostauth"
+
+    read_groups   = yes
+    read_profiles = yes
+    delete_stale_sessions = yes
+
+    pool {
+        start       = 5
+        min         = 3
+        max         = 32
+        spare       = 5
+        uses        = 0
+        lifetime    = 0
+        idle_timeout = 60
+    }
+
     \$INCLUDE \${modconfdir}/\${.:name}/main/\${dialect}/queries.conf
-    pool { start = 16  min = 8  max = 128  spare = 16  uses = 0  lifetime = 0  idle_timeout = 60 }
 }
 EOF
 
@@ -116,6 +155,13 @@ sed -i '0,/^\(\s*\)auth = no/s//\1auth = yes/' "$RAD/radiusd.conf"
 grep -q 'Acct-Interim-Interval' "$RAD/sites-enabled/default" || \
   perl -0pi -e "s/^post-auth \{\n/post-auth \{\n\tupdate reply {\n\t\t&Acct-Interim-Interval = 60\n\t}\n\n/m" \
   "$RAD/sites-enabled/default"
+
+# Enable the sql module in the default site so accounting writes to radacct and
+# post-auth is logged (the stock site ships these commented out). Uncomment a
+# standalone `sql` token wherever it appears; harmless if already active.
+for SITE in "$RAD/sites-enabled/default" "$RAD/sites-enabled/inner-tunnel"; do
+  [ -f "$SITE" ] && sed -i -E 's/^([[:space:]]*)#[[:space:]]*sql[[:space:]]*$/\1sql/' "$SITE"
+done
 
 chown -R freerad:freerad /var/log/freeradius /var/run/freeradius "$RAD" 2>/dev/null
 systemctl enable freeradius >/dev/null 2>&1
