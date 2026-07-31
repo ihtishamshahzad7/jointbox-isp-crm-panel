@@ -96,6 +96,16 @@ step "4/9  FreeRADIUS"
 apt-get install -y -qq freeradius freeradius-postgresql freeradius-utils >/dev/null
 RAD=/etc/freeradius/3.0
 
+# Ensure the CORE auth modules are enabled. Some minimal images ship an empty
+# (or partial) mods-enabled/, which makes FreeRADIUS refuse to start with
+# "Failed to find pap as a module". We link the essentials ourselves so the
+# install never depends on the base image's defaults.
+for m in pap chap mschap eap digest expiration logintime preprocess realm files expr exec unix radutmp attr_filter detail utf8 cache_eap; do
+  if [ -e "$RAD/mods-available/$m" ] && [ ! -e "$RAD/mods-enabled/$m" ]; then
+    ln -sf "../mods-available/$m" "$RAD/mods-enabled/$m"
+  fi
+done
+
 [ -e "$RAD/mods-enabled/sql" ] || ln -s ../mods-available/sql "$RAD/mods-enabled/sql"
 # COMPLETE sql module. Two things the old minimal version got wrong and that
 # stopped FreeRADIUS from starting:
