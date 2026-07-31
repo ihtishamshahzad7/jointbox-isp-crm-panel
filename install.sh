@@ -96,17 +96,27 @@ step "4/9  FreeRADIUS"
 apt-get install -y -qq freeradius freeradius-postgresql freeradius-utils >/dev/null
 RAD=/etc/freeradius/3.0
 
+# If the config tree is damaged/missing (broken mods-available, empty modules
+# section — the "Failed to find pap" / empty "modules {}" symptom), restore the
+# stock config from the package before layering our changes on top. dpkg won't
+# overwrite existing conffiles, so we only force a clean restore when pap is
+# actually missing — never on a healthy box.
+if [ ! -e "$RAD/mods-available/pap" ]; then
+  warn "FreeRADIUS config incomplete — restoring package defaults…"
+  systemctl stop freeradius >/dev/null 2>&1 || true
+  apt-get install -y -qq --reinstall -o Dpkg::Options::="--force-confmiss" freeradius freeradius-common >/dev/null 2>&1 || true
+fi
+
+mkdir -p "$RAD/mods-available" "$RAD/mods-enabled"
+
 # Ensure the CORE auth modules are enabled. Some minimal images ship an empty
 # (or partial) mods-enabled/, which makes FreeRADIUS refuse to start with
 # "Failed to find pap as a module". We link the essentials ourselves so the
-# install never depends on the base image's defaults.
+# install never depends on the base image's defaults. ln -sf so a pre-existing
+# broken symlink is replaced rather than causing "File exists".
 for m in pap chap mschap eap digest expiration logintime preprocess realm files expr exec unix radutmp attr_filter detail utf8 cache_eap; do
-  if [ -e "$RAD/mods-available/$m" ] && [ ! -e "$RAD/mods-enabled/$m" ]; then
-    ln -sf "../mods-available/$m" "$RAD/mods-enabled/$m"
-  fi
+  [ -e "$RAD/mods-available/$m" ] && ln -sf "../mods-available/$m" "$RAD/mods-enabled/$m"
 done
-
-[ -e "$RAD/mods-enabled/sql" ] || ln -s ../mods-available/sql "$RAD/mods-enabled/sql"
 # COMPLETE sql module. Two things the old minimal version got wrong and that
 # stopped FreeRADIUS from starting:
 #   1) the connection pool MUST be multi-line — one `key = value` per line, or
@@ -158,6 +168,9 @@ sql {
     \$INCLUDE \${modconfdir}/\${.:name}/main/\${dialect}/queries.conf
 }
 EOF
+
+# Enable the sql module (ln -sf replaces any stale/broken symlink safely).
+ln -sf ../mods-available/sql "$RAD/mods-enabled/sql"
 
 # Auth logging on, and one interim-update interval for EVERY user so live usage
 # works without touching each router.
