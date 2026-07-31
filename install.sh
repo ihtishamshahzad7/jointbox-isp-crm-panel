@@ -140,8 +140,11 @@ sql {
     client_table = "nas"
     client_query = "SELECT id, nasname, shortname, type, secret, server FROM nas"
 
-    # Table names referenced by queries.conf — required, or parsing fails.
+    # Table names + attributes referenced by queries.conf — required, or parsing
+    # fails with "Reference \${...} not found".
     sql_user_name    = "%{User-Name}"
+    group_attribute  = "SQL-Group"
+    default_user_profile = ""
     authcheck_table  = "radcheck"
     authreply_table  = "radreply"
     groupcheck_table = "radgroupcheck"
@@ -151,8 +154,12 @@ sql {
     acct_table2      = "radacct"
     postauth_table   = "radpostauth"
 
-    read_groups   = yes
-    read_profiles = yes
+    # The panel writes per-user radcheck/radreply directly — it does NOT use
+    # RADIUS user-groups or profiles. Turning these off skips the group/profile
+    # queries entirely (and their attribute references), which is both faster
+    # and removes a class of parse errors.
+    read_groups   = no
+    read_profiles = no
     delete_stale_sessions = yes
 
     pool {
@@ -234,6 +241,15 @@ sudo -u postgres psql -d "$DB_NAME" -qc "REASSIGN OWNED BY postgres TO $DB_USER;
 # so a fresh clone ends up byte-identical to an updated one. See MIGRATIONS.md.
 npm run db:deploy >/dev/null 2>&1 && ok "Schema migrated & in sync" || warn "db:deploy had warnings — run: cd $APP_DIR/backend && npm run db:deploy"
 npm run build >/dev/null 2>&1 && ok "Backend built"
+
+# Create the uploads dirs (CNIC/photos/documents) writable by the app, or the
+# backend fails at boot with EACCES mkdir .../uploads. Owned by the repo's user
+# so it works whether pm2 runs as root or as that user.
+REPO_OWNER="$(stat -c %U "$APP_DIR" 2>/dev/null || echo root)"
+mkdir -p "$APP_DIR/uploads" "$APP_DIR/backend/uploads"
+chown -R "$REPO_OWNER":"$REPO_OWNER" "$APP_DIR/uploads" "$APP_DIR/backend/uploads" 2>/dev/null || true
+chmod -R 775 "$APP_DIR/uploads" "$APP_DIR/backend/uploads" 2>/dev/null || true
+ok "Uploads directory ready"
 
 # -----------------------------------------------------------------------------
 step "7/9  Frontend"
