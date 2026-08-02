@@ -7,7 +7,6 @@ import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
 import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
-import DashboardHome from "./dashboard-home";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -741,9 +740,26 @@ export default function DashboardPage() {
 
       {tab === "home" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Restyled home: KPI cards w/ captions + sparklines, network health,
-              live feed and areas-by-health — all wired to live data. */}
-          <DashboardHome homeStats={homeStats} currency={currencySymbol()} refreshKey={refreshKey} />
+          {/* KPI cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
+            {[
+              { label: "Total Subscribers", value: homeStats.totalSubscribers, grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.32)", fill: Math.min(100, homeStats.totalSubscribers ? 100 : 6) },
+              { label: "Active Subscribers", value: homeStats.activeSubscribers, grad: "linear-gradient(135deg,#00C9FF,#92FE9D)", glow: "rgba(0,201,255,.28)", fill: homeStats.totalSubscribers ? (homeStats.activeSubscribers / homeStats.totalSubscribers) * 100 : 0 },
+              { label: "Today's Signups", value: homeStats.todaySignups, grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.30)", fill: Math.min(100, homeStats.todaySignups * 10) },
+              { label: "Revenue Today", value: toCurrency(homeStats.revenueToday), grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.30)", fill: Math.min(100, homeStats.revenueToday ? 72 : 4) },
+            ].map((c) => (
+              <div key={c.label} style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 14, background: c.grad, boxShadow: `0 8px 22px ${c.glow}` }} />
+                <div>
+                  <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}>{c.value}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 5 }}>{c.label}</div>
+                </div>
+                <div style={{ height: 4, borderRadius: 99, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                  <div style={{ width: `${Math.max(4, c.fill)}%`, height: "100%", borderRadius: 99, background: c.grad }} />
+                </div>
+              </div>
+            ))}
+          </div>
 
           {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
           <OverviewCharts refreshKey={refreshKey} />
