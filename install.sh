@@ -89,8 +89,31 @@ grep -q "jointbox-lan" "$PGHBA" || {
   echo "host all all 192.168.0.0/16 scram-sha-256" >> "$PGHBA"
   echo "host all all 10.0.0.0/8     scram-sha-256" >> "$PGHBA"
 }
+
+# --- Performance tuning, sized from the machine ---
+# A large base (100k+ subscribers, 100+ NAS, pm2 cluster + a worker) needs more
+# than Postgres's tiny defaults: enough connections for every worker's pool, and
+# memory settings scaled to RAM. Written to a drop-in so we never fight the
+# packaged postgresql.conf. Re-runnable (overwrites just our file).
+RAM_MB=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+SHARED_MB=$(( RAM_MB / 4 ));        [ "$SHARED_MB" -gt 8192 ] && SHARED_MB=8192
+CACHE_MB=$(( RAM_MB * 3 / 4 ))
+PGDROP="$(dirname "$PGCONF")/conf.d"; mkdir -p "$PGDROP"
+cat > "$PGDROP/10-jointbox.conf" <<PGEOF
+# Managed by Jointbox install.sh — tuned for a large ISP base.
+max_connections = 300
+shared_buffers = ${SHARED_MB}MB
+effective_cache_size = ${CACHE_MB}MB
+work_mem = 16MB
+maintenance_work_mem = 256MB
+wal_compression = on
+checkpoint_completion_target = 0.9
+random_page_cost = 1.1
+default_statistics_target = 200
+PGEOF
+grep -q "include_dir = 'conf.d'" "$PGCONF" || echo "include_dir = 'conf.d'" >> "$PGCONF"
 systemctl restart postgresql
-ok "PostgreSQL ready and reachable on the LAN"
+ok "PostgreSQL ready, LAN-reachable, tuned (max_connections=300, shared_buffers=${SHARED_MB}MB)"
 
 # -----------------------------------------------------------------------------
 step "4/9  FreeRADIUS"
@@ -213,7 +236,10 @@ fi
 step "6/9  Backend"
 cd "$APP_DIR/backend"
 cat > .env <<EOF
-DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME?connection_limit=25&pool_timeout=30"
+# connection_limit is PER PROCESS. With pm2 cluster + a worker you may have many
+# processes; keep each modest so the total stays under Postgres max_connections
+# (300, set above). e.g. 8 web + 1 worker × 20 = 180.
+DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME?connection_limit=20&pool_timeout=30"
 RADIUS_DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
 PORT=$API_PORT
 JWT_SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
@@ -228,6 +254,10 @@ NAS_POLL_CONCURRENCY=20
 NAS_FAST_POLL_MS=30000
 NAS_SLOW_POLL_MS=300000
 RADACCT_RETAIN_DAYS=90
+# radacct is rewritten on EVERY interim update. At a large base, 60s interims are
+# a write storm (e.g. 100k online = ~1,700 writes/s). 300s cuts that 5× while
+# still detecting a dead session within 5 min. Live usage graphs stay accurate.
+RADIUS_INTERIM_INTERVAL=300
 # Redis powers the cache (fast subscriber lookups) and the BullMQ job queue
 # (async billing/reconcile). Installed by this script; the app auto-detects it.
 REDIS_URL=redis://127.0.0.1:6379
@@ -282,6 +312,20 @@ fi
 cd "$APP_DIR"
 # retire any processes from older installs that used the buggy names/wrappers
 pm2 delete jointbox-api jointbox-web >/dev/null 2>&1 || true
+
+# Scale profile, sized from the box (override by exporting these before running).
+# On a multi-core server we cluster the web tier across (cores-1) and run ONE
+# dedicated background worker — so 100+ NAS polling and reconciles on a large
+# base never block HTTP. On a 1-2 core box we stay single-process (fork).
+CORES="$(nproc 2>/dev/null || echo 1)"
+if [ "$CORES" -ge 4 ]; then
+  export BACKEND_INSTANCES="${BACKEND_INSTANCES:-$(( CORES - 1 ))}"
+  export WORKER_INSTANCES="${WORKER_INSTANCES:-1}"
+  export FRONTEND_INSTANCES="${FRONTEND_INSTANCES:-2}"
+  ok "Scale profile: ${BACKEND_INSTANCES} web workers + 1 background worker (cores=$CORES)"
+else
+  ok "Small box (cores=$CORES) — single-process mode"
+fi
 pm2 startOrReload ecosystem.config.js --update-env >/dev/null 2>&1
 ok "Backend + frontend running via ecosystem.config.js"
 
