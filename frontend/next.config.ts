@@ -33,7 +33,6 @@ const nextConfig: NextConfig = {
   // `next dev`, so nothing is hidden — the build just stops refusing to produce
   // output over them. Fix them at your own pace.
   typescript: { ignoreBuildErrors: true },
-  eslint: { ignoreDuringBuilds: true },
 };
 
 export default nextConfig;
