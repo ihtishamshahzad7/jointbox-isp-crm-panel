@@ -1,0 +1,75 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "Jointbox — Network & Business",
+  "uid": "jointbox-network",
+  "tags": ["jointbox", "isp"],
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "30s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "stat", "title": "Online now",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short" } },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true,
+        "rawSql": "SELECT count(*) AS \"Online\" FROM radacct WHERE acctstoptime IS NULL" } ]
+    },
+    {
+      "type": "stat", "title": "Total subscribers",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true,
+        "rawSql": "SELECT count(*) AS \"Total\" FROM \"Subscriber\"" } ]
+    },
+    {
+      "type": "stat", "title": "Active subscribers",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true,
+        "rawSql": "SELECT count(*) AS \"Active\" FROM \"Subscriber\" WHERE status='ACTIVE'" } ]
+    },
+    {
+      "type": "stat", "title": "Monthly revenue (active)",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "currencyUSD" } },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true,
+        "rawSql": "SELECT COALESCE(SUM(p.price),0) AS \"Revenue\" FROM \"Subscriber\" s JOIN \"Package\" p ON p.id = s.\"packageId\" WHERE s.status='ACTIVE'" } ]
+    },
+    {
+      "type": "timeseries", "title": "Traffic (GB / hour)",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "decgbytes", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true,
+        "rawSql": "SELECT date_trunc('hour', acctstarttime) AS time, SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0))/1e9 AS \"GB\" FROM radacct WHERE $__timeFilter(acctstarttime) GROUP BY 1 ORDER BY 1" } ]
+    },
+    {
+      "type": "timeseries", "title": "New sessions / hour",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20 } } },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true,
+        "rawSql": "SELECT date_trunc('hour', acctstarttime) AS time, count(*) AS \"Sessions\" FROM radacct WHERE $__timeFilter(acctstarttime) GROUP BY 1 ORDER BY 1" } ]
+    },
+    {
+      "type": "table", "title": "Online by router (NAS)",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true,
+        "rawSql": "SELECT COALESCE(nasipaddress::text,'unknown') AS \"NAS\", count(*) AS \"Online\", ROUND(SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0))/1e9,2) AS \"GB\" FROM radacct WHERE acctstoptime IS NULL GROUP BY 1 ORDER BY 2 DESC" } ]
+    },
+    {
+      "type": "piechart", "title": "Subscribers by status",
+      "datasource": { "type": "postgres", "uid": "jointbox-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true,
+        "rawSql": "SELECT status AS \"metric\", count(*) AS \"value\" FROM \"Subscriber\" GROUP BY status" } ]
+    }
+  ]
+}

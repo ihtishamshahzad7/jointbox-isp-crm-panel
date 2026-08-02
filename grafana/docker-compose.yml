@@ -1,0 +1,32 @@
+# Jointbox network-monitoring dashboard.
+#   cd grafana
+#   DB_PASSWORD=<your jointbox DB pass> docker compose up -d
+#   open http://<server-ip>:3009   (admin / admin on first login)
+#
+# The Postgres datasource and the "Jointbox Network" dashboard are provisioned
+# automatically from ./provisioning — no manual setup.
+services:
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: jointbox-grafana
+    ports:
+      - "3009:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Passed into the provisioned datasource (see provisioning/datasources).
+      JB_DB_HOST: ${DB_HOST:-host.docker.internal}
+      JB_DB_NAME: ${DB_NAME:-jointbox}
+      JB_DB_USER: ${DB_USER:-jointbox}
+      JB_DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD to your jointbox DB password}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning
+      - ./dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
+volumes:
+  grafana-data:

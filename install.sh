@@ -45,8 +45,9 @@ cd /tmp 2>/dev/null || true
 step "1/9  System packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq curl git build-essential ca-certificates gnupg ufw >/dev/null
-ok "Base packages"
+apt-get install -y -qq curl git build-essential ca-certificates gnupg ufw redis-server >/dev/null
+systemctl enable --now redis-server >/dev/null 2>&1 || true
+ok "Base packages (incl. Redis for cache + job queue)"
 
 # -----------------------------------------------------------------------------
 step "2/9  Node.js 20 LTS"
@@ -227,7 +228,11 @@ NAS_POLL_CONCURRENCY=20
 NAS_FAST_POLL_MS=30000
 NAS_SLOW_POLL_MS=300000
 RADACCT_RETAIN_DAYS=90
-# REDIS_URL=redis://127.0.0.1:6379   # uncomment after installing Redis
+# Redis powers the cache (fast subscriber lookups) and the BullMQ job queue
+# (async billing/reconcile). Installed by this script; the app auto-detects it.
+REDIS_URL=redis://127.0.0.1:6379
+# SMS gateway for expiry reminders — set your provider's URL template, e.g.
+# SMS_GATEWAY_URL="https://sms.example.com/send?to={phone}&text={message}&key=XXX"
 EOF
 chmod 600 .env
 

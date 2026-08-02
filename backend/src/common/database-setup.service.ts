@@ -134,6 +134,15 @@ export class DatabaseSetupService implements OnModuleInit {
       `CREATE INDEX IF NOT EXISTS user_parent_idx         ON "User" ("parentId")`,
       `CREATE INDEX IF NOT EXISTS ubt_user_ref_idx
          ON "UserBalanceTransaction" ("userId", reference)`,
+
+      // Full-text / fuzzy subscriber search. pg_trgm GIN indexes make the
+      // panel's ILIKE '%q%' search (name / username / phone / CNIC) index-backed
+      // instead of a full scan — instant even with hundreds of thousands of rows.
+      `CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+      `CREATE INDEX IF NOT EXISTS subscriber_fullname_trgm ON "Subscriber" USING gin ("fullName" gin_trgm_ops)`,
+      `CREATE INDEX IF NOT EXISTS subscriber_username_trgm ON "Subscriber" USING gin (username gin_trgm_ops)`,
+      `CREATE INDEX IF NOT EXISTS subscriber_phone_trgm    ON "Subscriber" USING gin (phone gin_trgm_ops)`,
+      `CREATE INDEX IF NOT EXISTS subscriber_identity_trgm ON "Subscriber" USING gin (identity gin_trgm_ops)`,
     ]);
   }
 
