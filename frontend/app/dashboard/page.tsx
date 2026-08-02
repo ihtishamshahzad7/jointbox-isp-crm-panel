@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
 import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
+import DashboardHome from "./dashboard-home";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -740,50 +741,9 @@ export default function DashboardPage() {
 
       {tab === "home" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Nova stat cards: gradient icon chip, oversized figure, spark track.
-              The figure stays in --text rather than a decorative colour — the
-              gradient chip does the identifying, the number does the informing. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-            {[
-              { label: "Total Subscribers", value: homeStats.totalSubscribers,
-                grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.32)",
-                icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
-                fill: Math.min(100, homeStats.totalSubscribers ? 100 : 6) },
-              { label: "Active Subscribers", value: homeStats.activeSubscribers,
-                grad: "linear-gradient(135deg,#00C9FF,#92FE9D)", glow: "rgba(0,201,255,.28)",
-                icon: "M9 11l3 3 10-10 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
-                fill: homeStats.totalSubscribers ? (homeStats.activeSubscribers / homeStats.totalSubscribers) * 100 : 0 },
-              { label: "Today's Signups", value: homeStats.todaySignups,
-                grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.30)",
-                icon: "M12 5v14 M5 12h14",
-                fill: Math.min(100, homeStats.todaySignups * 10) },
-              { label: "Revenue Today", value: toCurrency(homeStats.revenueToday),
-                grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.30)",
-                icon: "M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
-                fill: Math.min(100, homeStats.revenueToday ? 72 : 4) },
-            ].map((c) => (
-              <div key={c.label} style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div style={{
-                    width: 44, height: 44, borderRadius: 14, background: c.grad,
-                    display: "grid", placeItems: "center", boxShadow: `0 8px 22px ${c.glow}`,
-                  }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff"
-                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d={c.icon} />
-                    </svg>
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}>{c.value}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 5 }}>{c.label}</div>
-                </div>
-                <div style={{ height: 4, borderRadius: 99, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-                  <div style={{ width: `${Math.max(4, c.fill)}%`, height: "100%", borderRadius: 99, background: c.grad }} />
-                </div>
-              </div>
-            ))}
-          </div>
+          {/* Restyled home: KPI cards w/ captions + sparklines, network health,
+              live feed and areas-by-health — all wired to live data. */}
+          <DashboardHome homeStats={homeStats} currency={currencySymbol()} refreshKey={refreshKey} />
 
           {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
           <OverviewCharts refreshKey={refreshKey} />
