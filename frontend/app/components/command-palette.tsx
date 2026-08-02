@@ -54,6 +54,7 @@ const DESTS: Dest[] = [
   { label: "Settings", href: "/settings", group: "System", keys: "settings currency sms email gateway configure" },
   { label: "Background Jobs", href: "/jobs", group: "System", keys: "job queue reconcile integrity progress", ispOnly: true },
   { label: "Server Console", href: "/console", group: "System", keys: "console terminal logs server root", ispOnly: true },
+  { label: "FreeRADIUS & Database", href: "/radius-admin", group: "System", keys: "freeradius radius config modules sql database settings postgres tuning enable disable", ispOnly: true },
   { label: "Setup checklist", href: "/setup", group: "System", keys: "setup checklist start onboarding" },
   { label: "Ask the assistant (help)", href: "#assistant", group: "System", keys: "help guide how to documentation assistant ask ai support" },
 ];
