@@ -60,6 +60,19 @@ async function bootstrap() {
   // Create the default admin on a fresh database (first Ubuntu install / new VM).
   await ensureDefaultAdmin(app);
 
+  // Security headers (no extra dependency). Hardens the API against clickjacking,
+  // MIME-sniffing, referrer leakage and forces HTTPS where a proxy sets it.
+  app.use((_req: any, res: any, next: any) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-XSS-Protection', '0');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    if (process.env.FORCE_HTTPS === '1') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+  });
+
   // ⚡ Phase 0: gzip all JSON responses (only bodies > 1kB)
   app.use(compression({ threshold: 1024 }));
 

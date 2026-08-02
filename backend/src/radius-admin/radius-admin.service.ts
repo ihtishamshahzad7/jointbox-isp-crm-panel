@@ -83,7 +83,7 @@ export class RadiusAdminService {
   }
 
   async toggleModule(name: string, enable: boolean) {
-    if (!/^[a-z0-9_.\-]+$/i.test(name)) throw new BadRequestException('Invalid module name');
+    if (!/^[a-z0-9_\-]+$/i.test(name) || name.includes('..')) throw new BadRequestException('Invalid module name');
     const availFile = path.join(RAD, 'mods-available', name);
     if (!(await fs.stat(availFile).then(() => true).catch(() => false))) {
       throw new BadRequestException(`Module "${name}" not found in mods-available.`);

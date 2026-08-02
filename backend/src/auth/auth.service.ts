@@ -20,6 +20,31 @@ export class AuthService {
     private events: EventsService,
   ) {}
 
+  // Brute-force protection: per email+IP failed-attempt counter. After 8 fails
+  // within the window the account/IP pair is locked out for 15 minutes. In
+  // memory (per process) — good enough to defeat online guessing; pair with
+  // fail2ban / a WAF for network-level protection.
+  private loginAttempts = new Map<string, { count: number; until: number }>();
+  private static readonly MAX_FAILS = 8;
+  private static readonly LOCK_MS = 15 * 60_000;
+
+  private failKey(email: string, ip?: string) {
+    return `${(email || '').toLowerCase()}|${ip || ''}`;
+  }
+  private assertNotLocked(email: string, ip?: string) {
+    const rec = this.loginAttempts.get(this.failKey(email, ip));
+    if (rec && rec.count >= AuthService.MAX_FAILS && rec.until > Date.now()) {
+      const mins = Math.ceil((rec.until - Date.now()) / 60000);
+      throw new UnauthorizedException(`Too many failed attempts. Try again in ${mins} minute(s).`);
+    }
+  }
+  private registerFail(email: string, ip?: string) {
+    const key = this.failKey(email, ip);
+    const rec = this.loginAttempts.get(key);
+    const count = (rec && rec.until > Date.now() ? rec.count : 0) + 1;
+    this.loginAttempts.set(key, { count, until: Date.now() + AuthService.LOCK_MS });
+  }
+
   async login(
     email: string,
     password: string,
@@ -27,6 +52,9 @@ export class AuthService {
     userAgent?: string,
     code?: string,
   ) {
+    // Reject early if this email+IP is currently locked out.
+    this.assertNotLocked(email, ip);
+
     console.log('🔍 Looking for user:', email);
 
     // Find user in database
@@ -46,6 +74,7 @@ export class AuthService {
         failReason: 'User not found',
       });
 
+      this.registerFail(email, ip);
       throw new UnauthorizedException(
         'Invalid email or password',
       );
@@ -72,11 +101,14 @@ export class AuthService {
         failReason: 'Invalid credentials',
       });
 
+      this.registerFail(email, ip);
       throw new UnauthorizedException(
         'Invalid email or password',
       );
     }
 
+    // Correct password → clear the failed-attempt counter for this email+IP.
+    this.loginAttempts.delete(this.failKey(email, ip));
     console.log('✅ Password valid for:', email);
 
     // Phase 4A: two-factor authentication
