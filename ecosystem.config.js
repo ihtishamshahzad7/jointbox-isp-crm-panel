@@ -80,11 +80,12 @@ module.exports = {
     },
     {
       name: 'jointbox-frontend',
-      // Standalone server produced by `next build` (output:'standalone'). Runs
-      // the traced server.js directly — tiny footprint, no npm wrapper to orphan
-      // the port. update-jointbox.sh copies .next/static + public in after build.
-      script: path.join(__dirname, 'frontend', '.next', 'standalone', 'server.js'),
-      cwd: path.join(__dirname, 'frontend', '.next', 'standalone'),
+      // Run Next's own binary directly (never `npm run start` — that wrapper
+      // orphans the port). `next start` serves the app AND /_next/static
+      // reliably, unlike the standalone server which needed static copied in.
+      script: path.join(__dirname, 'frontend', 'node_modules', 'next', 'dist', 'bin', 'next'),
+      args: 'start -H 0.0.0.0 -p 3000',
+      cwd: path.join(__dirname, 'frontend'),
       exec_mode: modeFor(frontendInstances),
       instances: asCount(frontendInstances),
       autorestart: true,

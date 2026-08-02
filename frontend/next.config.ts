@@ -9,17 +9,14 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: ROOT,
   },
-  // Keep standalone file-tracing scoped to the frontend, not the monorepo root.
   outputFileTracingRoot: ROOT,
   poweredByHeader: false,
   reactStrictMode: true,
 
-  // Standalone output: `next build` traces ONLY the modules the server actually
-  // uses into .next/standalone, so the deployed footprint is a fraction of the
-  // full node_modules. We run node .next/standalone/server.js in production
-  // (see ecosystem.config.js) and copy .next/static + public in after build
-  // (handled by update-jointbox.sh / install.sh).
-  output: "standalone",
+  // NOTE: standalone output was reverted — its first deploy failed to serve
+  // /_next/static chunks, leaving the UI stuck on "Loading…". We run the normal
+  // `next start` (see ecosystem.config.js) which serves everything reliably.
+  // Re-enable output:"standalone" only after verifying static serving end-to-end.
   // Allow the dev server to be opened from these LAN hosts (add more IPs as needed)
   allowedDevOrigins: ["192.168.51.253"],
 
