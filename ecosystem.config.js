@@ -30,15 +30,39 @@ const path = require('path');
 
 const backendInstances = process.env.BACKEND_INSTANCES || 1;   // set to 'max' or a number to cluster
 const frontendInstances = process.env.FRONTEND_INSTANCES || 1;
+const workerInstances = process.env.WORKER_INSTANCES || 0;    // >0 → run a dedicated worker service (microservice split)
 const asCount = (v) => (v === 'max' ? 'max' : Number(v) || 1);
 const modeFor = (v) => (v === 'max' || Number(v) > 1 ? 'cluster' : 'fork');
+
+// Microservice split. Set WORKER_INSTANCES>0 to run a dedicated worker service
+// that handles ALL background work (crons, pollers, queue jobs); the web nodes
+// then serve HTTP only. Default (0) = monolith: the web process also does the
+// background work on worker 0. Requires REDIS_URL so jobs are shared.
+const splitWorker = Number(workerInstances) > 0;
+const backend = path.join(__dirname, 'backend', 'dist', 'main.js');
+const backendCwd = path.join(__dirname, 'backend');
+
+const workerApp = {
+  name: 'jointbox-worker',
+  script: backend,
+  cwd: backendCwd,
+  exec_mode: 'fork',
+  instances: asCount(workerInstances),
+  autorestart: true,
+  min_uptime: '15s',
+  max_restarts: 10,
+  restart_delay: 3000,
+  max_memory_restart: '600M',
+  // JOINTBOX_ROLE=worker → runs background services, binds NO HTTP port.
+  env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', JOINTBOX_ROLE: 'worker' },
+};
 
 module.exports = {
   apps: [
     {
       name: 'jointbox-backend',
-      script: path.join(__dirname, 'backend', 'dist', 'main.js'),
-      cwd: path.join(__dirname, 'backend'),
+      script: backend,
+      cwd: backendCwd,
       exec_mode: modeFor(backendInstances),
       instances: asCount(backendInstances),
       autorestart: true,
@@ -48,7 +72,11 @@ module.exports = {
       max_memory_restart: '600M', // recycle a worker if it leaks past 600MB
       // Cap V8 heap so a worker can't balloon RAM on a small VM, and so the GC
       // runs sooner. 512MB is plenty for the API; raise if you cluster heavily.
-      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512' },
+      // When a dedicated worker is running, the web nodes serve HTTP ONLY.
+      env: Object.assign(
+        { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512' },
+        splitWorker ? { JOINTBOX_ROLE: 'web' } : {},
+      ),
     },
     {
       name: 'jointbox-frontend',
@@ -66,5 +94,7 @@ module.exports = {
       max_memory_restart: '500M',
       env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', PORT: '3000', HOSTNAME: '0.0.0.0' },
     },
+    // Dedicated background worker — only added when WORKER_INSTANCES>0.
+    ...(splitWorker ? [workerApp] : []),
   ],
 };

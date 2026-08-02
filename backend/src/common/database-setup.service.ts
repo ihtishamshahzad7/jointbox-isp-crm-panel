@@ -143,6 +143,17 @@ export class DatabaseSetupService implements OnModuleInit {
       `CREATE INDEX IF NOT EXISTS subscriber_username_trgm ON "Subscriber" USING gin (username gin_trgm_ops)`,
       `CREATE INDEX IF NOT EXISTS subscriber_phone_trgm    ON "Subscriber" USING gin (phone gin_trgm_ops)`,
       `CREATE INDEX IF NOT EXISTS subscriber_identity_trgm ON "Subscriber" USING gin (identity gin_trgm_ops)`,
+
+      // tsvector full-text search (Laravel Scout equivalent). A STORED generated
+      // column + GIN index lets ranked word search (websearch_to_tsquery) run
+      // against an index. Populated automatically on every insert/update.
+      `ALTER TABLE "Subscriber" ADD COLUMN IF NOT EXISTS search_tsv tsvector
+         GENERATED ALWAYS AS (
+           to_tsvector('simple',
+             coalesce("fullName",'') || ' ' || coalesce(username,'') || ' ' ||
+             coalesce(phone,'') || ' ' || coalesce(identity,'') || ' ' || coalesce(email,''))
+         ) STORED`,
+      `CREATE INDEX IF NOT EXISTS subscriber_search_tsv_idx ON "Subscriber" USING gin (search_tsv)`,
     ]);
   }
 

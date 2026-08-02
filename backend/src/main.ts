@@ -83,10 +83,47 @@ async function bootstrap() {
   // Graceful shutdown (queues, redis, prisma)
   app.enableShutdownHooks();
 
+  // Microservice split: a worker-role process runs background services only
+  // (crons, pollers, queue workers via isPrimaryInstance) and binds NO HTTP
+  // port, so it never competes with the web nodes for the request path.
+  const { isWorkerOnly } = require('./common/cluster-util');
+  if (isWorkerOnly()) {
+    await app.init();
+    console.log('✅ Backend running as WORKER (background services only, no HTTP).');
+    return;
+  }
+
   const port = Number(process.env.PORT) || 3001;
   await app.listen(port, '0.0.0.0');
   console.log('✅ Backend running on:');
   console.log(`  - http://localhost:${port}`);
+
+  // Bull-Board queue dashboard (the Laravel Horizon equivalent). Only mounts
+  // when Redis is on AND the optional packages are installed — otherwise skips
+  // silently. Protected by HTTP basic auth (admin creds by default). Mounted
+  // AFTER listen() so every processor is registered and shows up.
+  try {
+    const { QueueService } = require('./common/queue.service');
+    const queueSvc = app.get(QueueService, { strict: false });
+    if (queueSvc?.isBull?.()) {
+      const { createBullBoard } = require('@bull-board/api');
+      const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
+      const { ExpressAdapter } = require('@bull-board/express');
+      const queues = queueSvc.getBullQueues();
+      const serverAdapter = new ExpressAdapter();
+      serverAdapter.setBasePath('/admin/queues');
+      createBullBoard({ queues: queues.map((q: any) => new BullMQAdapter(q)), serverAdapter });
+      const U = process.env.QUEUE_DASHBOARD_USER || process.env.ADMIN_EMAIL || 'admin';
+      const P = process.env.QUEUE_DASHBOARD_PASS || process.env.ADMIN_PASSWORD || 'admin123';
+      app.use('/admin/queues', (req: any, res: any, next: any) => {
+        const [, b64] = String(req.headers['authorization'] || '').split(' ');
+        const [u, p] = Buffer.from(b64 || '', 'base64').toString().split(':');
+        if (u === U && p === P) return next();
+        res.set('WWW-Authenticate', 'Basic realm="Jointbox Queues"').status(401).send('Auth required');
+      }, serverAdapter.getRouter());
+      console.log(`  - Queue dashboard: http://localhost:${port}/admin/queues`);
+    }
+  } catch { /* @bull-board not installed — dashboard disabled */ }
 }
 bootstrap();
 

@@ -1,16 +1,27 @@
 /**
- * Should THIS process run singleton work (cron jobs, pollers)?
+ * Should THIS process run singleton background work (cron jobs, pollers, queue
+ * workers)? Every cron/poller in the app already gates on this, so this one
+ * function is what routes background work in every deployment topology:
  *
- * In pm2 fork mode there is one process → always yes. In pm2 CLUSTER mode there
- * are N identical workers; pm2 sets NODE_APP_INSTANCE=0,1,2… so we let only
- * worker 0 run scheduled jobs. Without this, every worker would run every cron
- * — duplicate emails, double reconciles, racing session syncs.
+ *  • JOINTBOX_ROLE unset ("all", the default) → monolith. In pm2 cluster mode
+ *    only worker 0 runs it (NODE_APP_INSTANCE=0); in fork mode the one process.
+ *  • JOINTBOX_ROLE="web"    → web node: HTTP only, NEVER runs background work.
+ *  • JOINTBOX_ROLE="worker" → dedicated worker service: ALWAYS runs background
+ *    work (and main.ts skips the HTTP server). This is the microservice split —
+ *    web and worker scale independently and a heavy poll can't block a request.
  *
- * Set CRON_DISABLED=true to turn all scheduled work off on a box (e.g. a
- * read-replica/standby node).
+ * Set CRON_DISABLED=true to force background work off on any box.
  */
 export function isPrimaryInstance(): boolean {
   if (process.env.CRON_DISABLED === 'true') return false;
+  const role = process.env.JOINTBOX_ROLE;
+  if (role === 'worker') return true;
+  if (role === 'web') return false;
   const inst = process.env.NODE_APP_INSTANCE ?? process.env.pm_id;
   return inst == null || inst === '0';
+}
+
+/** True when this process should NOT bind the HTTP server (pure worker). */
+export function isWorkerOnly(): boolean {
+  return process.env.JOINTBOX_ROLE === 'worker';
 }

@@ -54,6 +54,23 @@ export class QueueService implements OnModuleDestroy {
     }
   }
 
+  /** True when running on real BullMQ (Redis present). */
+  isBull(): boolean { return !!this.bull; }
+
+  /**
+   * Queue instances for the Bull-Board dashboard. Ensures a Queue exists for
+   * every registered processor so they all show up, even before their first job.
+   */
+  getBullQueues(): any[] {
+    if (!this.bull) return [];
+    for (const name of this.processors.keys()) {
+      if (!this.queues.has(name)) {
+        this.queues.set(name, new this.bull.Queue(name, { connection: this.connection }));
+      }
+    }
+    return [...this.queues.values()];
+  }
+
   /** Enqueue a job. Returns a job id usable with getStatus(). */
   async add(name: string, data: any = {}): Promise<string> {
     const fn = this.processors.get(name);
