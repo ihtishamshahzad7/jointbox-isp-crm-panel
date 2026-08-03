@@ -188,6 +188,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  // One button, two behaviours: on phones it opens/closes the off-canvas drawer;
+  // on desktop it collapses/expands the sidebar.
+  const toggleSidebar = () => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) setMobileOpen((o) => !o);
+    else setCollapsed((p) => !p);
+  };
   const [switchList, setSwitchList] = useState<any[]>([]);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -540,7 +547,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* Nova UI kit stylesheet — mounted once here so every page can compose
           the shared primitives without importing styles of its own. */}
       <NovaStyles />
-      <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
+      {/* Backdrop behind the mobile drawer — tap to close (shown on phones only). */}
+      {mobileOpen && <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />}
+      <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
           <div className="brand-mark" aria-hidden="true">
             {/* Linked-boxes glyph, matching the favicon/logo mark. */}
@@ -573,9 +582,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     key={item.href}
                     type="button"
                     className={`nav-item ${isActive ? 'active' : ''}`}
-                    onClick={() => item.href === '#assistant'
-                      ? window.dispatchEvent(new Event('open-assistant'))
-                      : router.push(item.href)}
+                    onClick={() => {
+                      setMobileOpen(false); // close the drawer after navigating on mobile
+                      if (item.href === '#assistant') window.dispatchEvent(new Event('open-assistant'));
+                      else router.push(item.href);
+                    }}
                     title={collapsed ? item.label : ''}
                   >
                     <span className="nav-icon"><Icon /></span>
@@ -605,7 +616,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               className="topbar-sidebar-toggle"
-              onClick={() => setCollapsed((p) => !p)}
+              onClick={toggleSidebar}
               aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
