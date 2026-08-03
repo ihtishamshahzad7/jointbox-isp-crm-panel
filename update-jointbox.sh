@@ -28,16 +28,12 @@ npm run build            # produces backend/dist/main.js
 echo "🎨 Building frontend..."
 cd "$REPO/frontend"
 npm install --no-audit --no-fund
+# Always start from a CLEAN .next. A stale/half-old build (or one whose files
+# were written by a different user in a mixed root/jointbox setup) makes
+# `next start` return HTTP 500 for /_next/static chunks → the UI hangs with a
+# ChunkLoadError. Wiping guarantees consistent, servable chunks every deploy.
+rm -rf "$REPO/frontend/.next"
 npm run build
-
-# Standalone output (next.config output:'standalone') traces the server into
-# .next/standalone, but static assets and /public must be copied in beside it.
-echo "📦 Assembling standalone frontend..."
-if [ -d "$REPO/frontend/.next/standalone" ]; then
-  mkdir -p "$REPO/frontend/.next/standalone/.next"
-  cp -r "$REPO/frontend/.next/static" "$REPO/frontend/.next/standalone/.next/static"
-  [ -d "$REPO/frontend/public" ] && cp -r "$REPO/frontend/public" "$REPO/frontend/.next/standalone/public"
-fi
 
 # Slim down: the Next build cache and webpack cache are only needed DURING the
 # build and can grow to several GB. Removing them after a successful build keeps
