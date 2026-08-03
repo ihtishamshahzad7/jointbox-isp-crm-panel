@@ -76,6 +76,24 @@ else
 fi
 pm2 save >/dev/null 2>&1 || true
 
+# --- Serve the domain on port 80 with NO nginx, PERMANENTLY. ---
+# The frontend runs on 3000 (stable, unprivileged). We bridge port 80 → 3000 at
+# the kernel and RE-APPLY it on every deploy so it can never be lost (the old
+# approach of binding the frontend to :80 via FRONTEND_PORT was fragile because
+# --update-env dropped the env each deploy). Idempotent + persisted.
+if [ "$(id -u)" -eq 0 ]; then
+  WEBPORT="$(pm2 jlist 2>/dev/null | grep -o '"PORT":"[0-9]*"' | head -1 | grep -o '[0-9]*')"; WEBPORT="${WEBPORT:-3000}"
+  if [ "$WEBPORT" != "80" ]; then
+    iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports "$WEBPORT" 2>/dev/null || {
+      iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports "$WEBPORT" 2>/dev/null || true
+      iptables -t nat -A OUTPUT -o lo -p tcp --dport 80 -j REDIRECT --to-ports "$WEBPORT" 2>/dev/null || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
+    }
+    netfilter-persistent save >/dev/null 2>&1 || true
+    echo "🌐 Port 80 → $WEBPORT bridge active (http://<domain> works, no nginx)"
+  fi
+fi
+
 echo ""
 echo "✅ Done. Status:"
 pm2 list
