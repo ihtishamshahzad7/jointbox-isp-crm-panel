@@ -747,15 +747,17 @@ export default function DashboardPage() {
             {(() => {
               const activePct = homeStats.totalSubscribers ? Math.round((homeStats.activeSubscribers / homeStats.totalSubscribers) * 100) : 0;
               return [
-                { icon: "👥", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.30)", scolor: "#8B5CF6", tag: "base", good: true, spark: "0,24 25,20 50,15 75,10 100,6" },
-                { icon: "✅", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, grad: "linear-gradient(135deg,#00C9FF,#22c55e)", glow: "rgba(34,197,94,.26)", scolor: "#22c55e", tag: `${activePct}%`, good: activePct >= 70, spark: "0,16 25,18 50,12 75,10 100,13" },
-                { icon: "📈", label: "Signups today", value: homeStats.todaySignups, cap: "New activations since midnight", grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.28)", scolor: "#F7971E", tag: "today", good: true, spark: "0,20 25,22 50,17 75,18 100,12" },
-                { icon: "💳", label: "Revenue today", value: toCurrency(homeStats.revenueToday), cap: "Payments received today", grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.28)", scolor: "#E9408B", tag: "today", good: true, spark: "0,24 25,20 50,17 75,12 100,7" },
+                { icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.30)", scolor: "#8B5CF6", tag: "base", good: true, spark: "0,24 25,20 50,15 75,10 100,6" },
+                { icon: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, grad: "linear-gradient(135deg,#00C9FF,#22c55e)", glow: "rgba(34,197,94,.26)", scolor: "#22c55e", tag: `${activePct}%`, good: activePct >= 70, spark: "0,16 25,18 50,12 75,10 100,13" },
+                { icon: "M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6", label: "Signups today", value: homeStats.todaySignups, cap: "New activations since midnight", grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.28)", scolor: "#F7971E", tag: "today", good: true, spark: "0,20 25,22 50,17 75,18 100,12" },
+                { icon: "M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6", label: "Revenue today", value: toCurrency(homeStats.revenueToday), cap: "Payments received today", grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.28)", scolor: "#E9408B", tag: "today", good: true, spark: "0,24 25,20 50,17 75,12 100,7" },
               ];
             })().map((c) => (
               <div key={c.label} style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ width: 42, height: 42, borderRadius: 12, background: c.grad, boxShadow: `0 8px 22px ${c.glow}`, display: "grid", placeItems: "center", fontSize: 19 }}>{c.icon}</div>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, background: c.grad, boxShadow: `0 8px 22px ${c.glow}`, display: "grid", placeItems: "center" }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={c.icon} /></svg>
+                  </div>
                   <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, color: c.good ? "#22c55e" : "#f59e0b", background: c.good ? "rgba(34,197,94,.14)" : "rgba(245,158,11,.14)" }}>{c.tag}</span>
                 </div>
                 <div>
