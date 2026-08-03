@@ -11,8 +11,19 @@ set -e
 REPO="$(cd "$(dirname "$0")" && pwd)"   # the repo this script lives in
 cd "$REPO"
 
+# git can refuse to operate on a repo owned by another user ("dubious ownership")
+# — mark it safe so root/jointbox both work.
+git config --global --add safe.directory "$REPO" 2>/dev/null || true
+
 echo "⬇️  Pulling latest code..."
-git pull
+# A deployment checkout should have NO local edits — anything there is a stray
+# manual change (e.g. someone edited install.sh on the box) that makes `git pull`
+# abort with "local changes would be overwritten", so the Update button silently
+# does nothing. Hard-reset to the remote so the pull ALWAYS applies.
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+git fetch origin "$BRANCH" 2>/dev/null || git fetch origin || true
+git reset --hard "origin/$BRANCH" 2>/dev/null || git reset --hard origin/main || true
+git pull --ff-only 2>/dev/null || true
 
 echo "🗄️  Applying database migrations + reconcile..."
 cd "$REPO/backend"
