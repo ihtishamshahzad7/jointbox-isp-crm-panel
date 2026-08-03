@@ -721,6 +721,36 @@ body {
     gap: 4px;
     text-align: center;
   }
+
+  /* Wide tables SCROLL horizontally inside their card instead of overflowing
+     the screen or squeezing columns into unreadable slivers. */
+  .db-root table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .db-root th, .db-root td { white-space: nowrap; }
+
+  /* Top bar wraps and shrinks so search + actions never push off-screen. */
+  .topbar {
+    height: auto;
+    min-height: 54px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .topbar input, .topbar [class*="search"] { max-width: 60vw; }
+
+  /* Tame oversized headings and stat figures on small screens. */
+  .db-root h1 { font-size: 20px !important; }
+  .db-root h2 { font-size: 17px !important; }
+
+  /* Modals/dialogs fit the viewport with a little margin. */
+  .db-root [style*="maxWidth"] { max-width: calc(100vw - 24px) !important; }
+
+  /* Floating assistant panel already caps to viewport; keep it clear of edges. */
+  .jb-assist-panel { right: 10px !important; left: 10px !important; width: auto !important; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
