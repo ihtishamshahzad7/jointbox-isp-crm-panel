@@ -43,6 +43,7 @@ import { NotesModule } from './notes/notes.module';
 import { JobsModule } from './jobs/jobs.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
 import { RadiusAdminModule } from './radius-admin/radius-admin.module';
+import { BoostModule } from './boost/boost.module';
 import { AiModule } from './ai/ai.module';
 import { FiberModule } from './fiber/fiber.module';
 import { GroupsModule } from './groups/groups.module';
@@ -90,6 +91,7 @@ import { GroupsModule } from './groups/groups.module';
     JobsModule,
     TelemetryModule,
     RadiusAdminModule,
+    BoostModule,
     AiModule,
     FiberModule,
     GroupsModule,

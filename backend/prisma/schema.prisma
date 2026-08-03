@@ -423,6 +423,31 @@ model Nas {
   @@map("nas")
 }
 
+/// A temporary speed change for a subscriber. Two modes:
+///  • expiresAt = null → a permanent speed change (applied live, stays until changed).
+///  • expiresAt set    → a timed boost; a background job restores originalDown/Up
+///    (the plan's normal speed) automatically when it expires.
+model TemporaryBoost {
+  id            Int       @id @default(autoincrement())
+  subscriberId  Int
+  boostDown     Int       // Mbps applied now
+  boostUp       Int
+  originalDown  Int       // Mbps to restore on revert (the plan's normal speed)
+  originalUp    Int
+  reason        String?
+  charge        Float?    @default(0)
+  expiresAt     DateTime? // null = permanent (no auto-revert)
+  reverted      Boolean   @default(false)
+  createdById   Int?
+  createdAt     DateTime  @default(now())
+  revertedAt    DateTime?
+
+  subscriber Subscriber @relation("SubscriberBoosts", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([subscriberId])
+  @@index([reverted, expiresAt])
+}
+
 /// One optical/interface signal reading (SFP or ONT, Rx or Tx), captured by the
 /// SNMP poller or parsed from syslog. Kept as time-series so a subscriber's
 /// profile can chart dBm over the last 24h and the aggregator can spot a slow
@@ -1230,6 +1255,7 @@ model Subscriber {
   networkLogs     NetworkLog[]     @relation("SubscriberNetworkLogs")
   pppoeSessions   PppoeSession[]   @relation("SubscriberPppoeSessions")
   linkSignals     LinkSignal[]     @relation("SubscriberLinkSignals")
+  boosts          TemporaryBoost[] @relation("SubscriberBoosts")
   radUserGroups   RadUserGroup[]   @relation("radUserGroups")
   radChecks       RadCheck[]       @relation("radChecks")
   radReplies      RadReply[]       @relation("radReplies")

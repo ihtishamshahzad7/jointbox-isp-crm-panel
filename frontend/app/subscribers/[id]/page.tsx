@@ -7,6 +7,7 @@ import { Icons as SIcons } from "../../components/icons";
 import { BandwidthChart } from "../../components/bandwidth-chart";
 import DailyUsageBars from "./bandwidth-panel";
 import LinkPath from "./link-path";
+import BoostButton from "./boost-button";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Subscriber {
@@ -462,6 +463,7 @@ export default function SubscriberProfilePage() {
           <Btn onClick={refreshLive} variant="teal" disabled={refreshing}>
             <Ic.Refresh/>{refreshing?"Refreshing…":"Refresh Live Data"}
           </Btn>
+          {sub?.id && <BoostButton subscriberId={sub.id} />}
           <Btn onClick={()=>router.push(`/subscribers?edit=${sub.id}`)} variant="warning">
             <Ic.Edit/> Edit
           </Btn>
