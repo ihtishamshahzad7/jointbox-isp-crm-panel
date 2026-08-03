@@ -63,10 +63,14 @@ BEGIN
            WHERE schemaname = 'public' AND viewowner <> '${appUser}'
   LOOP EXECUTE format('ALTER VIEW public.%I OWNER TO %I', r.viewname, '${appUser}'); n := n + 1; END LOOP;
 
-  -- Functions (e.g. archive_radacct)
+  -- Functions (e.g. archive_radacct). EXCLUDE functions that belong to an
+  -- extension (pg_trgm's similarity(), set_limit(), … ) — those are owned by
+  -- postgres, the app never alters them, and only a superuser could reassign
+  -- them. Flagging them produced a scary (harmless) warning every deploy.
   FOR r IN SELECT p.oid::regprocedure AS sig
            FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
            WHERE ns.nspname = 'public' AND pg_get_userbyid(p.proowner) <> '${appUser}'
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
   LOOP EXECUTE format('ALTER FUNCTION %s OWNER TO %I', r.sig, '${appUser}'); n := n + 1; END LOOP;
 
   -- Enum types. Only the type OWNER may ALTER TYPE ... ADD VALUE, so every
@@ -89,6 +93,7 @@ const CHECK = `
   SELECT p.proname, 'function' FROM pg_proc p
     JOIN pg_namespace ns ON ns.oid = p.pronamespace
    WHERE ns.nspname='public' AND pg_get_userbyid(p.proowner) <> $1
+     AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
   UNION ALL
   SELECT t.typname, 'enum type' FROM pg_type t
     JOIN pg_namespace ns ON ns.oid = t.typnamespace

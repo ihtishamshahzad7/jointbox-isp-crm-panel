@@ -81,5 +81,11 @@ echo "✅ Done. Status:"
 pm2 list
 echo ""
 echo "Health:"
-curl -fsS http://localhost:3001/health >/dev/null 2>&1 && echo "  API OK (3001)" || echo "  ⚠ API not responding — pm2 logs jointbox-backend"
-curl -fsS http://localhost:3000        >/dev/null 2>&1 && echo "  Web OK (3000)" || echo "  ⚠ Web not responding — pm2 logs jointbox-frontend"
+# Give the freshly-reloaded processes a few seconds to bind before checking, and
+# retry — otherwise the check races the boot and prints a false "not responding".
+check() { # $1=url $2=label
+  for i in 1 2 3 4 5 6 7 8; do curl -fsS "$1" >/dev/null 2>&1 && { echo "  $2 OK"; return; }; sleep 2; done
+  echo "  ⚠ $2 not responding after 16s — check: pm2 logs"
+}
+check http://localhost:3001/health "API (3001)"
+check http://localhost:3000        "Web (3000)"
