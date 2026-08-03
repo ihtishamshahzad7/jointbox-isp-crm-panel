@@ -88,4 +88,12 @@ check() { # $1=url $2=label
   echo "  ⚠ $2 not responding after 16s — check: pm2 logs"
 }
 check http://localhost:3001/health "API (3001)"
-check http://localhost:3000        "Web (3000)"
+# The web UI may be on 3000 (default) or 80 (FRONTEND_PORT=80 for a domain), so
+# accept either — otherwise a port change reads as a false "not responding".
+webok=""
+for i in 1 2 3 4 5 6 7 8; do
+  if curl -fsS http://localhost:3000 >/dev/null 2>&1; then webok="3000"; break; fi
+  if curl -fsS http://localhost:80   >/dev/null 2>&1; then webok="80";   break; fi
+  sleep 2
+done
+[ -n "$webok" ] && echo "  Web OK (:$webok)" || echo "  ⚠ Web not responding on :3000 or :80 — pm2 logs jointbox-frontend"
