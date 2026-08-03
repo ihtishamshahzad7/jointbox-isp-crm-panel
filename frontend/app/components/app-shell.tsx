@@ -452,6 +452,26 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     router.replace('/login');
   };
 
+  // Session inactivity auto-logout. After N minutes with no mouse/keyboard/touch
+  // activity, the panel logs the operator out — so an unattended terminal can't
+  // be used by someone else. Default 30 min; override with
+  // NEXT_PUBLIC_IDLE_LOGOUT_MIN. Any real activity resets the timer.
+  useEffect(() => {
+    const mins = Number(process.env.NEXT_PUBLIC_IDLE_LOGOUT_MIN) || 30;
+    if (mins <= 0) return;
+    let timer: number;
+    const reset = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (localStorage.getItem('token')) { localStorage.removeItem('token'); router.replace('/login?reason=idle'); }
+      }, mins * 60_000);
+    };
+    const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    evs.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => { window.clearTimeout(timer); evs.forEach((e) => window.removeEventListener(e, reset)); };
+  }, [router]);
+
   const checkUpdate = async () => {
     if (typeof window === 'undefined') return;
     const token = localStorage.getItem('token');

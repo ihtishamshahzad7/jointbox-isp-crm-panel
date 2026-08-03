@@ -334,6 +334,17 @@ pm2 save >/dev/null 2>&1
 pm2 startup systemd -u root --hp /root >/dev/null 2>&1
 ok "PM2 will restart everything on boot"
 
+# Serve the panel on port 80 for a domain WITHOUT nginx: redirect 80 → the web
+# port at the kernel (NAT). The app keeps running on $WEB_PORT under pm2; this
+# just bridges port 80 to it so http://<domain> works. Idempotent + persisted.
+if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports "$WEB_PORT" 2>/dev/null; then
+  iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports "$WEB_PORT" 2>/dev/null || true
+  iptables -t nat -A OUTPUT -o lo -p tcp --dport 80 -j REDIRECT --to-ports "$WEB_PORT" 2>/dev/null || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
+  netfilter-persistent save >/dev/null 2>&1 || true
+  ok "Port 80 → $WEB_PORT redirect set (panel reachable on http://<domain> with no nginx)"
+fi
+
 # -----------------------------------------------------------------------------
 step "8/9  Firewall"
 if ufw status | grep -q inactive; then
