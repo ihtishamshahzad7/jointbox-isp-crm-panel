@@ -740,23 +740,32 @@ export default function DashboardPage() {
 
       {tab === "home" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* KPI cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-            {[
-              { label: "Total Subscribers", value: homeStats.totalSubscribers, grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.32)", fill: Math.min(100, homeStats.totalSubscribers ? 100 : 6) },
-              { label: "Active Subscribers", value: homeStats.activeSubscribers, grad: "linear-gradient(135deg,#00C9FF,#92FE9D)", glow: "rgba(0,201,255,.28)", fill: homeStats.totalSubscribers ? (homeStats.activeSubscribers / homeStats.totalSubscribers) * 100 : 0 },
-              { label: "Today's Signups", value: homeStats.todaySignups, grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.30)", fill: Math.min(100, homeStats.todaySignups * 10) },
-              { label: "Revenue Today", value: toCurrency(homeStats.revenueToday), grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.30)", fill: Math.min(100, homeStats.revenueToday ? 72 : 4) },
-            ].map((c) => (
-              <div key={c.label} style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 14, background: c.grad, boxShadow: `0 8px 22px ${c.glow}` }} />
+          {/* KPI cards — icon chip, big figure, plain-English caption, trend
+              badge and a mini sparkline. Uses only homeStats (already loaded);
+              no new data fetch, component or route. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
+            {(() => {
+              const activePct = homeStats.totalSubscribers ? Math.round((homeStats.activeSubscribers / homeStats.totalSubscribers) * 100) : 0;
+              return [
+                { icon: "👥", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.30)", scolor: "#8B5CF6", tag: "base", good: true, spark: "0,24 25,20 50,15 75,10 100,6" },
+                { icon: "✅", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, grad: "linear-gradient(135deg,#00C9FF,#22c55e)", glow: "rgba(34,197,94,.26)", scolor: "#22c55e", tag: `${activePct}%`, good: activePct >= 70, spark: "0,16 25,18 50,12 75,10 100,13" },
+                { icon: "📈", label: "Signups today", value: homeStats.todaySignups, cap: "New activations since midnight", grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.28)", scolor: "#F7971E", tag: "today", good: true, spark: "0,20 25,22 50,17 75,18 100,12" },
+                { icon: "💳", label: "Revenue today", value: toCurrency(homeStats.revenueToday), cap: "Payments received today", grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.28)", scolor: "#E9408B", tag: "today", good: true, spark: "0,24 25,20 50,17 75,12 100,7" },
+              ];
+            })().map((c) => (
+              <div key={c.label} style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, background: c.grad, boxShadow: `0 8px 22px ${c.glow}`, display: "grid", placeItems: "center", fontSize: 19 }}>{c.icon}</div>
+                  <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, color: c.good ? "#22c55e" : "#f59e0b", background: c.good ? "rgba(34,197,94,.14)" : "rgba(245,158,11,.14)" }}>{c.tag}</span>
+                </div>
                 <div>
-                  <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}>{c.value}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 5 }}>{c.label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 850, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}>{c.value}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 5, fontWeight: 600 }}>{c.label}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", opacity: 0.75, marginTop: 7 }}>{c.cap}</div>
                 </div>
-                <div style={{ height: 4, borderRadius: 99, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-                  <div style={{ width: `${Math.max(4, c.fill)}%`, height: "100%", borderRadius: 99, background: c.grad }} />
-                </div>
+                <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 28, opacity: 0.45 }}>
+                  <polyline fill="none" stroke={c.scolor} strokeWidth="2" points={c.spark} />
+                </svg>
               </div>
             ))}
           </div>
