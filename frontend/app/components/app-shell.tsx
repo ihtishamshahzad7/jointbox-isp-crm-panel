@@ -617,10 +617,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               type="button"
               className="topbar-sidebar-toggle"
               onClick={toggleSidebar}
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label="Menu"
+              title="Menu"
             >
-              {collapsed ? <Icons.Menu /> : <Icons.ChevronLeft />}
+              {/* Hamburger on mobile (clearly a menu); chevron reflects collapse on desktop. */}
+              <span className="hamburger-mobile"><Icons.Menu /></span>
+              <span className="chevron-desktop">{collapsed ? <Icons.Menu /> : <Icons.ChevronLeft />}</span>
             </button>
             <div>
             <div className="topbar-title">{title}</div>

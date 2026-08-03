@@ -674,6 +674,9 @@ body {
 /* ── RESPONSIVE ── */
 /* Backdrop behind the mobile drawer (hidden on desktop). */
 .sidebar-backdrop { display: none; }
+/* Menu-toggle icon: show the desktop chevron by default, hamburger on phones. */
+.hamburger-mobile { display: none; }
+.chevron-desktop { display: inline-flex; }
 
 @media (max-width: 768px) {
   /* The shell is a flex row on desktop; on phones the sidebar becomes an
@@ -682,15 +685,16 @@ body {
   .main { width: 100% !important; margin-left: 0 !important; }
 
   .sidebar {
-    position: fixed;
+    position: fixed !important;
     top: 0; left: 0; bottom: 0;
-    z-index: 200;
+    height: 100vh !important;
+    z-index: 200 !important;
     width: 260px !important;   /* full drawer width even if "collapsed" was set on desktop */
-    transform: translateX(-100%);
-    transition: transform 0.28s ease;
+    transform: translateX(-100%) !important;
+    transition: transform 0.28s ease !important;
     box-shadow: 0 0 40px rgba(0,0,0,.5);
   }
-  .sidebar.mobile-open { transform: translateX(0); }
+  .sidebar.mobile-open { transform: translateX(0) !important; }
   /* Ignore the desktop "collapsed" narrow mode on phones — always show labels. */
   .sidebar.collapsed { width: 260px !important; }
   .sidebar.collapsed .brand-meta,
@@ -732,6 +736,15 @@ body {
     max-width: 100%;
   }
   .db-root th, .db-root td { white-space: nowrap; }
+
+  /* On phones the toggle is a hamburger and must always be visible/tappable. */
+  .hamburger-mobile { display: inline-flex !important; }
+  .chevron-desktop { display: none !important; }
+  .topbar-sidebar-toggle {
+    display: inline-flex !important;
+    width: 40px; height: 40px;
+    align-items: center; justify-content: center;
+  }
 
   /* Top bar wraps and shrinks so search + actions never push off-screen. */
   .topbar {
