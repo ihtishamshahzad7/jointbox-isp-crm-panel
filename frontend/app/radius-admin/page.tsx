@@ -114,13 +114,14 @@ export default function RadiusAdminPage() {
           <div style={{ fontWeight: 700, marginBottom: 10 }}>Modules ({modules.length}) — toggle enable/disable</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 8 }}>
             {modules.map((m) => (
-              <div key={m.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface-2)" }}>
-                <span style={{ fontSize: 13 }}>
-                  <b>{m.name}</b>{m.required && <span style={{ fontSize: 10, color: "#f59e0b", marginLeft: 6 }}>required</span>}
+              <div key={m.name} title={m.desc} style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, padding: "9px 10px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface-2)" }}>
+                <span style={{ fontSize: 13, minWidth: 0 }}>
+                  <span><b>{m.name}</b>{m.required && <span style={{ fontSize: 10, color: "#f59e0b", marginLeft: 6 }}>required</span>}</span>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3, lineHeight: 1.35 }}>{m.desc}</div>
                 </span>
                 <button disabled={busy || (m.required && m.enabled)} onClick={() => toggle(m.name, !m.enabled)}
                   title={m.required && m.enabled ? "Required by the panel — cannot disable" : ""}
-                  style={{ ...btn, padding: "3px 10px", fontSize: 11, background: m.enabled ? "rgba(34,197,94,.18)" : "var(--surface)", color: m.enabled ? "#22c55e" : "var(--muted)", opacity: m.required && m.enabled ? 0.5 : 1 }}>
+                  style={{ ...btn, padding: "3px 10px", fontSize: 11, flex: "0 0 auto", background: m.enabled ? "rgba(34,197,94,.18)" : "var(--surface)", color: m.enabled ? "#22c55e" : "var(--muted)", opacity: m.required && m.enabled ? 0.5 : 1 }}>
                   {m.enabled ? "ON" : "OFF"}
                 </button>
               </div>

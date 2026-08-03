@@ -40,15 +40,6 @@ npm run build
 # root-only .next was what returned HTTP 500 on /_next/static and hung the UI.)
 chmod -R a+rX "$REPO/frontend/.next" "$REPO/backend/dist" 2>/dev/null || true
 
-# Kill any STRAY next/node listener that isn't managed by pm2 (e.g. a manual
-# `npm run start` someone left running on 80/3000). An orphan bound to the port
-# behind the proxy is what served the OLD broken build. pm2 owns the real one.
-for P in 80 3000; do
-  for PID in $(ss -lptn "sport = :$P" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u); do
-    pm2 pid 2>/dev/null | grep -qw "$PID" || { echo "  ↳ killing stray listener on :$P (pid $PID)"; kill "$PID" 2>/dev/null || true; }
-  done
-done
-
 # Slim down: the Next build cache and webpack cache are only needed DURING the
 # build and can grow to several GB. Removing them after a successful build keeps
 # the deployed footprint small without affecting the running app.

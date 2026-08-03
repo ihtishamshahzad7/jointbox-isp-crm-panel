@@ -75,10 +75,55 @@ export class RadiusAdminService {
     // Modules the panel needs vs optional — surfaced so an operator knows what
     // is safe to turn off.
     const REQUIRED = new Set(['pap', 'chap', 'mschap', 'sql', 'preprocess', 'files', 'expiration', 'realm', 'detail', 'attr_filter', 'radutmp', 'exec', 'expr', 'unix', 'eap']);
+    // Short "what it does · what breaks if OFF" per module.
+    const DESC: Record<string, string> = {
+      pap: 'Plain-password auth. OFF: PAP logins fail.',
+      chap: 'CHAP auth. OFF: CHAP logins fail.',
+      mschap: 'MS-CHAP (Windows/MikroTik PPPoE). OFF: most PPPoE logins break.',
+      sql: 'Reads users & NAS from PostgreSQL — the panel’s brain. OFF: no one can authenticate.',
+      eap: 'EAP for WiFi / 802.1X (PEAP, TTLS). OFF: WiFi/enterprise auth fails.',
+      preprocess: 'Normalises incoming requests (hints, huntgroups). OFF: some NAS quirks break auth.',
+      files: 'Static users file. OFF: file-based users ignored (panel uses SQL anyway).',
+      expiration: 'Enforces the Expiration attribute. OFF: RADIUS expiry dates ignored.',
+      logintime: 'Enforces Login-Time windows. OFF: time-of-day restrictions ignored.',
+      detail: 'Writes raw accounting to a detail log (backup of radacct). OFF: no detail log.',
+      'detail.log': 'Auth/reply audit detail logs. OFF: those audit logs stop.',
+      radutmp: 'Tracks who is online (radwho / simultaneous-use). OFF: online tracking degraded.',
+      sradutmp: 'Compact online-session log. OFF: sradutmp file not written.',
+      attr_filter: 'Filters reply attributes to safe values. OFF: unfiltered replies sent.',
+      exec: 'Runs external programs from policy. OFF: exec-based policies fail.',
+      expr: 'Math/string expressions in config. OFF: expressions in policy fail.',
+      unix: 'Auth against /etc/passwd. OFF: system-account login off (fine for an ISP).',
+      realm: 'Splits user@realm for proxying/routing. OFF: realm routing off.',
+      digest: 'SIP Digest auth (VoIP). OFF: SIP digest auth fails.',
+      always: 'Test module that always returns a fixed result. Used in policy; harmless.',
+      echo: 'Example exec module. Safe to leave as-is.',
+      replicate: 'Copies requests to another server. OFF: replication off (usually fine).',
+      linelog: 'One-line custom logging. OFF: those custom log lines stop.',
+      passwd: 'Reads flat password files (e.g. /etc/passwd fields). OFF: that lookup off.',
+      soh: 'Statement-of-Health (NAP). OFF: SoH off (rarely used).',
+      unpack: 'Unpacks binary attributes in policy. OFF: those policies fail.',
+      utf8: 'Allows UTF-8 usernames/passwords. OFF: non-ASCII logins may fail.',
+      ntlm_auth: 'NTLM auth via winbind (AD). OFF: AD/NTLM auth off.',
+      dynamic_clients: 'Learns NAS clients at runtime. OFF: only static/SQL clients (panel uses SQL).',
+      cache_eap: 'Caches EAP sessions for faster reconnect. OFF: slightly slower EAP.',
+      redis: 'Redis backend for RADIUS (not the panel’s Redis). Optional.',
+      rest: 'Call external HTTP APIs from policy. Optional.',
+      ldap: 'Authenticate against LDAP/AD. Optional — panel uses SQL.',
+      perl: 'Run Perl from policy. Optional.',
+      python: 'Run Python from policy. Optional.',
+      python3: 'Run Python 3 from policy. Optional.',
+      counter: 'Time/data counters in flat files. Panel handles quotas itself.',
+      sqlcounter: 'SQL-based session/data counters. Optional (panel enforces FUP).',
+      sqlippool: 'Assign IPs from a SQL pool. Optional — panel manages IP pools.',
+      ippool: 'Assign IPs from a flat-file pool. Optional.',
+      cache: 'Generic attribute cache. Optional tuning.',
+    };
     return avail.filter((m) => !m.endsWith('.bak')).sort().map((name) => ({
       name,
       enabled: enabledSet.has(name),
       required: REQUIRED.has(name),
+      desc: DESC[name] || 'Optional FreeRADIUS module — leave OFF unless a specific feature needs it.',
     }));
   }
 
