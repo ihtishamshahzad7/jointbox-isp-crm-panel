@@ -30,6 +30,10 @@ const path = require('path');
 
 const backendInstances = process.env.BACKEND_INSTANCES || 1;   // set to 'max' or a number to cluster
 const frontendInstances = process.env.FRONTEND_INSTANCES || 1;
+// Port the web UI listens on. Default 3000. Set FRONTEND_PORT=80 to serve the
+// domain (jb.panel.net) directly with NO nginx/proxy — pm2 runs as root so it
+// can bind the privileged port, and pm2 keeps it alive across reboots.
+const frontendPort = process.env.FRONTEND_PORT || 3000;
 const workerInstances = process.env.WORKER_INSTANCES || 0;    // >0 → run a dedicated worker service (microservice split)
 const asCount = (v) => (v === 'max' ? 'max' : Number(v) || 1);
 const modeFor = (v) => (v === 'max' || Number(v) > 1 ? 'cluster' : 'fork');
@@ -84,7 +88,7 @@ module.exports = {
       // orphans the port). `next start` serves the app AND /_next/static
       // reliably, unlike the standalone server which needed static copied in.
       script: path.join(__dirname, 'frontend', 'node_modules', 'next', 'dist', 'bin', 'next'),
-      args: 'start -H 0.0.0.0 -p 3000',
+      args: `start -H 0.0.0.0 -p ${frontendPort}`,
       cwd: path.join(__dirname, 'frontend'),
       exec_mode: modeFor(frontendInstances),
       instances: asCount(frontendInstances),
@@ -93,7 +97,7 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 3000,
       max_memory_restart: '500M',
-      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', PORT: '3000', HOSTNAME: '0.0.0.0' },
+      env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', PORT: String(frontendPort), HOSTNAME: '0.0.0.0' },
     },
     // Dedicated background worker — only added when WORKER_INSTANCES>0.
     ...(splitWorker ? [workerApp] : []),
