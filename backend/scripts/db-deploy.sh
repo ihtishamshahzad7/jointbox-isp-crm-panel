@@ -30,8 +30,12 @@ echo "  • fixing object ownership (so Prisma can alter tables)…"
 node scripts/fix-db-ownership.js || true
 
 echo "  • applying migrations (prisma migrate deploy)…"
-if ! npx prisma migrate deploy 2>/tmp/jb_migrate.log; then
-  cat /tmp/jb_migrate.log
+# Use a per-user temp file (mktemp) — a shared /tmp path left by another user
+# (root vs jointbox) causes "Permission denied" and hides the real error.
+MLOG="$(mktemp 2>/dev/null || echo "./.jb_migrate.log")"
+trap 'rm -f "$MLOG"' EXIT
+if ! npx prisma migrate deploy 2>"$MLOG"; then
+  cat "$MLOG"
   echo "  • deploy needs baselining — marking committed migrations as applied…"
   for d in prisma/migrations/*/; do
     [ -f "$d/migration.sql" ] || continue
@@ -39,7 +43,7 @@ if ! npx prisma migrate deploy 2>/tmp/jb_migrate.log; then
     npx prisma migrate resolve --applied "$name" >/dev/null 2>&1 \
       && echo "      baselined $name" || true
   done
-  npx prisma migrate deploy 2>/tmp/jb_migrate.log || cat /tmp/jb_migrate.log
+  npx prisma migrate deploy 2>"$MLOG" || cat "$MLOG"
 fi
 
 echo "  • reconciling any residual drift (prisma db push, idempotent)…"
