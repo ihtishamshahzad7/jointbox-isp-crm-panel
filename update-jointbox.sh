@@ -94,6 +94,21 @@ if [ "$(id -u)" -eq 0 ]; then
   fi
 fi
 
+# -----------------------------------------------------------------------------
+# FreeRADIUS runs as the "freerad" service user, but config files edited by hand
+# as root (clients.conf, mods-enabled/sql, etc.) become root-owned and unreadable
+# to that user — which makes the service silently drop packets ("radius timeout")
+# even though "freeradius -X" (run as root) works fine. Re-assert correct
+# ownership every deploy so the service always behaves like -X. Harmless if the
+# perms are already right.
+if [ -d /etc/freeradius/3.0 ]; then
+  chown -R freerad:freerad /etc/freeradius/3.0 /var/log/freeradius /var/run/freeradius 2>/dev/null || true
+  systemctl restart freeradius 2>/dev/null || true
+  systemctl is-active --quiet freeradius \
+    && echo "📡 FreeRADIUS running (config owned by freerad — service matches -X)" \
+    || echo "⚠ FreeRADIUS not active — run: journalctl -u freeradius -n 40 --no-pager"
+fi
+
 echo ""
 echo "✅ Done. Status:"
 pm2 list
