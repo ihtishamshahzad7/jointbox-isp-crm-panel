@@ -598,12 +598,20 @@ export class NasService implements OnModuleInit {
         }
 
         try {
-          const quick = await this.mikrotikSync.quickCheck(
-            nas.nasIp,
-            nas.apiPort ?? 8728,
-            nas.apiUsername,
-            nas.apiPassword,
-          );
+          // Cap the live router probe — an unreachable/firewalled NAS IP would
+          // otherwise hang the TCP connect until the OS timeout and freeze the
+          // whole /nas/overview response (page stuck on "Loading…").
+          const quick = await Promise.race([
+            this.mikrotikSync.quickCheck(
+              nas.nasIp,
+              nas.apiPort ?? 8728,
+              nas.apiUsername,
+              nas.apiPassword,
+            ),
+            new Promise<{ online: boolean }>((resolve) =>
+              setTimeout(() => resolve({ online: false }), 4000),
+            ),
+          ]);
           return { id: nas.id, online: quick.online };
         } catch {
           return { id: nas.id, online: false };

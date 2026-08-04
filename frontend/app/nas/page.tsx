@@ -255,20 +255,30 @@ export default function NasPage() {
   // ── Load all NAS + stats ───────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
-    try {
-      const query = groupFilter && groupFilter !== 'ALL' ? `?group=${encodeURIComponent(groupFilter)}` : '';
-      const [nasRes, statsRes, radRes, overviewRes] = await Promise.all([
-        fetch(`${API}/nas${query}`, { headers }),
-        fetch(`${API}/nas/stats`, { headers }),
-        fetch(`${API}/nas/radius/stats`, { headers }),
-        fetch(`${API}/nas/overview`, { headers }),
-      ]);
-      if (nasRes.ok)   setNasList(await nasRes.json());
-      if (statsRes.ok) setStats(await statsRes.json());
-      if (radRes.ok)   setRadiusStats(await radRes.json());
-      if (overviewRes.ok) setOverview(await overviewRes.json());
-    } catch { addLog('error', 'Failed to load NAS data'); }
+    const query = groupFilter && groupFilter !== 'ALL' ? `?group=${encodeURIComponent(groupFilter)}` : '';
+
+    // Fetch with a hard timeout so one slow/hanging endpoint (RADIUS/SNMP stats
+    // can block) never freezes the whole page on "Loading…".
+    const get = async (path: string, ms = 12000) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      try {
+        const r = await fetch(`${API}${path}`, { headers, signal: ctrl.signal });
+        return r.ok ? await r.json() : null;
+      } catch { return null; }
+      finally { clearTimeout(timer); }
+    };
+
+    // The NAS list is the essential one — clear "Loading" as soon as it lands.
+    const nas = await get(`/nas${query}`);
+    if (nas != null) setNasList(nas);
+    else addLog('error', 'Failed to load NAS devices');
     setLoading(false);
+
+    // Stats/overview are secondary — load in the background, never block the list.
+    get('/nas/stats').then(v => v != null && setStats(v));
+    get('/nas/radius/stats').then(v => v != null && setRadiusStats(v));
+    get('/nas/overview').then(v => v != null && setOverview(v));
   }, [groupFilter, headers, addLog]);
 
   useEffect(() => {
