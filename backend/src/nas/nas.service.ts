@@ -679,6 +679,40 @@ export class NasService implements OnModuleInit {
     };
   }
 
+  // ── ICMP ping: is the router even reachable from this server? ──────
+  async ping(id: number) {
+    const nas = await this.prisma.nas.findUnique({ where: { id } });
+    if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
+    if (!nas.nasIp) throw new BadRequestException('NAS IP address not configured');
+    if (!this.isIpv4(nas.nasIp)) throw new BadRequestException(`"${nas.nasIp}" is not a valid IPv4 address.`);
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { execFile } = require('child_process') as typeof import('child_process');
+    const ip = nas.nasIp;
+
+    return new Promise((resolve) => {
+      // 4 packets, 1s each, 6s overall cap. -n numeric, -w total deadline.
+      execFile('ping', ['-n', '-c', '4', '-w', '6', ip], { timeout: 8000 }, (err, stdout: string) => {
+        const out = String(stdout || '');
+        const lossM = out.match(/([\d.]+)% packet loss/);
+        const rttM = out.match(/=\s*[\d.]+\/([\d.]+)\//); // avg
+        const loss = lossM ? parseFloat(lossM[1]) : 100;
+        const reachable = loss < 100;
+        resolve({
+          ip,
+          reachable,
+          packetLoss: loss,
+          avgMs: rttM ? parseFloat(rttM[1]) : null,
+          message: reachable
+            ? `Reachable — ${loss}% loss${rttM ? `, avg ${parseFloat(rttM[1])} ms` : ''}.`
+            : `No reply from ${ip}. Check the router is online and that ICMP isn't blocked between the server and the router.`,
+          raw: out.trim().split('\n').slice(-4).join('\n'),
+          checkedAt: new Date(),
+        });
+      });
+    });
+  }
+
   async syncDetails(id: number) {
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);

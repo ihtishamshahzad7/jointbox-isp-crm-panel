@@ -76,6 +76,11 @@ export class NasController {
     return this.nasService.checkReachability(+id);
   }
 
+  @Get(':id/ping')
+  ping(@Param('id') id: string) {
+    return this.nasService.ping(+id);
+  }
+
   @Get(':id/sync')
   syncDetails(@Param('id') id: string) {
     return this.nasService.syncDetails(+id);

@@ -542,6 +542,24 @@ export default function NasPage() {
   };
 
   const [coaTesting, setCoaTesting] = useState(false);
+  const [pinging, setPinging] = useState(false);
+  const [pingResult, setPingResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // ICMP ping from the server — is the router even reachable on the network?
+  const pingNas = async (id: number) => {
+    setPinging(true); setPingResult(null);
+    addLog('info', `Pinging NAS #${id}…`);
+    try {
+      const res = await fetch(`${API}/nas/${id}/ping`, { headers });
+      const data = await res.json();
+      setPingResult({ ok: !!data?.reachable, text: data?.message || (res.ok ? 'done' : 'failed') });
+      addLog(data?.reachable ? 'info' : 'error', `Ping: ${data?.message || 'failed'}`);
+    } catch (e: any) {
+      setPingResult({ ok: false, text: e.message });
+      addLog('error', `Ping error: ${e.message}`);
+    }
+    setPinging(false);
+  };
+
   // Probe whether this NAS accepts RADIUS CoA — harmless, changes nothing.
   const testCoa = async (id: number) => {
     setCoaTesting(true);
@@ -1080,13 +1098,19 @@ export default function NasPage() {
                     <div style={{ fontSize:12, color:t.text, fontWeight:700, wordBreak:'break-all' }}>{v}</div>
                   </div>
                 ))}
-                <div style={{ gridColumn:'1/-1', marginTop:6 }}>
+                <div style={{ gridColumn:'1/-1', marginTop:6, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                  <button onClick={() => pingNas(viewDetail.nas.id)} disabled={pinging}
+                    title="ICMP ping from this server to the router's IP — the quickest way to see if the router is reachable on the network at all."
+                    style={{ background:'transparent', color:t.accent, border:`1px solid ${t.cardBorder}`, borderRadius:8, padding:'7px 13px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+                    {pinging ? 'Pinging…' : '📡 Ping'}
+                  </button>
                   <button onClick={() => testCoa(viewDetail.nas.id)} disabled={coaTesting}
                     title="Send a harmless RADIUS CoA probe to confirm this router/BNG accepts session control (disconnect & live speed change). Changes nothing."
                     style={{ background:'transparent', color:t.accent, border:`1px solid ${t.cardBorder}`, borderRadius:8, padding:'7px 13px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
                     {coaTesting ? 'Testing CoA…' : '⚡ Test CoA'}
                   </button>
-                  <span style={{ fontSize:11, color:t.textMuted, marginLeft:10 }}>Confirms disconnect &amp; live speed-change will work on this NAS.</span>
+                  {pingResult && <span style={{ fontSize:11.5, fontWeight:600, color: pingResult.ok ? '#16a34a' : '#ef4444' }}>{pingResult.text}</span>}
+                  {!pingResult && <span style={{ fontSize:11, color:t.textMuted }}>Confirms disconnect &amp; live speed-change will work on this NAS.</span>}
                 </div>
               </div>
             )}
