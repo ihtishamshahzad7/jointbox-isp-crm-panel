@@ -229,7 +229,8 @@ export class TopologyService {
   /** Usernames with a live session right now. */
   private async onlineSet(): Promise<Set<string>> {
     const rows = await this.prisma.$queryRaw<any[]>`
-      SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL AND username IS NOT NULL`
+      SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL AND username IS NOT NULL
+        AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
     .catch(() => [] as any[]);
     return new Set(rows.map((r) => r.username));
   }

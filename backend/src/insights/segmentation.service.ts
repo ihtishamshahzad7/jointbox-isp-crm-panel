@@ -46,7 +46,8 @@ export class SegmentationService {
               COALESCE(acctinputoctets, 0)::bigint  AS up,
               COALESCE(acctoutputoctets, 0)::bigint AS down
          FROM radacct
-        WHERE acctstoptime IS NULL AND username IS NOT NULL`
+        WHERE acctstoptime IS NULL AND username IS NOT NULL
+          AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
     .catch(() => [] as any[]);
 
     const map = new Map<string, any>();

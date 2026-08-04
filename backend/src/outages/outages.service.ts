@@ -191,7 +191,8 @@ export class OutagesService {
       const rows = await this.prisma.$queryRaw<any[]>`
         SELECT COUNT(DISTINCT r.username)::int AS online
            FROM radacct r JOIN "Subscriber" s ON s.username = r.username
-          WHERE s."areaId" = ${o.areaId} AND r.acctstoptime IS NULL`;
+          WHERE s."areaId" = ${o.areaId} AND r.acctstoptime IS NULL
+            AND COALESCE(r.acctupdatetime, r.acctstarttime) > NOW() - INTERVAL '15 minutes'`;
       const online = Number(rows?.[0]?.online ?? 0);
       // Back to at least half the area connected → treat as restored.
       if (o.areaTotal > 0 && online / o.areaTotal >= 0.5) {
@@ -252,7 +253,8 @@ export class OutagesService {
         SELECT (SELECT COUNT(*)::int FROM "Subscriber" WHERE "areaId" = ${a.id} AND status = 'ACTIVE') AS total,
                 (SELECT COUNT(DISTINCT r.username)::int
                    FROM radacct r JOIN "Subscriber" s ON s.username = r.username
-                  WHERE s."areaId" = ${a.id} AND r.acctstoptime IS NULL) AS online`;
+                  WHERE s."areaId" = ${a.id} AND r.acctstoptime IS NULL
+                    AND COALESCE(r.acctupdatetime, r.acctstarttime) > NOW() - INTERVAL '15 minutes') AS online`;
       const total = Number(counts?.total ?? 0);
       const online = Number(counts?.online ?? 0);
       if (!total) continue;

@@ -676,8 +676,15 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       this.ensureConnected();
       const [nasResult, sessionResult] = await Promise.all([
         this.pgClient.query('SELECT COUNT(*) FROM nas'),
+        // Count only sessions the NAS has reported on recently — the SAME 15-min
+        // freshness rule the subscriber list, overview tile and detail page use.
+        // Without this, a ghost session (Accounting-Stop lost, or a NAS with a
+        // wrong clock) stays "active" forever and this tile disagrees with the
+        // rest of the panel.
         this.pgClient.query(
-          'SELECT COUNT(*) FROM radacct WHERE acctstoptime IS NULL',
+          `SELECT COUNT(*) FROM radacct
+             WHERE acctstoptime IS NULL
+               AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`,
         ),
       ]);
       return {

@@ -127,7 +127,8 @@ export class DeviceIntelService {
     // Latest MAC per user, plus whether they are up right now.
     const rows = await this.prisma.$queryRaw<any[]>`
       SELECT DISTINCT ON (username) username, callingstationid,
-              (acctstoptime IS NULL) AS online
+              (acctstoptime IS NULL
+               AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes') AS online
          FROM radacct
         WHERE username = ANY(${subs.map((s) => s.username).filter(Boolean)}::text[]) AND callingstationid IS NOT NULL
         ORDER BY username, acctstarttime DESC`

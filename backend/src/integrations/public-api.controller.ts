@@ -51,7 +51,7 @@ export class PublicApiController {
   async health() {
     const [subs, online] = await Promise.all([
       this.prisma.subscriber.count(),
-      this.prisma.$queryRaw<any[]>`SELECT COUNT(*)::int AS n FROM radacct WHERE acctstoptime IS NULL`
+      this.prisma.$queryRaw<any[]>`SELECT COUNT(*)::int AS n FROM radacct WHERE acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
         .catch(() => [{ n: 0 }]),
     ]);
     return {

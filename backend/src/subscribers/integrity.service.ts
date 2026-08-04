@@ -70,6 +70,7 @@ export class IntegrityService implements OnModuleInit {
     if (this.sessionSyncBusy) { this.logger.warn('Session sync still running — skipping this tick'); return; }
     this.sessionSyncBusy = true;
     try {
+      await this.closeGhostSessions();
       await this.reconcileSessionsWithRouter(true);
       // Enforce panel-dependency: kick any live session whose account is gone.
       if ((process.env.ENFORCE_PANEL_DEPENDENCY ?? '1') !== '0') {
@@ -78,6 +79,32 @@ export class IntegrityService implements OnModuleInit {
     }
     catch (e: any) { this.logger.warn(`Session sync cron failed: ${e?.message || e}`); }
     finally { this.sessionSyncBusy = false; }
+  }
+
+  /**
+   * Close "ghost" sessions directly in radacct: rows still marked open
+   * (acctstoptime NULL) that no NAS has updated for a long time. A live PPPoE
+   * session sends interim-updates every 1–5 min, so anything silent for 30+
+   * minutes is dead — its Accounting-Stop was lost (router reboot, RADIUS
+   * restart, packet loss) or the NAS had a wrong clock. The display layer
+   * already hides these via the 15-min freshness rule; this closes the row so
+   * the database itself stays clean and every counter agrees permanently.
+   * The 30-minute window is deliberately wider than the display window so a
+   * brief interim gap never closes a genuinely live session.
+   */
+  async closeGhostSessions() {
+    try {
+      const res = await this.prisma.$executeRaw`
+        UPDATE radacct
+           SET acctstoptime = NOW(), acctterminatecause = 'Ghost-Cleanup'
+         WHERE acctstoptime IS NULL
+           AND COALESCE(acctupdatetime, acctstarttime) <= NOW() - INTERVAL '30 minutes'`;
+      if (res) this.logger.log(`Ghost cleanup: closed ${res} stale open session(s)`);
+      return { closed: Number(res) || 0 };
+    } catch (e: any) {
+      this.logger.warn(`Ghost cleanup skipped: ${e?.message || e}`);
+      return { closed: 0 };
+    }
   }
 
   /** Wallet balance vs sum of ledger entries, per account. Report-only. */

@@ -204,7 +204,8 @@ export class ExportService {
     let live = new Set<string>();
     if (columns.includes('online') && subs.length) {
       const rows = await this.prisma.$queryRaw<any[]>`
-        SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL`
+        SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL
+          AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
       .catch(() => [] as any[]);
       live = new Set(rows.map((r) => r.username));
     }
