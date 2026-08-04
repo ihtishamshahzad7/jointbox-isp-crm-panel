@@ -364,6 +364,16 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Let the panel reload FreeRADIUS clients on its own. FreeRADIUS only reads its
+# SQL client list (the `nas` table) at startup, so when a router is added/edited
+# in the GUI the backend must restart the service. If the backend ever runs as a
+# non-root user, this NOPASSWD rule lets it do exactly that one command safely.
+cat > /etc/sudoers.d/jointbox-freeradius <<'SUDOEOF'
+%sudo   ALL=(root) NOPASSWD: /usr/bin/systemctl restart freeradius, /bin/systemctl restart freeradius
+SUDOEOF
+chmod 440 /etc/sudoers.d/jointbox-freeradius
+
+# -----------------------------------------------------------------------------
 step "9/9  Start services and verify"
 systemctl restart freeradius && sleep 2
 systemctl is-active --quiet freeradius && ok "FreeRADIUS running" || err "FreeRADIUS failed — run: freeradius -XC"
