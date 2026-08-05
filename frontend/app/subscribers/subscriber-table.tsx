@@ -106,6 +106,9 @@ export function SubscriberTable({
               || r.isOnline === true;
             const expired = r.daysLeft != null && r.daysLeft <= 0;
             const soon = r.daysLeft != null && r.daysLeft > 0 && r.daysLeft <= 7;
+            const name = r.fullName || r.username || "?";
+            const initials = String(name).trim().split(/\s+/).slice(0, 2)
+              .map((w: string) => w[0]).join("").toUpperCase() || "?";
 
             return (
               <tr key={r.id} onClick={() => onOpen(r)} className={selectedIds.includes(r.id) ? "on" : ""}>
@@ -113,21 +116,27 @@ export function SubscriberTable({
                   <input type="checkbox" checked={selectedIds.includes(r.id)} onChange={() => onToggle(r.id)} />
                 </td>
 
-                {/* Who. The anchor: name loud, identifiers quiet beneath it. */}
-                <td>
-                  <div className="nm">{r.fullName}</div>
-                  <div className="sub">
-                    <code>{r.username}</code>
-                    {r.phone && <span> · {r.phone}</span>}
+                {/* Who. Avatar anchors the row; name loud, identifiers quiet. */}
+                <td data-label="Subscriber">
+                  <div className="who">
+                    <span className={`av ${online ? "on" : ""}`} aria-hidden>{initials}</span>
+                    <span className="whoTxt">
+                      <span className="nm">{r.fullName || r.username}</span>
+                      <span className="sub">
+                        <code>{r.username}</code>
+                        {r.phone && <span className="ph"> {r.phone}</span>}
+                      </span>
+                    </span>
                   </div>
                 </td>
 
-                {/* State. A dot resolves before a word does — you read forty
-                    rows at a glance instead of forty labels. */}
-                <td>
-                  <span className={`dot ${online ? "up" : "down"}`} />
-                  <b className={online ? "up" : "down"}>{online ? "Online" : "Offline"}</b>
-                  <div className="sub">
+                {/* State. A glowing pill reads before a word does. */}
+                <td data-label="Connection">
+                  <span className={`pill ${online ? "up" : "down"}`}>
+                    <span className={`dot ${online ? "up" : "down"}`} />
+                    {online ? "Online" : "Offline"}
+                  </span>
+                  <div className="sub mt">
                     {r.framedIp || r.leasedIp
                       ? <code>{r.framedIp || r.leasedIp}</code>
                       : (r.connectionType || "—")}
@@ -135,43 +144,41 @@ export function SubscriberTable({
                 </td>
 
                 {/* What they bought, with the speed that defines it. */}
-                <td>
-                  <div className="nm sm">{r.package?.name ?? "—"}</div>
+                <td data-label="Package">
+                  <span className="chip">{r.package?.name ?? "—"}</span>
                   {r.package && (
-                    <div className="sub">
+                    <div className="sub mt">
                       {r.package.downloadSpeed}/{r.package.uploadSpeed} Mbps
                       {r.sellPrice != null && <> · {money(r.sellPrice)}</>}
                     </div>
                   )}
                 </td>
 
-                {/* When it runs out — the number that decides whether anyone
-                    needs to act today. Coloured only when it matters. */}
-                <td>
+                {/* When it runs out — coloured only when it matters. */}
+                <td data-label="Expiry">
                   <div className={`nm sm ${expired ? "down" : soon ? "warn" : ""}`}>
                     {r.serviceSettings?.expiryDate
                       ? new Date(r.serviceSettings.expiryDate).toLocaleDateString()
                       : "—"}
                   </div>
                   {r.daysLeft != null && (
-                    <div className={`sub ${expired ? "down" : soon ? "warn" : ""}`}>
+                    <span className={`badge ${expired ? "bad" : soon ? "warnb" : "okb"}`}>
                       {expired ? "expired" : `${r.daysLeft} days left`}
-                    </div>
+                    </span>
                   )}
                 </td>
 
-                {/* Whose customer, and where. Two facts that are always read
-                    together and never separately. */}
-                <td>
+                {/* Whose customer, and where. */}
+                <td data-label="Owner">
                   <div className="nm sm">{r.user?.name ?? r.salesperson?.name ?? "—"}</div>
                   <div className="sub">{r.area?.name ?? r.nas?.nasname ?? "—"}</div>
                 </td>
 
                 <td className="act" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => onEdit(r)}>Edit</button>
-                  <button onClick={() => onMove(r)}>Move</button>
-                  <button className="warn" onClick={() => onDeactivate(r)}>Off</button>
-                  <button className="bad" onClick={() => onDelete(r)}>Del</button>
+                  <button onClick={() => onEdit(r)} title="Edit">Edit</button>
+                  <button onClick={() => onMove(r)} title="Move">Move</button>
+                  <button className="warn" onClick={() => onDeactivate(r)} title="Deactivate">Off</button>
+                  <button className="bad" onClick={() => onDelete(r)} title="Delete">Del</button>
                 </td>
               </tr>
             );
@@ -192,17 +199,17 @@ export function SubscriberTable({
 }
 
 const CSS = `
-.st{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:auto}
-.st table{width:100%;border-collapse:separate;border-spacing:0;min-width:820px}
+.st{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:auto;
+  box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.st table{width:100%;border-collapse:separate;border-spacing:0;min-width:860px}
 
-.st thead th{position:sticky;top:0;z-index:2;padding:10px 14px;text-align:left;
-  font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
-  color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--border);
-  white-space:nowrap}
-.st th.pick,.st td.pick{width:34px;padding-right:0}
+.st thead th{position:sticky;top:0;z-index:2;padding:12px 16px;text-align:left;
+  font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);background:linear-gradient(180deg,var(--surface-2),color-mix(in srgb,var(--surface-2) 85%,transparent));
+  border-bottom:1px solid var(--border);white-space:nowrap;backdrop-filter:blur(6px)}
+.st th.pick,.st td.pick{width:38px;padding-right:0}
+.st .pick input{width:15px;height:15px;accent-color:#7C4DFF;cursor:pointer}
 
-/* Sortable headers: the arrow is faint until the column is in use, so the
-   header row stays quiet while still telling you sorting exists. */
 .st th.srt{cursor:pointer;user-select:none;transition:color .12s ease}
 .st th.srt:hover{color:var(--text)}
 .st th.srt.on{color:#C4B5FD}
@@ -210,52 +217,89 @@ const CSS = `
 .st th.srt:hover i{opacity:.7}
 .st th.srt.on i{opacity:1}
 
-.st tbody tr{cursor:pointer;transition:background .12s ease}
-.st tbody tr:hover{background:rgba(108,60,225,.07)}
-.st tbody tr.on{background:rgba(108,60,225,.12)}
-.st tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 #6C3CE1}
-.st tbody td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+.st tbody tr{cursor:pointer;transition:background .14s ease,box-shadow .14s ease}
+.st tbody tr:hover{background:linear-gradient(90deg,rgba(124,77,255,.10),rgba(124,77,255,.02))}
+.st tbody tr.on{background:rgba(124,77,255,.14)}
+.st tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 #7C4DFF}
+.st tbody td{padding:12px 16px;border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);vertical-align:middle}
 .st tbody tr:last-child td{border-bottom:none}
 
-/* One anchor per row, everything else a step quieter. */
-.st .nm{font-size:13px;font-weight:700;color:var(--text);line-height:1.35}
-.st .nm.sm{font-size:12px;font-weight:600}
-.st .sub{font-size:10.5px;color:var(--muted);line-height:1.5;margin-top:2px}
-.st code{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;
-  background:rgba(255,255,255,.05);padding:1px 5px;border-radius:4px;letter-spacing:-.02em}
+/* Identity cell: avatar + text. */
+.st .who{display:flex;align-items:center;gap:11px}
+.st .av{flex:none;width:38px;height:38px;border-radius:11px;display:grid;place-items:center;
+  font-size:13px;font-weight:800;color:#fff;letter-spacing:.02em;
+  background:linear-gradient(135deg,#7C4DFF,#B14DE8 55%,#F0508A);
+  box-shadow:0 2px 8px rgba(124,77,255,.35);position:relative}
+.st .av.on::after{content:"";position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;
+  border-radius:50%;background:#10B981;border:2px solid var(--surface);box-shadow:0 0 8px rgba(16,185,129,.9)}
+.st .whoTxt{display:flex;flex-direction:column;min-width:0}
+.st .ph{color:var(--muted)}
 
-.st .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;
-  vertical-align:1px}
-.st .dot.up{background:#10B981;box-shadow:0 0 7px rgba(16,185,129,.75)}
+.st .nm{font-size:13.5px;font-weight:700;color:var(--text);line-height:1.35}
+.st .nm.sm{font-size:12.5px;font-weight:600}
+.st .sub{font-size:10.5px;color:var(--muted);line-height:1.5}
+.st .sub.mt{margin-top:5px}
+.st code{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;
+  background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;letter-spacing:-.02em}
+
+/* Status pill. */
+.st .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  font-size:11px;font-weight:700;line-height:1;border:1px solid transparent}
+.st .pill.up{color:#6EE7B7;background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35)}
+.st .pill.down{color:#94A3B8;background:rgba(148,163,184,.10);border-color:rgba(148,163,184,.22)}
+.st .dot{display:inline-block;width:6px;height:6px;border-radius:50%}
+.st .dot.up{background:#10B981;box-shadow:0 0 7px rgba(16,185,129,.9)}
 .st .dot.down{background:#64748B}
-.st b.up{font-size:12px;color:#6EE7B7}
-.st b.down{font-size:12px;color:var(--muted)}
+
+/* Package chip. */
+.st .chip{display:inline-block;padding:3px 10px;border-radius:8px;font-size:12px;font-weight:700;
+  color:#C4B5FD;background:rgba(124,77,255,.12);border:1px solid rgba(124,77,255,.28)}
+
+/* Expiry badges. */
+.st .badge{display:inline-block;margin-top:5px;padding:2px 9px;border-radius:999px;
+  font-size:10px;font-weight:700}
+.st .badge.okb{color:#6EE7B7;background:rgba(16,185,129,.12)}
+.st .badge.warnb{color:#FCD34D;background:rgba(245,158,11,.14)}
+.st .badge.bad{color:#FCA5A5;background:rgba(239,68,68,.14)}
 .st .warn{color:#FCD34D}
 .st .down{color:#FCA5A5}
 
-/* Actions stay quiet until the row is under the pointer — four bright
-   buttons on every row of a long list compete with the data itself. */
+/* Action buttons. */
 .st td.act{white-space:nowrap;text-align:right}
-.st td.act button{margin-left:5px;padding:4px 9px;border-radius:7px;font-size:10.5px;
-  font-weight:700;cursor:pointer;font-family:inherit;opacity:.65;
-  background:var(--surface-2);border:1px solid var(--border);color:var(--muted);
-  transition:opacity .12s ease,color .12s ease,border-color .12s ease}
-.st tbody tr:hover td.act button{opacity:1}
-.st td.act button:hover{color:var(--text);border-color:#6C3CE1}
-.st td.act button.warn:hover{color:#FCD34D;border-color:#F59E0B}
-.st td.act button.bad:hover{color:#FCA5A5;border-color:#EF4444}
+.st td.act button{margin-left:6px;padding:5px 11px;border-radius:8px;font-size:11px;
+  font-weight:700;cursor:pointer;font-family:inherit;
+  background:var(--surface-2);border:1px solid var(--border);color:var(--text);
+  transition:all .13s ease}
+.st td.act button:hover{border-color:#7C4DFF;color:#C4B5FD;background:rgba(124,77,255,.12);transform:translateY(-1px)}
+.st td.act button.warn:hover{color:#FCD34D;border-color:#F59E0B;background:rgba(245,158,11,.12)}
+.st td.act button.bad:hover{color:#FCA5A5;border-color:#EF4444;background:rgba(239,68,68,.12)}
 
-.st tr.empty td{padding:38px;text-align:center;border:none}
-.st tr.empty b{display:block;font-size:13px;color:var(--text);margin-bottom:5px}
-.st tr.empty span{font-size:11.5px;color:var(--muted)}
+.st tr.empty td{padding:44px;text-align:center;border:none}
+.st tr.empty b{display:block;font-size:14px;color:var(--text);margin-bottom:6px}
+.st tr.empty span{font-size:12px;color:var(--muted)}
 
-@media (max-width:720px){
-  .st table{min-width:0}
+/* ── Mobile: each row becomes a card with labelled fields ── */
+@media (max-width:760px){
+  .st{border:none;background:transparent;box-shadow:none;overflow:visible}
+  .st table{min-width:0;display:block}
   .st thead{display:none}
-  .st tbody tr{display:block;border-bottom:1px solid var(--border);padding:4px 0}
-  .st tbody td{display:flex;justify-content:space-between;gap:12px;border:none;
-    padding:5px 13px;text-align:right}
-  .st tbody td.act{justify-content:flex-end}
-  .st .sub{margin-top:0}
+  .st tbody{display:block}
+  .st tbody tr{display:block;margin-bottom:12px;padding:12px 14px;border:1px solid var(--border);
+    border-radius:14px;background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.20)}
+  .st tbody tr:hover td:first-child{box-shadow:none}
+  .st tbody td{display:flex;align-items:center;justify-content:space-between;gap:14px;
+    border:none;padding:7px 0;text-align:right}
+  .st tbody td::before{content:attr(data-label);font-size:10px;font-weight:800;
+    letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left}
+  .st td[data-label="Subscriber"]{padding-bottom:11px;margin-bottom:5px;
+    border-bottom:1px solid var(--border)}
+  .st td[data-label="Subscriber"]::before{display:none}
+  .st td[data-label="Subscriber"] .who{width:100%}
+  .st td.pick{position:absolute;opacity:0;pointer-events:none}
+  .st td.act{justify-content:flex-end;padding-top:11px;margin-top:5px;
+    border-top:1px solid var(--border)}
+  .st td.act::before{display:none}
+  .st td.act button{margin:0 0 0 7px}
+  .st .sub.mt{margin-top:2px}
 }
 `;
