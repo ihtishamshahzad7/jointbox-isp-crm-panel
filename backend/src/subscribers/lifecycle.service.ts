@@ -53,7 +53,7 @@ export class LifecycleService {
         },
         select: {
           id: true, fullName: true, phone: true, username: true, status: true, onHold: true,
-          serviceSettings: { select: { expiryDate: true } },
+          serviceSettings: { select: { expiryDate: true, gracePeriodUntil: true } },
         },
       });
 
@@ -78,7 +78,13 @@ export class LifecycleService {
           // 2. Expiry cut-off: past expiry (+ grace) and still ACTIVE → suspend.
           //    A subscriber under dispute (onHold) is skipped — never cut while
           //    the disagreement is being reviewed.
-          if (s.status === 'ACTIVE' && !s.onHold && exp < cutoff) {
+          // A per-subscriber grace period, if still in the future, holds off the
+          // cut-off — the customer stays online until the grace moment passes.
+          const graceUntil = s.serviceSettings?.gracePeriodUntil
+            ? new Date(s.serviceSettings.gracePeriodUntil) : null;
+          const inGrace = graceUntil ? graceUntil > now : false;
+
+          if (s.status === 'ACTIVE' && !s.onHold && !inGrace && exp < cutoff) {
             await this.prisma.subscriber.update({ where: { id: s.id }, data: { status: 'EXPIRED' } });
             if (this.autoSuspend && s.username) {
               await this.radius.removeSubscriberFromRadius(s.username).catch((e) =>

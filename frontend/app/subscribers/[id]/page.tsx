@@ -464,6 +464,16 @@ export default function SubscriberProfilePage() {
             <Ic.Refresh/>{refreshing?"Refreshing…":"Refresh Live Data"}
           </Btn>
           {sub?.id && <BoostButton subscriberId={sub.id} />}
+          <Btn onClick={async ()=>{
+            const days = Number(prompt("Grant grace period — how many days should this customer stay online past expiry?", "3"));
+            if (!days || days <= 0) return;
+            const reason = prompt("Reason (optional)", "Awaiting payment") || undefined;
+            const r = await fetch(`${API}/subscribers/${sub.id}/grace`, { method:"POST", headers, body: JSON.stringify({ days, reason }) });
+            if (r.ok) { const d = await r.json(); showToast(`Grace period granted — online until ${new Date(d.gracePeriodUntil).toLocaleDateString()}`, "ok"); refreshLive(); }
+            else { const e = await r.json().catch(()=>({})); showToast(e.message || "Failed to grant grace period", "err"); }
+          }} variant="teal">
+            <Ic.Clock/> Grace Period
+          </Btn>
           <Btn onClick={()=>router.push(`/subscribers?edit=${sub.id}`)} variant="warning">
             <Ic.Edit/> Edit
           </Btn>

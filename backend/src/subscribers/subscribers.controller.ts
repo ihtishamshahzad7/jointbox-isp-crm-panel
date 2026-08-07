@@ -370,6 +370,12 @@ export class SubscribersController {
     return this.subscribersService.deactivateAndRelease(+id, req.user, body?.reason);
   }
 
+  /** Grant a temporary grace period (keeps/puts the customer online for N days). */
+  @Post(':id/grace')
+  grace(@Param('id') id: string, @Body() body: { days: number; reason?: string }, @Req() req: any) {
+    return this.subscribersService.grantGracePeriod(+id, Number(body?.days), req.user, body?.reason);
+  }
+
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req: any, @Query('force') force?: string) {
     // ?force=true bypasses the "has recorded payments" guard — for test data.

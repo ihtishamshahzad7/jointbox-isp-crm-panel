@@ -2137,6 +2137,47 @@ if (!unpaid && data.username && data.password) {
     };
   }
 
+  /**
+   * Grant a per-subscriber grace period: keep (or put) the customer online for
+   * `days` more days despite their paid period having ended. If they were
+   * EXPIRED/INACTIVE we reactivate them (status ACTIVE + re-push RADIUS creds),
+   * so they immediately regain internet; the daily sweep will not cut them until
+   * the grace moment passes. No charge and no new invoice — this is goodwill.
+   */
+  async grantGracePeriod(id: number, days: number, actor?: Actor, reason?: string) {
+    if (actor) await this.scope.assertSubscriber(actor, id);
+    const d = Math.max(1, Math.min(Math.floor(Number(days) || 0), 90)); // 1..90 days
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id },
+      select: { id: true, username: true, password: true, fullName: true, status: true },
+    });
+    if (!sub) throw new NotFoundException('Subscriber not found');
+
+    const until = new Date(Date.now() + d * 86400_000);
+    await this.prisma.serviceSettings.upsert({
+      where: { subscriberId: id },
+      update: { gracePeriodUntil: until, isBlocked: false },
+      create: { subscriberId: id, gracePeriodUntil: until },
+    });
+    if (sub.status !== 'ACTIVE') {
+      await this.prisma.subscriber.update({ where: { id }, data: { status: 'ACTIVE' } });
+    }
+    // Ensure they can authenticate during the grace window.
+    if (sub.username && sub.password) {
+      await this.radiusSync.syncSubscriberProfile(sub.username, sub.password, null).catch((e: any) =>
+        this.logger.warn(`Grace RADIUS restore failed for ${sub.username}: ${e?.message || e}`));
+    }
+    await this.prisma.activityLog.create({
+      data: {
+        userId: actor ? this.scope.actorId(actor) : null,
+        action: 'GRACE_PERIOD_GRANTED', entity: 'Subscriber', entityId: id,
+        details: `Granted ${d}-day grace period to ${sub.fullName} until ${until.toLocaleString()}${reason ? ` — ${reason}` : ''}.`,
+      },
+    }).catch(() => null);
+
+    return { ok: true, subscriberId: id, days: d, gracePeriodUntil: until, reactivated: sub.status !== 'ACTIVE' };
+  }
+
   async deactivateAndRelease(id: number, actor?: Actor, reason?: string) {
     if (actor) await this.scope.assertSubscriber(actor, id);
     const sub = await this.prisma.subscriber.findUnique({

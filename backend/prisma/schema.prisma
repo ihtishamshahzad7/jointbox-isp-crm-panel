@@ -1353,6 +1353,9 @@ model ServiceSettings {
 
   quotaResetDate DateTime?
   expiryDate     DateTime?
+  // Per-subscriber grace: keep this customer online until this moment even
+  // though their paid period has ended (operator goodwill / awaiting payment).
+  gracePeriodUntil DateTime?
 
   duration Int?
 
