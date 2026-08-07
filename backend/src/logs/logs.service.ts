@@ -142,18 +142,22 @@ export class LogsService {
     if (q) { params.push(`%${q}%`); whereParts.push(`(p.username ILIKE $${params.length} OR p.reply ILIKE $${params.length})`); }
     const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
+    // Prefer the values the post-auth query now stores natively on radpostauth
+    // (present on every attempt, including rejects). For rows written before
+    // that capture existed, fall back to the user's most recent session.
     const rowsSql = `
       SELECT p.id::text AS id, p.authdate, p.username, p.pass, p.reply,
-             a.callingstationid AS mac, a.nasportid AS port,
-             host(a.nasipaddress) AS nasip,
-             COALESCE(n.shortname, n.nasname, host(a.nasipaddress)) AS nas
+             COALESCE(p.callingstationid, a.callingstationid) AS mac,
+             COALESCE(p.nasportid, a.nasportid) AS port,
+             COALESCE(p.nasipaddress, host(a.nasipaddress)) AS nasip,
+             COALESCE(n.shortname, n.nasname, p.nasipaddress, host(a.nasipaddress)) AS nas
       FROM radpostauth p
       LEFT JOIN LATERAL (
         SELECT callingstationid, nasportid, nasipaddress
         FROM radacct r WHERE r.username = p.username
         ORDER BY r.acctstarttime DESC LIMIT 1
       ) a ON true
-      LEFT JOIN nas n ON n.nasname = host(a.nasipaddress)
+      LEFT JOIN nas n ON n.nasname = COALESCE(p.nasipaddress, host(a.nasipaddress))
       ${whereSql}
       ORDER BY p.id DESC
       LIMIT ${limit} OFFSET ${offset}`;

@@ -124,13 +124,13 @@ export function NasTable({
                     <>
                       <span className={`dot ${live.apiPortOpen ? "up" : "down"}`} />
                       <b className={live.apiPortOpen ? "up" : "down"}>{live.apiPortOpen ? "Reachable" : "Unreachable"}</b>
-                      <div className="sub">{live.identity || n.type || "MIKROTIK"}</div>
+                      <div className="sub">{live.identity || n.type || "default"}</div>
                     </>
                   ) : (
                     <>
                       <span className={`dot ${n.isActive ? "up" : "down"}`} />
                       <b className={n.isActive ? "up" : "down"}>{n.isActive ? "Active" : "Disabled"}</b>
-                      <div className="sub">{rowChecking ? "checking…" : (n.type || "MIKROTIK")}</div>
+                      <div className="sub">{rowChecking ? "checking…" : (n.type || "default")}</div>
                     </>
                   )}
                 </td>

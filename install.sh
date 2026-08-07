@@ -373,6 +373,11 @@ cat > /etc/sudoers.d/jointbox-freeradius <<'SUDOEOF'
 SUDOEOF
 chmod 440 /etc/sudoers.d/jointbox-freeradius
 
+# Extend post-auth logging to capture MAC/NAS/port on every auth attempt.
+if [ -f "$SCRIPT_DIR/backend/scripts/patch-postauth.sh" ]; then
+  DB_NAME="$DB_NAME" bash "$SCRIPT_DIR/backend/scripts/patch-postauth.sh" || warn "post-auth capture patch skipped"
+fi
+
 # -----------------------------------------------------------------------------
 step "9/9  Start services and verify"
 systemctl restart freeradius && sleep 2

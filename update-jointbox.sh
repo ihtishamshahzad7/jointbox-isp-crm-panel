@@ -102,6 +102,10 @@ fi
 # ownership every deploy so the service always behaves like -X. Harmless if the
 # perms are already right.
 if [ -d /etc/freeradius/3.0 ]; then
+  # Capture MAC/NAS/port on every auth attempt (idempotent, self-validating).
+  if [ -f backend/scripts/patch-postauth.sh ]; then
+    bash backend/scripts/patch-postauth.sh || echo "⚠ post-auth capture patch skipped"
+  fi
   chown -R freerad:freerad /etc/freeradius/3.0 /var/log/freeradius /var/run/freeradius 2>/dev/null || true
   systemctl restart freeradius 2>/dev/null || true
   systemctl is-active --quiet freeradius \

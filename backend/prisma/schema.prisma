@@ -350,6 +350,12 @@ model RadPostAuth {
   pass     String?  @db.VarChar(64)
   reply    String?  @db.VarChar(32)
   authdate DateTime @default(now()) @db.Timestamptz(6)
+  // Captured directly by the FreeRADIUS post-auth query (see patch-postauth.sh)
+  // so EVERY attempt — including rejects — carries device/NAS context.
+  callingstationid String? @db.VarChar(64)
+  calledstationid  String? @db.VarChar(64)
+  nasipaddress     String? @db.VarChar(64)
+  nasportid        String? @db.VarChar(64)
 
   subscriber Subscriber? @relation("radPostAuths", fields: [username], references: [username], onDelete: SetNull, onUpdate: Cascade)
 
