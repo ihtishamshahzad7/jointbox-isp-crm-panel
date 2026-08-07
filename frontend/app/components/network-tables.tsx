@@ -20,6 +20,31 @@ import React from "react";
 
 type Row = any;
 
+/* Shared WinBox-style right-click context menu for these tables. */
+type CtxItem = { label: string; onClick: () => void; danger?: boolean };
+function useCtxMenu() {
+  const [menu, setMenu] = React.useState<{ x: number; y: number; items: CtxItem[] } | null>(null);
+  React.useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); };
+  }, [menu]);
+  const open = (e: React.MouseEvent, items: CtxItem[]) => {
+    e.preventDefault();
+    setMenu({ x: Math.min(e.clientX, window.innerWidth - 190), y: Math.min(e.clientY, window.innerHeight - 40 - items.length * 34), items });
+  };
+  const node = menu && (
+    <div className="nt-ctx" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+      {menu.items.map((it, i) => (
+        <button key={i} className={it.danger ? "danger" : ""} onClick={() => { it.onClick(); setMenu(null); }}>{it.label}</button>
+      ))}
+    </div>
+  );
+  return { open, node };
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    NAS / ROUTERS
    ═══════════════════════════════════════════════════════════════════ */
@@ -44,6 +69,7 @@ export function NasTable({
   reachOf?: (id: number) => { apiPortOpen?: boolean; activeSessionCount?: number; identity?: string } | undefined;
 }) {
   const isIsp = !me || me.role === "ADMIN" || me.role === "SUPER_ADMIN";
+  const ctx = useCtxMenu();
 
   return (
     <div className="nt">
@@ -51,6 +77,7 @@ export function NasTable({
       <table>
         <thead>
           <tr>
+            <th className="flg" title="R: reachable/active · X: disabled">Flags</th>
             <th>Router</th><th>Reachability</th><th>Sessions</th><th>Ports</th><th>Site</th><th>Access</th><th />
           </tr>
         </thead>
@@ -60,8 +87,22 @@ export function NasTable({
             const live = reachOf?.(n.id);
             const sessions = live?.activeSessionCount ?? n.activeSessions ?? n._count?.subscribers ?? 0;
             const rowChecking = checkingIds ? checkingIds.has(n.id) : !!checking;
+            const reachable = live ? !!live.apiPortOpen : !!n.isActive;
             return (
-              <tr key={n.id} onClick={() => onView(n)}>
+              <tr key={n.id} onClick={() => onView(n)}
+                onContextMenu={(e) => ctx.open(e, [
+                  { label: "Open", onClick: () => onView(n) },
+                  ...(mine ? [
+                    { label: "Check reachability", onClick: () => onCheck(n.id) },
+                    { label: "Share…", onClick: () => onShare(n) },
+                    { label: "Edit…", onClick: () => onEdit(n) },
+                    { label: "Delete", onClick: () => onDelete(n), danger: true },
+                  ] : []),
+                ])}>
+                <td className="flg">
+                  <span className={`fl ${reachable ? "r" : ""}`} title="Running (reachable)">R</span>
+                  <span className={`fl ${!n.isActive ? "x" : "off"}`} title="Disabled">X</span>
+                </td>
                 <td>
                   <div className="nm">{n.nasname}</div>
                   <div className="sub">
@@ -141,13 +182,14 @@ export function NasTable({
             );
           })}
           {rows.length === 0 && (
-            <tr className="empty"><td colSpan={7}>
+            <tr className="empty"><td colSpan={8}>
               <b>No routers yet.</b>
               <span>Add one, or ask your parent account to share theirs with you.</span>
             </td></tr>
           )}
         </tbody>
       </table>
+      {ctx.node}
     </div>
   );
 }
@@ -236,12 +278,14 @@ export function PackageTable({
   onPrice: () => void; onViewSubs: (r: Row) => void; onDuplicate?: (r: Row) => void;
   onShare?: (r: Row) => void;
 }) {
+  const ctx = useCtxMenu();
   return (
     <div className="nt">
       <style>{CSS}</style>
       <table>
         <thead>
           <tr>
+            <th className="flg" title="R: active · X: inactive">Flags</th>
             <th>Package</th><th>Speed</th><th>{isIsp ? "Base price" : "You pay"}</th>
             <th>Allowance</th><th>Customers</th><th />
           </tr>
@@ -250,7 +294,18 @@ export function PackageTable({
           {rows.map((p) => {
             const subs = p._count?.subscribers ?? 0;
             return (
-              <tr key={p.id}>
+              <tr key={p.id}
+                onContextMenu={(e) => ctx.open(e, [
+                  { label: "Edit…", onClick: () => onEdit(p) },
+                  { label: p.isActive ? "Disable" : "Enable", onClick: () => onToggle(p) },
+                  ...(onDuplicate ? [{ label: "Duplicate", onClick: () => onDuplicate(p) }] : []),
+                  { label: "View subscribers", onClick: () => onViewSubs(p) },
+                  { label: "Delete", onClick: () => onDelete(p), danger: true },
+                ])}>
+                <td className="flg">
+                  <span className={`fl ${p.isActive ? "r" : ""}`} title="Active">R</span>
+                  <span className={`fl ${!p.isActive ? "x" : "off"}`} title="Inactive">X</span>
+                </td>
                 <td>
                   <div className="nm">{p.name}</div>
                   <div className="sub">
@@ -303,20 +358,38 @@ export function PackageTable({
             );
           })}
           {rows.length === 0 && (
-            <tr className="empty"><td colSpan={6}>
+            <tr className="empty"><td colSpan={7}>
               <b>No packages.</b>
               <span>{isIsp ? "Create one to start selling." : "Ask the ISP to assign a package to your account."}</span>
             </td></tr>
           )}
         </tbody>
       </table>
+      {ctx.node}
     </div>
   );
 }
 
 const CSS = `
-.nt{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:auto}
+.nt{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:auto;position:relative}
 .nt table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px}
+
+/* WinBox flags column. */
+.nt th.flg,.nt td.flg{width:52px;white-space:nowrap}
+.nt .fl{display:inline-block;width:14px;text-align:center;font-family:ui-monospace,monospace;
+  font-size:11px;font-weight:800;margin-right:1px;color:#3a4051}
+.nt .fl.r{color:#4a9eff}
+.nt .fl.x{color:#94A3B8}
+.nt .fl.off{opacity:.28}
+
+/* WinBox right-click context menu. */
+.nt-ctx{position:fixed;z-index:200;min-width:170px;padding:4px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.nt-ctx button{text-align:left;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;
+  background:transparent;border:none;color:var(--text);border-radius:5px;font-family:inherit}
+.nt-ctx button:hover{background:rgba(74,158,255,.14)}
+.nt-ctx button.danger:hover{background:rgba(239,68,68,.16);color:#FCA5A5}
 
 .nt thead th{position:sticky;top:0;z-index:2;padding:10px 14px;text-align:left;
   font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
