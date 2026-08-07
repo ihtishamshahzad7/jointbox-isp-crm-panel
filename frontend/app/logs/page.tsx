@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API from "../components/api";
+import { WinBoxLog } from "../components/winbox-log";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -244,6 +245,7 @@ export default function LogsPage() {
   // ── Tabs ───────────────────────────────────────────────────────
 
   const tabs = [
+    { id: "console",    label: "🖥️ Console" },
     { id: "timeline",   label: "📋 Timeline" },
     { id: "login",      label: "🔐 Login" },
     { id: "activity",   label: "📝 Activity" },
@@ -364,11 +366,23 @@ export default function LogsPage() {
           </div>
 
           {/* ═══════════════ LOADING ═══════════════ */}
-          {loading && activeTab !== "timeline" && (
+          {loading && activeTab !== "timeline" && activeTab !== "console" && (
             <div style={{ textAlign: "center", padding: 40, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>
               <div style={{ width: 30, height: 30, border: `3px solid ${t.cardBorder}`, borderTopColor: t.accent, borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 12px" }}></div>
               <p style={{ color: t.textMuted, fontSize: 12 }}>Loading...</p>
               <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            </div>
+          )}
+
+          {/* ═══════════════ TAB: CONSOLE (WinBox Log window) ═══════════════ */}
+          {activeTab === "console" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: t.green, animation: "pulse 2s infinite" }}></span>
+                <span style={{ fontSize: 11, color: t.textMuted }}>Live · auto-refresh 15s</span>
+                <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}`}</style>
+              </div>
+              <WinBoxLog entries={filteredTimeline} />
             </div>
           )}
 
