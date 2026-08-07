@@ -70,6 +70,22 @@ export class LogsController {
     });
   }
 
+  // ── RADIUS auth logs (radpostauth) ────────────────────────────
+  @Get('radius-auth')
+  radiusAuthLogs(
+    @Query('limit') limit: string,
+    @Query('offset') offset: string,
+    @Query('q') q: string,
+    @Query('days') days: string,
+  ) {
+    return this.logs.getRadiusAuthLogs({
+      limit: limit ? +limit : undefined,
+      offset: offset ? +offset : undefined,
+      q: q || undefined,
+      days: days ? +days : undefined,
+    });
+  }
+
   // ── Network Logs ──────────────────────────────────────────────
   @Get('network')
   networkLogs(

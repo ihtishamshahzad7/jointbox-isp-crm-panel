@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API from "../components/api";
 import { WinBoxLog } from "../components/winbox-log";
+import { LogRecordsTable } from "../components/log-records-table";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -246,6 +247,8 @@ export default function LogsPage() {
 
   const tabs = [
     { id: "console",    label: "🖥️ Console" },
+    { id: "actrec",     label: "🧾 Activity Logs" },
+    { id: "authrec",    label: "🔑 Login Logs" },
     { id: "timeline",   label: "📋 Timeline" },
     { id: "login",      label: "🔐 Login" },
     { id: "activity",   label: "📝 Activity" },
@@ -366,7 +369,7 @@ export default function LogsPage() {
           </div>
 
           {/* ═══════════════ LOADING ═══════════════ */}
-          {loading && activeTab !== "timeline" && activeTab !== "console" && (
+          {loading && activeTab !== "timeline" && activeTab !== "console" && activeTab !== "actrec" && activeTab !== "authrec" && (
             <div style={{ textAlign: "center", padding: 40, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>
               <div style={{ width: 30, height: 30, border: `3px solid ${t.cardBorder}`, borderTopColor: t.accent, borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 12px" }}></div>
               <p style={{ color: t.textMuted, fontSize: 12 }}>Loading...</p>
@@ -384,6 +387,44 @@ export default function LogsPage() {
               </div>
               <WinBoxLog entries={filteredTimeline} />
             </div>
+          )}
+
+          {/* ═══════════════ TAB: ACTIVITY LOGS (paginated) ═══════════════ */}
+          {activeTab === "actrec" && (
+            <LogRecordsTable
+              endpoint="/logs/activity"
+              columns={[
+                { key: "id", label: "ID", nowrap: true },
+                { key: "type", label: "Log Type", nowrap: true, render: (r) => <b>{r.action}{r.entity ? ` · ${r.entity}` : ""}</b> },
+                { key: "details", label: "Description", render: (r) => r.details || r.action || "—" },
+                { key: "subject", label: "Subject", nowrap: true, render: (r) => r.entityId ? `${r.entity || ""} #${r.entityId}` : "—" },
+                { key: "causer", label: "Causer", nowrap: true, render: (r) => r.user ? `${r.user.name} (${r.user.role || "Staff"})` : "System" },
+                { key: "ipAddress", label: "IP Address", mono: true, nowrap: true },
+                { key: "createdAt", label: "Datetime", nowrap: true, render: (r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : "—" },
+              ]}
+            />
+          )}
+
+          {/* ═══════════════ TAB: LOGIN LOGS — RADIUS auth (paginated) ═══════════════ */}
+          {activeTab === "authrec" && (
+            <LogRecordsTable
+              endpoint="/logs/radius-auth"
+              days={7}
+              daysOptions={[{ label: "Last 24 hours", value: 1 }, { label: "Last 7 days", value: 7 }, { label: "Last 30 days", value: 30 }, { label: "All time", value: 0 }]}
+              columns={[
+                { key: "id", label: "ID", nowrap: true, mono: true },
+                { key: "authdate", label: "Datetime", nowrap: true, render: (r) => r.authdate ? new Date(r.authdate).toLocaleString() : "—" },
+                { key: "username", label: "Username", nowrap: true, render: (r) => <b>{r.username}</b> },
+                { key: "pass", label: "Password", mono: true, render: (r) => r.pass || "—" },
+                { key: "reply", label: "Reply", nowrap: true, render: (r) => {
+                    const ok = String(r.reply || "").toLowerCase().includes("accept");
+                    return <span style={{ color: ok ? "#4caf50" : "#f44336", fontWeight: 700 }}>{r.reply || "—"}</span>;
+                  } },
+                { key: "mac", label: "MAC", mono: true, nowrap: true, render: (r) => r.mac || "—" },
+                { key: "port", label: "Port", nowrap: true, render: (r) => r.port || "—" },
+                { key: "nas", label: "NAS", nowrap: true, render: (r) => r.nas || "—" },
+              ]}
+            />
           )}
 
           {/* ═══════════════ TAB: TIMELINE ═══════════════ */}

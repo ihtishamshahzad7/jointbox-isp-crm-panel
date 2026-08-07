@@ -1,10 +1,11 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 
 @Injectable()
 export class LogsService {
+  private readonly logger = new Logger('Logs');
   constructor(
     private prisma: PrismaService,
     private scope: ScopeService,
@@ -80,7 +81,7 @@ export class LogsService {
         orderBy: { createdAt: 'desc' },
         take: opts.limit ?? 100,
         skip: opts.offset ?? 0,
-        include: { user: { select: { id: true, name: true, email: true } } },
+        include: { user: { select: { id: true, name: true, email: true, role: true } } },
       }),
       this.prisma.loginLog.count({ where }),
     ]);
@@ -114,11 +115,62 @@ export class LogsService {
         orderBy: { createdAt: 'desc' },
         take: opts.limit ?? 100,
         skip: opts.offset ?? 0,
-        include: { user: { select: { id: true, name: true, email: true } } },
+        include: { user: { select: { id: true, name: true, email: true, role: true } } },
       }),
       this.prisma.activityLog.count({ where }),
     ]);
     return { logs, total };
+  }
+
+  // ── RADIUS auth logs (radpostauth) ────────────────────────────
+  /**
+   * Paginated FreeRADIUS post-auth log — every Access-Accept / Access-Reject.
+   * radpostauth only stores id/username/pass/reply/authdate natively, so MAC,
+   * VLAN/port and NAS are enriched per page from the user's most recent radacct
+   * session (cheap: only the rows on the current page are joined).
+   */
+  async getRadiusAuthLogs(opts: { limit?: number; offset?: number; q?: string; days?: number } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const days = opts.days && opts.days > 0 ? opts.days : null;
+    const q = (opts.q ?? '').trim();
+
+    const since = days ? `NOW() - INTERVAL '${days} days'` : null;
+    const whereParts: string[] = [];
+    const params: any[] = [];
+    if (since) whereParts.push(`p.authdate > ${since}`);
+    if (q) { params.push(`%${q}%`); whereParts.push(`(p.username ILIKE $${params.length} OR p.reply ILIKE $${params.length})`); }
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    const rowsSql = `
+      SELECT p.id::text AS id, p.authdate, p.username, p.pass, p.reply,
+             a.callingstationid AS mac, a.nasportid AS port,
+             host(a.nasipaddress) AS nasip,
+             COALESCE(n.shortname, n.nasname, host(a.nasipaddress)) AS nas
+      FROM radpostauth p
+      LEFT JOIN LATERAL (
+        SELECT callingstationid, nasportid, nasipaddress
+        FROM radacct r WHERE r.username = p.username
+        ORDER BY r.acctstarttime DESC LIMIT 1
+      ) a ON true
+      LEFT JOIN nas n ON n.nasname = host(a.nasipaddress)
+      ${whereSql}
+      ORDER BY p.id DESC
+      LIMIT ${limit} OFFSET ${offset}`;
+
+    const countSql = `SELECT COUNT(*)::bigint AS n FROM radpostauth p ${whereSql}`;
+
+    try {
+      const [logs, cnt] = await Promise.all([
+        this.prisma.$queryRawUnsafe<any[]>(rowsSql, ...params),
+        this.prisma.$queryRawUnsafe<any[]>(countSql, ...params),
+      ]);
+      const total = Number(cnt?.[0]?.n ?? 0);
+      return { logs, total };
+    } catch (e: any) {
+      this.logger?.warn?.(`RADIUS auth log query failed: ${e?.message || e}`);
+      return { logs: [], total: 0 };
+    }
   }
 
   // ── Network Logs ──────────────────────────────────────────────
