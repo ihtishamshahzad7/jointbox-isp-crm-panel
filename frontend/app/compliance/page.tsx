@@ -47,6 +47,7 @@ export default function CompliancePage() {
   const [search, setSearch] = useState("");
   const [stats, setStats] = useState<any>(null);
   const [queue, setQueue] = useState<any[]>([]);
+  const [userRows, setUserRows] = useState<any[]>([]);
   const [dupes, setDupes] = useState<any[]>([]);
   const [fup, setFup] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,16 +60,18 @@ export default function CompliancePage() {
 
   const load = useCallback(async () => {
     try {
-      const [st, q, dp, fu] = await Promise.all([
+      const [st, q, dp, fu, uq] = await Promise.all([
         fetch(`${API}/compliance/kyc/stats`, { headers }).then((r) => (r.ok ? r.json() : null)),
         fetch(`${API}/compliance/kyc/queue?filter=${filter}`, { headers }).then((r) => (r.ok ? r.json() : [])),
         fetch(`${API}/compliance/kyc/duplicates`, { headers }).then((r) => (r.ok ? r.json() : [])),
         fetch(`${API}/compliance/fup/report`, { headers }).then((r) => (r.ok ? r.json() : [])),
+        fetch(`${API}/compliance/kyc/users/queue?filter=${filter}`, { headers }).then((r) => (r.ok ? r.json() : [])),
       ]);
       setStats(st);
       setQueue(Array.isArray(q) ? q : []);
       setDupes(Array.isArray(dp) ? dp : []);
       setFup(Array.isArray(fu) ? fu : []);
+      setUserRows(Array.isArray(uq) ? uq : []);
     } catch { /* keep the last good view */ }
     setLoading(false);
   }, [token, filter]);
@@ -191,6 +194,45 @@ export default function CompliancePage() {
       ) : null },
   ];
 
+  const userVisible = userRows.filter((r) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return [r.name, r.email, r.role, r.phone, r.cnicNumber, r.formattedCnic]
+      .some((v) => String(v ?? "").toLowerCase().includes(q));
+  });
+
+  const userCols: Col<any>[] = [
+    { key: "u", header: "Account",
+      render: (r) => <Cell top={r.name} bottom={`${r.role} · ${r.email || "no email"}`} /> },
+    { key: "cnic", header: "CNIC",
+      render: (r) => r.formattedCnic
+        ? <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{r.formattedCnic}</span>
+        : <span style={{ color: NV.bad }}>not recorded</span> },
+    { key: "docs", header: "Documents",
+      render: (r) => r.hasDocuments
+        ? <Badge tone="ok" dot>both sides</Badge>
+        : <Badge tone="warn" dot>{r.cnicFrontUrl ? "back missing" : r.cnicBackUrl ? "front missing" : "none uploaded"}</Badge> },
+    { key: "exp", header: "Expiry",
+      render: (r) => <Cell top={fd(r.cnicExpiry)}
+        bottom={r.daysToExpiry !== null && r.daysToExpiry <= 60
+          ? (r.daysToExpiry < 0 ? `expired ${-r.daysToExpiry}d ago` : `${r.daysToExpiry}d left`) : undefined} /> },
+    { key: "status", header: "Status",
+      render: (r) => { const k = KYC_LABEL[r.kycStatus] || KYC_LABEL.PENDING; return <Badge tone={k.tone} dot>{k.label}</Badge>; } },
+    { key: "act", header: "", align: "right",
+      render: (r) => (
+        <div className="nv-row" style={{ justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+          <Button size="sm" onClick={() => {
+            setEditing({ ...r, fullName: r.name, username: r.email, _isUser: true });
+            setForm({ cnicNumber: r.formattedCnic || "", cnicExpiry: r.cnicExpiry ? String(r.cnicExpiry).slice(0, 10) : "" });
+          }}>CNIC</Button>
+          <Button size="sm" variant="success" disabled={busy}
+            onClick={() => call(`/compliance/kyc/users/${r.id}/verify`, "PATCH", { approved: true }, `${r.name} verified`)}>Verify</Button>
+          <Button size="sm" variant="quiet" disabled={busy}
+            onClick={() => call(`/compliance/kyc/users/${r.id}/verify`, "PATCH", { approved: false, notes: "Rejected from queue" }, "Marked rejected")}>Reject</Button>
+        </div>
+      ) },
+  ];
+
   return (
     <Page>
       {toastNode}
@@ -219,7 +261,8 @@ export default function CompliancePage() {
 
       <div className="nv-row" style={{ marginBottom: 16, justifyContent: "space-between" }}>
         <Segmented value={tab} onChange={setTab} options={[
-          { id: "kyc", label: `Verification queue (${queue.length})` },
+          { id: "kyc", label: `Subscriber KYC (${queue.length})` },
+          { id: "users", label: `Account KYC (${userRows.length})` },
           { id: "duplicates", label: `Shared CNICs (${dupes.length})` },
           { id: "fup", label: `Data usage (${fup.length})` },
         ]} />
@@ -249,6 +292,32 @@ export default function CompliancePage() {
             onRowClick={(r) => router.push(`/subscribers/${r.id}`)}
             empty="Nothing to check"
             emptyHint="Every connection in this view has a complete, verified identity on file." />
+        </Card>
+      )}
+
+      {/* ── Account (reseller / staff) KYC ── */}
+      {tab === "users" && (
+        <Card
+          title="Account verification queue"
+          subtitle="Identity checks for reseller and staff accounts you manage."
+          pad={0}
+          actions={
+            <div className="nv-row">
+              <Input placeholder="Search name, email, role or CNIC…"
+                value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 260 }} />
+              <Segmented value={filter} onChange={setFilter} options={[
+                { id: "ALL", label: "All" },
+                { id: "PENDING", label: "Pending" },
+                { id: "MISSING", label: "Incomplete" },
+                { id: "EXPIRED", label: "Expired" },
+              ]} />
+            </div>
+          }
+        >
+          <Table cols={userCols} rows={userVisible} loading={loading}
+            onRowClick={(r) => router.push(`/users/${r.id}`)}
+            empty="Nothing to check"
+            emptyHint="Every account in this view has a complete, verified identity on file." />
         </Card>
       )}
 
@@ -316,7 +385,10 @@ export default function CompliancePage() {
             <Button variant="quiet" onClick={() => setEditing(null)}>Cancel</Button>
             <Button variant="primary" disabled={busy}
               onClick={async () => {
-                const d = await call(`/compliance/kyc/${editing.id}/cnic`, "POST", {
+                const path = editing?._isUser
+                  ? `/compliance/kyc/users/${editing.id}/cnic`
+                  : `/compliance/kyc/${editing.id}/cnic`;
+                const d = await call(path, "POST", {
                   cnicNumber: form.cnicNumber,
                   cnicExpiry: form.cnicExpiry || undefined,
                 }, "CNIC recorded");

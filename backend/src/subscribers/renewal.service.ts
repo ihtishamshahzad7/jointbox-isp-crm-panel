@@ -68,6 +68,10 @@ export class RenewalService {
    */
   async quote(subscriberId: number, opts: {
     mode: RenewMode; packageId?: number; days?: number; expiryDate?: string; extraFee?: number;
+    /** First activation: bill from the activation date (now), ignoring any
+     *  placeholder expiry set at creation. So a subscriber created on the 1st
+     *  but activated on the 6th runs 6th → 6th next month, not from the 1st. */
+    fromActivation?: boolean;
   }, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, subscriberId);
 
@@ -98,7 +102,13 @@ export class RenewalService {
     const price = Number(resolved ?? pkg.price ?? 0);
     const duration = pkg.duration || 30;
     const rate = this.dailyRate(price, duration);
-    const base = this.baseDate(sub.serviceSettings?.expiryDate);
+    // On a first activation the customer starts fresh from today; on a renewal
+    // of a still-active subscriber we extend from their current expiry so paid
+    // days are never lost. Auto-detect when the caller didn't say: a non-ACTIVE
+    // subscriber being given a full/day period is a first activation, so the
+    // preview and the real activation date the period identically.
+    const firstActivation = opts.fromActivation ?? ((sub as any).status !== 'ACTIVE' && opts.mode !== 'DATE');
+    const base = firstActivation ? new Date() : this.baseDate(sub.serviceSettings?.expiryDate);
     const balance = Number(sub.balance ?? 0);
 
     let days = duration;

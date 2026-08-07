@@ -2366,12 +2366,17 @@ if (!unpaid && data.username && data.password) {
     // days, an exact date, or whatever the balance buys — is priced and dated
     // by the same rules. The legacy customExpiryDate flag still works.
     const mode = payload.mode || (payload.customExpiryDate && payload.expiryDateTime ? 'DATE' : 'FULL');
+    // First activation (subscriber not currently ACTIVE) → bill from today, so
+    // the 30-day period runs from the activation date, not the creation date.
+    // A custom expiry date always wins if the operator picked one.
+    const firstActivation = subscriber.status !== 'ACTIVE' && mode !== 'DATE';
     const quote = await this.renewal.quote(subscriberId, {
       mode,
       packageId,
       days: payload.days,
       expiryDate: payload.expiryDateTime || payload.expiryDate,
       extraFee: extraFee,
+      fromActivation: firstActivation,
     });
     const expiryDate = quote.newExpiry;
 
