@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import { SubscriberTable } from "./subscriber-table";
+import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
@@ -1533,8 +1534,29 @@ export default function SubscribersPage() {
             </div>
           )}
 
+          {/* WinBox toolbar strip */}
+          <WinBoxToolbar
+            selectedCount={selectedIds.length}
+            find={searchQ}
+            onFind={onSearch}
+            findPlaceholder="Find subscriber…"
+            groups={[
+              [{ label: "Add", icon: "＋", tone: "primary", title: "Add subscriber (register)", onClick: openCreate }],
+              [
+                { label: "Remove", icon: "－", tone: "danger", selectionRequired: true, title: "Delete selected", onClick: () => setShowMassDeleteModal(true) },
+                { label: "Disable", icon: "⊘", tone: "warn", selectionRequired: true, title: "Mass service settings for selected", onClick: () => setShowMassSettingsModal(true) },
+                { label: "Move", icon: "⇄", selectionRequired: true, title: "Move selected to another account", onClick: openTransfer },
+              ],
+              [
+                { label: "Import", icon: "⬆", onClick: () => setShowImportModal(true) },
+                { label: "Export", icon: "⬇", onClick: () => setShowExportModal(true) },
+                { label: "Sync RADIUS", icon: "⟲", title: "Sync all to FreeRADIUS", onClick: bulkSyncToRadius },
+              ],
+            ]}
+          />
+
           {/* Subscriber Table */}
-          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 16px", borderBottom: `1px solid ${t.cardBorder}` }}>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 Subscriber List
