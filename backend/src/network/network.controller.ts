@@ -1,35 +1,62 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards, ForbiddenException } from '@nestjs/common';
 import { NetworkService } from './network.service';
 import { CoaService } from './coa.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('network')
 export class NetworkController {
-  constructor(private readonly network: NetworkService, private readonly coa: CoaService) {}
+  constructor(
+    private readonly network: NetworkService,
+    private readonly coa: CoaService,
+    private readonly scope: ScopeService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /**
+   * SECURITY: verify the caller may act on this subscriber before any
+   * session-control action. Without this, a reseller could disconnect, re-speed
+   * or read the MAC of ANY customer in the whole ISP by guessing a username/id.
+   */
+  private async assertOwns(actor: any, opts: { username?: string; subscriberId?: number }) {
+    if (this.scope.isAdmin(actor?.role)) return;
+    let id = opts.subscriberId;
+    if (!id && opts.username) {
+      const sub = await this.prisma.subscriber.findUnique({ where: { username: opts.username }, select: { id: true } });
+      if (!sub) throw new ForbiddenException('Not found or not permitted.');
+      id = sub.id;
+    }
+    if (!id) throw new ForbiddenException('Not permitted.');
+    await this.scope.assertSubscriber(actor, id);
+  }
 
   @Get('live')
-  live(@Query('nasIp') nasIp?: string) {
-    return this.network.liveSessions(nasIp);
+  live(@Query('nasIp') nasIp: string, @Req() req: any) {
+    return this.network.liveSessions(nasIp, req.user);
   }
 
   @Get('live/stats')
-  liveStats() {
-    return this.network.liveStats();
+  liveStats(@Req() req: any) {
+    return this.network.liveStats(req.user);
   }
 
   @Post('disconnect/:username')
-  disconnect(@Param('username') username: string) {
+  async disconnect(@Param('username') username: string, @Req() req: any) {
+    await this.assertOwns(req.user, { username });
     return this.network.disconnect(username);
   }
 
   /** Live bandwidth change via RADIUS CoA (vendor-agnostic). */
   @Post('bandwidth/:subscriberId')
-  changeBandwidth(
+  async changeBandwidth(
     @Param('subscriberId') subscriberId: string,
     @Body() body: { downloadSpeed: number; uploadSpeed: number },
+    @Req() req: any,
   ) {
+    await this.assertOwns(req.user, { subscriberId: +subscriberId });
     return this.coa.changeBandwidth(+subscriberId, Number(body.downloadSpeed), Number(body.uploadSpeed));
   }
 
@@ -41,22 +68,26 @@ export class NetworkController {
 
   // ── MAC binding ───────────────────────────────────────────────
   @Get('mac/:username')
-  getMac(@Param('username') username: string) {
+  async getMac(@Param('username') username: string, @Req() req: any) {
+    await this.assertOwns(req.user, { username });
     return this.network.getMacBinding(username);
   }
 
   @Post('mac/:username')
-  bindMac(@Param('username') username: string, @Body() body: { mac: string }) {
+  async bindMac(@Param('username') username: string, @Body() body: { mac: string }, @Req() req: any) {
+    await this.assertOwns(req.user, { username });
     return this.network.bindMac(username, body.mac);
   }
 
   @Post('mac/:username/autolearn')
-  autolearn(@Param('username') username: string) {
+  async autolearn(@Param('username') username: string, @Req() req: any) {
+    await this.assertOwns(req.user, { username });
     return this.network.autolearnMac(username);
   }
 
   @Delete('mac/:username')
-  unbindMac(@Param('username') username: string, @Query('mac') mac?: string) {
+  async unbindMac(@Param('username') username: string, @Query('mac') mac: string, @Req() req: any) {
+    await this.assertOwns(req.user, { username });
     return this.network.unbindMac(username, mac);
   }
 }

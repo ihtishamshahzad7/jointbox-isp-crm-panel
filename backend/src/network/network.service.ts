@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { CoaService } from './coa.service';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Phase 5 network operations. RADIUS tables live in the same Postgres DB,
@@ -19,19 +20,27 @@ export class NetworkService {
     private prisma: PrismaService,
     private radiusSync: RadiusSyncService,
     private coa: CoaService,
+    private scope: ScopeService,
   ) {}
 
   // ── Live sessions ─────────────────────────────────────────────
-  async liveSessions(nasIp?: string) {
+  async liveSessions(nasIp?: string, actor?: any) {
     const rows = await this.radiusSync.getActiveSessions(nasIp).catch(() => []);
     if (!rows.length) return [];
     const usernames = [...new Set(rows.map((r: any) => r.username).filter(Boolean))];
+    // SECURITY: a non-admin may only see sessions for subscribers in its own
+    // subtree — never the whole ISP's live users.
+    const scopeWhere = await this.scope.subscriberWhere(actor);
     const subs = await this.prisma.subscriber.findMany({
-      where: { username: { in: usernames } },
+      where: { AND: [{ username: { in: usernames } }, scopeWhere] },
       select: { id: true, username: true, fullName: true, phone: true, package: { select: { name: true } } },
     });
     const byUsername = new Map(subs.map((s) => [s.username, s]));
-    return rows.map((r: any) => {
+    const isAdmin = this.scope.isAdmin(actor?.role);
+    return rows
+      // drop any session whose subscriber is outside the caller's subtree
+      .filter((r: any) => isAdmin || byUsername.has(r.username))
+      .map((r: any) => {
       const sub = byUsername.get(r.username);
       const up = Number(r.upload_bytes || 0);
       const down = Number(r.download_bytes || 0);
@@ -55,8 +64,8 @@ export class NetworkService {
     });
   }
 
-  async liveStats() {
-    const sessions = await this.liveSessions();
+  async liveStats(actor?: any) {
+    const sessions = await this.liveSessions(undefined, actor);
     const totalUp = sessions.reduce((a, s) => a + s.uploadBytes, 0);
     const totalDown = sessions.reduce((a, s) => a + s.downloadBytes, 0);
     return {
