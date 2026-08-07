@@ -1248,19 +1248,40 @@ export class SubscribersService implements OnModuleInit {
      */
     let unpaid = false;
     let unpaidReason = '';
-    if (subscriber.userId && subscriber.packageId) {
-      try {
-        await this.pricing.settleActivation(subscriber.id, { byUserId: ownerId ?? undefined });
-      } catch (e: any) {
-        unpaid = true;
-        unpaidReason = e?.message || 'Wallet could not cover this activation.';
-        await this.prisma.subscriber.update({
-          where: { id: subscriber.id },
-          data: { status: 'INACTIVE' },
-        });
-        this.logger.warn(
-          `Subscriber #${subscriber.id} created but NOT activated — ${unpaidReason}`,
-        );
+
+    // ── Activation gate: a subscriber may ONLY reach RADIUS (get internet)
+    // after being activated against a package, invoiced, and the activator's
+    // wallet charged. No package → no activation → INACTIVE, no internet.
+    if (!subscriber.packageId) {
+      unpaid = true; // reuse the "not activated → don't sync to RADIUS" path
+      unpaidReason = 'No package assigned. Assign a package to activate and enable internet.';
+      await this.prisma.subscriber.update({
+        where: { id: subscriber.id },
+        data: { status: 'INACTIVE' },
+      });
+      this.logger.warn(`Subscriber #${subscriber.id} created without a package — left INACTIVE (no internet).`);
+    } else {
+      // Packaged subscriber: 1) raise the first invoice, then 2) charge the
+      // owner's wallet (resellers only — the ISP owner has no wallet gate).
+      // Only if both steps are satisfied does the customer reach RADIUS below.
+      if (data.skipInvoice !== true) {
+        await this.autoInvoiceForSubscriber(subscriber.id, subscriber.packageId, sellPrice ?? undefined)
+          .catch((e: any) => this.logger.warn(`Invoice at activation skipped for #${subscriber.id}: ${e?.message || e}`));
+      }
+      if (subscriber.userId) {
+        try {
+          await this.pricing.settleActivation(subscriber.id, { byUserId: ownerId ?? undefined });
+        } catch (e: any) {
+          unpaid = true;
+          unpaidReason = e?.message || 'Wallet could not cover this activation.';
+          await this.prisma.subscriber.update({
+            where: { id: subscriber.id },
+            data: { status: 'INACTIVE' },
+          });
+          this.logger.warn(
+            `Subscriber #${subscriber.id} created but NOT activated — ${unpaidReason}`,
+          );
+        }
       }
     }
 
@@ -1334,12 +1355,9 @@ if (!unpaid && data.username && data.password) {
       // Phase 2: welcome message (uses WELCOME template if one is active)
       void this.notifications.fireEvent('WELCOME', subscriber);
 
-      // Auto-invoice: raise the first bill against the customer at the RETAIL price.
-      // Runs unless the caller opts out with skipInvoice=true. Never blocks creation.
-      if (subscriber.packageId && data.skipInvoice !== true) {
-        this.autoInvoiceForSubscriber(subscriber.id, subscriber.packageId, sellPrice ?? undefined)
-          .catch((e: any) => this.logger.warn(`Auto-invoice skipped for #${subscriber.id}: ${e?.message || e}`));
-      }
+      // NOTE: the first invoice is now raised inside the activation gate above
+      // (package → invoice → wallet charge → RADIUS), so it is intentionally NOT
+      // re-created here — doing so would double-bill the customer.
 
       // The cascade already ran above, before RADIUS. Nothing to do here.
 
