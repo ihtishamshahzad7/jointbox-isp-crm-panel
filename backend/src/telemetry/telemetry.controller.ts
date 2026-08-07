@@ -1,12 +1,16 @@
-import { Controller, Get, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
 import { TelemetryService } from './telemetry.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('telemetry')
 export class TelemetryController {
-  constructor(private readonly telemetry: TelemetryService) {}
+  constructor(
+    private readonly telemetry: TelemetryService,
+    private readonly scope: ScopeService,
+  ) {}
 
   /** Live network feed for the sidebar widget (in-memory, newest first). */
   @Get('feed')
@@ -25,7 +29,10 @@ export class TelemetryController {
 
   /** Full live connection path + signal history for one subscriber. */
   @Get('subscriber/:id/path')
-  subscriberPath(@Param('id', ParseIntPipe) id: number) {
+  async subscriberPath(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    // SECURITY: a subscriber's link trace + signal history is customer-specific
+    // data; only accounts that own the subscriber may view it.
+    await this.scope.assertSubscriber(req.user, id);
     return this.telemetry.subscriberPath(id);
   }
 }

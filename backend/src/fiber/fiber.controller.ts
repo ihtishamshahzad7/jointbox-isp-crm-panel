@@ -1,15 +1,26 @@
 import {
   Controller, Get, Post, Put, Delete,
-  Body, Param, Query, UseGuards,
+  Body, Param, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { FiberService } from './fiber.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('fiber')
 export class FiberController {
-  constructor(private readonly fiber: FiberService) {}
+  constructor(
+    private readonly fiber: FiberService,
+    private readonly scope: ScopeService,
+  ) {}
+
+  // SECURITY: OLTs/ports/ONUs are shared infrastructure (permission-gated), but
+  // anything tied to a specific subscriber must be limited to accounts that own
+  // that subscriber — otherwise fiber/box/ONU details leak across resellers.
+  private assertOwns(actor: any, subscriberId: number) {
+    return this.scope.assertSubscriber(actor, subscriberId);
+  }
 
   // ── Summary ──────────────────────────────────────────────────
   @Get('summary')
@@ -93,7 +104,8 @@ export class FiberController {
   }
 
   @Post('onus/:id/assign/:subscriberId')
-  assignOnu(@Param('id') id: string, @Param('subscriberId') subscriberId: string) {
+  async assignOnu(@Param('id') id: string, @Param('subscriberId') subscriberId: string, @Req() req: any) {
+    await this.assertOwns(req.user, +subscriberId);
     return this.fiber.assignOnu(+id, +subscriberId);
   }
 
@@ -136,19 +148,22 @@ export class FiberController {
 
   // ── Subscriber Fiber Details ─────────────────────────────────
   @Get('subscribers/:subscriberId')
-  getSubscriberFiber(@Param('subscriberId') subscriberId: string) {
+  async getSubscriberFiber(@Param('subscriberId') subscriberId: string, @Req() req: any) {
+    await this.assertOwns(req.user, +subscriberId);
     return this.fiber.getSubscriberFiber(+subscriberId);
   }
 
   @Put('subscribers/:subscriberId')
-  updateSubscriberFiber(
+  async updateSubscriberFiber(
     @Param('subscriberId') subscriberId: string,
     @Body() body: {
       boxNumber?: string; boxAddress?: string; switchBoard?: string; switchPort?: string;
       electricSocket?: string; cableType?: string; uplinkPort?: string;
       fiberCode?: string; fiberColor?: string; onuNote?: string;
     },
+    @Req() req: any,
   ) {
+    await this.assertOwns(req.user, +subscriberId);
     return this.fiber.updateSubscriberFiber(+subscriberId, body);
   }
 }
