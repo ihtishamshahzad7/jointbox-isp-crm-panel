@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
+import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -877,8 +878,25 @@ export default function NasPage() {
             <span style={{ fontSize:11, color:t.textMuted }}>{filteredNasList.length} result{filteredNasList.length !== 1 ? 's' : ''}</span>
           </div>
 
+          {/* WinBox toolbar strip */}
+          <WinBoxToolbar
+            find={searchQ}
+            onFind={setSearchQ}
+            findPlaceholder="Find NAS name or IP…"
+            groups={[
+              [{ label: "Add", icon: "＋", tone: "primary", title: "Add NAS / router", onClick: () => { resetForm(); setEditItem(null); setShowForm(true); } }],
+              [
+                { label: "Import", icon: "⬆", onClick: () => setShowImport(true) },
+                { label: "Export", icon: "⬇", onClick: () => downloadCsv("nas.csv", nasList.map((n:any)=>({ nasName:n.shortname||n.nasname, nasIp:n.nasIp||n.nasname, secret:n.secret, apiPort:n.apiPort, nasType:n.type, deviceType:(n as any).deviceType })), [
+                  { key:"nasName", label:"NAS Name" }, { key:"nasIp", label:"NAS IP" }, { key:"secret", label:"Secret" }, { key:"apiPort", label:"API Port" }, { key:"nasType", label:"Type" }, { key:"deviceType", label:"Device" },
+                ]) },
+              ],
+              [{ label: "Refresh", icon: "⟳", onClick: loadData }],
+            ]}
+          />
+
           {/* NAS Table */}
-          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:10, overflow:'hidden' }}>
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 16px', borderBottom:`1px solid ${t.cardBorder}` }}>
               <div>
                 <span style={{ fontWeight:800, fontSize:14 }}>Registered NAS Devices</span>

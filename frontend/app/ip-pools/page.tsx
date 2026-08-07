@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
+import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { PoolTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -513,8 +514,24 @@ export default function IpPoolsPage() {
             />
           )}
 
+          {/* WinBox toolbar strip */}
+          <WinBoxToolbar
+            find={searchQ}
+            onFind={setSearchQ}
+            findPlaceholder="Find pool or network…"
+            groups={[
+              [{ label: "Add", icon: "＋", tone: "primary", title: "Add IP pool", onClick: openCreate }],
+              [
+                { label: "Import", icon: "⬆", onClick: () => setShowImport(true) },
+                { label: "Export", icon: "⬇", onClick: () => downloadCsv("ip-pools.csv", (pools || []).map((p:any)=>({ name:p.name, network:p.network, subnet:p.subnet })), [
+                  { key:"name", label:"name" }, { key:"network", label:"network" }, { key:"subnet", label:"subnet" },
+                ]) },
+              ],
+            ]}
+          />
+
           {/* Table */}
-          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:10, overflow:"hidden" }}>
+          <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderTop:"none", borderRadius:"0 0 10px 10px", overflow:"hidden" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"11px 16px", borderBottom:`1px solid ${t.cardBorder}` }}>
               <span style={{ fontWeight:800, fontSize:14 }}>
                 IP Pool List

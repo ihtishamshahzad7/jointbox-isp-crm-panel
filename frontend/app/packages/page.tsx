@@ -82,6 +82,7 @@ const durationTypes: DurationType[] = ["DAILY", "WEEKLY", "MONTHLY", "QUARTERLY"
 import { PackageWizard } from "./package-wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
+import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { PackageTable } from "../components/network-tables";
 
 const packageDefaults = {
@@ -833,8 +834,24 @@ export default function PackagesPage() {
         </select>
       </div>
 
+      {/* WinBox toolbar strip */}
+      <WinBoxToolbar
+        find={searchQ}
+        onFind={(v) => { setSearchQ(v); setPage(1); }}
+        findPlaceholder="Find package…"
+        groups={[
+          [{ label: "Add", icon: "＋", tone: "primary", title: "Add package", onClick: openCreatePackage }],
+          [
+            { label: "Import", icon: "⬆", onClick: () => setShowImport(true) },
+            { label: "Export", icon: "⬇", onClick: () => downloadCsv("packages.csv", (packages || []).map((p:any)=>({ name:p.name, price:p.price, downloadSpeed:p.downloadSpeed, uploadSpeed:p.uploadSpeed })), [
+              { key:"name", label:"Name" }, { key:"price", label:"Price" }, { key:"downloadSpeed", label:"Down" }, { key:"uploadSpeed", label:"Up" },
+            ]) },
+          ],
+        ]}
+      />
+
       {/* Table */}
-      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "14px", overflow: "hidden", marginBottom: "12px" }}>
+      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderTop: "none", borderRadius: "0 0 14px 14px", overflow: "hidden", marginBottom: "12px" }}>
         {isLoading ? (
           <div style={{ textAlign: "center", padding: 50, color: "rgba(255,255,255,0.35)" }}>⏳ Loading packages…</div>
         ) : !pagedPackages.length ? (
