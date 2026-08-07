@@ -48,10 +48,11 @@ export class IntegrityService implements OnModuleInit {
       const radius = await this.reconcileRadiusState(apply);
       await update(3, 5);
       const radiusHeal = await this.healActiveCredentials(apply);
+      const radiusPurge = await this.purgeInactiveCredentials(apply);
       await update(4, 5);
       const sessions = await this.reconcileSessionsWithRouter(apply);
       await update(5, 5);
-      return { trialBalance, wallets, radius, radiusHeal, sessions };
+      return { trialBalance, wallets, radius, radiusHeal, radiusPurge, sessions };
     });
   }
 
@@ -71,6 +72,9 @@ export class IntegrityService implements OnModuleInit {
     this.sessionSyncBusy = true;
     try {
       await this.closeGhostSessions();
+      // Enforce activation: strip RADIUS credentials from any non-active
+      // subscriber so it cannot authenticate on any NAS until activated.
+      await this.purgeInactiveCredentials(true);
       await this.reconcileSessionsWithRouter(true);
       // Enforce panel-dependency: kick any live session whose account is gone.
       if ((process.env.ENFORCE_PANEL_DEPENDENCY ?? '1') !== '0') {
@@ -223,6 +227,46 @@ export class IntegrityService implements OnModuleInit {
       }).catch(() => null);
     }
     return { checked: 'radius-credentials', missing: missing.length, healed };
+  }
+
+  /**
+   * ENFORCE ACTIVATION: a subscriber that is NOT active (INACTIVE / EXPIRED /
+   * SUSPENDED) must have NO RADIUS credentials, so it cannot authenticate on any
+   * NAS. reconcileRadiusState only strips those already online; this closes the
+   * gap by removing radcheck for EVERY non-active subscriber that still has one,
+   * online or not. Result: internet runs only when the account is activated.
+   */
+  async purgeInactiveCredentials(apply = true) {
+    const stragglers = await this.prisma.$queryRaw<Array<{ id: number; username: string; status: string }>>`
+      SELECT s.id, s.username, s.status
+      FROM "Subscriber" s
+      WHERE s.status <> 'ACTIVE' AND s.username IS NOT NULL AND s.username <> ''
+        AND EXISTS (SELECT 1 FROM radcheck r WHERE r.username = s.username)
+      LIMIT 1000;`;
+
+    let purged = 0;
+    if (apply) {
+      for (const s of stragglers) {
+        try {
+          await this.radius.removeSubscriberFromRadius(s.username);
+          purged++;
+        } catch (e: any) {
+          this.logger.warn(`RADIUS purge failed for ${s.username}: ${e?.message || e}`);
+        }
+      }
+    }
+
+    if (stragglers.length) {
+      this.logger.warn(`RADIUS PURGE: ${stragglers.length} non-active subscriber(s) still had credentials${apply ? `, removed ${purged}` : ' (dry run)'}`);
+      await this.prisma.systemLog.create({
+        data: {
+          level: 'WARN', source: 'integrity',
+          message: `Activation enforcement: removed credentials from ${purged} non-active subscriber(s): ` +
+            stragglers.slice(0, 15).map((s) => `${s.username}(${s.status})`).join(', '),
+        },
+      }).catch(() => null);
+    }
+    return { checked: 'radius-inactive-purge', found: stragglers.length, purged };
   }
 
   /**
