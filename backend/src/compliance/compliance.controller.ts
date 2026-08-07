@@ -63,6 +63,37 @@ export class ComplianceController {
     return this.kyc.verify(+id, body?.approved !== false, body?.notes, req.user);
   }
 
+  // ── User (account-holder) KYC ───────────────────────────────
+  /** Verification coverage for reseller/staff accounts. */
+  @Get('kyc/users/stats')
+  userKycStats(@Req() req: any) {
+    return this.kyc.userStats(req.user);
+  }
+
+  /** User-KYC work queue: PENDING | EXPIRED | REJECTED | VERIFIED | MISSING | ALL */
+  @Get('kyc/users/queue')
+  userKycQueue(@Query('filter') filter: string, @Req() req: any) {
+    return this.kyc.userQueue(req.user, filter || 'ALL');
+  }
+
+  @Post('kyc/users/:userId/cnic')
+  setUserCnic(
+    @Param('userId') id: string,
+    @Body() body: { cnicNumber: string; cnicExpiry?: string },
+    @Req() req: any,
+  ) {
+    return this.kyc.setUserCnic(+id, body, req.user);
+  }
+
+  @Patch('kyc/users/:userId/verify')
+  verifyUser(
+    @Param('userId') id: string,
+    @Body() body: { approved: boolean; notes?: string },
+    @Req() req: any,
+  ) {
+    return this.kyc.verifyUser(+id, body?.approved !== false, body?.notes, req.user);
+  }
+
   // ── FUP ─────────────────────────────────────────────────────
   /** Heavy users: near quota or already throttled. */
   @Get('fup/report')

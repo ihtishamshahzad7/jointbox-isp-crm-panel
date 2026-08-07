@@ -199,6 +199,117 @@ export class KycService {
     }));
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  //  USER (reseller / staff) KYC — same identity discipline as subscribers,
+  //  because regulators require a verified identity behind every account too.
+  // ══════════════════════════════════════════════════════════════════
+
+  /** Record/update the CNIC on a user account. */
+  async setUserCnic(userId: number, data: { cnicNumber: string; cnicExpiry?: string }, actor?: Actor) {
+    if (actor) await this.scope.assertUser(actor, userId);
+
+    const check = this.validate(data.cnicNumber);
+    if (!check.valid) throw new BadRequestException(check.reason);
+    const n = this.normalise(data.cnicNumber)!;
+
+    const duplicates = await this.prisma.user.findMany({
+      where: { cnicNumber: n, id: { not: userId } },
+      select: { id: true, name: true, role: true },
+    });
+    const expiry = data.cnicExpiry ? new Date(data.cnicExpiry) : null;
+    const expired = expiry ? expiry < new Date() : false;
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        cnicNumber: n, cnicExpiry: expiry,
+        kycStatus: expired ? 'EXPIRED' : 'PENDING',
+        kycVerifiedBy: null, kycVerifiedAt: null,
+      },
+      select: { id: true, name: true, cnicNumber: true, cnicExpiry: true, kycStatus: true },
+    });
+
+    return {
+      ...updated, formatted: check.formatted, duplicates,
+      warning: duplicates.length
+        ? `This CNIC is already on ${duplicates.length} other account(s).`
+        : null,
+    };
+  }
+
+  /** Approve or reject a user's identity. */
+  async verifyUser(userId: number, approved: boolean, notes?: string, actor?: Actor) {
+    if (actor) await this.scope.assertUser(actor, userId);
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { cnicNumber: true, cnicFrontUrl: true, cnicBackUrl: true, cnicExpiry: true },
+    });
+    if (!u) throw new NotFoundException('User not found');
+    if (approved) {
+      if (!u.cnicNumber) throw new BadRequestException('Record the CNIC number before verifying.');
+      if (!u.cnicFrontUrl || !u.cnicBackUrl) throw new BadRequestException('Both sides of the CNIC must be uploaded before verifying.');
+      if (u.cnicExpiry && u.cnicExpiry < new Date()) throw new BadRequestException('This CNIC has expired — obtain a current one.');
+    }
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        kycStatus: approved ? 'VERIFIED' : 'REJECTED',
+        kycVerifiedBy: actor ? this.scope.actorId(actor) : null,
+        kycVerifiedAt: new Date(), kycNotes: notes ?? null,
+      },
+      select: { id: true, name: true, kycStatus: true, kycVerifiedAt: true },
+    });
+  }
+
+  /** Compliance stats for user accounts (scoped to the actor's descendants). */
+  async userStats(actor?: Actor) {
+    const where: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      where.id = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    }
+    const [byStatus, missingNumber, missingDocs, total] = await Promise.all([
+      this.prisma.user.groupBy({ by: ['kycStatus'], where, _count: { _all: true } }),
+      this.prisma.user.count({ where: { ...where, cnicNumber: null } }),
+      this.prisma.user.count({ where: { ...where, OR: [{ cnicFrontUrl: null }, { cnicBackUrl: null }] } }),
+      this.prisma.user.count({ where }),
+    ]);
+    const m: Record<string, number> = {};
+    byStatus.forEach((s) => (m[s.kycStatus] = s._count._all));
+    const verified = m.VERIFIED ?? 0;
+    return {
+      total, verified, pending: m.PENDING ?? 0, rejected: m.REJECTED ?? 0, expired: m.EXPIRED ?? 0,
+      missingCnicNumber: missingNumber, missingDocuments: missingDocs,
+      compliancePercent: total > 0 ? Math.round((verified / total) * 1000) / 10 : 100,
+    };
+  }
+
+  /** The user-KYC work queue, scoped to the actor's own accounts. */
+  async userQueue(actor?: Actor, filter = 'ALL') {
+    const where: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      where.id = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    }
+    if (['PENDING', 'EXPIRED', 'REJECTED', 'VERIFIED'].includes(filter)) where.kycStatus = filter;
+    if (filter === 'MISSING') where.OR = [{ cnicNumber: null }, { cnicFrontUrl: null }, { cnicBackUrl: null }];
+
+    const rows = await this.prisma.user.findMany({
+      where,
+      select: {
+        id: true, name: true, email: true, role: true, phone: true, isActive: true,
+        cnicNumber: true, cnicExpiry: true, cnicFrontUrl: true, cnicBackUrl: true,
+        kycStatus: true, kycVerifiedAt: true, kycNotes: true, createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    return rows.map((r) => ({
+      ...r,
+      formattedCnic: r.cnicNumber ? `${r.cnicNumber.slice(0, 5)}-${r.cnicNumber.slice(5, 12)}-${r.cnicNumber.slice(12)}` : null,
+      hasDocuments: !!(r.cnicFrontUrl && r.cnicBackUrl),
+      daysToExpiry: r.cnicExpiry ? Math.ceil((new Date(r.cnicExpiry).getTime() - Date.now()) / 86400_000) : null,
+    }));
+  }
+
   /**
    * Every connection sharing a CNIC.
    *
@@ -248,10 +359,15 @@ export class KycService {
         where: { cnicExpiry: { lt: new Date() }, kycStatus: { in: ['VERIFIED', 'PENDING'] } },
         data: { kycStatus: 'EXPIRED' },
       });
-      if (res.count) {
-        this.logger.warn(`${res.count} subscriber(s) now have an expired CNIC — re-verification needed`);
+      // Same sweep for user (reseller/staff) accounts.
+      const uRes = await this.prisma.user.updateMany({
+        where: { cnicExpiry: { lt: new Date() }, kycStatus: { in: ['VERIFIED', 'PENDING'] } },
+        data: { kycStatus: 'EXPIRED' },
+      });
+      if (res.count || uRes.count) {
+        this.logger.warn(`${res.count} subscriber(s) and ${uRes.count} account(s) now have an expired CNIC — re-verification needed`);
       }
-      return { expired: res.count };
+      return { expired: res.count, usersExpired: uRes.count };
     } catch (e: any) {
       this.logger.warn(`KYC expiry sweep failed: ${e?.message || e}`);
     }
