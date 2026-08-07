@@ -5,6 +5,7 @@ import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
+import { Expandable } from "../components/expandable";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -879,6 +880,7 @@ export default function NasPage() {
           </div>
 
           {/* WinBox toolbar strip */}
+          <Expandable label="NAS list">
           <WinBoxToolbar
             find={searchQ}
             onFind={setSearchQ}
@@ -933,6 +935,7 @@ export default function NasPage() {
               />
             )}
           </div>
+          </Expandable>
         </div>
       </div>
 

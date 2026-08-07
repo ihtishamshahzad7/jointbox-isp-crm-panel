@@ -83,6 +83,7 @@ import { PackageWizard } from "./package-wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
+import { Expandable } from "../components/expandable";
 import { PackageTable } from "../components/network-tables";
 
 const packageDefaults = {
@@ -835,6 +836,7 @@ export default function PackagesPage() {
       </div>
 
       {/* WinBox toolbar strip */}
+      <Expandable label="packages">
       <WinBoxToolbar
         find={searchQ}
         onFind={(v) => { setSearchQ(v); setPage(1); }}
@@ -939,6 +941,7 @@ export default function PackagesPage() {
           </button>
         </div>
       </div>
+      </Expandable>
 
       {/* ============================================================ */}
       {/* ADD PACKAGE MODAL */}

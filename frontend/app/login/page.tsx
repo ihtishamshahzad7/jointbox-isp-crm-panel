@@ -105,15 +105,16 @@ export default function LoginPage() {
         error instanceof TypeError &&
         (error.message || "").toLowerCase().includes("failed to fetch");
 
+      // SECURITY: never expose internal host/IP/port or raw error text in the
+      // UI — it hands an attacker the backend address and stack details. Show a
+      // generic message; the real reason stays in the console for operators.
       if (isNetworkError) {
-        setMessage(
-          `❌ Cannot reach backend at ${getBackendUrl()}. Ensure backend is running and database is reachable.`
-        );
+        setMessage("❌ Unable to connect to the server. Please try again in a moment.");
       } else {
-        setMessage(`❌ Connection error: ${error?.message || "Unknown error"}`);
+        setMessage("❌ Sign-in failed. Please check your details and try again.");
       }
 
-      // Keep this as warning to avoid flooding the browser error overlay.
+      // Full detail stays in the console only (not shown to the user).
       console.warn("Login request failed:", error);
     } finally {
       setLoading(false);

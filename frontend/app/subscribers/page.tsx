@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import { SubscriberTable } from "./subscriber-table";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
+import { Expandable } from "../components/expandable";
 import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
@@ -1535,6 +1536,7 @@ export default function SubscribersPage() {
           )}
 
           {/* WinBox toolbar strip */}
+          <Expandable label="subscribers">
           <WinBoxToolbar
             selectedCount={selectedIds.length}
             find={searchQ}
@@ -1620,6 +1622,7 @@ export default function SubscribersPage() {
               </div>
             )}
           </div>
+          </Expandable>
 
           {/* Expired & Expiring Subscribers */}
           <div style={{ marginTop: 14, background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 16px" }}>

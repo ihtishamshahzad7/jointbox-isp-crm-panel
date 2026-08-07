@@ -77,8 +77,9 @@ export class LogsController {
     @Query('offset') offset: string,
     @Query('q') q: string,
     @Query('days') days: string,
+    @Req() req: any,
   ) {
-    return this.logs.getRadiusAuthLogs({
+    return this.logs.getRadiusAuthLogs(req.user, {
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
       q: q || undefined,

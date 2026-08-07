@@ -89,7 +89,7 @@ const menuItems = menuGroups.flatMap((g) => g.items);
 
 // Selectable dark themes (palettes defined in globals.css by data-theme id).
 const THEMES = [
-  { id: 'winbox', name: 'WinBox (MikroTik)', dot: '#4a9eff' },
+  { id: 'winbox', name: 'Default', dot: '#4a9eff' },
   { id: 'night-tower', name: 'Night tower', dot: '#378ADD' },
   { id: 'signal-room', name: 'Signal room', dot: '#1D9E75' },
   { id: 'fiber-glass', name: 'Fiber glass', dot: '#7F77DD' },

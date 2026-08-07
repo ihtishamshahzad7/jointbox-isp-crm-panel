@@ -129,17 +129,28 @@ export class LogsService {
    * VLAN/port and NAS are enriched per page from the user's most recent radacct
    * session (cheap: only the rows on the current page are joined).
    */
-  async getRadiusAuthLogs(opts: { limit?: number; offset?: number; q?: string; days?: number } = {}) {
+  async getRadiusAuthLogs(actor: Actor, opts: { limit?: number; offset?: number; q?: string; days?: number } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     const offset = Math.max(opts.offset ?? 0, 0);
     const days = opts.days && opts.days > 0 ? opts.days : null;
     const q = (opts.q ?? '').trim();
+
+    // SECURITY: non-admin actors (reseller/retailer/staff) may ONLY see auth logs
+    // for subscribers inside their own subtree — never the whole system. Admins
+    // (SUPER_ADMIN/ADMIN) see everything. subtreeIds() returns null for admins.
+    const ids = await this.subtreeIds(actor);
 
     const since = days ? `NOW() - INTERVAL '${days} days'` : null;
     const whereParts: string[] = [];
     const params: any[] = [];
     if (since) whereParts.push(`p.authdate > ${since}`);
     if (q) { params.push(`%${q}%`); whereParts.push(`(p.username ILIKE $${params.length} OR p.reply ILIKE $${params.length})`); }
+    if (ids !== null) {
+      // Restrict to usernames owned within the actor's subtree. An empty subtree
+      // yields no rows (the `= ANY(...)` on an empty array matches nothing).
+      params.push(ids);
+      whereParts.push(`p.username IN (SELECT username FROM "Subscriber" WHERE "userId" = ANY($${params.length}::int[]))`);
+    }
     const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     // Prefer the values the post-auth query now stores natively on radpostauth
