@@ -88,6 +88,69 @@ html[data-theme="terminal-phosphor"] { --bg:#0A0B0A; --surface:#121312; --surfac
 html[data-theme="dusk-bazaar"] { --bg:#150F1A; --surface:#201828; --surface-2:#2A2035; --surface2:#2A2035; --border:#3D2F4D; --text:#F0E7F5; --muted:#B7A3C7; --accent:#EF9F27; --accent-2:#D4537E; --accent2:#D4537E; }
 html[data-theme="cold-steel"] { --bg:#101112; --surface:#18191B; --surface-2:#202224; --surface2:#202224; --border:#2E3033; --text:#E4E6E8; --muted:#9AA0A6; --accent:#378ADD; --accent-2:#85B7EB; --accent2:#85B7EB; }
 html[data-theme="monsoon-sky"] { --bg:#0D131A; --surface:#161F29; --surface-2:#1E2A38; --surface2:#1E2A38; --border:#2B3B4D; --text:#DCE6F0; --muted:#8FA3B8; --accent:#85B7EB; --accent-2:#1D9E75; --accent2:#1D9E75; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   WINBOX — MikroTik WinBox 4.x look: flat, sharp, compact, Segoe UI.
+   The palette maps onto the same theme variables every page already uses,
+   so selecting it restyles the whole app. The overrides below (scoped to
+   this theme only) strip rounded corners and tighten density for the
+   authentic WinBox feel. Other themes are untouched.
+   ═══════════════════════════════════════════════════════════════════ */
+html[data-theme="winbox"] {
+  --bg:#1a1a1a; --surface:#252525; --surface-2:#2d2d2d; --surface2:#2d2d2d;
+  --border:#404040; --text:#e0e0e0; --muted:#999999;
+  --accent:#4a9eff; --accent-2:#4a9eff; --accent2:#4a9eff;
+  --wb-selected:#1e3a5f; --wb-hover:#2a2a2a; --wb-toolbar:#2d2d2d;
+  --wb-green:#4caf50; --wb-orange:#ff9800; --wb-red:#f44336;
+}
+html[data-theme="winbox"] body,
+html[data-theme="winbox"] .db-root {
+  font-family:"Segoe UI",system-ui,-apple-system,"Roboto",sans-serif;
+  font-size:12px;
+}
+/* Flat, sharp edges everywhere for the WinBox aesthetic. */
+html[data-theme="winbox"] .db-root *,
+html[data-theme="winbox"] .db-root *::before,
+html[data-theme="winbox"] .db-root *::after {
+  border-radius:2px !important;
+}
+html[data-theme="winbox"] .db-root button,
+html[data-theme="winbox"] .db-root input,
+html[data-theme="winbox"] .db-root select,
+html[data-theme="winbox"] .db-root textarea {
+  border-radius:2px !important;
+}
+/* WinBox blue selection on the active nav item, square. */
+html[data-theme="winbox"] .nav-item.active {
+  background:var(--wb-selected) !important; color:var(--text) !important;
+  box-shadow:inset 3px 0 0 var(--accent) !important; border-radius:0 !important;
+}
+html[data-theme="winbox"] .nav-item:hover { background:var(--wb-hover) !important; }
+
+/* Compact WinBox data tables (applies to the subscriber .st table and any
+   plain .db-root table). 22px rows, alternating stripes, blue selection. */
+html[data-theme="winbox"] .st,
+html[data-theme="winbox"] .db-root table { box-shadow:none !important; }
+html[data-theme="winbox"] .st thead th,
+html[data-theme="winbox"] .db-root thead th {
+  background:#303030 !important; color:#888 !important; font-size:11px !important;
+  padding:5px 12px !important; letter-spacing:.04em !important; backdrop-filter:none !important;
+}
+html[data-theme="winbox"] .st tbody td,
+html[data-theme="winbox"] .db-root tbody td { padding:4px 12px !important; font-size:12px !important; }
+html[data-theme="winbox"] .st tbody tr:nth-child(even),
+html[data-theme="winbox"] .db-root tbody tr:nth-child(even) { background:#222 !important; }
+html[data-theme="winbox"] .st tbody tr:nth-child(odd),
+html[data-theme="winbox"] .db-root tbody tr:nth-child(odd) { background:#1e1e1e !important; }
+html[data-theme="winbox"] .st tbody tr:hover,
+html[data-theme="winbox"] .db-root tbody tr:hover { background:var(--wb-hover) !important; }
+html[data-theme="winbox"] .st tbody tr.on,
+html[data-theme="winbox"] .db-root tbody tr.selected { background:var(--wb-selected) !important; }
+/* Keep the avatar subtle & square in WinBox mode. */
+html[data-theme="winbox"] .st .av { box-shadow:none !important; background:#3a3a3a !important; }
+html[data-theme="winbox"] .st .chip { background:rgba(74,158,255,.14) !important; color:#7cc0ff !important; border-color:rgba(74,158,255,.4) !important; }
+html[data-theme="winbox"] .st .pill.up { color:#7bd88a !important; }
+
 /* Accent follows the theme on the active nav pill (was a fixed gradient). */
 html:not([data-theme="light"]) .nav-item.active { background: var(--accent); color: var(--bg); box-shadow: none; }
 

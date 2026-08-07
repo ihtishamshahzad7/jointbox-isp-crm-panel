@@ -23,6 +23,7 @@ type Row = any;
 
 export function SubscriberTable({
   rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, money,
+  onRefresh,
 }: {
   rows: Row[];
   selectedIds: number[];
@@ -34,7 +35,35 @@ export function SubscriberTable({
   onDeactivate: (r: Row) => void;
   onDelete: (r: Row) => void;
   money: (n: any) => string;
+  /** Optional: enables the WinBox-style "Live" auto-refresh toggle + manual refresh. */
+  onRefresh?: () => void;
 }) {
+  // ── WinBox right-click context menu ──────────────────────────────────
+  const [menu, setMenu] = React.useState<{ x: number; y: number; row: Row } | null>(null);
+  React.useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [menu]);
+  const openMenu = (e: React.MouseEvent, row: Row) => {
+    e.preventDefault();
+    setMenu({ x: Math.min(e.clientX, window.innerWidth - 190), y: Math.min(e.clientY, window.innerHeight - 200), row });
+  };
+
+  // ── WinBox "Live" auto-refresh ───────────────────────────────────────
+  const [live, setLive] = React.useState(false);
+  React.useEffect(() => {
+    if (!live || !onRefresh) return;
+    const t = setInterval(() => onRefresh(), 5000);
+    return () => clearInterval(t);
+  }, [live, onRefresh]);
   const allOn = rows.length > 0 && rows.every((r) => selectedIds.includes(r.id));
 
   /**
@@ -92,6 +121,7 @@ export function SubscriberTable({
         <thead>
           <tr>
             <th className="pick"><input type="checkbox" checked={allOn} onChange={onToggleAll} /></th>
+            <th className="flg" title="Flags — R: running/online · X: disabled · D: dynamic IP">Flags</th>
             {head("name", "Subscriber")}
             {head("online", "Connection")}
             {head("package", "Package")}
@@ -110,10 +140,21 @@ export function SubscriberTable({
             const initials = String(name).trim().split(/\s+/).slice(0, 2)
               .map((w: string) => w[0]).join("").toUpperCase() || "?";
 
+            const inactive = String(r.status ?? "").toUpperCase() !== "ACTIVE";
+            const dynamic = !r.serviceSettings?.staticIp && !r.staticIp;
+
             return (
-              <tr key={r.id} onClick={() => onOpen(r)} className={selectedIds.includes(r.id) ? "on" : ""}>
+              <tr key={r.id} onClick={() => onOpen(r)} onContextMenu={(e) => openMenu(e, r)}
+                className={selectedIds.includes(r.id) ? "on" : ""}>
                 <td className="pick" onClick={(e) => e.stopPropagation()}>
                   <input type="checkbox" checked={selectedIds.includes(r.id)} onChange={() => onToggle(r.id)} />
+                </td>
+
+                {/* WinBox flags: R running · X disabled · D dynamic. */}
+                <td className="flg" data-label="Flags">
+                  <span className={`fl ${online ? "r" : ""}`} title="Running (online)">R</span>
+                  <span className={`fl ${inactive ? "x" : "off"}`} title="Disabled (inactive)">X</span>
+                  <span className={`fl ${dynamic ? "d" : "off"}`} title="Dynamic IP">D</span>
                 </td>
 
                 {/* Who. Avatar anchors the row; name loud, identifiers quiet. */}
@@ -186,7 +227,7 @@ export function SubscriberTable({
 
           {sorted.length === 0 && (
             <tr className="empty">
-              <td colSpan={7}>
+              <td colSpan={8}>
                 <b>No subscribers yet.</b>
                 <span>Add one with the button above, or adjust the filters if you expected to see some.</span>
               </td>
@@ -194,6 +235,35 @@ export function SubscriberTable({
           )}
         </tbody>
       </table>
+
+      {/* WinBox status bar: total count + Live auto-refresh toggle. */}
+      <div className="statusbar">
+        <span className="cnt">
+          {rows.length} item{rows.length === 1 ? "" : "s"}
+          {selectedIds.length > 0 && <> · <b>{selectedIds.length} selected</b></>}
+        </span>
+        {onRefresh && (
+          <span className="live">
+            <button className={`livebtn ${live ? "on" : ""}`} onClick={() => setLive((v) => !v)}
+              title="Auto-refresh every 5 seconds">
+              <span className="ld" /> {live ? "Live" : "Live off"}
+            </button>
+            <button className="refr" onClick={onRefresh} title="Refresh now">⟳</button>
+          </span>
+        )}
+      </div>
+
+      {/* Right-click context menu (WinBox style). */}
+      {menu && (
+        <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { onOpen(menu.row); setMenu(null); }}>Open</button>
+          <button onClick={() => { onEdit(menu.row); setMenu(null); }}>Edit…</button>
+          <button onClick={() => { onMove(menu.row); setMenu(null); }}>Move…</button>
+          <div className="sep" />
+          <button onClick={() => { onDeactivate(menu.row); setMenu(null); }}>Disable</button>
+          <button className="danger" onClick={() => { onDelete(menu.row); setMenu(null); }}>Delete</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -273,6 +343,43 @@ const CSS = `
 .st td.act button:hover{border-color:#7C4DFF;color:#C4B5FD;background:rgba(124,77,255,.12);transform:translateY(-1px)}
 .st td.act button.warn:hover{color:#FCD34D;border-color:#F59E0B;background:rgba(245,158,11,.12)}
 .st td.act button.bad:hover{color:#FCA5A5;border-color:#EF4444;background:rgba(239,68,68,.12)}
+
+/* WinBox flags column. */
+.st th.flg,.st td.flg{width:64px;white-space:nowrap}
+.st .fl{display:inline-block;width:15px;text-align:center;font-family:ui-monospace,monospace;
+  font-size:11px;font-weight:800;margin-right:1px;color:#3a4051}
+.st .fl.r{color:#4a9eff}
+.st .fl.x{color:#94A3B8}
+.st .fl.d{color:#FCD34D}
+.st .fl.off{opacity:.28}
+
+/* WinBox status bar. */
+.st .statusbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:6px 14px;border-top:1px solid var(--border);background:var(--surface-2);
+  font-size:11px;color:var(--muted)}
+.st .statusbar b{color:var(--text)}
+.st .live{display:flex;align-items:center;gap:6px}
+.st .livebtn{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;font-size:11px;
+  font-weight:700;cursor:pointer;background:var(--surface);border:1px solid var(--border);
+  color:var(--muted);border-radius:6px;font-family:inherit}
+.st .livebtn .ld{width:7px;height:7px;border-radius:50%;background:#64748B}
+.st .livebtn.on{color:#6EE7B7;border-color:rgba(16,185,129,.4)}
+.st .livebtn.on .ld{background:#10B981;box-shadow:0 0 7px rgba(16,185,129,.9);animation:stpulse 1.4s ease-in-out infinite}
+@keyframes stpulse{50%{opacity:.4}}
+.st .refr{padding:3px 9px;font-size:13px;cursor:pointer;background:var(--surface);
+  border:1px solid var(--border);color:var(--text);border-radius:6px;line-height:1}
+.st .refr:hover{border-color:var(--accent);color:var(--accent)}
+
+/* WinBox right-click context menu. */
+.st .ctxmenu{position:fixed;z-index:200;min-width:170px;padding:4px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.st .ctxmenu button{text-align:left;padding:7px 12px;font-size:12px;font-weight:600;
+  cursor:pointer;background:transparent;border:none;color:var(--text);border-radius:5px;
+  font-family:inherit}
+.st .ctxmenu button:hover{background:rgba(74,158,255,.14)}
+.st .ctxmenu button.danger:hover{background:rgba(239,68,68,.16);color:#FCA5A5}
+.st .ctxmenu .sep{height:1px;background:var(--border);margin:4px 6px}
 
 .st tr.empty td{padding:44px;text-align:center;border:none}
 .st tr.empty b{display:block;font-size:14px;color:var(--text);margin-bottom:6px}

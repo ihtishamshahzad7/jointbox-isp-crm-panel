@@ -89,6 +89,7 @@ const menuItems = menuGroups.flatMap((g) => g.items);
 
 // Selectable dark themes (palettes defined in globals.css by data-theme id).
 const THEMES = [
+  { id: 'winbox', name: 'WinBox (MikroTik)', dot: '#4a9eff' },
   { id: 'night-tower', name: 'Night tower', dot: '#378ADD' },
   { id: 'signal-room', name: 'Signal room', dot: '#1D9E75' },
   { id: 'fiber-glass', name: 'Fiber glass', dot: '#7F77DD' },
@@ -209,17 +210,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [updating, setUpdating] = useState(false);
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
   const [light, setLight] = useState(false);
-  const [theme, setThemeState] = useState('night-tower');
+  const [theme, setThemeState] = useState('winbox');
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    const saved = localStorage.getItem('jb_theme') || 'night-tower';
+    const saved = localStorage.getItem('jb_theme') || 'winbox';
     const isLight = saved === 'light';
     setLight(isLight);
-    setThemeState(isLight ? 'night-tower' : saved);
+    setThemeState(isLight ? 'winbox' : saved);
     document.documentElement.setAttribute('data-theme', saved);
   }, []);
   const applyTheme = (id: string) => {

@@ -1572,6 +1572,7 @@ export default function SubscribersPage() {
                 onDeactivate={deactivateSub}
                 onDelete={(r) => setDeleteConfirm(r)}
                 money={money}
+                onRefresh={loadAll}
               />
             )}
 
