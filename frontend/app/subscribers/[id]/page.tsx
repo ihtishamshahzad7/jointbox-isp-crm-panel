@@ -474,6 +474,25 @@ export default function SubscriberProfilePage() {
           }} variant="teal">
             <Ic.Clock/> Grace Period
           </Btn>
+          <Btn onClick={async ()=>{
+            const amount = Number(prompt(`Add balance to ${sub.fullName}'s wallet — amount?`, "0"));
+            if (!amount || amount <= 0) return;
+            const description = prompt("Note (optional)", "Wallet top-up") || undefined;
+            const r = await fetch(`${API}/billing-ext/subscriber-balance/${sub.id}/topup`, { method:"POST", headers, body: JSON.stringify({ amount, description }) });
+            if (r.ok) { showToast(`Added ${money(amount)} to wallet`, "ok"); loadSub(); }
+            else { const e = await r.json().catch(()=>({})); showToast(e.message || "Top-up failed", "err"); }
+          }}>
+            <Ic.Invoice/> Add Balance
+          </Btn>
+          <Btn onClick={async ()=>{
+            if (!sub?.username) return;
+            if (!confirm(`Reset MAC binding for ${sub.fullName}? They'll be able to reconnect from a new device.`)) return;
+            const r = await fetch(`${API}/network/mac/${encodeURIComponent(sub.username)}`, { method:"DELETE", headers });
+            if (r.ok) { showToast("MAC binding reset", "ok"); loadLiveData(sub.username); }
+            else { const e = await r.json().catch(()=>({})); showToast(e.message || "Reset MAC failed", "err"); }
+          }}>
+            <Ic.MAC/> Reset MAC
+          </Btn>
           <Btn onClick={()=>router.push(`/subscribers?edit=${sub.id}`)} variant="warning">
             <Ic.Edit/> Edit
           </Btn>
