@@ -2268,6 +2268,65 @@ if (!unpaid && data.username && data.password) {
     };
   }
 
+  /**
+   * One scoped, permission-checked engine for multi-select actions on the list.
+   * Every id is access-checked against the actor's subtree, so a bulk action can
+   * never touch a subscriber the caller doesn't own. Each item is attempted
+   * independently — one failure never aborts the rest.
+   *
+   * actions: 'activate' | 'deactivate' | 'grace' | 'message'
+   */
+  async bulkAction(
+    ids: number[],
+    action: string,
+    params: { days?: number; reason?: string; message?: string } = {},
+    actor?: Actor,
+  ) {
+    const unique = [...new Set((ids || []).map(Number).filter(Boolean))];
+    let success = 0, failed = 0, skipped = 0;
+    const errors: Array<{ id: number; error: string }> = [];
+
+    for (const id of unique) {
+      try {
+        if (actor) {
+          const ok = await this.scope.canAccessSubscriber(actor, id);
+          if (!ok) { skipped++; continue; } // silently skip out-of-scope ids
+        }
+        switch (action) {
+          case 'activate': {
+            const sub = await this.prisma.subscriber.findUnique({ where: { id }, select: { packageId: true } });
+            if (!sub?.packageId) throw new Error('No package assigned — cannot activate.');
+            await this.activateRenewal({ subscriberId: id, packageId: sub.packageId, mode: 'FULL', actorId: actor ? this.scope.actorId(actor) : null });
+            break;
+          }
+          case 'deactivate':
+            await this.deactivateAndRelease(id, actor, params.reason);
+            break;
+          case 'grace':
+            await this.grantGracePeriod(id, Number(params.days) || 3, actor, params.reason);
+            break;
+          case 'message': {
+            if (!params.message) throw new Error('Message body is required.');
+            const sub = await this.prisma.subscriber.findUnique({ where: { id }, select: { phone: true, fullName: true } });
+            if (!sub?.phone) throw new Error('No phone number on file.');
+            await this.notifications.send({
+              channel: 'SMS', recipient: sub.phone, subscriberId: id, event: 'BULK_MESSAGE',
+              body: params.message,
+            });
+            break;
+          }
+          default:
+            throw new Error(`Unknown bulk action "${action}".`);
+        }
+        success++;
+      } catch (e: any) {
+        failed++;
+        errors.push({ id, error: e?.message || 'Failed' });
+      }
+    }
+    return { action, total: unique.length, success, failed, skipped, errors };
+  }
+
   async bulkDelete(ids: number[], actor?: Actor, force = false) {
     let success = 0;
     let failed = 0;

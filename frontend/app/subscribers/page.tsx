@@ -975,6 +975,32 @@ export default function SubscribersPage() {
     } catch { setTransferAccounts([]); }
   };
 
+  const bulkAction = async (action: string) => {
+    if (selectedIds.length === 0) return showToast("Select subscribers first", "warn");
+    const body: any = { ids: selectedIds, action };
+    if (action === "grace") {
+      const days = Number(prompt(`Grant grace period to ${selectedIds.length} subscriber(s) — how many days?`, "3"));
+      if (!days || days <= 0) return;
+      body.days = days;
+      body.reason = prompt("Reason (optional)", "Awaiting payment") || undefined;
+    } else if (action === "message") {
+      const message = prompt(`Send SMS to ${selectedIds.length} subscriber(s):`, "");
+      if (!message) return;
+      body.message = message;
+    } else if (action === "activate") {
+      if (!confirm(`Activate ${selectedIds.length} subscriber(s)? This charges wallets and generates invoices.`)) return;
+    } else if (action === "deactivate") {
+      if (!confirm(`Deactivate ${selectedIds.length} subscriber(s)?`)) return;
+    }
+    try {
+      const r = await fetch(`${API}/subscribers/bulk-action`, { method: "POST", headers, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.message || "Bulk action failed");
+      showToast(`${action}: ${d.success} ok${d.failed ? `, ${d.failed} failed` : ""}${d.skipped ? `, ${d.skipped} skipped` : ""}`, d.failed ? "warn" : "ok");
+      loadAll();
+    } catch (e: any) { showToast(e.message, "err"); }
+  };
+
   const runTransfer = async () => {
     if (!transferTo) return showToast("Choose the account to move them to", "warn");
     setTransferBusy(true);
@@ -1544,6 +1570,11 @@ export default function SubscribersPage() {
             findPlaceholder="Find subscriber…"
             groups={[
               [{ label: "Add", icon: "＋", tone: "primary", title: "Add subscriber (register)", onClick: openCreate }],
+              [
+                { label: "Activate", icon: "✓", tone: "primary", selectionRequired: true, title: "Activate selected (charges wallet, generates invoice)", onClick: () => bulkAction("activate") },
+                { label: "Grace", icon: "⏳", selectionRequired: true, title: "Grant grace period to selected", onClick: () => bulkAction("grace") },
+                { label: "Message", icon: "✉", selectionRequired: true, title: "Send SMS to selected", onClick: () => bulkAction("message") },
+              ],
               [
                 { label: "Remove", icon: "－", tone: "danger", selectionRequired: true, title: "Delete selected", onClick: () => setShowMassDeleteModal(true) },
                 { label: "Disable", icon: "⊘", tone: "warn", selectionRequired: true, title: "Mass service settings for selected", onClick: () => setShowMassSettingsModal(true) },

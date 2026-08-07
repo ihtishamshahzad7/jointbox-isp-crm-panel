@@ -286,6 +286,17 @@ export class SubscribersController {
     return this.subscribersService.bulkUpdateServiceSettings(body.ids || [], body.payload || {});
   }
 
+  /** Scoped multi-select engine: activate | deactivate | grace | message. */
+  @Post('bulk-action')
+  bulkAction(
+    @Body() body: { ids: number[]; action: string; days?: number; reason?: string; message?: string },
+    @Req() req: any,
+  ) {
+    return this.subscribersService.bulkAction(body.ids || [], body.action, {
+      days: body.days, reason: body.reason, message: body.message,
+    }, req.user);
+  }
+
   @Get('search')
   search(@Query('q') q: string, @Req() req: any) {
     return this.subscribersService.search(q, req.user);
