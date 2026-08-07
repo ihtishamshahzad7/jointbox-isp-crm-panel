@@ -29,6 +29,15 @@ export function LogRecordsTable({
   const [q, setQ] = React.useState("");
   const [dayR, setDayR] = React.useState(days ?? 0);
   const [loading, setLoading] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+
+  // Esc closes the expanded (fullscreen) view.
+  React.useEffect(() => {
+    if (!expanded) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setExpanded(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [expanded]);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
 
@@ -70,7 +79,7 @@ export function LogRecordsTable({
   }, [lastPage, page]);
 
   return (
-    <div className="lrt">
+    <div className={`lrt ${expanded ? "lrt-full" : ""}`}>
       <style>{CSS}</style>
 
       <div className="lrt-bar">
@@ -92,6 +101,10 @@ export function LogRecordsTable({
         <span className="lrt-count">
           {loading ? "Loading…" : <>Showing <b>{from}</b> to <b>{to}</b> of <b>{total.toLocaleString()}</b> records</>}
         </span>
+        <button className="lrt-expand" onClick={() => setExpanded((v) => !v)}
+          title={expanded ? "Exit full screen (Esc)" : "Expand to full screen"}>
+          {expanded ? "✕ Close" : "⛶ Expand"}
+        </button>
       </div>
 
       <div className="lrt-scroll">
@@ -129,6 +142,15 @@ export function LogRecordsTable({
 
 const CSS = `
 .lrt{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+
+/* Full-screen "expanded" view — fills the viewport so long log rows are easy to read. */
+.lrt-full{position:fixed;inset:12px;z-index:350;border-radius:12px;display:flex;flex-direction:column;
+  box-shadow:0 0 0 100vmax rgba(0,0,0,.6),0 24px 80px rgba(0,0,0,.65)}
+.lrt-full .lrt-scroll{max-height:none;flex:1 1 auto}
+
+.lrt-expand{margin-left:10px;padding:4px 11px;font-size:11.5px;font-weight:700;font-family:inherit;
+  cursor:pointer;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px}
+.lrt-expand:hover{border-color:var(--accent);color:var(--accent)}
 .lrt-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;
   background:var(--surface-2);border-bottom:1px solid var(--border)}
 .lrt-bar select{background:var(--surface);color:var(--text);border:1px solid var(--border);
