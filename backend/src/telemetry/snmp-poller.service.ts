@@ -70,6 +70,36 @@ export class SnmpPollerService {
     return nas.nasIp || (nas.nasname && /^\d+\.\d+\.\d+\.\d+$/.test(nas.nasname) ? nas.nasname : null);
   }
 
+  /**
+   * One-off SNMP walk to list a NAS's interfaces (name + ifIndex + up/down), so
+   * the operator can pick which ports to register for monitoring instead of
+   * typing names by hand.
+   */
+  async discoverInterfaces(nasId: number): Promise<{ ok: boolean; interfaces: Array<{ ifIndex: number; name: string; up: boolean }>; error?: string }> {
+    const nas = await this.prisma.nas.findUnique({
+      where: { id: nasId },
+      select: { nasname: true, nasIp: true, snmpPort: true, snmpCommunity: true, snmpVersion: true },
+    });
+    if (!nas || !this.host(nas)) return { ok: false, interfaces: [], error: 'NAS has no IP address.' };
+    const session = this.session(nas);
+    try {
+      const [descr, oper] = await Promise.all([this.walk(session, IF.descr), this.walk(session, IF.operStatus)]);
+      if (descr.size === 0 && oper.size === 0) {
+        return { ok: false, interfaces: [], error: 'No SNMP response — check SNMP is enabled, the community string, and reachability on UDP/161.' };
+      }
+      const interfaces = [...descr.entries()].map(([ifIndex, d]) => ({
+        ifIndex,
+        name: d?.toString?.() || `if${ifIndex}`,
+        up: Number(oper.get(ifIndex)) === IF_OPER_UP,
+      })).sort((a, b) => a.ifIndex - b.ifIndex);
+      return { ok: true, interfaces };
+    } catch (e: any) {
+      return { ok: false, interfaces: [], error: e?.message || 'SNMP walk failed.' };
+    } finally {
+      try { session.close(); } catch { /* ignore */ }
+    }
+  }
+
   private session(nas: any) {
     const version =
       nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;

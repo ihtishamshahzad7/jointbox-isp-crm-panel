@@ -1004,6 +1004,17 @@ export default function NasPage() {
                 id={`mp-${viewDetail.nas.id}`}
                 placeholder="e.g. ether1-wan, vlan100  (blank = all interfaces)"
                 style={{ ...inputSt, flex:1, minWidth:220 }} />
+              <Btn variant="ghost" size="xs" onClick={async ()=>{
+                showToast("Discovering interfaces…", "ok");
+                const r = await fetch(`${API}/telemetry/nas/${viewDetail.nas.id}/discover-interfaces`, { headers });
+                const d = await r.json();
+                if (!d?.ok) { showToast(d?.error || "Discovery failed", "err"); return; }
+                const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
+                const current = new Set((el?.value||"").split(",").map(s=>s.trim()).filter(Boolean));
+                const pick = d.interfaces.map((i:any)=>`${i.name}${i.up?"":" (down)"}`).join("\n");
+                const chosen = prompt(`Discovered ${d.interfaces.length} interface(s). Type the ones to monitor (comma-separated), or copy from this list:\n\n${pick}`, (el?.value)|| d.interfaces.filter((i:any)=>i.up).map((i:any)=>i.name).join(", "));
+                if (chosen != null && el) el.value = chosen;
+              }}>Discover</Btn>
               <Btn variant="primary" size="xs" onClick={async ()=>{
                 const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
                 const ports = (el?.value || "").split(",").map(s=>s.trim()).filter(Boolean);

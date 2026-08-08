@@ -1,6 +1,7 @@
 import { Controller, Get, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
 import { TelemetryService } from './telemetry.service';
 import { NasMonitorService } from './nas-monitor.service';
+import { SnmpPollerService } from './snmp-poller.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -11,8 +12,15 @@ export class TelemetryController {
   constructor(
     private readonly telemetry: TelemetryService,
     private readonly monitor: NasMonitorService,
+    private readonly snmp: SnmpPollerService,
     private readonly scope: ScopeService,
   ) {}
+
+  /** One-off SNMP walk to list a NAS's interfaces for port registration. */
+  @Get('nas/:id/discover-interfaces')
+  discover(@Param('id', ParseIntPipe) id: number) {
+    return this.snmp.discoverInterfaces(id);
+  }
 
   /** MRTG-style traffic for a NAS: range = 1h | 6h | 7d | 30d, optional vlan. */
   @Get('nas/:id/traffic')
