@@ -1,6 +1,8 @@
 "use client";
 
 import Hub from "../components/hub";
+import Operations from "../operations/page";
+import Noc from "../noc/page";
 import LiveNetwork from "../network/page";
 import Nas from "../nas/page";
 import IpPools from "../ip-pools/page";
@@ -20,6 +22,8 @@ export default function NetworkCenter() {
     <Hub
       storageKey="network"
       tabs={[
+        { id: "ops",     label: "Operations",   hint: "Alerts, router health and what needs attention now.", render: () => <Operations /> },
+        { id: "noc",     label: "NOC / Uptime", hint: "Segment health, uptime and the outage timeline.", render: () => <Noc /> },
         { id: "live",    label: "Live Network", hint: "Who is online right now, per router.", render: () => <LiveNetwork /> },
         { id: "nas",     label: "NAS / Routers", hint: "Your MikroTiks and their RADIUS settings.", render: () => <Nas /> },
         { id: "fiber",   label: "FTTH / Fiber", hint: "OLTs, PON ports, ONUs and fiber topology.", render: () => <Fiber /> },

@@ -41,7 +41,7 @@ export default function MyBusinessPage() {
           <div className="mb-sub">{d.name} · {d.role} — live snapshot, refreshes every minute</div>
         </div>
         <div className="mb-actions">
-          <button className="primary" onClick={() => router.push("/quick-connect")}>＋ New connection</button>
+          <button className="primary" onClick={() => router.push("/my-work?tab=connect")}>＋ New connection</button>
           <button onClick={() => router.push("/subscribers")}>All subscribers</button>
         </div>
       </div>
@@ -69,16 +69,16 @@ export default function MyBusinessPage() {
         <Kpi label="Expired" value={c.expired} sub="offline — win back" tone={c.expired ? "bad" : "ok"} onClick={() => router.push("/subscribers")} />
         <Kpi label="Suspended" value={c.suspended} sub="on hold" tone={c.suspended ? "warn" : "ok"} onClick={() => router.push("/subscribers")} />
         <Kpi label="New this month" value={m.newConnections} sub="connections added" tone="accent" />
-        <Kpi label="Receivables" value={money(r.dueAmount)} sub={`${r.unpaidInvoices} unpaid invoice(s)`} tone={r.dueAmount ? "warn" : "ok"} onClick={() => router.push("/invoices")} isMoney />
+        <Kpi label="Receivables" value={money(r.dueAmount)} sub={`${r.unpaidInvoices} unpaid invoice(s)`} tone={r.dueAmount ? "warn" : "ok"} onClick={() => router.push("/billing-center?tab=invoices")} isMoney />
       </div>
 
       {/* Action strip */}
       <div className="mb-action-strip">
         <div className="t">Do next</div>
-        <button onClick={() => router.push("/quick-connect")}>Add & activate a customer</button>
-        <button onClick={() => router.push("/renewals")}>Renew expiring customers</button>
-        <button onClick={() => router.push("/payments")}>Record a payment</button>
-        <button onClick={() => router.push("/earnings")}>Collections report</button>
+        <button onClick={() => router.push("/my-work?tab=connect")}>Add & activate a customer</button>
+        <button onClick={() => router.push("/my-work?tab=renewals")}>Renew expiring customers</button>
+        <button onClick={() => router.push("/billing-center?tab=payments")}>Record a payment</button>
+        <button onClick={() => router.push("/billing-center?tab=earnings")}>Collections report</button>
         <button onClick={() => router.push("/support-center")}>Handle complaints</button>
       </div>
     </div>

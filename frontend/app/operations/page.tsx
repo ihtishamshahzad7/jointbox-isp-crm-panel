@@ -54,9 +54,9 @@ export default function OperationsPage() {
       {/* Top metrics */}
       <div className="op-metrics">
         <M label="Online now" value={totalOnline.toLocaleString()} tone="ok" />
-        <M label="NAS reporting" value={`${nas.length - nasDown.length}/${nas.length}`} tone={nasDown.length ? "bad" : "ok"} onClick={() => router.push("/noc")} />
-        <M label="Active outages" value={String(outages.filter((o:any)=>o.outageId).length)} tone={outages.some((o:any)=>o.outageId) ? "bad" : "ok"} onClick={() => router.push("/outages")} />
-        <M label="Problem areas" value={String(problemAreas.length)} tone={problemAreas.length ? "warn" : "ok"} onClick={() => router.push("/noc")} />
+        <M label="NAS reporting" value={`${nas.length - nasDown.length}/${nas.length}`} tone={nasDown.length ? "bad" : "ok"} onClick={() => router.push("/network-center?tab=noc")} />
+        <M label="Active outages" value={String(outages.filter((o:any)=>o.outageId).length)} tone={outages.some((o:any)=>o.outageId) ? "bad" : "ok"} onClick={() => router.push("/network-center?tab=outages")} />
+        <M label="Problem areas" value={String(problemAreas.length)} tone={problemAreas.length ? "warn" : "ok"} onClick={() => router.push("/network-center?tab=noc")} />
         <M label="Open alerts" value={String(alerts.length)} tone={alerts.length ? "warn" : "ok"} />
       </div>
 
@@ -77,13 +77,13 @@ export default function OperationsPage() {
           <div className="op-panel">
             <div className="op-t">📡 NAS not reporting</div>
             {nasDown.length === 0 ? <div className="op-empty">Every router is reporting.</div> : nasDown.map((n) => (
-              <button key={n.id} className="op-nas bad" onClick={() => router.push("/nas")}>
+              <button key={n.id} className="op-nas bad" onClick={() => router.push("/network-center?tab=nas")}>
                 <span className="dn" /> <b>{n.name}</b> <span className="ip">{n.ip}</span>
               </button>
             ))}
             <div className="op-t" style={{ marginTop: 14 }}>🟢 Busiest routers</div>
             {[...nas].filter((n)=>n.reporting).sort((a,b)=>b.online-a.online).slice(0,6).map((n) => (
-              <button key={n.id} className="op-nas" onClick={() => router.push("/nas")}>
+              <button key={n.id} className="op-nas" onClick={() => router.push("/network-center?tab=nas")}>
                 <span className="up" /> <b>{n.name}</b>
                 <span className="thr">{n.online} on · ↓{bps(n.inBps)} ↑{bps(n.outBps)}</span>
               </button>
@@ -93,9 +93,9 @@ export default function OperationsPage() {
       )}
 
       <div className="op-jump">
-        <button onClick={() => router.push("/noc")}>Open NOC</button>
-        <button onClick={() => router.push("/outages")}>Manage outages</button>
-        <button onClick={() => router.push("/nas")}>NAS / Routers</button>
+        <button onClick={() => router.push("/network-center?tab=noc")}>Open NOC</button>
+        <button onClick={() => router.push("/network-center?tab=outages")}>Manage outages</button>
+        <button onClick={() => router.push("/network-center?tab=nas")}>NAS / Routers</button>
         <button onClick={() => router.push("/logs")}>Full logs</button>
       </div>
     </div>

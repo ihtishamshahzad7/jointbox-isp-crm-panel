@@ -53,23 +53,21 @@ const menuGroups = [
   // and bookmarks are unaffected.
   { label: 'Daily Work', items: [
     { id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: navIcons.Dashboard },
-    { id: 'my-business', label: 'My Business', href: '/my-business', Icon: navIcons.Reports },
-    { id: 'quick-connect', label: 'Quick Connect', href: '/quick-connect', Icon: navIcons.Subscribers },
-    { id: 'renewals', label: 'Renewals', href: '/renewals', Icon: navIcons.Payments },
+    // My Business + Quick Connect + Renewals — the daily loop, one page, tabs.
+    { id: 'my-work', label: 'My Work', href: '/my-work', Icon: navIcons.Reports },
     { id: 'subscribers', label: 'Subscribers', href: '/subscribers', Icon: navIcons.Subscribers },
     { id: 'support', label: 'Support', href: '/support-center', Icon: navIcons.Support },
     { id: 'trace', label: 'Trace Search', href: '/trace', Icon: navIcons.Search },
   ]},
   { label: 'Operations', items: [
-    { id: 'operations', label: 'Operations', href: '/operations', Icon: navIcons.Network },
+    // Operations + NOC + Live + NAS + Fiber + Pools + Static + Outages as tabs.
     { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
-    { id: 'noc', label: 'NOC / Uptime', href: '/noc', Icon: navIcons.Network },
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
   ]},
   { label: 'Business', items: [
-    { id: 'earnings', label: 'Collections & Earnings', href: '/earnings', Icon: navIcons.Payments },
-    { id: 'billing', label: 'Billing', href: '/billing-center', Icon: navIcons.Payments },
-    { id: 'reversals', label: 'Disputes & Reversals', href: '/reversals', Icon: navIcons.Invoices },
+    // Accounting + Collections + Invoices + Payments + Gateways + Vouchers +
+    // Pricing + Reversals all live here as tabs — one "money" entry.
+    { id: 'billing', label: 'Billing & Accounting', href: '/billing-center', Icon: navIcons.Payments },
     { id: 'insights', label: 'Insights', href: '/insights', Icon: navIcons.Reports },
     { id: 'compliance', label: 'KYC & Data Usage', href: '/compliance', Icon: navIcons.Users },
   ]},
@@ -151,13 +149,24 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/inventory', 'catalog'],
   ['/franchise-groups', 'catalog'],
 
-  // Billing
+  // Billing & Accounting (all tabs of /billing-center)
   ['/accounting', 'billing'],
   ['/invoices', 'billing'],
   ['/payments', 'billing'],
   ['/gateways', 'billing'],
   ['/vouchers', 'billing'],
   ['/pricing', 'billing'],
+  ['/earnings', 'billing'],
+  ['/reversals', 'billing'],
+
+  // My Work (tabs of /my-work)
+  ['/my-business', 'my-work'],
+  ['/quick-connect', 'my-work'],
+  ['/renewals', 'my-work'],
+
+  // Network (tabs of /network-center)
+  ['/operations', 'network'],
+  ['/noc', 'network'],
 
   // Support
   ['/complaints', 'support'],
