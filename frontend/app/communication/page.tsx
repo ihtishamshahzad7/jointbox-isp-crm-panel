@@ -23,6 +23,7 @@ export default function CommunicationPage() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("Templates");
   const [status, setStatus] = useState<any>(null);
+  const [myChannels, setMyChannels] = useState<any[]>([]);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -53,6 +54,7 @@ export default function CommunicationPage() {
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
     get("/communication/status").then(setStatus).catch(silent("loadCommStatus"));
+    get("/communication/alerts/my-channels").then((d) => setMyChannels(Array.isArray(d) ? d : [])).catch(silent("loadMyChannels"));
     get("/areas").then((d) => setAreas(Array.isArray(d) ? d : [])).catch(silent("loadAreas"));
     get("/packages").then((d) => setPackages(Array.isArray(d) ? d : [])).catch(silent("loadPackages"));
   }, []);
@@ -159,6 +161,62 @@ export default function CommunicationPage() {
 
       {/* ── ALERTS (Discord / WhatsApp) ── */}
       {tab === "Alerts" && (
+        <>
+        {/* MY OWN channel — every account can route its own alerts. */}
+        <div style={{ ...card, maxWidth: 720, marginBottom: 14 }}>
+          <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>My alert channel</h3>
+          <p style={{ fontSize: 12, color: T.sub, marginTop: 0 }}>
+            Alerts about <b>your own</b> routers and customers go here — independent of the ISP owner's channel.
+            Create a webhook in your own Discord server and paste it below.
+          </p>
+          {[
+            { kind: "DISCORD", label: "My Discord webhook", ph: "https://discord.com/api/webhooks/…" },
+            { kind: "WHATSAPP", label: "My WhatsApp number", ph: "923001234567" },
+          ].map((f) => {
+            const mine = (myChannels || []).find((c: any) => c.kind === f.kind);
+            return (
+              <div key={f.kind} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                <label style={{ fontSize: 12, color: T.sub, minWidth: 165 }}>{f.label}</label>
+                <input id={`my-${f.kind}`} style={{ ...input, flex: 1, minWidth: 200 }}
+                  placeholder={mine ? `${mine.maskedHint} — type to replace` : f.ph} />
+                {f.kind === "WHATSAPP" && (
+                  <input id="my-WA-KEY" style={{ ...input, width: 150 }} placeholder="CallMeBot API key" />
+                )}
+                <button style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.text }}
+                  onClick={async () => {
+                    const el = document.getElementById(`my-${f.kind}`) as HTMLInputElement;
+                    const keyEl = document.getElementById("my-WA-KEY") as HTMLInputElement | null;
+                    setBusy(true);
+                    try {
+                      const r = await fetch(`${API}/communication/alerts/my-channels`, {
+                        method: "POST", headers,
+                        body: JSON.stringify({ kind: f.kind, value: el?.value ?? "", provider: f.kind === "WHATSAPP" ? "callmebot" : undefined, extra: keyEl?.value || undefined }),
+                      });
+                      const d = await r.json();
+                      if (!r.ok) throw new Error(d?.message || "Save failed");
+                      setMyChannels(Array.isArray(d) ? d : []);
+                      if (el) el.value = ""; if (keyEl) keyEl.value = "";
+                      setMsg(`${f.label} saved.`);
+                    } catch (e: any) { setMsg(`❌ ${e.message}`); }
+                    setBusy(false);
+                  }}>Save</button>
+                {mine && <span style={{ fontSize: 10.5, color: "#4ade80" }}>saved ✓</span>}
+              </div>
+            );
+          })}
+          <button style={{ ...btn(T.accent), color: "#fff", border: "none", marginTop: 6 }} disabled={busy}
+            onClick={async () => {
+              setBusy(true); setMsg("");
+              try {
+                const r = await fetch(`${API}/communication/alerts/my-channels/test`, { method: "POST", headers });
+                const d = await r.json();
+                const ok = d?.sent?.discord || d?.sent?.whatsapp;
+                setMsg(ok ? "✅ Test sent to your own channel." : "Set up your own channel above first.");
+              } catch { setMsg("Could not send the test."); }
+              setBusy(false);
+            }}>Test my channel</button>
+        </div>
+
         <div style={{ ...card, maxWidth: 720 }}>
           <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>Operational alerts</h3>
           <p style={{ fontSize: 12, color: T.sub, marginTop: 0 }}>
@@ -253,6 +311,7 @@ export default function CommunicationPage() {
             <span style={{ opacity: .8 }}>Values are encrypted at rest and never shown again — only a masked preview. Anything already set in <code>.env</code> keeps working.</span>
           </div>
         </div>
+        </>
       )}
 
       {/* ── TEMPLATES ── */}

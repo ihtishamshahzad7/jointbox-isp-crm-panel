@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SecretsService } from '../common/secrets.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * AlertsService — operational alerts to Discord and WhatsApp.
@@ -28,7 +29,7 @@ import { SecretsService } from '../common/secrets.service';
 export class AlertsService {
   private readonly log = new Logger('Alerts');
 
-  constructor(private secrets: SecretsService) {}
+  constructor(private secrets: SecretsService, private prisma: PrismaService) {}
 
   /** Keys managed from the panel (each falls back to its env var). */
   static readonly KEYS = [
@@ -63,10 +64,82 @@ export class AlertsService {
     return results;
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  //  PER-ACCOUNT CHANNELS — every user can route alerts about their own
+  //  network to their own Discord/WhatsApp, independent of the ISP owner's.
+  // ══════════════════════════════════════════════════════════════════
+
+  /** Save (or clear, when value is blank) this user's own alert channel. */
+  async setUserChannel(userId: number, kind: 'DISCORD' | 'WHATSAPP', value: string, opts: { provider?: string; extra?: string } = {}) {
+    const v = (value ?? '').trim();
+    if (!v) {
+      await this.prisma.userAlertChannel.deleteMany({ where: { userId, kind } });
+      return { kind, configured: false };
+    }
+    const data = {
+      valueEnc: this.secrets.encryptValue(v),
+      extraEnc: opts.extra ? this.secrets.encryptValue(opts.extra) : null,
+      provider: opts.provider ?? null,
+      maskedHint: this.secrets.maskValue(v),
+      enabled: true,
+    };
+    await this.prisma.userAlertChannel.upsert({
+      where: { userId_kind: { userId, kind } },
+      update: data,
+      create: { userId, kind, ...data },
+    });
+    return { kind, configured: true, maskedHint: data.maskedHint };
+  }
+
+  /** Masked list of this user's own channels, for their settings screen. */
+  async userChannels(userId: number) {
+    const rows = await this.prisma.userAlertChannel.findMany({ where: { userId } }).catch(() => []);
+    return rows.map((r) => ({
+      kind: r.kind, provider: r.provider, enabled: r.enabled,
+      maskedHint: r.maskedHint, updatedAt: r.updatedAt, configured: true,
+    }));
+  }
+
+  /**
+   * Send an alert to ONE account's own channels (used when the event belongs to
+   * that account's network — their NAS, their area, their subscribers).
+   */
+  async sendToUser(userId: number, opts: { title: string; message: string; level?: string; fields?: Record<string, string> }) {
+    const rows = await this.prisma.userAlertChannel.findMany({ where: { userId, enabled: true } }).catch(() => []);
+    const out: Record<string, boolean> = {};
+    for (const r of rows) {
+      const value = this.secrets.decryptValue(r.valueEnc);
+      if (!value) continue;
+      if (r.kind === 'DISCORD') {
+        out.discord = await this.postDiscord(value, opts).catch(() => false);
+      } else if (r.kind === 'WHATSAPP') {
+        const extra = r.extraEnc ? this.secrets.decryptValue(r.extraEnc) : null;
+        out.whatsapp = await this.postWhatsApp(r.provider || 'callmebot', value, extra, opts).catch(() => false);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Notify the owner of a piece of the network AND the ISP owner: the account's
+   * own channel gets it (so a franchise sees only their own alerts) and the
+   * system-wide channel still gets everything.
+   */
+  async sendScoped(ownerUserId: number | null | undefined, opts: { title: string; message: string; level?: string; fields?: Record<string, string> }) {
+    const system = await this.send(opts);
+    const owner = ownerUserId ? await this.sendToUser(ownerUserId, opts).catch(() => ({})) : {};
+    return { system, owner };
+  }
+
   /** Discord webhook — rich embed, exactly like an Uptime Kuma alert. */
   private async toDiscord(opts: { title: string; message: string; level?: string; fields?: Record<string, string> }) {
     const url = await this.secrets.get('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL');
     if (!url) return false;
+    return this.postDiscord(url, opts);
+  }
+
+  /** Low-level Discord post — shared by the system and per-user channels. */
+  private async postDiscord(url: string, opts: { title: string; message: string; level?: string; fields?: Record<string, string> }) {
     const body = {
       username: 'Jointbox',
       embeds: [{
@@ -97,23 +170,28 @@ export class AlertsService {
     const provider = ((await this.secrets.get('WHATSAPP_PROVIDER', 'WHATSAPP_PROVIDER')) || '').toLowerCase();
     const phone = await this.secrets.get('WHATSAPP_PHONE', 'WHATSAPP_PHONE');
     if (!provider || !phone) return false;
-    const text = `*${opts.title}*\n${opts.message}`;
+    const extra = provider === 'meta'
+      ? await this.secrets.get('WHATSAPP_TOKEN', 'WHATSAPP_TOKEN')
+      : await this.secrets.get('WHATSAPP_APIKEY', 'WHATSAPP_APIKEY');
+    return this.postWhatsApp(provider, phone, extra, opts);
+  }
 
+  /** Low-level WhatsApp send — shared by the system and per-user channels. */
+  private async postWhatsApp(provider: string, phone: string, extra: string | null, opts: { title: string; message: string }) {
+    const text = `*${opts.title}*\n${opts.message}`;
     try {
-      if (provider === 'callmebot') {
-        const key = await this.secrets.get('WHATSAPP_APIKEY', 'WHATSAPP_APIKEY');
-        if (!key) return false;
-        const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(text)}&apikey=${encodeURIComponent(key)}`;
+      if (provider.toLowerCase() === 'callmebot') {
+        if (!extra) return false;
+        const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(text)}&apikey=${encodeURIComponent(extra)}`;
         const res = await fetch(url);
         return res.ok;
       }
-      if (provider === 'meta') {
-        const token = await this.secrets.get('WHATSAPP_TOKEN', 'WHATSAPP_TOKEN');
+      if (provider.toLowerCase() === 'meta') {
         const phoneId = await this.secrets.get('WHATSAPP_PHONE_ID', 'WHATSAPP_PHONE_ID');
-        if (!token || !phoneId) return false;
+        if (!extra || !phoneId) return false;
         const res = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          headers: { Authorization: `Bearer ${extra}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: text } }),
         });
         if (!res.ok) this.log.warn(`WhatsApp (meta) failed: HTTP ${res.status}`);

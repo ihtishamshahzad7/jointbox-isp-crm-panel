@@ -2785,6 +2785,27 @@ model AppSecret {
   @@map("app_secret")
 }
 
+/// Per-account alert destination. Every user (ISP owner, franchise, dealer…)
+/// can point alerts about THEIR OWN network at their own Discord/WhatsApp, so
+/// a franchise's alerts go to the franchise's channel, not the ISP's. Values
+/// are AES-256-GCM encrypted like AppSecret and never returned in plaintext.
+model UserAlertChannel {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  kind       String   @db.VarChar(20)   // DISCORD | WHATSAPP
+  valueEnc   String                     // webhook URL / phone, encrypted
+  extraEnc   String?                    // provider api key / token, encrypted
+  provider   String?  @db.VarChar(20)   // callmebot | meta (WhatsApp only)
+  maskedHint String?
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, kind])
+  @@index([userId])
+  @@map("user_alert_channel")
+}
+
 /// Time-series of ONU optical signal + link status, so signal degradation and
 /// up/down flaps can be graphed over time (OnuTelemetry only keeps the latest).
 model OnuSignalSample {

@@ -243,6 +243,10 @@ DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME?connection_
 RADIUS_DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
 PORT=$API_PORT
 JWT_SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
+# Encrypts operator-managed secrets (Discord webhooks, WhatsApp tokens) at rest.
+# Kept separate from JWT_SECRET so rotating login tokens never makes saved
+# alert credentials undecryptable. Do not change this once secrets are saved.
+SECRETS_KEY="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
 # Default web login created automatically on first boot. Change the password
 # after logging in. (The backend refuses to start without ADMIN_PASSWORD set.)
 ADMIN_EMAIL=admin@jointbox.com

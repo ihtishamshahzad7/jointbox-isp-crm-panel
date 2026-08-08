@@ -37,6 +37,39 @@ export class NotificationsController {
     return this.alerts.status();
   }
 
+  // ── Per-account alert channels (any user, their own only) ──────
+  /** My own alert channels (masked). */
+  @Get('alerts/my-channels')
+  myChannels(@Request() req: any) {
+    return this.alerts.userChannels(req?.user?.sub);
+  }
+
+  /** Save/clear MY own Discord or WhatsApp alert destination. */
+  @Post('alerts/my-channels')
+  async setMyChannel(
+    @Body() body: { kind: 'DISCORD' | 'WHATSAPP'; value: string; provider?: string; extra?: string },
+    @Request() req: any,
+  ) {
+    const kind = body?.kind === 'WHATSAPP' ? 'WHATSAPP' : 'DISCORD';
+    // A user may only ever write their OWN channel — the id comes from the JWT.
+    await this.alerts.setUserChannel(req?.user?.sub, kind, body?.value ?? '', {
+      provider: body?.provider, extra: body?.extra,
+    });
+    return this.alerts.userChannels(req?.user?.sub);
+  }
+
+  /** Test MY own channel. */
+  @Post('alerts/my-channels/test')
+  async testMyChannel(@Request() req: any) {
+    const sent = await this.alerts.sendToUser(req?.user?.sub, {
+      title: '✅ Jointbox test alert',
+      message: 'Your personal alert channel is configured correctly.',
+      level: 'OK',
+      fields: { Account: req?.user?.name || req?.user?.email || '—', Time: new Date().toLocaleString() },
+    });
+    return { sent };
+  }
+
   /** Send a test alert so you can confirm the webhook works. */
   @Post('alerts/test')
   async alertTest() {

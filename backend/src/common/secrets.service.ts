@@ -24,6 +24,11 @@ export class SecretsService {
     return crypto.createHash('sha256').update(material).digest(); // 32 bytes
   }
 
+  /** Public wrappers so other services can store their own encrypted rows. */
+  encryptValue(plain: string): string { return this.encrypt(plain); }
+  decryptValue(payload: string): string | null { return this.decrypt(payload); }
+  maskValue(v: string): string { return this.mask(v); }
+
   private encrypt(plain: string): string {
     const iv = crypto.randomBytes(12);
     const c = crypto.createCipheriv('aes-256-gcm', this.key(), iv);

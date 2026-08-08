@@ -33,7 +33,7 @@ export class NasMonitorService {
   async sample() {
     if (!isPrimaryInstance()) return;
     try {
-      const nases = await this.prisma.nas.findMany({ where: { isActive: true }, select: { id: true, nasIp: true, nasname: true, shortname: true } });
+      const nases = await this.prisma.nas.findMany({ where: { isActive: true }, select: { id: true, nasIp: true, nasname: true, shortname: true, ownerId: true } });
       for (const nas of nases) {
         const ip = nas.nasIp || nas.nasname;
         if (!ip) continue;
@@ -83,7 +83,7 @@ export class NasMonitorService {
             body: `⚠️ ${nas.shortname || nas.nasname}: ${prev - now} subscribers dropped offline in 5 minutes.`,
           } as any).catch(() => null);
           // Push the same alert to Discord / WhatsApp (Uptime-Kuma style).
-          this.alerts.send({
+          this.alerts.sendScoped(nas.ownerId, {
             title: `🔴 NAS mass disconnect — ${nas.shortname || nas.nasname}`,
             message: `${prev - now} subscribers dropped offline within 5 minutes. Possible link or power outage — please investigate.`,
             level: 'ERROR',
@@ -98,7 +98,7 @@ export class NasMonitorService {
           await this.prisma.systemLog.create({
             data: { level: 'ERROR', source: 'nas-monitor', message: `NAS "${nas.shortname || nas.nasname}" (${ip}) is DOWN — no subscribers online.` },
           }).catch(() => null);
-          this.alerts.send({
+          this.alerts.sendScoped(nas.ownerId, {
             title: `🔴 NAS DOWN — ${nas.shortname || nas.nasname}`,
             message: `No subscribers are online on this router. It was serving ${prev} before. Check power, uplink and reachability.`,
             level: 'ERROR',
@@ -109,7 +109,7 @@ export class NasMonitorService {
           await this.prisma.systemLog.create({
             data: { level: 'INFO', source: 'nas-monitor', message: `NAS "${nas.shortname || nas.nasname}" (${ip}) RECOVERED — ${now} subscriber(s) online.` },
           }).catch(() => null);
-          this.alerts.send({
+          this.alerts.sendScoped(nas.ownerId, {
             title: `🟢 NAS recovered — ${nas.shortname || nas.nasname}`,
             message: `Subscribers are reconnecting: ${now} online now.`,
             level: 'OK',
