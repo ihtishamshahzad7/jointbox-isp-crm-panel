@@ -2386,6 +2386,37 @@ if (!unpaid && data.username && data.password) {
     };
   }
 
+  /**
+   * Run a bulk action on an ENTIRE group (everyone on a NAS / area / dealer /
+   * package / status) without selecting each subscriber. Resolves the group to
+   * its subscriber ids within the actor's subtree, then reuses bulkAction — so
+   * scoping and per-item safety are identical.
+   */
+  async groupAction(
+    by: string,
+    key: any,
+    action: string,
+    params: { days?: number; reason?: string; message?: string } = {},
+    actor?: Actor,
+  ) {
+    const where = await this.scope.subscriberWhere(actor);
+    const fieldMap: Record<string, string> = {
+      nas: 'nasId', area: 'areaId', owner: 'userId', dealer: 'userId',
+      parent: 'userId', package: 'packageId', status: 'status',
+    };
+    const field = fieldMap[by] || 'nasId';
+    const keyVal = field === 'status' ? String(key) : (key == null || key === '' ? null : Number(key));
+
+    const rows = await this.prisma.subscriber.findMany({
+      where: { AND: [where, { [field]: keyVal } as any] },
+      select: { id: true },
+      take: 5000,
+    });
+    const ids = rows.map((r) => r.id);
+    if (!ids.length) return { action, total: 0, success: 0, failed: 0, skipped: 0, errors: [] };
+    return this.bulkAction(ids, action, params, actor);
+  }
+
   async bulkDelete(ids: number[], actor?: Actor, force = false) {
     let success = 0;
     let failed = 0;

@@ -297,6 +297,17 @@ export class SubscribersController {
     }, req.user);
   }
 
+  /** Run a bulk action on a whole group (by nas|area|owner|package|status). */
+  @Post('group-action')
+  groupAction(
+    @Body() body: { by: string; key: any; action: string; days?: number; reason?: string; message?: string },
+    @Req() req: any,
+  ) {
+    return this.subscribersService.groupAction(body.by, body.key, body.action, {
+      days: body.days, reason: body.reason, message: body.message,
+    }, req.user);
+  }
+
   /** Grouped counts by nas | area | owner(dealer/parent) | package | status. */
   @Get('grouped')
   grouped(@Query('by') by: string, @Req() req: any) {
