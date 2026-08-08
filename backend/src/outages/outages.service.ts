@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AlertsService } from '../notifications/alerts.service';
 
 /**
  * OutagesService — tells power cuts apart from network faults.
@@ -39,6 +40,7 @@ export class OutagesService {
     private prisma: PrismaService,
     private scope: ScopeService,
     private notifications: NotificationsService,
+    private alerts: AlertsService,
   ) {}
 
   // ── Schedules ────────────────────────────────────────────────
@@ -175,6 +177,21 @@ export class OutagesService {
           `Outage detected in ${outage.area?.name ?? `area ${areaId}`}: ` +
             `${dropped}/${total} customers offline (${Math.round(share * 100)}%) — ${type}`,
         );
+
+        // Push to Discord / WhatsApp so the operator knows before customers call.
+        this.alerts.send({
+          title: `${scheduled ? '🟠' : '🔴'} Outage — ${outage.area?.name ?? `area ${areaId}`}`,
+          message: scheduled
+            ? 'Mass disconnection matching the published load-shedding timetable.'
+            : 'Mass disconnection outside any scheduled window — verify power or network.',
+          level: scheduled ? 'WARN' : 'ERROR',
+          fields: {
+            Area: outage.area?.name ?? `#${areaId}`,
+            Affected: `${dropped}/${total}`,
+            Share: `${Math.round(share * 100)}%`,
+            Type: type,
+          },
+        }).catch(() => null);
       }
 
       await this.closeRecovered();

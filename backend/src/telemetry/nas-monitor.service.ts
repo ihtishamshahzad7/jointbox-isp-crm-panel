@@ -19,6 +19,9 @@ export class NasMonitorService {
   private readonly log = new Logger('NasMonitor');
   // Remember each NAS's last online count to detect drops between ticks.
   private lastOnline = new Map<number, number>();
+  // Which NAS we've already alerted as "down", so we alert once on the way down
+  // and once again on recovery — never every 5 minutes.
+  private downAlerted = new Set<number>();
 
   constructor(
     private prisma: PrismaService,
@@ -87,6 +90,33 @@ export class NasMonitorService {
             fields: { NAS: nas.shortname || nas.nasname, IP: String(ip), Before: String(prev), Now: String(now) },
           }).catch(() => null);
         }
+        // NAS down / recovered: a router that had users and now reports zero is
+        // treated as down. Alert once on the transition, and once on recovery.
+        const wasAlerted = this.downAlerted.has(nas.id);
+        if (now === 0 && (prev ?? 0) > 0 && !wasAlerted) {
+          this.downAlerted.add(nas.id);
+          await this.prisma.systemLog.create({
+            data: { level: 'ERROR', source: 'nas-monitor', message: `NAS "${nas.shortname || nas.nasname}" (${ip}) is DOWN — no subscribers online.` },
+          }).catch(() => null);
+          this.alerts.send({
+            title: `🔴 NAS DOWN — ${nas.shortname || nas.nasname}`,
+            message: `No subscribers are online on this router. It was serving ${prev} before. Check power, uplink and reachability.`,
+            level: 'ERROR',
+            fields: { NAS: nas.shortname || nas.nasname, IP: String(ip), 'Was serving': String(prev ?? 0) },
+          }).catch(() => null);
+        } else if (now > 0 && wasAlerted) {
+          this.downAlerted.delete(nas.id);
+          await this.prisma.systemLog.create({
+            data: { level: 'INFO', source: 'nas-monitor', message: `NAS "${nas.shortname || nas.nasname}" (${ip}) RECOVERED — ${now} subscriber(s) online.` },
+          }).catch(() => null);
+          this.alerts.send({
+            title: `🟢 NAS recovered — ${nas.shortname || nas.nasname}`,
+            message: `Subscribers are reconnecting: ${now} online now.`,
+            level: 'OK',
+            fields: { NAS: nas.shortname || nas.nasname, IP: String(ip), Online: String(now) },
+          }).catch(() => null);
+        }
+
         this.lastOnline.set(nas.id, now);
       }
       // Append ONU optical-signal history so signal + up/down can be graphed.

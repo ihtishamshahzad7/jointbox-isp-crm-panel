@@ -14,7 +14,7 @@ const T = {
 
 const EVENTS = ["MANUAL", "WELCOME", "INVOICE_CREATED", "PAYMENT_RECEIVED", "EXPIRY_REMINDER", "RENEWAL", "SUSPENSION"];
 const VARS = "{name} {username} {phone} {package} {amount} {dueAmount} {expiry} {invoiceNo} {balance} {daysLeft}";
-const TABS = ["Templates", "Send", "Log"] as const;
+const TABS = ["Templates", "Send", "Log", "Alerts"] as const;
 type Tab = (typeof TABS)[number];
 
 const fdate = (d: string) => new Date(d).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
@@ -156,6 +156,60 @@ export default function CommunicationPage() {
           </button>
         ))}
       </div>
+
+      {/* ── ALERTS (Discord / WhatsApp) ── */}
+      {tab === "Alerts" && (
+        <div style={{ ...card, maxWidth: 720 }}>
+          <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>Operational alerts</h3>
+          <p style={{ fontSize: 12, color: T.sub, marginTop: 0 }}>
+            Get notified on Discord and WhatsApp when a NAS goes down, a mass disconnect happens, or an outage is detected.
+          </p>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "12px 0" }}>
+            <span style={{ padding: "5px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+              background: status?.alerts?.discord ? "rgba(34,197,94,.15)" : "rgba(148,163,184,.12)",
+              color: status?.alerts?.discord ? "#4ade80" : T.sub }}>
+              Discord: {status?.alerts?.discord ? "configured ✓" : "not configured"}
+            </span>
+            <span style={{ padding: "5px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+              background: status?.alerts?.whatsapp ? "rgba(34,197,94,.15)" : "rgba(148,163,184,.12)",
+              color: status?.alerts?.whatsapp ? "#4ade80" : T.sub }}>
+              WhatsApp: {status?.alerts?.whatsapp ? `configured (${status.alerts.whatsappProvider}) ✓` : "not configured"}
+            </span>
+          </div>
+
+          <button
+            style={{ ...btn(T.accent), color: "#fff", border: "none" }}
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true); setMsg("");
+              try {
+                const r = await fetch(`${API}/communication/alerts/test`, { method: "POST", headers });
+                const d = await r.json();
+                const ok = d?.sent?.discord || d?.sent?.whatsapp;
+                setMsg(ok ? "✅ Test alert sent — check your Discord channel / WhatsApp." : "No channel is configured yet (see setup below).");
+              } catch { setMsg("Could not send the test alert."); }
+              setBusy(false);
+            }}>
+            Send test alert
+          </button>
+
+          <div style={{ marginTop: 18, fontSize: 12.5, color: T.sub, lineHeight: 1.7 }}>
+            <b style={{ color: T.text }}>Discord setup (free, 2 minutes)</b><br />
+            1. Discord → <b>Server Settings → Integrations → Webhooks → New Webhook</b><br />
+            2. Choose the channel, click <b>Copy Webhook URL</b><br />
+            3. On the server add it to <code>backend/.env</code>:<br />
+            <code style={{ display: "block", background: T.card, padding: "8px 10px", borderRadius: 6, margin: "6px 0" }}>
+              DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/XXXX/YYYY"
+            </code>
+            4. <code>pm2 restart jointbox-backend</code>, then press <b>Send test alert</b>.
+            <br /><br />
+            <b style={{ color: T.text }}>WhatsApp setup</b><br />
+            CallMeBot (free): <code>WHATSAPP_PROVIDER=callmebot</code>, <code>WHATSAPP_PHONE=923001234567</code>, <code>WHATSAPP_APIKEY=…</code><br />
+            Meta Cloud API: <code>WHATSAPP_PROVIDER=meta</code>, <code>WHATSAPP_TOKEN=…</code>, <code>WHATSAPP_PHONE_ID=…</code>
+          </div>
+        </div>
+      )}
 
       {/* ── TEMPLATES ── */}
       {tab === "Templates" && (
