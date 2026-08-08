@@ -28,6 +28,13 @@ export class TelemetryController {
     return this.monitor.healthOverview();
   }
 
+  /** Recent operational alerts (admin ops screen). Demo accounts blocked. */
+  @Get('ops-alerts')
+  opsAlerts(@Req() req: any) {
+    if (req?.user?.isDemo) return [];
+    return this.monitor.opsAlerts(40);
+  }
+
   /** MRTG-style traffic for a NAS: range = 1h | 6h | 7d | 30d, optional vlan. */
   @Get('nas/:id/traffic')
   nasTraffic(

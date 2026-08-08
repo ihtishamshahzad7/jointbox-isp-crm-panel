@@ -283,6 +283,16 @@ export class NasMonitorService {
     };
   }
 
+  /** Recent operational alerts (mass-disconnect, drift, outages) for the ops screen. */
+  async opsAlerts(limit = 40) {
+    return this.prisma.systemLog.findMany({
+      where: { level: { in: ['WARN', 'ERROR', 'CRITICAL'] } },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(limit, 1), 100),
+      select: { id: true, level: true, source: true, message: true, createdAt: true },
+    });
+  }
+
   /** Current per-VLAN online + throughput snapshot (latest bucket). */
   async vlanBreakdown(nasId: number) {
     const nas = await this.prisma.nas.findUnique({ where: { id: nasId }, select: { nasIp: true, nasname: true } });

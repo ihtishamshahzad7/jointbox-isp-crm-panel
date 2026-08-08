@@ -61,6 +61,7 @@ const menuGroups = [
     { id: 'trace', label: 'Trace Search', href: '/trace', Icon: navIcons.Search },
   ]},
   { label: 'Operations', items: [
+    { id: 'operations', label: 'Operations', href: '/operations', Icon: navIcons.Network },
     { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
     { id: 'noc', label: 'NOC / Uptime', href: '/noc', Icon: navIcons.Network },
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
