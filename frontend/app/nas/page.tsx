@@ -256,6 +256,8 @@ export default function NasPage() {
     setLogs(p => [{ id: `${Date.now()}-${Math.random()}`, level, message, time: new Date() }, ...p].slice(0, 200));
   }, []);
 
+  const [healthMap, setHealthMap] = useState<Record<number, any>>({});
+
   // ── Load all NAS + stats ───────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -283,6 +285,9 @@ export default function NasPage() {
     get('/nas/stats').then(v => v != null && setStats(v));
     get('/nas/radius/stats').then(v => v != null && setRadiusStats(v));
     get('/nas/overview').then(v => v != null && setOverview(v));
+    get('/telemetry/nas-health').then(v => {
+      if (v?.nas) setHealthMap(Object.fromEntries(v.nas.map((n: any) => [n.id, { inBps: n.inBps, outBps: n.outBps }])));
+    });
   }, [groupFilter, headers, addLog]);
 
   useEffect(() => {
@@ -947,6 +952,7 @@ export default function NasPage() {
                   } catch (e: any) { alert(e.message); }
                 }}
                 checkingIds={checkingIds}
+                healthOf={(id) => healthMap[id]}
                 reachOf={(id) => {
                   const r = reach(id);
                   return r ? { apiPortOpen: r.apiPortOpen, activeSessionCount: r.activeSessionCount, identity: r.identity } : undefined;

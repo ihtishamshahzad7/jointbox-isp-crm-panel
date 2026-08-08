@@ -26,6 +26,7 @@ export function NasTraffic({ nasId }: { nasId: number }) {
   const [data, setData] = React.useState<any>(null);
   const [vlans, setVlans] = React.useState<any[]>([]);
   const [links, setLinks] = React.useState<any[]>([]);
+  const [uptime, setUptime] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const h = { Authorization: `Bearer ${token}` };
@@ -33,11 +34,13 @@ export function NasTraffic({ nasId }: { nasId: number }) {
   React.useEffect(() => {
     let alive = true;
     setLoading(true);
+    const days = range === "30d" ? 30 : range === "7d" ? 7 : 1;
     Promise.all([
       fetch(`${API}/telemetry/nas/${nasId}/traffic?range=${range}`, { headers: h }).then((r) => r.ok ? r.json() : null),
       fetch(`${API}/telemetry/nas/${nasId}/vlans`, { headers: h }).then((r) => r.ok ? r.json() : null),
       fetch(`${API}/telemetry/nas/${nasId}/signals`, { headers: h }).then((r) => r.ok ? r.json() : null),
-    ]).then(([t, v, s]) => { if (!alive) return; setData(t); setVlans(v?.vlans || []); setLinks(s?.links || []); setLoading(false); })
+      fetch(`${API}/telemetry/nas/${nasId}/uptime?days=${days}`, { headers: h }).then((r) => r.ok ? r.json() : null),
+    ]).then(([t, v, s, u]) => { if (!alive) return; setData(t); setVlans(v?.vlans || []); setLinks(s?.links || []); setUptime(u); setLoading(false); })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [nasId, range]);
@@ -80,6 +83,10 @@ export function NasTraffic({ nasId }: { nasId: number }) {
             <span>Peak ↓ <b>{bps(data.peakIn)}</b></span>
             <span>Peak ↑ <b>{bps(data.peakOut)}</b></span>
             <span>Now online <b>{pts[pts.length - 1]?.online ?? 0}</b></span>
+            {uptime && (
+              <span>Uptime <b style={{ color: uptime.uptimePercent >= 99 ? "#4ade80" : uptime.uptimePercent >= 95 ? "#ff9800" : "#f87171" }}>
+                {uptime.uptimePercent}%</b>{uptime.downMinutes ? ` · ${uptime.downMinutes}m down` : ""}</span>
+            )}
           </div>
         </>
       )}

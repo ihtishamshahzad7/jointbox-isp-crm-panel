@@ -22,6 +22,12 @@ export class TelemetryController {
     return this.snmp.discoverInterfaces(id);
   }
 
+  /** Health of every NAS: online count + throughput + reporting status. */
+  @Get('nas-health')
+  nasHealth() {
+    return this.monitor.healthOverview();
+  }
+
   /** MRTG-style traffic for a NAS: range = 1h | 6h | 7d | 30d, optional vlan. */
   @Get('nas/:id/traffic')
   nasTraffic(
@@ -36,6 +42,12 @@ export class TelemetryController {
   @Get('nas/:id/vlans')
   nasVlans(@Param('id', ParseIntPipe) id: number) {
     return this.monitor.vlanBreakdown(id);
+  }
+
+  /** Availability % + downtime windows for a NAS over N days. */
+  @Get('nas/:id/uptime')
+  nasUptime(@Param('id', ParseIntPipe) id: number, @Query('days') days?: string) {
+    return this.monitor.nasUptime(id, days ? +days : 7);
   }
 
   /** Link up/down + optical signal for every ONU on a NAS. */

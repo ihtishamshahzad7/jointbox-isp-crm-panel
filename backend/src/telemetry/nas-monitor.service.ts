@@ -199,6 +199,90 @@ export class NasMonitorService {
     return { nasId, range, vlan: vlan ?? null, points, peakIn, peakOut, samples: rows.length };
   }
 
+  /**
+   * Health of every NAS on one screen: online count, current in/out bit-rate
+   * (from the two latest samples), and whether it's reporting (fresh sample).
+   */
+  async healthOverview() {
+    const nases = await this.prisma.nas.findMany({
+      where: { isActive: true },
+      select: { id: true, nasname: true, nasIp: true, shortname: true },
+    });
+    // Last ~20 min of whole-NAS samples for every NAS, newest last.
+    const samples = await this.prisma.nasTrafficSample.findMany({
+      where: { vlan: null, ts: { gte: new Date(Date.now() - 20 * 60_000) } },
+      orderBy: { ts: 'asc' },
+      select: { nasId: true, ts: true, inBytes: true, outBytes: true, online: true },
+    });
+    const byNas = new Map<number, any[]>();
+    for (const s of samples) { (byNas.get(s.nasId) ?? byNas.set(s.nasId, []).get(s.nasId))!.push(s); }
+
+    const now = Date.now();
+    return {
+      nas: nases.map((n) => {
+        const rows = byNas.get(n.id) || [];
+        const last = rows[rows.length - 1];
+        const prev = rows[rows.length - 2];
+        let inBps = 0, outBps = 0;
+        if (last && prev) {
+          const secs = (last.ts.getTime() - prev.ts.getTime()) / 1000;
+          if (secs > 0) {
+            inBps = Math.max(0, Number(last.inBytes - prev.inBytes)) * 8 / secs;
+            outBps = Math.max(0, Number(last.outBytes - prev.outBytes)) * 8 / secs;
+          }
+        }
+        const reporting = last ? (now - last.ts.getTime()) < 11 * 60_000 : false;
+        return {
+          id: n.id,
+          name: n.shortname || n.nasname,
+          ip: n.nasIp,
+          online: last?.online ?? 0,
+          inBps, outBps,
+          reporting,
+        };
+      }).sort((a, b) => b.online - a.online),
+    };
+  }
+
+  /**
+   * Availability of one NAS over `days`, derived from the 5-minute samples: a
+   * gap larger than 12 minutes between consecutive samples means the NAS wasn't
+   * reporting (down / unreachable). Returns an uptime %, total downtime and the
+   * individual down windows for a timeline.
+   */
+  async nasUptime(nasId: number, days = 7) {
+    const since = new Date(Date.now() - days * 86400_000);
+    const rows = await this.prisma.nasTrafficSample.findMany({
+      where: { nasId, vlan: null, ts: { gte: since } },
+      orderBy: { ts: 'asc' },
+      select: { ts: true },
+    });
+    const totalMin = days * 24 * 60;
+    if (rows.length < 2) {
+      return { nasId, days, uptimePercent: rows.length ? 100 : 0, downMinutes: rows.length ? 0 : totalMin, gaps: [], samples: rows.length };
+    }
+    const gapThresholdMs = 12 * 60_000; // > 2 sample intervals = a real gap
+    const gaps: Array<{ start: Date; end: Date; minutes: number }> = [];
+    let downMs = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const dt = rows[i].ts.getTime() - rows[i - 1].ts.getTime();
+      if (dt > gapThresholdMs) {
+        downMs += dt;
+        gaps.push({ start: rows[i - 1].ts, end: rows[i].ts, minutes: Math.round(dt / 60_000) });
+      }
+    }
+    // Count the lead-in before the first sample as unmonitored, not downtime.
+    const monitoredMs = rows[rows.length - 1].ts.getTime() - rows[0].ts.getTime();
+    const upPct = monitoredMs > 0 ? Math.max(0, Math.min(100, ((monitoredMs - downMs) / monitoredMs) * 100)) : 100;
+    return {
+      nasId, days,
+      uptimePercent: Math.round(upPct * 100) / 100,
+      downMinutes: Math.round(downMs / 60_000),
+      gaps: gaps.slice(-50),
+      samples: rows.length,
+    };
+  }
+
   /** Current per-VLAN online + throughput snapshot (latest bucket). */
   async vlanBreakdown(nasId: number) {
     const nas = await this.prisma.nas.findUnique({ where: { id: nasId }, select: { nasIp: true, nasname: true } });

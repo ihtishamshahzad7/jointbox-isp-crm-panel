@@ -49,7 +49,7 @@ function useCtxMenu() {
    NAS / ROUTERS
    ═══════════════════════════════════════════════════════════════════ */
 export function NasTable({
-  rows, me, onView, onEdit, onShare, onCheck, onDelete, checking, checkingIds, reachOf, onMessageSubs,
+  rows, me, onView, onEdit, onShare, onCheck, onDelete, checking, checkingIds, reachOf, onMessageSubs, healthOf,
 }: {
   rows: Row[];
   me?: any;
@@ -60,6 +60,8 @@ export function NasTable({
   onDelete: (r: Row) => void;
   /** Optional: message all subscribers on this NAS (maintenance notice, etc.). */
   onMessageSubs?: (r: Row) => void;
+  /** Optional: live throughput per NAS id (from /telemetry/nas-health). */
+  healthOf?: (id: number) => { inBps: number; outBps: number } | undefined;
   /** Global disable for the Check button — used when no per-row state exists. */
   checking?: boolean;
   /** Per-row "currently checking" — takes precedence over `checking` when given. */
@@ -141,6 +143,12 @@ export function NasTable({
                 <td>
                   <div className={`big ${sessions > 0 ? "up" : ""}`}>{sessions}</div>
                   <div className="sub">online now</div>
+                  {(() => {
+                    const hb = healthOf?.(n.id);
+                    if (!hb) return null;
+                    const bps = (v: number) => { const u = ["bps","Kbps","Mbps","Gbps"]; let i=0,x=v||0; while(x>=1000&&i<3){x/=1000;i++;} return `${x.toFixed(x<10?1:0)} ${u[i]}`; };
+                    return <div className="sub" style={{ marginTop: 2 }}>↓ {bps(hb.inBps)} · ↑ {bps(hb.outBps)}</div>;
+                  })()}
                 </td>
 
                 <td>

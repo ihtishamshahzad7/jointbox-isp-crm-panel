@@ -17,6 +17,7 @@ export default function NocPage() {
   const [status, setStatus] = useState<any[]>([]);
   const [uptime, setUptime] = useState<any>(null);
   const [outages, setOutages] = useState<any[]>([]);
+  const [nasHealth, setNasHealth] = useState<any[]>([]);
   const [days, setDays] = useState(30);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
@@ -25,14 +26,16 @@ export default function NocPage() {
   const load = useCallback(async () => {
     if (!token) { router.push("/login"); return; }
     try {
-      const [s, u, o] = await Promise.all([
+      const [s, u, o, nh] = await Promise.all([
         fetch(`${API}/outages/status`, { headers }).then((r) => (r.ok ? r.json() : [])),
         fetch(`${API}/outages/uptime?days=${days}`, { headers }).then((r) => (r.ok ? r.json() : null)),
         fetch(`${API}/outages?limit=40`, { headers }).then((r) => (r.ok ? r.json() : [])),
+        fetch(`${API}/telemetry/nas-health`, { headers }).then((r) => (r.ok ? r.json() : null)),
       ]);
       setStatus(Array.isArray(s) ? s : []);
       setUptime(u);
       setOutages(Array.isArray(o) ? o : (o?.data ?? []));
+      setNasHealth(Array.isArray(nh?.nas) ? nh.nas : []);
     } catch { /* keep last view */ }
   }, [token, days]);
 
@@ -73,6 +76,38 @@ export default function NocPage() {
         {uptime && metric("Customer-experienced", `${uptime.customerExperiencedUptimePercent}%`)}
         {uptime && metric("Network downtime", `${uptime.networkMinutes} min`, uptime.networkMinutes ? "#ef4444" : "#22c55e")}
       </div>
+
+      {/* NAS health grid — every router's live status on one screen */}
+      {nasHealth.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>
+            NAS / Router health
+            <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400, marginLeft: 8 }}>
+              {nasHealth.filter((n) => n.reporting).length}/{nasHealth.length} reporting
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+            {nasHealth.map((n) => {
+              const bps = (v: number) => { const u = ["bps","Kbps","Mbps","Gbps"]; let i=0,x=v||0; while(x>=1000&&i<3){x/=1000;i++;} return `${x.toFixed(x<10?1:0)} ${u[i]}`; };
+              return (
+                <button key={n.id} onClick={() => router.push("/nas")}
+                  style={{ textAlign: "left", background: "var(--surface)", border: `1px solid ${n.reporting ? "var(--border)" : "#7f1d1d"}`, borderLeft: `3px solid ${n.reporting ? "#22c55e" : "#ef4444"}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: n.reporting ? "#22c55e" : "#ef4444", boxShadow: n.reporting ? "0 0 6px #22c55e" : undefined }} />
+                    <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.name}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>
+                    <b style={{ color: "var(--text)" }}>{n.online}</b> online · {n.reporting ? "reporting" : "no data"}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
+                    ↓ {bps(n.inBps)} · ↑ {bps(n.outBps)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Live link-tracing feed (SNMP + Syslog) */}
       <div style={{ marginBottom: 18 }}>
