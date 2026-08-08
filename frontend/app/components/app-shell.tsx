@@ -92,7 +92,8 @@ const menuItems = menuGroups.flatMap((g) => g.items);
 
 // Selectable dark themes (palettes defined in globals.css by data-theme id).
 const THEMES = [
-  { id: 'winbox', name: 'Default', dot: '#4a9eff' },
+  { id: 'aurora', name: 'Aurora (default)', dot: '#8B5CF6' },
+  { id: 'winbox', name: 'Flat / compact', dot: '#4a9eff' },
   { id: 'night-tower', name: 'Night tower', dot: '#378ADD' },
   { id: 'signal-room', name: 'Signal room', dot: '#1D9E75' },
   { id: 'fiber-glass', name: 'Fiber glass', dot: '#7F77DD' },
@@ -126,7 +127,6 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/billing-center', 'billing'],
   ['/service-catalog', 'catalog'],
   ['/jobs', 'jobs'],
-  ['/noc', 'noc'],
   ['/support-center', 'support'],
   ['/admin-center', 'admin'],
   ['/insights', 'insights'],
@@ -224,17 +224,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [updating, setUpdating] = useState(false);
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
   const [light, setLight] = useState(false);
-  const [theme, setThemeState] = useState('winbox');
+  const [theme, setThemeState] = useState('aurora');
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    const saved = localStorage.getItem('jb_theme') || 'winbox';
+    const saved = localStorage.getItem('jb_theme') || 'aurora';
     const isLight = saved === 'light';
     setLight(isLight);
-    setThemeState(isLight ? 'winbox' : saved);
+    setThemeState(isLight ? 'aurora' : saved);
     document.documentElement.setAttribute('data-theme', saved);
   }, []);
   const applyTheme = (id: string) => {

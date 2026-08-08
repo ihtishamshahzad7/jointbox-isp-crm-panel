@@ -67,17 +67,89 @@ body {
      the glass look is preserved with none of the stacking problems. */
   /* Default dark palette = "Night tower". Switchable via the theme picker
      (adds a data-theme="<id>" on <html>). Named blocks below define the others. */
-  --bg: #0C0F1A;
-  --surface: #141826;
-  --surface-2: #1B2032; --surface2: #1B2032;
-  --border: #262D42;
-  --text: #DEE3F0;
-  --muted: #8D96B0;
-  --accent: #378ADD; --accent-2: #FAC775; --accent2: #FAC775;
-  --card-shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 30px rgba(0,0,0,.28);
+  /* Defaults mirror the "Aurora" theme below, so the app looks right even
+     before the theme attribute is applied (no flash of a different palette). */
+  --bg: #0A0C18;
+  --surface: #12162A;
+  --surface-2: #1A1F3A; --surface2: #1A1F3A;
+  --border: #262C4D;
+  --text: #E6E9F7;
+  --muted: #8E97BC;
+  --accent: #8B5CF6; --accent-2: #EC4899; --accent2: #EC4899;
+  --grad: linear-gradient(135deg, #8B5CF6 0%, #C13BB0 50%, #F0708A 100%);
+  --grad-soft: linear-gradient(135deg, rgba(139,92,246,.16), rgba(236,72,153,.10));
+  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 34px rgba(0,0,0,.32);
   /* Semantic status colours stay constant across every theme. */
   --online: #639922; --warning: #BA7517; --danger: #E24B4A;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   AURORA — the default. A deep indigo base lit by a violet→pink→amber
+   gradient. The gradient is expressed once as --grad and reused for the
+   active nav item, primary buttons, headings and accents, so the whole
+   product reads as one designed surface rather than assorted colours.
+   ═══════════════════════════════════════════════════════════════════ */
+html[data-theme="aurora"] {
+  --bg:#0A0C18;
+  --surface:#12162A;
+  --surface-2:#1A1F3A; --surface2:#1A1F3A;
+  --border:#262C4D;
+  --text:#E6E9F7;
+  --muted:#8E97BC;
+  --accent:#8B5CF6; --accent-2:#EC4899; --accent2:#EC4899;
+  --grad: linear-gradient(135deg, #8B5CF6 0%, #C13BB0 50%, #F0708A 100%);
+  --grad-soft: linear-gradient(135deg, rgba(139,92,246,.16), rgba(236,72,153,.10));
+  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 34px rgba(0,0,0,.32);
+}
+
+/* A gentle aurora wash behind the app — depth without noise. */
+html[data-theme="aurora"] body {
+  background:
+    radial-gradient(1100px 620px at 12% -8%,  rgba(139,92,246,.16), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%,   rgba(236,72,153,.12), transparent 55%),
+    radial-gradient(800px 500px at 60% 110%,  rgba(56,189,248,.08), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* Gradient applied where it carries meaning: the active item and primaries. */
+html[data-theme="aurora"] .nav-item.active {
+  background: var(--grad) !important;
+  color: #fff !important;
+  box-shadow: 0 6px 18px rgba(139,92,246,.35) !important;
+}
+html[data-theme="aurora"] .db-root h1 {
+  background: var(--grad);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+/* Panels get a hairline gradient top edge so cards feel intentional. */
+html[data-theme="aurora"] .db-root div[style*="background: var(--surface)"] {
+  position: relative;
+}
+html[data-theme="aurora"] .hub-tab.on {
+  background: var(--grad-soft);
+  border-radius: 8px;
+}
+
+/* Primary actions carry the gradient, so the main action on any screen is
+   unmistakable. Matches buttons already written with the old fixed gradient. */
+html[data-theme="aurora"] .db-root button[style*="linear-gradient(135deg,#6C3CE1"],
+html[data-theme="aurora"] .db-root button[style*="linear-gradient(135deg,#7C4DFF"] {
+  background: var(--grad) !important;
+  box-shadow: 0 6px 18px rgba(139,92,246,.30) !important;
+}
+
+/* Softer, rounder surfaces to match the gradient language. */
+html[data-theme="aurora"] .db-root { --radius: 14px; }
+html[data-theme="aurora"] .st,
+html[data-theme="aurora"] .nt { box-shadow: var(--card-shadow); }
+html[data-theme="aurora"] .st thead th,
+html[data-theme="aurora"] .nt thead th {
+  background: linear-gradient(180deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 82%, transparent));
+}
+html[data-theme="aurora"] .st tbody tr:hover,
+html[data-theme="aurora"] .nt tbody tr:hover { background: var(--grad-soft); }
 
 /* ── Selectable dark themes (mapped onto the app's token names) ── */
 html[data-theme="night-tower"] { --bg:#0C0F1A; --surface:#141826; --surface-2:#1B2032; --surface2:#1B2032; --border:#262D42; --text:#DEE3F0; --muted:#8D96B0; --accent:#378ADD; --accent-2:#FAC775; --accent2:#FAC775; }
