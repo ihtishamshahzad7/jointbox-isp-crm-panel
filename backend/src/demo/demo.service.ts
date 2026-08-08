@@ -20,6 +20,11 @@ export class DemoService {
 
   constructor(private prisma: PrismaService) {}
 
+  /** How many demo accounts are currently live — used to cap public creation. */
+  async liveCount(): Promise<number> {
+    return this.prisma.user.count({ where: { isDemo: true } }).catch(() => 0);
+  }
+
   /** Create a fresh demo franchise account and return its login credentials. */
   async create() {
     const rand = Math.random().toString(36).slice(2, 8);

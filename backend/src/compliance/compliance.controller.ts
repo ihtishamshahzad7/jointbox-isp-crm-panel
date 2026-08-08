@@ -34,9 +34,10 @@ export class ComplianceController {
   }
 
   /** PTA-style subscriber register export. */
+  /** Paginated register export — pass ?skip= to walk large subscriber bases. */
   @Get('kyc/register')
-  register(@Req() req: any) {
-    return this.kyc.register(req.user);
+  register(@Req() req: any, @Query('skip') skip?: string) {
+    return this.kyc.register(req.user, skip ? Number(skip) : 0);
   }
 
   /** Check a CNIC's format without saving it. */

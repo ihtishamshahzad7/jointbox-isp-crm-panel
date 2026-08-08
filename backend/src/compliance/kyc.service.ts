@@ -377,13 +377,18 @@ export class KycService {
    * PTA-style subscriber register export.
    * When a regulator asks, this is produced in minutes rather than days.
    */
-  async register(actor?: Actor) {
+  async register(actor?: Actor, skip = 0) {
     const where: any = {};
     if (actor && !this.scope.isAdmin(actor.role)) {
       where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
     }
+    // BOUNDED: at 300k subscribers an unbounded findMany loads the whole base
+    // into memory and takes the API down. The regulator export is paginated —
+    // callers pass ?skip= to walk the register in pages.
     const rows = await this.prisma.subscriber.findMany({
       where,
+      take: 5000,
+      skip: Math.max(0, Number(skip) || 0),
       select: {
         id: true, fullName: true, cnicNumber: true, phone: true, email: true,
         address: true, username: true, status: true, kycStatus: true,
