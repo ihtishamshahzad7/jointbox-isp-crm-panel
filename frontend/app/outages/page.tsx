@@ -171,7 +171,11 @@ export default function OutagesPage() {
                       <td style={{ padding: "10px 12px" }}>
                         {a.outageId && (
                           <button style={btn(T.accent, true)} disabled={busy}
-                            onClick={() => call(`/outages/${a.outageId}/notify`, "POST", {}, "Customers notified")}>
+                            onClick={() => {
+                              const message = prompt(`Message to send to affected customers in ${a.area || "this area"}:`, "We're aware of a service interruption in your area and are working to restore it. Sorry for the inconvenience.");
+                              if (message === null) return; // cancelled (empty = use default)
+                              call(`/outages/${a.outageId}/notify`, "POST", message ? { message } : {}, "Customers notified");
+                            }}>
                             Notify area
                           </button>
                         )}
