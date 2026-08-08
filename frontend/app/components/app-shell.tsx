@@ -67,6 +67,7 @@ const menuGroups = [
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
   ]},
   { label: 'Business', items: [
+    { id: 'earnings', label: 'Collections & Earnings', href: '/earnings', Icon: navIcons.Payments },
     { id: 'billing', label: 'Billing', href: '/billing-center', Icon: navIcons.Payments },
     { id: 'reversals', label: 'Disputes & Reversals', href: '/reversals', Icon: navIcons.Invoices },
     { id: 'insights', label: 'Insights', href: '/insights', Icon: navIcons.Reports },

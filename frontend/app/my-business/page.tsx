@@ -78,6 +78,7 @@ export default function MyBusinessPage() {
         <button onClick={() => router.push("/quick-connect")}>Add & activate a customer</button>
         <button onClick={() => router.push("/renewals")}>Renew expiring customers</button>
         <button onClick={() => router.push("/payments")}>Record a payment</button>
+        <button onClick={() => router.push("/earnings")}>Collections report</button>
         <button onClick={() => router.push("/support-center")}>Handle complaints</button>
       </div>
     </div>

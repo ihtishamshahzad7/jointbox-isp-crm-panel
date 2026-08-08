@@ -77,6 +77,53 @@ export class UsersService {
     };
   }
 
+  /**
+   * Collections / earnings report for a reseller (or the whole ISP for admins):
+   * total collected + commission in a date range, a daily trend, a per-package
+   * breakdown and a per-method split. Scoped to the actor's subtree.
+   */
+  async myEarnings(actor: Actor | undefined, fromStr?: string, toStr?: string) {
+    const myId = this.scope.actorId(actor);
+    const isAdmin = this.scope.isAdmin(actor?.role);
+    const ids = isAdmin ? null : await this.scope.descendantIds(myId);
+
+    const to = toStr ? new Date(toStr) : new Date();
+    const from = fromStr ? new Date(fromStr) : new Date(to.getTime() - 29 * 86400_000);
+    to.setHours(23, 59, 59, 999);
+
+    // Subscriber ids in scope (payments/invoices reference subscribers).
+    const subIds = (await this.prisma.subscriber.findMany({
+      where: ids ? { userId: { in: ids } } : {},
+      select: { id: true },
+    })).map((s) => s.id);
+
+    if (!subIds.length) {
+      return { from, to, totalCollected: 0, commission: 0, paymentCount: 0, daily: [], byPackage: [], byMethod: [] };
+    }
+
+    const idArr = `{${subIds.join(',')}}`;
+    const fromISO = from.toISOString(), toISO = to.toISOString();
+
+    const [totalRow, daily, byPackage, byMethod, commissionRow] = await Promise.all([
+      this.prisma.$queryRawUnsafe<any[]>(`SELECT COALESCE(SUM(amount-COALESCE("refundedAmount",0)),0)::float8 AS total, COUNT(*)::int AS n FROM "Payment" WHERE "subscriberId" = ANY($1::int[]) AND "createdAt" BETWEEN $2 AND $3`, idArr, fromISO, toISO),
+      this.prisma.$queryRawUnsafe<any[]>(`SELECT to_char("createdAt",'YYYY-MM-DD') AS day, COALESCE(SUM(amount-COALESCE("refundedAmount",0)),0)::float8 AS total, COUNT(*)::int AS n FROM "Payment" WHERE "subscriberId" = ANY($1::int[]) AND "createdAt" BETWEEN $2 AND $3 GROUP BY 1 ORDER BY 1`, idArr, fromISO, toISO),
+      this.prisma.$queryRawUnsafe<any[]>(`SELECT COALESCE(pk.name,'—') AS package, COALESCE(SUM(p.amount-COALESCE(p."refundedAmount",0)),0)::float8 AS total, COUNT(*)::int AS n FROM "Payment" p JOIN "Subscriber" s ON s.id=p."subscriberId" LEFT JOIN "packages" pk ON pk.id=s."packageId" WHERE p."subscriberId" = ANY($1::int[]) AND p."createdAt" BETWEEN $2 AND $3 GROUP BY 1 ORDER BY total DESC`, idArr, fromISO, toISO),
+      this.prisma.$queryRawUnsafe<any[]>(`SELECT method, COALESCE(SUM(amount-COALESCE("refundedAmount",0)),0)::float8 AS total, COUNT(*)::int AS n FROM "Payment" WHERE "subscriberId" = ANY($1::int[]) AND "createdAt" BETWEEN $2 AND $3 GROUP BY 1 ORDER BY total DESC`, idArr, fromISO, toISO),
+      this.prisma.userBalanceTransaction.aggregate({ _sum: { amount: true }, where: { userId: ids ? { in: ids } : undefined, type: 'COMMISSION', createdAt: { gte: from, lte: to } } }),
+    ]);
+
+    const r2 = (n: number) => Math.round((n || 0) * 100) / 100;
+    return {
+      from, to,
+      totalCollected: r2(totalRow?.[0]?.total),
+      paymentCount: totalRow?.[0]?.n ?? 0,
+      commission: r2(commissionRow?._sum?.amount ?? 0),
+      daily: (daily || []).map((d) => ({ day: d.day, total: r2(d.total), count: d.n })),
+      byPackage: (byPackage || []).map((d) => ({ package: d.package, total: r2(d.total), count: d.n })),
+      byMethod: (byMethod || []).map((d) => ({ method: d.method, total: r2(d.total), count: d.n })),
+    };
+  }
+
   /** Group accounts by role, parent or KYC status — clear classification. */
   async groupedBy(by: string, actor?: Actor) {
     // Scope: admins see all; others see their subtree (descendants incl. self).

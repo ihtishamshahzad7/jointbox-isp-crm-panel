@@ -36,6 +36,12 @@ export class UsersController {
     return this.usersService.myBusiness(req.user);
   }
 
+  /** Collections/earnings report: totals, daily trend, per-package & method. */
+  @Get('me/earnings')
+  myEarnings(@Req() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.usersService.myEarnings(req.user, from, to);
+  }
+
   /** Group accounts by role | parent | kyc, with counts. */
   @Get('grouped')
   grouped(@Query('by') by: string, @Req() req: any) {
