@@ -40,6 +40,10 @@ export class NasController {
   @Get('overview')
   getOverview(@Req() req: any) { return this.nasService.getOverview(req.user); }
 
+  /** Group NAS by owner | type | site, with counts. */
+  @Get('grouped')
+  grouped(@Query('by') by: string, @Req() req: any) { return this.nasService.groupedBy(by || 'owner', req.user); }
+
   @Get('debug/radius-sync')
   debugRadiusSync() { return this.nasService.debugRadiusSync(); }
 

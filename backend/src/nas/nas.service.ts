@@ -240,6 +240,38 @@ export class NasService implements OnModuleInit {
     return nas;
   }
 
+  /** Group NAS by owner, type or site — clear classification with counts. */
+  async groupedBy(by: string, actor?: any) {
+    const where = await this.scope.nasWhere(actor);
+    const field = ({ owner: 'ownerId', type: 'type', site: 'description' } as Record<string, string>)[by] || 'ownerId';
+    const groups = await this.prisma.nas.groupBy({ by: [field as any], where, _count: { _all: true } });
+    const active = await this.prisma.nas.groupBy({ by: [field as any], where: { AND: [where, { isActive: true }] }, _count: { _all: true } });
+    const activeMap = new Map(active.map((g: any) => [g[field], g._count._all]));
+
+    const labels = new Map<any, string>();
+    if (field === 'ownerId') {
+      const keys = groups.map((g: any) => g[field]).filter((v) => v != null);
+      if (keys.length) {
+        const rows = await this.prisma.user.findMany({ where: { id: { in: keys } }, select: { id: true, name: true, role: true } });
+        rows.forEach((r) => labels.set(r.id, `${r.name} (${r.role})`));
+      }
+    }
+    return {
+      groupBy: by,
+      groups: groups.map((g: any) => {
+        const key = g[field];
+        return {
+          key,
+          label: field === 'ownerId'
+            ? (labels.get(key) ?? (key == null ? 'ISP-owned' : `#${key}`))
+            : String(key ?? 'Unspecified'),
+          total: g._count._all,
+          active: activeMap.get(key) ?? 0,
+        };
+      }).sort((a, b) => b.total - a.total),
+    };
+  }
+
   private resolveNasType(raw?: string): NasType {
     const map: Record<string, NasType> = {
       CISCO: NasType.CISCO, HUAWEI: NasType.HUAWEI,

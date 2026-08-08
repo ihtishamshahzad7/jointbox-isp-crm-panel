@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { UserWizard } from "./user-wizard";
 import ImageUpload from "../components/image-upload";
 import { Icons as SIcons } from "../components/icons";
+import { GroupPanel } from "../components/group-panel";
 
 const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
 
@@ -376,6 +377,13 @@ export default function UsersPage() {
               + Add {childRole ? `${childLabel} / Staff` : "Staff"}
             </button>
           </div>
+
+          {/* Grouping / classification panel */}
+          <GroupPanel
+            endpoint="/users/grouped"
+            title="Group accounts"
+            dims={[{ id: "role", label: "Role" }, { id: "parent", label: "Parent" }, { id: "kyc", label: "KYC status" }]}
+          />
 
           {/* Error Message */}
           {error && (

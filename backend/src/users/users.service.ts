@@ -21,6 +21,43 @@ const USER_LIST_CAP = 500;
 export class UsersService {
   constructor(private prisma: PrismaService, private scope: ScopeService) {}
 
+  /** Group accounts by role, parent or KYC status — clear classification. */
+  async groupedBy(by: string, actor?: Actor) {
+    // Scope: admins see all; others see their subtree (descendants incl. self).
+    let where: any = {};
+    if (!this.scope.isAdmin(actor?.role)) {
+      const ids = await this.scope.descendantIds(this.scope.actorId(actor));
+      where = { id: { in: ids } };
+    }
+    const field = ({ role: 'role', parent: 'parentId', kyc: 'kycStatus' } as Record<string, string>)[by] || 'role';
+    const groups = await this.prisma.user.groupBy({ by: [field as any], where, _count: { _all: true } });
+    const active = await this.prisma.user.groupBy({ by: [field as any], where: { AND: [where, { isActive: true }] }, _count: { _all: true } });
+    const activeMap = new Map(active.map((g: any) => [g[field], g._count._all]));
+
+    const labels = new Map<any, string>();
+    if (field === 'parentId') {
+      const keys = groups.map((g: any) => g[field]).filter((v) => v != null);
+      if (keys.length) {
+        const rows = await this.prisma.user.findMany({ where: { id: { in: keys } }, select: { id: true, name: true, role: true } });
+        rows.forEach((r) => labels.set(r.id, `${r.name} (${r.role})`));
+      }
+    }
+    return {
+      groupBy: by,
+      groups: groups.map((g: any) => {
+        const key = g[field];
+        return {
+          key,
+          label: field === 'parentId'
+            ? (labels.get(key) ?? (key == null ? 'Top-level (no parent)' : `#${key}`))
+            : String(key ?? 'Unspecified'),
+          total: g._count._all,
+          active: activeMap.get(key) ?? 0,
+        };
+      }).sort((a, b) => b.total - a.total),
+    };
+  }
+
   /** The logged-in user's own profile: details, organization, downline counts, balance. */
   async myProfile(actor?: Actor) {
     const id = this.scope.actorId(actor);

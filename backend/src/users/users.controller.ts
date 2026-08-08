@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Put, Delete, Patch,
-  Body, Param, UseGuards, Req,
+  Body, Param, Query, UseGuards, Req,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -28,6 +28,12 @@ export class UsersController {
   @Get('me/profile')
   myProfile(@Req() req: any) {
     return this.usersService.myProfile(req.user);
+  }
+
+  /** Group accounts by role | parent | kyc, with counts. */
+  @Get('grouped')
+  grouped(@Query('by') by: string, @Req() req: any) {
+    return this.usersService.groupedBy(by || 'role', req.user);
   }
 
   @Get(':id')

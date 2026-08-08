@@ -6,6 +6,7 @@ import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
+import { GroupPanel } from "../components/group-panel";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -878,6 +879,14 @@ export default function NasPage() {
             </select>
             <span style={{ fontSize:11, color:t.textMuted }}>{filteredNasList.length} result{filteredNasList.length !== 1 ? 's' : ''}</span>
           </div>
+
+          {/* Grouping / classification panel */}
+          <GroupPanel
+            endpoint="/nas/grouped"
+            title="Group NAS"
+            dims={[{ id: "owner", label: "Owner" }, { id: "type", label: "Type" }, { id: "site", label: "Site" }]}
+            onPick={(dim, key, label) => { if (dim === "type") setTypeFilter(String(key) as any); else setSearchQ(String(label || "")); }}
+          />
 
           {/* WinBox toolbar strip */}
           <Expandable label="NAS list">
