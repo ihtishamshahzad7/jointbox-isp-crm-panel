@@ -41,7 +41,7 @@ export default function MyBusinessPage() {
           <div className="mb-sub">{d.name} · {d.role} — live snapshot, refreshes every minute</div>
         </div>
         <div className="mb-actions">
-          <button className="primary" onClick={() => router.push("/subscribers?add=1")}>＋ New connection</button>
+          <button className="primary" onClick={() => router.push("/quick-connect")}>＋ New connection</button>
           <button onClick={() => router.push("/subscribers")}>All subscribers</button>
         </div>
       </div>
@@ -75,7 +75,7 @@ export default function MyBusinessPage() {
       {/* Action strip */}
       <div className="mb-action-strip">
         <div className="t">Do next</div>
-        <button onClick={() => router.push("/subscribers?add=1")}>Add & activate a customer</button>
+        <button onClick={() => router.push("/quick-connect")}>Add & activate a customer</button>
         <button onClick={() => router.push("/subscribers")}>Renew expiring customers</button>
         <button onClick={() => router.push("/payments")}>Record a payment</button>
         <button onClick={() => router.push("/support-center")}>Handle complaints</button>
