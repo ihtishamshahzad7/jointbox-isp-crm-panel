@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { TelemetryController } from './telemetry.controller';
 import { TelemetryService } from './telemetry.service';
 import { LinkAggregatorService } from './link-aggregator.service';
 import { SnmpPollerService } from './snmp-poller.service';
 import { SyslogReceiverService } from './syslog-receiver.service';
+import { NasMonitorService } from './nas-monitor.service';
 
 /**
  * Real-time subscriber link tracing. Three optional-per-NAS collectors
@@ -12,14 +14,15 @@ import { SyslogReceiverService } from './syslog-receiver.service';
  * one aggregator, which drives the live feed and per-subscriber path.
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, NotificationsModule],
   controllers: [TelemetryController],
   providers: [
     TelemetryService,
     LinkAggregatorService,
     SnmpPollerService,
     SyslogReceiverService,
+    NasMonitorService,
   ],
-  exports: [TelemetryService, LinkAggregatorService],
+  exports: [TelemetryService, LinkAggregatorService, NasMonitorService],
 })
 export class TelemetryModule {}

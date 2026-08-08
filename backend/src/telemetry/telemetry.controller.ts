@@ -1,5 +1,6 @@
 import { Controller, Get, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
 import { TelemetryService } from './telemetry.service';
+import { NasMonitorService } from './nas-monitor.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -9,8 +10,25 @@ import { ScopeService } from '../common/scope.service';
 export class TelemetryController {
   constructor(
     private readonly telemetry: TelemetryService,
+    private readonly monitor: NasMonitorService,
     private readonly scope: ScopeService,
   ) {}
+
+  /** MRTG-style traffic for a NAS: range = 1h | 6h | 7d | 30d, optional vlan. */
+  @Get('nas/:id/traffic')
+  nasTraffic(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('range') range?: string,
+    @Query('vlan') vlan?: string,
+  ) {
+    return this.monitor.traffic(id, range || '7d', vlan || undefined);
+  }
+
+  /** Current per-VLAN online + throughput breakdown for a NAS. */
+  @Get('nas/:id/vlans')
+  nasVlans(@Param('id', ParseIntPipe) id: number) {
+    return this.monitor.vlanBreakdown(id);
+  }
 
   /** Live network feed for the sidebar widget (in-memory, newest first). */
   @Get('feed')

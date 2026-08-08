@@ -344,6 +344,24 @@ model NasReload {
   @@map("nasreload")
 }
 
+/// Periodic per-NAS throughput + online-count snapshot for MRTG-style graphs.
+/// inBytes/outBytes are the CUMULATIVE octet sums across the NAS's live sessions
+/// at sample time; the read side derives a bit-rate from the delta between two
+/// consecutive samples (counter resets are clamped to 0, like MRTG).
+model NasTrafficSample {
+  id       Int      @id @default(autoincrement())
+  nasId    Int
+  ts       DateTime @default(now())
+  inBytes  BigInt   @default(0)
+  outBytes BigInt   @default(0)
+  online   Int      @default(0)
+  vlan     String?  @db.VarChar(64) // null = whole NAS; set = per-VLAN sample
+
+  @@index([nasId, ts])
+  @@index([nasId, vlan, ts])
+  @@map("nas_traffic_sample")
+}
+
 model RadPostAuth {
   id       BigInt   @id @default(autoincrement())
   username String   @db.VarChar(64)

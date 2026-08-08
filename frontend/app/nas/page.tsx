@@ -7,6 +7,7 @@ import { downloadCsv } from "../components/csv-export";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { GroupPanel } from "../components/group-panel";
+import { NasTraffic } from "./nas-traffic";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -994,6 +995,9 @@ export default function NasPage() {
                 </button>
               </div>
             </div>
+
+            {/* ── Traffic graph + VLAN breakdown (MRTG-style) ── */}
+            <NasTraffic nasId={viewDetail.nas.id} />
 
             {/* ── Notes (transmission, device, install details) ── */}
             <div style={{ border:`1px solid ${t.cardBorder}`, borderRadius:10, padding:'12px 14px', marginBottom:14 }}>
