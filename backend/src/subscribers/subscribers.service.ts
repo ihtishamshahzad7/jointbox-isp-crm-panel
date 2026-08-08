@@ -2327,6 +2327,65 @@ if (!unpaid && data.username && data.password) {
     return { action, total: unique.length, success, failed, skipped, errors };
   }
 
+  /**
+   * Group subscribers by a related dimension — NAS, area, dealer/parent
+   * (owner), package or status — with counts, so the list can be presented
+   * classified rather than as one flat roll. Scoped to the actor's subtree.
+   */
+  async groupedBy(by: string, actor?: Actor) {
+    const where = await this.scope.subscriberWhere(actor);
+    const fieldMap: Record<string, string> = {
+      nas: 'nasId', area: 'areaId', owner: 'userId', dealer: 'userId',
+      parent: 'userId', package: 'packageId', status: 'status',
+    };
+    const field = fieldMap[by] || 'nasId';
+
+    const groups = await this.prisma.subscriber.groupBy({
+      by: [field as any],
+      where,
+      _count: { _all: true },
+    });
+    // Active count per group, so each row shows total + how many are live-billing.
+    const activeGroups = await this.prisma.subscriber.groupBy({
+      by: [field as any],
+      where: { AND: [where, { status: 'ACTIVE' }] },
+      _count: { _all: true },
+    });
+    const activeMap = new Map(activeGroups.map((g: any) => [g[field], g._count._all]));
+
+    // Resolve human labels for the grouping keys.
+    const keys = groups.map((g: any) => g[field]).filter((v) => v != null);
+    const labels = new Map<any, string>();
+    if (field === 'nasId' && keys.length) {
+      const rows = await this.prisma.nas.findMany({ where: { id: { in: keys } }, select: { id: true, shortname: true, nasname: true } });
+      rows.forEach((r) => labels.set(r.id, r.shortname || r.nasname));
+    } else if (field === 'areaId' && keys.length) {
+      const rows = await this.prisma.area.findMany({ where: { id: { in: keys } }, select: { id: true, name: true } });
+      rows.forEach((r) => labels.set(r.id, r.name));
+    } else if (field === 'userId' && keys.length) {
+      const rows = await this.prisma.user.findMany({ where: { id: { in: keys } }, select: { id: true, name: true, role: true } });
+      rows.forEach((r) => labels.set(r.id, `${r.name} (${r.role})`));
+    } else if (field === 'packageId' && keys.length) {
+      const rows = await this.prisma.package.findMany({ where: { id: { in: keys } }, select: { id: true, name: true } });
+      rows.forEach((r) => labels.set(r.id, r.name));
+    }
+
+    return {
+      groupBy: by,
+      groups: groups
+        .map((g: any) => {
+          const key = g[field];
+          return {
+            key,
+            label: field === 'status' ? String(key) : (labels.get(key) ?? (key == null ? 'Unassigned' : `#${key}`)),
+            total: g._count._all,
+            active: activeMap.get(key) ?? 0,
+          };
+        })
+        .sort((a, b) => b.total - a.total),
+    };
+  }
+
   async bulkDelete(ids: number[], actor?: Actor, force = false) {
     let success = 0;
     let failed = 0;

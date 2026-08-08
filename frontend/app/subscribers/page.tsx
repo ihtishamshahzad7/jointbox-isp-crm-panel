@@ -5,6 +5,7 @@ import { money } from "../components/currency";
 import { SubscriberTable } from "./subscriber-table";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
+import { SubscriberGroups } from "./subscriber-groups";
 import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
@@ -1560,6 +1561,16 @@ export default function SubscribersPage() {
               <input type="date" style={inputSt} value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
             </div>
           )}
+
+          {/* Grouping / classification panel */}
+          <SubscriberGroups onPick={(dim, key) => {
+            const k = String(key ?? "");
+            if (dim === "nas") setNasFilter(k);
+            else if (dim === "package") setPackageFilter(k);
+            else if (dim === "status") setStatusFilter(k);
+            else if (dim === "owner") setSalespersonFilter(k);
+            setPage(1);
+          }} />
 
           {/* WinBox toolbar strip */}
           <Expandable label="subscribers">

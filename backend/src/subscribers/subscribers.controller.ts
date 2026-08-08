@@ -297,6 +297,12 @@ export class SubscribersController {
     }, req.user);
   }
 
+  /** Grouped counts by nas | area | owner(dealer/parent) | package | status. */
+  @Get('grouped')
+  grouped(@Query('by') by: string, @Req() req: any) {
+    return this.subscribersService.groupedBy(by || 'nas', req.user);
+  }
+
   @Get('search')
   search(@Query('q') q: string, @Req() req: any) {
     return this.subscribersService.search(q, req.user);
