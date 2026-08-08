@@ -71,6 +71,12 @@ export class NasController {
     return this.nasService.toggleStatus(+id);
   }
 
+  /** Register the interfaces/ports to monitor (empty array = monitor all). */
+  @Patch(':id/monitored-ports')
+  setMonitoredPorts(@Param('id') id: string, @Body() body: { ports: string[] }) {
+    return this.nasService.setMonitoredPorts(+id, body?.ports || []);
+  }
+
   @Delete(':id')
   remove(@Param('id') id: string) { return this.nasService.remove(+id); }
 

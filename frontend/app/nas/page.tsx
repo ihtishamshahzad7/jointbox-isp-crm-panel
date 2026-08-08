@@ -996,6 +996,23 @@ export default function NasPage() {
               </div>
             </div>
 
+            {/* ── Registered ports to monitor ── */}
+            <div style={{ border:`1px solid ${t.cardBorder}`, borderRadius:10, padding:'11px 14px', marginBottom:12, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+              <span style={{ fontSize:12, fontWeight:700 }}>Monitored ports</span>
+              <input
+                defaultValue={(() => { try { const a = JSON.parse((viewDetail.nas as any).monitoredPorts || "[]"); return Array.isArray(a) ? a.join(", ") : ""; } catch { return ""; } })()}
+                id={`mp-${viewDetail.nas.id}`}
+                placeholder="e.g. ether1-wan, vlan100  (blank = all interfaces)"
+                style={{ ...inputSt, flex:1, minWidth:220 }} />
+              <Btn variant="primary" size="xs" onClick={async ()=>{
+                const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
+                const ports = (el?.value || "").split(",").map(s=>s.trim()).filter(Boolean);
+                const r = await fetch(`${API}/nas/${viewDetail.nas.id}/monitored-ports`, { method:"PATCH", headers, body: JSON.stringify({ ports }) });
+                showToast(r.ok ? (ports.length ? `Monitoring ${ports.length} registered port(s)` : "Monitoring all interfaces") : "Save failed", r.ok ? "ok" : "err");
+              }}>Save</Btn>
+              <span style={{ fontSize:10.5, color:t.textMuted, width:'100%' }}>Only these interfaces/ports are polled. Leave blank to monitor every interface.</span>
+            </div>
+
             {/* ── Traffic graph + VLAN breakdown (MRTG-style) ── */}
             <NasTraffic nasId={viewDetail.nas.id} />
 

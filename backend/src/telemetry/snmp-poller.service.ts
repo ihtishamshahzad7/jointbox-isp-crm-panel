@@ -49,7 +49,7 @@ export class SnmpPollerService {
         where: { snmpEnabled: true, isActive: true },
         select: {
           id: true, nasname: true, nasIp: true, snmpPort: true, snmpCommunity: true,
-          snmpVersion: true, snmpPollSec: true, deviceType: true,
+          snmpVersion: true, snmpPollSec: true, deviceType: true, monitoredPorts: true,
         },
       });
       const now = Date.now();
@@ -117,8 +117,24 @@ export class SnmpPollerService {
       }
       await this.aggregator.onNasReachable(nas);
 
+      // Only monitor the interfaces/ports registered on this NAS. When
+      // monitoredPorts is set we poll ONLY those (matched by interface name or
+      // ifIndex); when empty/null we fall back to monitoring every interface.
+      let allowed: Set<string> | null = null;
+      if (nas.monitoredPorts) {
+        try {
+          const list = JSON.parse(nas.monitoredPorts);
+          if (Array.isArray(list) && list.length) {
+            allowed = new Set(list.map((x: any) => String(x).trim().toLowerCase()));
+          }
+        } catch { /* not JSON — treat as unset */ }
+      }
+      const isAllowed = (ifIndex: any, portName: string) =>
+        !allowed || allowed.has(String(ifIndex).toLowerCase()) || allowed.has(portName.toLowerCase());
+
       for (const [ifIndex, status] of oper) {
         const portName = descr.get(ifIndex)?.toString?.() || `if${ifIndex}`;
+        if (!isAllowed(ifIndex, portName)) continue; // skip unregistered ports
         const up = Number(status) === IF_OPER_UP;
         await this.aggregator.onInterfaceStatus(nas, ifIndex, portName, up);
 

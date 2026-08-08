@@ -240,6 +240,20 @@ export class NasService implements OnModuleInit {
     return nas;
   }
 
+  /**
+   * Register which interfaces/ports to monitor on a NAS. Pass an array of
+   * interface names or ifIndexes; only these are polled by the SNMP monitor.
+   * An empty array clears the restriction (monitor all again).
+   */
+  async setMonitoredPorts(id: number, ports: string[]) {
+    const clean = (ports || []).map((p) => String(p).trim()).filter(Boolean);
+    await this.prisma.nas.update({
+      where: { id },
+      data: { monitoredPorts: clean.length ? JSON.stringify(clean) : null },
+    });
+    return { id, monitoredPorts: clean, monitorsAll: clean.length === 0 };
+  }
+
   /** Group NAS by owner, type or site — clear classification with counts. */
   async groupedBy(by: string, actor?: any) {
     const where = await this.scope.nasWhere(actor);

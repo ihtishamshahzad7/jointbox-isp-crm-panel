@@ -422,6 +422,10 @@ model Nas {
   snmpCommunity  String?     @default("public")
   snmpVersion    SnmpVersion @default(V2C)
   snmpPollSec    Int         @default(30)
+  /// JSON array of interface names or ifIndexes to monitor, e.g.
+  /// ["ether1-wan","vlan100"] or ["1","3"]. When set (non-empty), ONLY these
+  /// registered ports/interfaces are polled; empty/null monitors all.
+  monitoredPorts String?
 
   syslogEnabled  Boolean @default(false)  // receive device syslog on UDP 514
   syslogPort     Int     @default(514)
