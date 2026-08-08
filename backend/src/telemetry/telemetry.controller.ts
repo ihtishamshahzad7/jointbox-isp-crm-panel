@@ -30,6 +30,18 @@ export class TelemetryController {
     return this.monitor.vlanBreakdown(id);
   }
 
+  /** Link up/down + optical signal for every ONU on a NAS. */
+  @Get('nas/:id/signals')
+  nasSignals(@Param('id', ParseIntPipe) id: number) {
+    return this.monitor.nasSignals(id);
+  }
+
+  /** Optical-signal history for one ONU (trend graph). */
+  @Get('onu/:id/signal')
+  onuSignal(@Param('id', ParseIntPipe) id: number, @Query('range') range?: string) {
+    return this.monitor.onuSignal(id, range || '7d');
+  }
+
   /** Live network feed for the sidebar widget (in-memory, newest first). */
   @Get('feed')
   feed(@Query('limit') limit?: string) {

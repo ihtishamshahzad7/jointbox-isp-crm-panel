@@ -2761,6 +2761,20 @@ model OnuTelemetry {
   @@map("onu_telemetry")
 }
 
+/// Time-series of ONU optical signal + link status, so signal degradation and
+/// up/down flaps can be graphed over time (OnuTelemetry only keeps the latest).
+model OnuSignalSample {
+  id         Int      @id @default(autoincrement())
+  onuId      Int
+  ts         DateTime @default(now())
+  rxPowerDbm Float?
+  txPowerDbm Float?
+  status     String?  @db.VarChar(40)
+
+  @@index([onuId, ts])
+  @@map("onu_signal_sample")
+}
+
 /// Audit trail for invoice reversals. The original invoice gets CANCELLED,
 /// a new reversal invoice is created, and every step is logged here.
 model InvoiceReversal {

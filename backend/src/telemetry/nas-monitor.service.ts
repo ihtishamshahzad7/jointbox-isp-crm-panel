@@ -77,17 +77,87 @@ export class NasMonitorService {
         }
         this.lastOnline.set(nas.id, now);
       }
+      // Append ONU optical-signal history so signal + up/down can be graphed.
+      await this.sampleSignals();
     } catch (e: any) {
       this.log.warn(`NAS sample failed: ${e?.message || e}`);
     }
+  }
+
+  /** Copy the latest ONU telemetry snapshots into the signal-history table. */
+  private async sampleSignals() {
+    try {
+      const rows = await this.prisma.onuTelemetry.findMany({
+        where: { OR: [{ rxPowerDbm: { not: null } }, { status: { not: null } }] },
+        select: { onuId: true, rxPowerDbm: true, txPowerDbm: true, status: true },
+      });
+      if (!rows.length) return;
+      await this.prisma.onuSignalSample.createMany({
+        data: rows.map((r) => ({ onuId: r.onuId, rxPowerDbm: r.rxPowerDbm, txPowerDbm: r.txPowerDbm, status: r.status })),
+      });
+    } catch (e: any) {
+      this.log.warn(`Signal sample failed: ${e?.message || e}`);
+    }
+  }
+
+  /** Current link status + optical signal for every ONU on a NAS. */
+  async nasSignals(nasId: number) {
+    const onus = await this.prisma.onu.findMany({
+      where: { subscriber: { is: { nasId } } },
+      select: {
+        id: true, serialNumber: true,
+        subscriber: { select: { id: true, fullName: true, username: true } },
+        telemetry: { select: { rxPowerDbm: true, txPowerDbm: true, status: true, lastSeenAt: true } },
+      },
+      take: 2000,
+    });
+    const quality = (dbm?: number | null) => {
+      if (dbm == null) return 'unknown';
+      if (dbm >= -25) return 'good';
+      if (dbm >= -28) return 'warn';
+      return 'critical';
+    };
+    return {
+      nasId,
+      links: onus.map((o) => {
+        const st = (o.telemetry?.status || '').toUpperCase();
+        const up = st === 'ONLINE' || st === 'UP' || (st === '' && o.telemetry?.rxPowerDbm != null);
+        return {
+          onuId: o.id,
+          subscriberId: o.subscriber?.id ?? null,
+          name: o.subscriber?.fullName ?? o.serialNumber ?? `ONU #${o.id}`,
+          username: o.subscriber?.username ?? null,
+          status: o.telemetry?.status ?? (up ? 'ONLINE' : 'OFFLINE'),
+          up,
+          rxPowerDbm: o.telemetry?.rxPowerDbm ?? null,
+          txPowerDbm: o.telemetry?.txPowerDbm ?? null,
+          quality: quality(o.telemetry?.rxPowerDbm),
+          lastSeenAt: o.telemetry?.lastSeenAt ?? null,
+        };
+      }).sort((a, b) => (a.up === b.up ? 0 : a.up ? 1 : -1)), // down/critical first
+    };
+  }
+
+  /** Optical-signal history for one ONU (for a trend graph). */
+  async onuSignal(onuId: number, range = '7d') {
+    const { since } = this.rangeToInterval(range);
+    const rows = await this.prisma.onuSignalSample.findMany({
+      where: { onuId, ts: { gte: since } },
+      orderBy: { ts: 'asc' },
+      select: { ts: true, rxPowerDbm: true, txPowerDbm: true, status: true },
+    });
+    return { onuId, range, points: rows };
   }
 
   /** Nightly: keep the sample table bounded (30 days of history). */
   @Cron('40 3 * * *')
   async prune() {
     if (!isPrimaryInstance()) return;
-    await this.prisma.nasTrafficSample.deleteMany({ where: { ts: { lt: new Date(Date.now() - 31 * 86400_000) } } })
-      .catch((e) => this.log.warn(`Sample prune failed: ${e?.message || e}`));
+    const cutoff = new Date(Date.now() - 31 * 86400_000);
+    await this.prisma.nasTrafficSample.deleteMany({ where: { ts: { lt: cutoff } } })
+      .catch((e) => this.log.warn(`Traffic prune failed: ${e?.message || e}`));
+    await this.prisma.onuSignalSample.deleteMany({ where: { ts: { lt: cutoff } } })
+      .catch((e) => this.log.warn(`Signal prune failed: ${e?.message || e}`));
   }
 
   private rangeToInterval(range: string): { since: Date; bucketSec: number } {

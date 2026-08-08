@@ -25,6 +25,7 @@ export function NasTraffic({ nasId }: { nasId: number }) {
   const [range, setRange] = React.useState("7d");
   const [data, setData] = React.useState<any>(null);
   const [vlans, setVlans] = React.useState<any[]>([]);
+  const [links, setLinks] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(false);
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const h = { Authorization: `Bearer ${token}` };
@@ -35,7 +36,8 @@ export function NasTraffic({ nasId }: { nasId: number }) {
     Promise.all([
       fetch(`${API}/telemetry/nas/${nasId}/traffic?range=${range}`, { headers: h }).then((r) => r.ok ? r.json() : null),
       fetch(`${API}/telemetry/nas/${nasId}/vlans`, { headers: h }).then((r) => r.ok ? r.json() : null),
-    ]).then(([t, v]) => { if (!alive) return; setData(t); setVlans(v?.vlans || []); setLoading(false); })
+      fetch(`${API}/telemetry/nas/${nasId}/signals`, { headers: h }).then((r) => r.ok ? r.json() : null),
+    ]).then(([t, v, s]) => { if (!alive) return; setData(t); setVlans(v?.vlans || []); setLinks(s?.links || []); setLoading(false); })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [nasId, range]);
@@ -96,6 +98,25 @@ export function NasTraffic({ nasId }: { nasId: number }) {
           ))}
         </div>
       )}
+
+      <div className="nt-vlan-h">Links up/down &amp; optical signal</div>
+      {links.length === 0 ? (
+        <div className="nt-empty sm">No ONU/link telemetry for this NAS (needs SNMP-enabled OLT/ONU).</div>
+      ) : (
+        <div className="nt-links">
+          <div className="nt-links-sum">
+            {links.filter((l) => l.up).length} up · <span className="dn">{links.filter((l) => !l.up).length} down</span>
+          </div>
+          {links.slice(0, 200).map((l) => (
+            <div key={l.onuId} className={`nt-link q-${l.quality}`}>
+              <span className={`ld ${l.up ? "up" : "dn"}`} />
+              <span className="l-name">{l.name}</span>
+              <span className="l-st">{l.status}</span>
+              <span className="l-sig">{l.rxPowerDbm != null ? `${l.rxPowerDbm.toFixed(1)} dBm` : "—"}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -125,4 +146,19 @@ const CSS = `
 .v-name{font-family:ui-monospace,monospace;font-weight:700;color:#7cc0ff;min-width:120px}
 .v-on{color:#4ade80;font-weight:700}
 .v-b{margin-left:auto;color:var(--muted);font-size:11px}
+.nt-links-sum{font-size:11.5px;color:var(--muted);margin-bottom:8px}
+.nt-links-sum .dn{color:#f87171;font-weight:700}
+.nt-links{display:grid;gap:5px;max-height:260px;overflow:auto}
+.nt-link{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:6px 11px;font-size:12px;border-left-width:3px}
+.nt-link.q-good{border-left-color:#4ade80}
+.nt-link.q-warn{border-left-color:#ff9800}
+.nt-link.q-critical{border-left-color:#f44336}
+.nt-link.q-unknown{border-left-color:var(--border)}
+.nt-link .ld{width:8px;height:8px;border-radius:50%;flex:none}
+.nt-link .ld.up{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,.8)}
+.nt-link .ld.dn{background:#f87171;box-shadow:0 0 6px rgba(248,113,113,.8)}
+.nt-link .l-name{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nt-link .l-st{margin-left:auto;font-size:10.5px;color:var(--muted);text-transform:uppercase}
+.nt-link .l-sig{min-width:74px;text-align:right;font-family:ui-monospace,monospace;font-size:11px;color:var(--text)}
 `;
