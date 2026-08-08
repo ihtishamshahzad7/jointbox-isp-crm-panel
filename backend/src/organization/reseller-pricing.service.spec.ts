@@ -4,6 +4,9 @@ describe('ResellerPricingService.reverseActivation', () => {
   it('reverses a previously settled activation by restoring balances and logging an audit entry', async () => {
     const prisma: any = {
       userBalanceTransaction: {
+        // reverseActivation first checks whether this settlement was ALREADY
+        // reversed (reference REV#…). null = not yet reversed, so it proceeds.
+        findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([
           { id: 11, userId: 7, amount: -150, balanceAfter: 350, reference: 'SUB#42', notes: 'Package activation: dealer cost' },
           { id: 12, userId: 8, amount: 50, balanceAfter: 250, reference: 'SUB#42', notes: 'Package activation: dealer profit' },
