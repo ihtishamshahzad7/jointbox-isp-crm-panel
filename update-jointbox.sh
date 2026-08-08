@@ -25,6 +25,36 @@ git fetch origin "$BRANCH" 2>/dev/null || git fetch origin || true
 git reset --hard "origin/$BRANCH" 2>/dev/null || git reset --hard origin/main || true
 git pull --ff-only 2>/dev/null || true
 
+# -----------------------------------------------------------------------------
+# ENV MIGRATION — keep every existing install's .env up to date automatically.
+#
+# New releases sometimes need a new setting (e.g. SECRETS_KEY, which encrypts
+# saved Discord/WhatsApp credentials). Clients must never have to hand-edit
+# .env on their server, so we add anything missing here. Idempotent: an existing
+# key is left exactly as-is, so nothing is ever overwritten or rotated.
+# -----------------------------------------------------------------------------
+ENVF="$REPO/backend/.env"
+if [ -f "$ENVF" ]; then
+  add_env() {  # add_env KEY "value"   → only if KEY is absent
+    local key="$1" val="$2"
+    if ! grep -qE "^[[:space:]]*${key}=" "$ENVF"; then
+      # Ensure the file ends with a newline before appending.
+      [ -n "$(tail -c1 "$ENVF")" ] && echo "" >> "$ENVF"
+      echo "${key}=${val}" >> "$ENVF"
+      echo "  • added missing ${key} to backend/.env"
+    fi
+  }
+  gen48() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48; }
+
+  # Encrypts operator-managed secrets at rest. Generated once, then never
+  # changed — rotating it would make already-saved secrets undecryptable.
+  add_env SECRETS_KEY "\"$(gen48)\""
+  # Interim accounting interval — required for accurate live/online detection.
+  add_env RADIUS_INTERIM_INTERVAL "300"
+
+  chmod 600 "$ENVF" 2>/dev/null || true
+fi
+
 echo "🗄️  Applying database migrations + reconcile..."
 cd "$REPO/backend"
 npm install --no-audit --no-fund
