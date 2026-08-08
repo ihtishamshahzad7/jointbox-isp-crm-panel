@@ -50,6 +50,10 @@ export function SubscriberGroups({ onPick }: { onPick?: (dimension: string, key:
       const days = Number(prompt(`Grant grace period to all ${g.total} in "${g.label}" — days?`, "3"));
       if (!days || days <= 0) return;
       body.days = days;
+    } else if (action === "activate") {
+      if (!confirm(`Activate all ${g.total} subscriber(s) in "${g.label}"? This charges wallets and generates invoices.`)) return;
+    } else if (action === "deactivate") {
+      if (!confirm(`Deactivate all ${g.total} subscriber(s) in "${g.label}"? They will go offline.`)) return;
     }
     try {
       const r = await fetch(`${API}/subscribers/group-action`, {
@@ -94,6 +98,8 @@ export function SubscriberGroups({ onPick }: { onPick?: (dimension: string, key:
                   <div className="sg-meter"><span style={{ width: `${pct}%` }} /></div>
                 </button>
                 <div className="sg-acts">
+                  <button title="Activate everyone in this group" onClick={() => groupAction(g, "activate")}>✓</button>
+                  <button title="Deactivate everyone in this group" className="bad" onClick={() => groupAction(g, "deactivate")}>⊘</button>
                   <button title="Message everyone in this group" onClick={() => groupAction(g, "message")}>✉</button>
                   <button title="Grant grace to this group" onClick={() => groupAction(g, "grace")}>⏳</button>
                 </div>
@@ -128,6 +134,7 @@ const CSS = `
 .sg-acts button{width:24px;height:24px;border-radius:6px;border:1px solid var(--border);
   background:var(--surface-2);color:var(--text);cursor:pointer;font-size:12px;line-height:1}
 .sg-acts button:hover{border-color:var(--accent);color:var(--accent)}
+.sg-acts button.bad:hover{border-color:#ef4444;color:#fca5a5}
 .sg-name{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sg-nums{font-size:11.5px;color:var(--muted);margin-top:4px}
 .sg-nums b{color:var(--text);font-size:14px}
