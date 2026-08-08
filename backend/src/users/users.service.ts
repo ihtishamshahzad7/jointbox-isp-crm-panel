@@ -21,6 +21,62 @@ const USER_LIST_CAP = 500;
 export class UsersService {
   constructor(private prisma: PrismaService, private scope: ScopeService) {}
 
+  /**
+   * "My Business" — a reseller/franchise operations snapshot: wallet, customer
+   * health, this-month revenue + commission, money owed to them (due invoices)
+   * and what needs action (expiring / expired). Scoped to their own subtree.
+   */
+  async myBusiness(actor?: Actor) {
+    const myId = this.scope.actorId(actor);
+    const ids = this.scope.isAdmin(actor?.role) ? null : await this.scope.descendantIds(myId);
+    const subWhere: any = ids ? { userId: { in: ids } } : {};
+
+    const me = await this.prisma.user.findUnique({
+      where: { id: myId },
+      select: { name: true, role: true, balance: true, creditLimit: true },
+    });
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const soon = new Date(now.getTime() + 7 * 86400_000);
+
+    // Customer counts.
+    const [total, active, expired, suspended, expiringSoon] = await Promise.all([
+      this.prisma.subscriber.count({ where: subWhere }),
+      this.prisma.subscriber.count({ where: { ...subWhere, status: 'ACTIVE' } }),
+      this.prisma.subscriber.count({ where: { ...subWhere, status: 'EXPIRED' } }),
+      this.prisma.subscriber.count({ where: { ...subWhere, status: 'SUSPENDED' } }),
+      this.prisma.subscriber.count({ where: { ...subWhere, status: 'ACTIVE', serviceSettings: { is: { expiryDate: { gte: now, lte: soon } } } } }),
+    ]);
+
+    // The subscriber ids in scope (for payment/invoice aggregates).
+    const subIds = (await this.prisma.subscriber.findMany({ where: subWhere, select: { id: true } })).map((s) => s.id);
+
+    const [collectedMonth, dueAgg, newThisMonth, commissionMonth] = await Promise.all([
+      subIds.length ? this.prisma.payment.aggregate({ _sum: { amount: true }, where: { subscriberId: { in: subIds }, createdAt: { gte: monthStart } } }) : Promise.resolve({ _sum: { amount: 0 } } as any),
+      subIds.length ? this.prisma.invoice.aggregate({ _sum: { dueAmount: true }, _count: { _all: true }, where: { subscriberId: { in: subIds }, status: { not: 'PAID' } } }) : Promise.resolve({ _sum: { dueAmount: 0 }, _count: { _all: 0 } } as any),
+      this.prisma.subscriber.count({ where: { ...subWhere, createdAt: { gte: monthStart } } }),
+      this.prisma.userBalanceTransaction.aggregate({ _sum: { amount: true }, where: { userId: ids ? { in: ids } : undefined, type: 'COMMISSION', createdAt: { gte: monthStart } } }),
+    ]);
+
+    const balance = me?.balance ?? 0;
+    const creditLimit = me?.creditLimit ?? 0;
+    return {
+      name: me?.name, role: me?.role,
+      wallet: { balance, creditLimit, spendable: balance + creditLimit, low: balance < 1000 },
+      customers: { total, active, expired, suspended, expiringSoon },
+      month: {
+        newConnections: newThisMonth,
+        collected: Math.round((collectedMonth?._sum?.amount ?? 0) * 100) / 100,
+        commission: Math.round((commissionMonth?._sum?.amount ?? 0) * 100) / 100,
+      },
+      receivables: {
+        dueAmount: Math.round((dueAgg?._sum?.dueAmount ?? 0) * 100) / 100,
+        unpaidInvoices: dueAgg?._count?._all ?? 0,
+      },
+    };
+  }
+
   /** Group accounts by role, parent or KYC status — clear classification. */
   async groupedBy(by: string, actor?: Actor) {
     // Scope: admins see all; others see their subtree (descendants incl. self).

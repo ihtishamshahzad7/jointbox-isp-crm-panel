@@ -30,6 +30,12 @@ export class UsersController {
     return this.usersService.myProfile(req.user);
   }
 
+  /** Reseller/franchise operations snapshot: wallet, customers, revenue, dues. */
+  @Get('me/business')
+  myBusiness(@Req() req: any) {
+    return this.usersService.myBusiness(req.user);
+  }
+
   /** Group accounts by role | parent | kyc, with counts. */
   @Get('grouped')
   grouped(@Query('by') by: string, @Req() req: any) {
