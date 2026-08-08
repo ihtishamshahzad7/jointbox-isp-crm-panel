@@ -936,6 +936,15 @@ export default function NasPage() {
                 onShare={openShare}
                 onCheck={checkNas}
                 onDelete={(nas) => setDeleteConfirm(nas.id)}
+                onMessageSubs={async (nas) => {
+                  const message = prompt(`Send SMS to all subscribers on "${nas.shortname || nas.nasname}":`, "Maintenance notice: brief downtime expected tonight.");
+                  if (!message) return;
+                  try {
+                    const r = await fetch(`${API}/subscribers/group-action`, { method: "POST", headers, body: JSON.stringify({ by: "nas", key: nas.id, action: "message", message }) });
+                    const d = await r.json();
+                    alert(r.ok ? `Sent to ${d.success} subscriber(s)${d.failed ? `, ${d.failed} failed` : ""}` : (d?.message || "Failed"));
+                  } catch (e: any) { alert(e.message); }
+                }}
                 checkingIds={checkingIds}
                 reachOf={(id) => {
                   const r = reach(id);

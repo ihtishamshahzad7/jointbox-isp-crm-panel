@@ -49,7 +49,7 @@ function useCtxMenu() {
    NAS / ROUTERS
    ═══════════════════════════════════════════════════════════════════ */
 export function NasTable({
-  rows, me, onView, onEdit, onShare, onCheck, onDelete, checking, checkingIds, reachOf,
+  rows, me, onView, onEdit, onShare, onCheck, onDelete, checking, checkingIds, reachOf, onMessageSubs,
 }: {
   rows: Row[];
   me?: any;
@@ -58,6 +58,8 @@ export function NasTable({
   onShare: (r: Row) => void;
   onCheck: (id: number) => void;
   onDelete: (r: Row) => void;
+  /** Optional: message all subscribers on this NAS (maintenance notice, etc.). */
+  onMessageSubs?: (r: Row) => void;
   /** Global disable for the Check button — used when no per-row state exists. */
   checking?: boolean;
   /** Per-row "currently checking" — takes precedence over `checking` when given. */
@@ -92,6 +94,7 @@ export function NasTable({
               <tr key={n.id} onClick={() => onView(n)}
                 onContextMenu={(e) => ctx.open(e, [
                   { label: "Open", onClick: () => onView(n) },
+                  ...(onMessageSubs ? [{ label: "Message subscribers…", onClick: () => onMessageSubs(n) }] : []),
                   ...(mine ? [
                     { label: "Check reachability", onClick: () => onCheck(n.id) },
                     { label: "Share…", onClick: () => onShare(n) },
