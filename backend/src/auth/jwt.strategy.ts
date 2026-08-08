@@ -27,6 +27,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       role: payload.role,
       name: payload.name,
       imp: payload.imp,     // present when this is an "act as" session
+      isDemo: payload.isDemo === true,
     };
   }
 }

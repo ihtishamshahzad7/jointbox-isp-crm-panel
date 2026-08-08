@@ -537,6 +537,13 @@ model User {
   cnicFrontUrl String?  // CNIC / national ID — front
   cnicBackUrl  String?  // CNIC / national ID — back
 
+  // ── Demo / sandbox account. A demo user does real franchise work (create
+  // subscribers, users, NAS, billing…) but is blocked from console / RADIUS
+  // admin / logs, and the whole account + everything it created is auto-deleted
+  // after demoExpiresAt (7 days), so nothing it touches leaks or persists.
+  isDemo        Boolean   @default(false)
+  demoExpiresAt DateTime?
+
   // ── KYC for the account holder (reseller / staff), mirroring Subscriber KYC.
   // Regulators require a verified identity behind every account, not just every
   // subscriber. Normalised digits for duplicate detection.

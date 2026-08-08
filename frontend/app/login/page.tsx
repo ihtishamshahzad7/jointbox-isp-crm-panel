@@ -127,6 +127,22 @@ export default function LoginPage() {
     }
   };
 
+  const handleDemo = async () => {
+    setLoading(true);
+    setMessage("Creating a demo account…");
+    try {
+      const base = (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "");
+      const r = await fetch(`${base}/demo/create`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.message || "Could not create a demo account");
+      setEmail(d.email);
+      setPassword(d.password);
+      setMessage(`✅ Demo ready! Email: ${d.email} · Password: ${d.password} — click Sign In. (Auto-deletes in 7 days.)`);
+    } catch (e: any) {
+      setMessage("❌ Could not create a demo account right now. Please try again.");
+    } finally { setLoading(false); }
+  };
+
   return (
     <div
       style={{
@@ -490,6 +506,20 @@ export default function LoginPage() {
             }}
           >
             {loading ? "Signing In..." : "Sign In →"}
+          </button>
+
+          <button
+            onClick={handleDemo}
+            disabled={loading}
+            style={{
+              width: "100%", marginTop: "10px", padding: "11px", borderRadius: "10px",
+              border: "1px solid rgba(255,255,255,0.15)", cursor: loading ? "not-allowed" : "pointer",
+              fontSize: "12.5px", fontWeight: 700, letterSpacing: "0.04em",
+              background: "transparent", color: "#c4b5fd", transition: "all 0.2s",
+            }}
+            title="Create a sandbox franchise account — everything auto-deletes in 7 days"
+          >
+            ✦ Try a demo account
           </button>
 
           {message && (

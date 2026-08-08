@@ -3,9 +3,11 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { BlockDemoGuard } from '../security/block-demo.guard';
 import { LogsService } from './logs.service';
 
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+// Demo accounts never see logs — security / no data leak.
+@UseGuards(JwtAuthGuard, PermissionsGuard, BlockDemoGuard)
 @Controller('logs')
 export class LogsController {
   constructor(private readonly logs: LogsService) {}

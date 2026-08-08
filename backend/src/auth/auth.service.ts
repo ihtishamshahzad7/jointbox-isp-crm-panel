@@ -166,6 +166,7 @@ export class AuthService {
       email: user.email,
       role: user.role,
       name: user.name,
+      isDemo: (user as any).isDemo === true,
     };
 
     const token = this.jwtService.sign(payload, {
