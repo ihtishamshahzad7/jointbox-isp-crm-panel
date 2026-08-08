@@ -2772,6 +2772,19 @@ model OnuTelemetry {
   @@map("onu_telemetry")
 }
 
+/// Encrypted key/value store for operator-managed secrets (Discord webhook,
+/// WhatsApp tokens…). Values are AES-256-GCM encrypted at rest and are NEVER
+/// returned to the UI in plaintext — only a masked preview.
+model AppSecret {
+  key         String   @id
+  valueEnc    String              // iv:tag:ciphertext (base64)
+  maskedHint  String?             // e.g. "https://discord.com/api/webhooks/…4f2a"
+  updatedById Int?
+  updatedAt   DateTime @updatedAt
+
+  @@map("app_secret")
+}
+
 /// Time-series of ONU optical signal + link status, so signal degradation and
 /// up/down flaps can be graphed over time (OnuTelemetry only keeps the latest).
 model OnuSignalSample {

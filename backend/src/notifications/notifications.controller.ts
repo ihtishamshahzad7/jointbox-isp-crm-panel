@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { AlertsService } from './alerts.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -13,13 +13,27 @@ export class NotificationsController {
   ) {}
 
   @Get('status')
-  status() {
-    return { ...this.notifications.gatewayStatus(), alerts: this.alerts.status() };
+  async status() {
+    return { ...this.notifications.gatewayStatus(), alerts: await this.alerts.status() };
   }
 
-  /** Which alert channels are configured (Discord / WhatsApp). */
+  /** Which alert channels are configured (Discord / WhatsApp), masked. */
   @Get('alerts/status')
   alertStatus() {
+    return this.alerts.status();
+  }
+
+  /**
+   * Save an alert credential from the panel. ISP owner/admin only — a webhook
+   * URL is a credential. Stored AES-256-GCM encrypted; never returned in full.
+   */
+  @Post('alerts/config')
+  async setAlertConfig(@Body() body: { key: string; value: string }, @Request() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
+      throw new ForbiddenException('Only the ISP owner can change alert settings.');
+    }
+    await this.alerts.setSecret(body?.key, body?.value ?? '', req?.user?.sub);
     return this.alerts.status();
   }
 
@@ -32,7 +46,7 @@ export class NotificationsController {
       level: 'OK',
       fields: { Source: 'Manual test', Time: new Date().toLocaleString() },
     });
-    return { sent: r, configured: this.alerts.status() };
+    return { sent: r, configured: await this.alerts.status() };
   }
 
   // ── Templates ─────────────────────────────────────────────────

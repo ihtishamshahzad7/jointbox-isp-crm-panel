@@ -194,19 +194,63 @@ export default function CommunicationPage() {
             Send test alert
           </button>
 
-          <div style={{ marginTop: 18, fontSize: 12.5, color: T.sub, lineHeight: 1.7 }}>
-            <b style={{ color: T.text }}>Discord setup (free, 2 minutes)</b><br />
-            1. Discord → <b>Server Settings → Integrations → Webhooks → New Webhook</b><br />
-            2. Choose the channel, click <b>Copy Webhook URL</b><br />
-            3. On the server add it to <code>backend/.env</code>:<br />
-            <code style={{ display: "block", background: T.card, padding: "8px 10px", borderRadius: 6, margin: "6px 0" }}>
-              DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/XXXX/YYYY"
-            </code>
-            4. <code>pm2 restart jointbox-backend</code>, then press <b>Send test alert</b>.
-            <br /><br />
-            <b style={{ color: T.text }}>WhatsApp setup</b><br />
-            CallMeBot (free): <code>WHATSAPP_PROVIDER=callmebot</code>, <code>WHATSAPP_PHONE=923001234567</code>, <code>WHATSAPP_APIKEY=…</code><br />
-            Meta Cloud API: <code>WHATSAPP_PROVIDER=meta</code>, <code>WHATSAPP_TOKEN=…</code>, <code>WHATSAPP_PHONE_ID=…</code>
+          {/* Editable, encrypted-at-rest settings */}
+          <div style={{ marginTop: 18, display: "grid", gap: 10 }}>
+            {[
+              { key: "DISCORD_WEBHOOK_URL", label: "Discord webhook URL", ph: "https://discord.com/api/webhooks/…" },
+              { key: "WHATSAPP_PROVIDER", label: "WhatsApp provider", ph: "callmebot  |  meta" },
+              { key: "WHATSAPP_PHONE", label: "WhatsApp number", ph: "923001234567" },
+              { key: "WHATSAPP_APIKEY", label: "CallMeBot API key", ph: "only for callmebot" },
+              { key: "WHATSAPP_TOKEN", label: "Meta token", ph: "only for meta" },
+              { key: "WHATSAPP_PHONE_ID", label: "Meta phone-number ID", ph: "only for meta" },
+            ].map((f) => {
+              const st = (status?.alerts?.keys || []).find((k: any) => k.key === f.key);
+              return (
+                <div key={f.key} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 12, color: T.sub, minWidth: 165 }}>{f.label}</label>
+                  <input
+                    id={`sec-${f.key}`}
+                    style={{ ...input, flex: 1, minWidth: 200 }}
+                    placeholder={st?.configured ? `${st.maskedHint} — type to replace` : f.ph}
+                  />
+                  <button
+                    style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.text }}
+                    onClick={async () => {
+                      const el = document.getElementById(`sec-${f.key}`) as HTMLInputElement;
+                      const value = el?.value ?? "";
+                      setBusy(true);
+                      try {
+                        const r = await fetch(`${API}/communication/alerts/config`, {
+                          method: "POST", headers, body: JSON.stringify({ key: f.key, value }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok) throw new Error(d?.message || "Save failed");
+                        setStatus((p: any) => ({ ...(p || {}), alerts: d }));
+                        if (el) el.value = "";
+                        setMsg(value ? `${f.label} saved (encrypted).` : `${f.label} cleared.`);
+                      } catch (e: any) { setMsg(`❌ ${e.message}`); }
+                      setBusy(false);
+                    }}>
+                    Save
+                  </button>
+                  {st?.configured && (
+                    <span style={{ fontSize: 10.5, color: st.source === "env" ? T.sub : "#4ade80" }}>
+                      {st.source === "env" ? "from .env" : "saved ✓"}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop: 16, fontSize: 12, color: T.sub, lineHeight: 1.7 }}>
+            <b style={{ color: T.text }}>Discord (free, 2 minutes):</b> Discord → <b>Server Settings → Integrations →
+            Webhooks → New Webhook</b> → pick a channel → <b>Copy Webhook URL</b> → paste above → Save → <b>Send test alert</b>.
+            <br />
+            <b style={{ color: T.text }}>WhatsApp:</b> CallMeBot (free, personal) needs provider <code>callmebot</code>, your
+            number and its API key. Meta Cloud API (business) needs provider <code>meta</code>, token and phone-number ID.
+            <br />
+            <span style={{ opacity: .8 }}>Values are encrypted at rest and never shown again — only a masked preview. Anything already set in <code>.env</code> keeps working.</span>
           </div>
         </div>
       )}

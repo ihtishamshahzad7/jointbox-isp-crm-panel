@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { SecretsService } from '../common/secrets.service';
 
 /**
  * AlertsService — operational alerts to Discord and WhatsApp.
@@ -27,6 +28,18 @@ import { Injectable, Logger } from '@nestjs/common';
 export class AlertsService {
   private readonly log = new Logger('Alerts');
 
+  constructor(private secrets: SecretsService) {}
+
+  /** Keys managed from the panel (each falls back to its env var). */
+  static readonly KEYS = [
+    { key: 'DISCORD_WEBHOOK_URL', env: 'DISCORD_WEBHOOK_URL' },
+    { key: 'WHATSAPP_PROVIDER', env: 'WHATSAPP_PROVIDER' },
+    { key: 'WHATSAPP_PHONE', env: 'WHATSAPP_PHONE' },
+    { key: 'WHATSAPP_APIKEY', env: 'WHATSAPP_APIKEY' },
+    { key: 'WHATSAPP_TOKEN', env: 'WHATSAPP_TOKEN' },
+    { key: 'WHATSAPP_PHONE_ID', env: 'WHATSAPP_PHONE_ID' },
+  ];
+
   /** Colour per severity for the Discord embed stripe. */
   private colour(level: string) {
     switch ((level || '').toUpperCase()) {
@@ -52,7 +65,7 @@ export class AlertsService {
 
   /** Discord webhook — rich embed, exactly like an Uptime Kuma alert. */
   private async toDiscord(opts: { title: string; message: string; level?: string; fields?: Record<string, string> }) {
-    const url = process.env.DISCORD_WEBHOOK_URL;
+    const url = await this.secrets.get('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL');
     if (!url) return false;
     const body = {
       username: 'Jointbox',
@@ -81,22 +94,22 @@ export class AlertsService {
 
   /** WhatsApp via CallMeBot (free) or Meta Cloud API. */
   private async toWhatsApp(opts: { title: string; message: string }) {
-    const provider = (process.env.WHATSAPP_PROVIDER || '').toLowerCase();
-    const phone = process.env.WHATSAPP_PHONE;
+    const provider = ((await this.secrets.get('WHATSAPP_PROVIDER', 'WHATSAPP_PROVIDER')) || '').toLowerCase();
+    const phone = await this.secrets.get('WHATSAPP_PHONE', 'WHATSAPP_PHONE');
     if (!provider || !phone) return false;
     const text = `*${opts.title}*\n${opts.message}`;
 
     try {
       if (provider === 'callmebot') {
-        const key = process.env.WHATSAPP_APIKEY;
+        const key = await this.secrets.get('WHATSAPP_APIKEY', 'WHATSAPP_APIKEY');
         if (!key) return false;
         const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(text)}&apikey=${encodeURIComponent(key)}`;
         const res = await fetch(url);
         return res.ok;
       }
       if (provider === 'meta') {
-        const token = process.env.WHATSAPP_TOKEN;
-        const phoneId = process.env.WHATSAPP_PHONE_ID;
+        const token = await this.secrets.get('WHATSAPP_TOKEN', 'WHATSAPP_TOKEN');
+        const phoneId = await this.secrets.get('WHATSAPP_PHONE_ID', 'WHATSAPP_PHONE_ID');
         if (!token || !phoneId) return false;
         const res = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
           method: 'POST',
@@ -113,12 +126,26 @@ export class AlertsService {
     }
   }
 
-  /** Which channels are configured — surfaced in settings/health. */
-  status() {
+  /** Which channels are configured — masked, never the actual values. */
+  async status() {
+    const [discord, provider, phone] = await Promise.all([
+      this.secrets.get('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL'),
+      this.secrets.get('WHATSAPP_PROVIDER', 'WHATSAPP_PROVIDER'),
+      this.secrets.get('WHATSAPP_PHONE', 'WHATSAPP_PHONE'),
+    ]);
     return {
-      discord: !!process.env.DISCORD_WEBHOOK_URL,
-      whatsapp: !!(process.env.WHATSAPP_PROVIDER && process.env.WHATSAPP_PHONE),
-      whatsappProvider: process.env.WHATSAPP_PROVIDER || null,
+      discord: !!discord,
+      whatsapp: !!(provider && phone),
+      whatsappProvider: provider || null,
+      keys: await this.secrets.status(AlertsService.KEYS),
     };
+  }
+
+  /** Save a managed alert secret from the panel (value is encrypted at rest). */
+  async setSecret(key: string, value: string, byUserId?: number) {
+    if (!AlertsService.KEYS.some((k) => k.key === key)) {
+      throw new Error(`"${key}" is not a managed alert setting.`);
+    }
+    return this.secrets.set(key, value, byUserId);
   }
 }

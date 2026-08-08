@@ -8,6 +8,7 @@ import { DatabaseSetupService } from './database-setup.service';
 import { BackupService } from './backup.service';
 import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
+import { SecretsService } from './secrets.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -26,8 +27,9 @@ import { PrismaModule } from '../prisma/prisma.module';
     DatabaseSetupService,
     BackupService,
     EventsService,
+    SecretsService,
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
-  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService],
+  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService, SecretsService],
 })
 export class CommonModule {}
