@@ -1,16 +1,38 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
+import { AlertsService } from './alerts.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('communication')
 export class NotificationsController {
-  constructor(private readonly notifications: NotificationsService) {}
+  constructor(
+    private readonly notifications: NotificationsService,
+    private readonly alerts: AlertsService,
+  ) {}
 
   @Get('status')
   status() {
-    return this.notifications.gatewayStatus();
+    return { ...this.notifications.gatewayStatus(), alerts: this.alerts.status() };
+  }
+
+  /** Which alert channels are configured (Discord / WhatsApp). */
+  @Get('alerts/status')
+  alertStatus() {
+    return this.alerts.status();
+  }
+
+  /** Send a test alert so you can confirm the webhook works. */
+  @Post('alerts/test')
+  async alertTest() {
+    const r = await this.alerts.send({
+      title: '✅ Jointbox test alert',
+      message: 'If you can read this, your alert channel is configured correctly.',
+      level: 'OK',
+      fields: { Source: 'Manual test', Time: new Date().toLocaleString() },
+    });
+    return { sent: r, configured: this.alerts.status() };
   }
 
   // ── Templates ─────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AlertsService } from '../notifications/alerts.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
@@ -19,7 +20,11 @@ export class NasMonitorService {
   // Remember each NAS's last online count to detect drops between ticks.
   private lastOnline = new Map<number, number>();
 
-  constructor(private prisma: PrismaService, private notifications: NotificationsService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationsService,
+    private alerts: AlertsService,
+  ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async sample() {
@@ -74,6 +79,13 @@ export class NasMonitorService {
             channel: 'SYSTEM', event: 'NAS_MASS_DISCONNECT', recipient: 'admin',
             body: `⚠️ ${nas.shortname || nas.nasname}: ${prev - now} subscribers dropped offline in 5 minutes.`,
           } as any).catch(() => null);
+          // Push the same alert to Discord / WhatsApp (Uptime-Kuma style).
+          this.alerts.send({
+            title: `🔴 NAS mass disconnect — ${nas.shortname || nas.nasname}`,
+            message: `${prev - now} subscribers dropped offline within 5 minutes. Possible link or power outage — please investigate.`,
+            level: 'ERROR',
+            fields: { NAS: nas.shortname || nas.nasname, IP: String(ip), Before: String(prev), Now: String(now) },
+          }).catch(() => null);
         }
         this.lastOnline.set(nas.id, now);
       }

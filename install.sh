@@ -263,6 +263,23 @@ RADIUS_INTERIM_INTERVAL=300
 REDIS_URL=redis://127.0.0.1:6379
 # SMS gateway for expiry reminders — set your provider's URL template, e.g.
 # SMS_GATEWAY_URL="https://sms.example.com/send?to={phone}&text={message}&key=XXX"
+
+# ── Operational alerts (NAS mass-disconnect, outages) ────────────────────────
+# Discord (free — same method Uptime Kuma uses):
+#   Discord → Server Settings → Integrations → Webhooks → New Webhook →
+#   choose a channel → Copy Webhook URL → paste below and restart the backend.
+# DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/XXXX/YYYY"
+#
+# WhatsApp — pick ONE provider:
+#   CallMeBot (free, personal):
+# WHATSAPP_PROVIDER=callmebot
+# WHATSAPP_PHONE=923001234567
+# WHATSAPP_APIKEY=123456
+#   Meta WhatsApp Cloud API (business):
+# WHATSAPP_PROVIDER=meta
+# WHATSAPP_PHONE=923001234567
+# WHATSAPP_TOKEN=EAAG...
+# WHATSAPP_PHONE_ID=123456789
 EOF
 chmod 600 .env
 
