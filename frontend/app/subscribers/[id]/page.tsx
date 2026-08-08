@@ -493,6 +493,23 @@ export default function SubscriberProfilePage() {
           }}>
             <Ic.MAC/> Reset MAC
           </Btn>
+          <Btn onClick={()=>{
+            // Consolidated account statement: invoices (debit) + payments (credit)
+            // in date order with a running balance, exported as CSV.
+            const events = [
+              ...invoices.map((i:any)=>({ date:i.createdAt||i.dueDate, type:"Invoice", ref:i.invoiceNo||i.id, desc:(i.items?.[0]?.description)||"Invoice", debit:Number(i.total??i.amount??0), credit:0 })),
+              ...payments.map((p:any)=>({ date:p.createdAt||p.date, type:"Payment", ref:p.paymentNo||p.id, desc:p.method||"Payment", debit:0, credit:Number(p.amount??0) })),
+            ].sort((a,b)=> new Date(a.date).getTime()-new Date(b.date).getTime());
+            let bal=0;
+            const header=["Date","Type","Reference","Description","Debit","Credit","Balance"];
+            const rows=events.map((e)=>{ bal+=e.debit-e.credit; return [new Date(e.date).toLocaleString(), e.type, e.ref, e.desc, e.debit||"", e.credit||"", bal.toFixed(2)]; });
+            const csv=[`Statement for ${sub.fullName} (${sub.username})`, `Generated ${new Date().toLocaleString()}`, "", header.join(","), ...rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(","))].join("\n");
+            const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+            const a=document.createElement("a"); a.href=url; a.download=`statement-${sub.username}-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+            showToast(`Statement exported (${events.length} entries)`, "ok");
+          }}>
+            <Ic.Download/> Statement
+          </Btn>
           <Btn onClick={()=>router.push(`/subscribers?edit=${sub.id}`)} variant="warning">
             <Ic.Edit/> Edit
           </Btn>
