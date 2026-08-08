@@ -76,7 +76,7 @@ export default function MyBusinessPage() {
       <div className="mb-action-strip">
         <div className="t">Do next</div>
         <button onClick={() => router.push("/quick-connect")}>Add & activate a customer</button>
-        <button onClick={() => router.push("/subscribers")}>Renew expiring customers</button>
+        <button onClick={() => router.push("/renewals")}>Renew expiring customers</button>
         <button onClick={() => router.push("/payments")}>Record a payment</button>
         <button onClick={() => router.push("/support-center")}>Handle complaints</button>
       </div>

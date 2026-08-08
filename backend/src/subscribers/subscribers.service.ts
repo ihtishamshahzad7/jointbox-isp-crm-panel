@@ -1020,34 +1020,21 @@ export class SubscribersService implements OnModuleInit {
     };
   }
 
-  async getExpiring(days?: number) {
+  async getExpiring(days?: number, actor?: Actor) {
     const now = new Date();
     const end = new Date(now);
     end.setDate(end.getDate() + (days ?? 30));
 
-    const where: any = {
-      serviceSettings: {
-        is: {
-          expiryDate: {
-            not: null,
-            lte: end,
-          },
-        },
-      },
-    };
-
-    if (days !== undefined) {
-      where.serviceSettings.is.expiryDate.gte = now;
-    }
+    // SECURITY: restrict to the caller's own subtree — never the whole system.
+    const scopeWhere = await this.scope.subscriberWhere(actor);
+    const expiryWindow: any = { not: null, lte: end };
+    if (days !== undefined) expiryWindow.gte = now; // upcoming only (exclude already-expired)
 
     return this.prisma.subscriber.findMany({
-      where,
-      include: {
-        package: true,
-        salesperson: true,
-        serviceSettings: true,
-      },
+      where: { AND: [scopeWhere, { serviceSettings: { is: { expiryDate: expiryWindow } } }] },
+      include: { package: true, salesperson: true, serviceSettings: true },
       orderBy: { serviceSettings: { expiryDate: 'asc' } },
+      take: 1000,
     });
   }
 

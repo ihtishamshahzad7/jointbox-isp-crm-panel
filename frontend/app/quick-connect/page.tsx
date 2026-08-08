@@ -22,6 +22,7 @@ export default function QuickConnectPage() {
   const [result, setResult] = React.useState<any>(null);
   const [err, setErr] = React.useState("");
 
+  const [collect, setCollect] = React.useState(true);
   const [f, setF] = React.useState<any>({ fullName: "", phone: "", username: "", password: "", packageId: "", areaId: "", nasId: "" });
   const set = (k: string, v: any) => setF((p: any) => ({ ...p, [k]: v }));
 
@@ -55,7 +56,11 @@ export default function QuickConnectPage() {
       const r = await fetch(`${API}/subscribers`, { method: "POST", headers, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok) throw new Error(d?.message || "Could not create the connection");
-      setResult(d);
+      // Record the customer's first cash payment against their invoice, if collected.
+      if (collect && pkg?.price && d.activated !== false && !d.warning) {
+        await fetch(`${API}/payments`, { method: "POST", headers, body: JSON.stringify({ subscriberId: d.id, amount: pkg.price, method: "CASH", notes: "First payment (Quick Connect)" }) }).catch(() => null);
+      }
+      setResult({ ...d, _collected: collect && pkg?.price });
     } catch (e: any) { setErr(e.message); }
     setBusy(false);
   };
@@ -70,7 +75,8 @@ export default function QuickConnectPage() {
           <h2>{activated ? "Customer connected & online" : "Saved — but not activated"}</h2>
           <div className="qc-line">{result.fullName} · <code>{result.username}</code></div>
           {activated
-            ? <div className="qc-line">Package <b>{pkg?.name}</b> · expires {result.serviceSettings?.expiryDate ? new Date(result.serviceSettings.expiryDate).toLocaleDateString() : "—"}</div>
+            ? <><div className="qc-line">Package <b>{pkg?.name}</b> · expires {result.serviceSettings?.expiryDate ? new Date(result.serviceSettings.expiryDate).toLocaleDateString() : "—"}</div>
+                {result._collected ? <div className="qc-line" style={{ color: "#4ade80" }}>Payment recorded ✓</div> : null}</>
             : <div className="qc-warn">{result.warning}</div>}
           <div className="qc-actions">
             <button className="primary" onClick={() => router.push(`/subscribers/${result.id}`)}>Open profile</button>
@@ -120,6 +126,10 @@ export default function QuickConnectPage() {
         {pkg && (
           <div className="qc-price">
             Activating charges your wallet <b>{money(pkg.price)}</b> for <b>{pkg.name}</b> and raises the customer's first invoice.
+            <label className="qc-collect">
+              <input type="checkbox" checked={collect} onChange={(e) => setCollect(e.target.checked)} />
+              Mark {money(pkg.price)} collected from customer (cash)
+            </label>
           </div>
         )}
         {err && <div className="qc-err">{err}</div>}
@@ -143,6 +153,8 @@ const CSS = `
 .qc-row input,.qc-row select{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:9px;padding:10px 12px;font-size:13px;font-family:inherit}
 .qc-sugg{background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:9px;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;height:40px}
 .qc-price{background:rgba(124,77,255,.10);border:1px solid rgba(124,77,255,.3);border-radius:10px;padding:11px 14px;font-size:12.5px;color:var(--text);margin-bottom:12px}
+.qc-collect{display:flex;align-items:center;gap:8px;margin-top:9px;font-size:12.5px;font-weight:600;cursor:pointer}
+.qc-collect input{width:16px;height:16px;accent-color:#7C4DFF;cursor:pointer}
 .qc-err{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#fca5a5;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:12px}
 .qc-go{width:100%;padding:14px;border:none;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer;
   background:linear-gradient(135deg,#7C4DFF,#E9408B,#F27121);color:#fff}

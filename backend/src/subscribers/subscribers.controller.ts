@@ -97,9 +97,9 @@ export class SubscribersController {
   }
 
   @Get('expiring')
-  getExpiring(@Query('days') days?: string) {
+  getExpiring(@Req() req: any, @Query('days') days?: string) {
     const parsed = days !== undefined ? Number(days) : undefined;
-    return this.subscribersService.getExpiring(parsed);
+    return this.subscribersService.getExpiring(parsed, req.user);
   }
 
   /** What can be filtered on, restricted to what the caller may see. */

@@ -55,6 +55,7 @@ const menuGroups = [
     { id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: navIcons.Dashboard },
     { id: 'my-business', label: 'My Business', href: '/my-business', Icon: navIcons.Reports },
     { id: 'quick-connect', label: 'Quick Connect', href: '/quick-connect', Icon: navIcons.Subscribers },
+    { id: 'renewals', label: 'Renewals', href: '/renewals', Icon: navIcons.Payments },
     { id: 'subscribers', label: 'Subscribers', href: '/subscribers', Icon: navIcons.Subscribers },
     { id: 'support', label: 'Support', href: '/support-center', Icon: navIcons.Support },
     { id: 'trace', label: 'Trace Search', href: '/trace', Icon: navIcons.Search },
