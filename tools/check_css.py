@@ -42,6 +42,42 @@ def line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
+def split_selector_list(sel: str) -> list[str]:
+    """
+    Split a selector list on top-level commas only.
+
+    `[style*="rgb(129, 140, 248)"]` contains commas of its own. Splitting on
+    every comma is exactly the bug this file exists to catch, so the checker
+    must not commit it while looking for it.
+    """
+    parts: list[str] = []
+    buf = ""
+    depth = 0
+    quote: str | None = None
+    for ch in sel:
+        if quote:
+            buf += ch
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            buf += ch
+            continue
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(buf.strip())
+            buf = ""
+        else:
+            buf += ch
+    if buf.strip():
+        parts.append(buf.strip())
+    return parts
+
+
 def check(path: Path) -> list[str]:
     css = path.read_text(encoding="utf-8")
     masked = mask_comments(css)
@@ -74,7 +110,36 @@ def check(path: Path) -> list[str]:
                     f"line {line_of(css, m.start())}: @import appears after a rule — it will be ignored"
                 )
 
-    # 4. A declaration without a colon is almost always a truncated edit.
+    # 4. Every selector part must actually look like a selector.
+    #
+    # A scripted edit that splits selector lists on "," will happily split
+    # INSIDE rgb(129, 140, 248), producing fragments like `html 140` and
+    # `248)"]`. Braces still balance and no selector is empty, so the earlier
+    # checks pass while the stylesheet is nonsense.
+    #
+    # Brackets are counted with QUOTED text removed first: a perfectly legal
+    # selector such as button[style*="linear-gradient(135deg,#6C3CE1"] has an
+    # unclosed paren inside its attribute value, and flagging that would bury
+    # the real problems under false alarms.
+    for m in re.finditer(r"(^|\})([^{}]*)\{", masked):
+        sel = m.group(2)
+        if sel.lstrip().startswith("@"):
+            continue
+        for p in split_selector_list(sel):
+            bare = re.sub(r"\"[^\"]*\"|'[^']*'", "", p)
+            for token in bare.split():
+                if re.fullmatch(r"[\d.]+[,)\]]*", token):
+                    problems.append(
+                        f"line {line_of(css, m.start(2))}: selector contains a bare number "
+                        f"({token!r}) — a selector list was probably split inside rgb(...): {p[:44]!r}"
+                    )
+                    break
+            if bare.count("(") != bare.count(")") or bare.count("[") != bare.count("]"):
+                problems.append(
+                    f"line {line_of(css, m.start(2))}: unbalanced brackets in selector: {p[:44]!r}"
+                )
+
+    # 5. A declaration without a colon is almost always a truncated edit.
     for m in re.finditer(r"\{([^{}]*)\}", masked):
         for decl in m.group(1).split(";"):
             d = decl.strip()
