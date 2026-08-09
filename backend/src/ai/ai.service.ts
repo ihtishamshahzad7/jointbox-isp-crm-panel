@@ -331,17 +331,33 @@ export class AiService {
    * entire question. Four entries tied on 2 points and the winner was simply
    * whichever sat earliest in the array: "Add a subscriber". Weighting each
    * term by its rarity makes the meaningful word decide the answer.
+   *
+   * COMPUTED LAZILY, AND THAT MATTERS. As a field initializer this read
+   * `this.GEN`, which is declared further down the class — and class fields
+   * initialize in declaration order, so GEN was still undefined. The throw
+   * happened inside the constructor, Nest could not create AiService, and the
+   * ENTIRE BACKEND failed to boot: no API, no login. Building it on first use
+   * removes the ordering dependency altogether, and the guard below means a
+   * bad knowledge file degrades the assistant instead of the whole panel.
    */
-  private readonly IDF: Map<string, number> = (() => {
-    const df = new Map<string, number>();
-    const all = [...this.KB, ...this.GEN.entries];
-    for (const e of all) {
-      for (const w of new Set(this.tokens(`${e.t} ${e.k}`))) df.set(w, (df.get(w) || 0) + 1);
-    }
+  private idfCache: Map<string, number> | null = null;
+
+  private get IDF(): Map<string, number> {
+    if (this.idfCache) return this.idfCache;
     const idf = new Map<string, number>();
-    for (const [w, n] of df) idf.set(w, Math.log(all.length / (1 + n)) + 0.2);
+    try {
+      const all = this.ALL;
+      const df = new Map<string, number>();
+      for (const e of all) {
+        for (const w of new Set(this.tokens(`${e.t} ${e.k}`))) df.set(w, (df.get(w) || 0) + 1);
+      }
+      for (const [w, n] of df) idf.set(w, Math.log(all.length / (1 + n)) + 0.2);
+    } catch (e: any) {
+      this.logger.warn(`Could not build the search index: ${e?.message}`);
+    }
+    this.idfCache = idf;
     return idf;
-  })();
+  }
 
   /** Levenshtein distance — used only to forgive typos. */
   private dist(a: string, b: string): number {
