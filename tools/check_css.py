@@ -139,7 +139,30 @@ def check(path: Path) -> list[str]:
                     f"line {line_of(css, m.start(2))}: unbalanced brackets in selector: {p[:44]!r}"
                 )
 
-    # 5. A declaration without a colon is almost always a truncated edit.
+    # 5. A dark text colour applied to .db-root will black out the sidebar.
+    #
+    # `.db-root` is the whole shell — it contains BOTH the white page and the
+    # dark navigation rail. A page-wide rule like
+    #     .db-root span { color: #1C2434 }
+    # therefore paints the menu labels the same colour as the rail they sit on,
+    # and the navigation disappears. This has happened twice. Page text rules
+    # must target `.main`.
+    for m in re.finditer(r"(^|\})([^{}]*)\{([^{}]*)\}", masked):
+        sel, body = m.group(2), m.group(3)
+        if ".db-root" not in sel or ".sidebar" in sel:
+            continue
+        cm = re.search(r"(?:^|;)\s*color\s*:\s*#([0-9A-Fa-f]{6})", body)
+        if not cm:
+            continue
+        r_, g_, b_ = (int(cm.group(1)[i:i+2], 16) for i in (0, 2, 4))
+        if r_ + g_ + b_ < 300:                     # a dark colour
+            problems.append(
+                f"line {line_of(css, m.start(2))}: dark colour #{cm.group(1)} applied to "
+                f"a .db-root selector — this also hits the sidebar and hides the menu. "
+                f"Use .main instead: {sel.strip()[:44]!r}"
+            )
+
+    # 6. A declaration without a colon is almost always a truncated edit.
     for m in re.finditer(r"\{([^{}]*)\}", masked):
         for decl in m.group(1).split(";"):
             d = decl.strip()

@@ -262,7 +262,7 @@ body {
 /* Body background is lightened ONLY when the dashboard shell is present, so the
    login/landing pages (which render outside .db-root) keep their dark body. */
 body:has(.db-root) { background: #F1F5F9; }
-.db-root { background: #F1F5F9; color: #1C2434; }
+.main { background: #F1F5F9; color: #1C2434; }
 
 /* THE DARK SIDEBAR. TailAdmin's aside is `bg-black` (#1C2434) in light
    mode as well as dark — a white page with a dark rail. Getting this
@@ -358,9 +358,9 @@ body:has(.db-root) { background: #F1F5F9; }
 /* bright accent stat numbers → darker on white (text only, not buttons) */
 /* Legacy teal compatibility — the palette no longer uses these, but the rules
    are harmless and cover any page not yet swept. */
-.db-root :not(button):not(a)[style*="#10B981"] { color: #059669 !important; }
+.main :not(button):not(a)[style*="#10B981"] { color: #059669 !important; }
 .db-root :not(button):not(a)[style*="#00C9FF"] { color: #0891b2 !important; }
-.db-root :not(button):not(a)[style*="#4ade80"] { color: #16a34a !important; }
+.main :not(button):not(a)[style*="#4ade80"] { color: #16a34a !important; }
 .db-root :not(button):not(a)[style*="#34d399"] { color: #059669 !important; }
 .db-root :not(button):not(a)[style*="#60a5fa"] { color: #2563eb !important; }
 .db-root :not(button):not(a)[style*="#fbbf24"] { color: #d97706 !important; }
@@ -1168,10 +1168,10 @@ body {
   box-shadow: 0 9px 26px rgba(233, 64, 139, 0.42);
 }
 /* Success buttons get the secondary gradient. */
-.db-root button[style*="background: #22c55e"],
-.db-root button[style*="background: rgb(34, 197, 94)"],
-.db-root button[style*="background: #10b981"],
-.db-root button[style*="background: rgb(16, 185, 129)"] {
+.main button[style*="background: #22c55e"],
+.main button[style*="background: rgb(34, 197, 94)"],
+.main button[style*="background: #10b981"],
+.main button[style*="background: rgb(16, 185, 129)"] {
   background: var(--g-secondary) !important;
   color: #06281c !important;
   border-color: transparent !important;
@@ -3147,7 +3147,7 @@ html  {
 
 html body:has(.db-root) { background: #F1F5F9; }
 
-html .db-root { background: #F1F5F9; color: #1C2434; }
+html .main { background: #F1F5F9; color: #1C2434; }
 
 html .sidebar {
   background: #1C2434;
@@ -3214,35 +3214,35 @@ html .db-root [style*="color:#ffffff"],
 html .db-root [style*="color: #ffffff"],
 html .db-root [style*="rgb(255, 255, 255)"] { color: #0f172a !important; }
 
-html .db-root [style*="rgba(255,255,255,0.9)"],
-html .db-root [style*="rgba(255, 255, 255, 0.9)"],
-html .db-root [style*="rgba(255,255,255,0.8)"],
-html .db-root [style*="rgba(255, 255, 255, 0.8)"],
-html .db-root [style*="rgba(255,255,255,0.7)"],
-html .db-root [style*="rgba(255, 255, 255, 0.7)"],
-html .db-root [style*="rgba(255,255,255,0.6)"],
-html .db-root [style*="rgba(255, 255, 255, 0.6)"],
-html .db-root [style*="rgba(255,255,255,0.5)"],
-html .db-root [style*="rgba(255, 255, 255, 0.5)"],
-html .db-root [style*="rgba(255,255,255,0.4)"],
-html .db-root [style*="rgba(255, 255, 255, 0.4)"],
-html .db-root [style*="rgba(255,255,255,0.35)"],
-html .db-root [style*="rgba(255, 255, 255, 0.35)"],
-html .db-root [style*="rgba(255,255,255,0.3)"],
-html .db-root [style*="rgba(255, 255, 255, 0.3)"],
-html .db-root [style*="rgba(255,255,255,0.25)"],
-html .db-root [style*="rgba(255, 255, 255, 0.25)"] { color: #475569 !important; }
+html .main [style*="rgba(255,255,255,0.9)"],
+html .main [style*="rgba(255, 255, 255, 0.9)"],
+html .main [style*="rgba(255,255,255,0.8)"],
+html .main [style*="rgba(255, 255, 255, 0.8)"],
+html .main [style*="rgba(255,255,255,0.7)"],
+html .main [style*="rgba(255, 255, 255, 0.7)"],
+html .main [style*="rgba(255,255,255,0.6)"],
+html .main [style*="rgba(255, 255, 255, 0.6)"],
+html .main [style*="rgba(255,255,255,0.5)"],
+html .main [style*="rgba(255, 255, 255, 0.5)"],
+html .main [style*="rgba(255,255,255,0.4)"],
+html .main [style*="rgba(255, 255, 255, 0.4)"],
+html .main [style*="rgba(255,255,255,0.35)"],
+html .main [style*="rgba(255, 255, 255, 0.35)"],
+html .main [style*="rgba(255,255,255,0.3)"],
+html .main [style*="rgba(255, 255, 255, 0.3)"],
+html .main [style*="rgba(255,255,255,0.25)"],
+html .main [style*="rgba(255, 255, 255, 0.25)"] { color: #475569 !important; }
 
 html .db-root button[style*="#fff"],
 html .db-root a[style*="#fff"],
 html .db-root button[style*="rgb(255, 255, 255)"],
 html .db-root a[style*="rgb(255, 255, 255)"] { color: #ffffff !important; }
 
-html .db-root :not(button):not(a)[style*="#10B981"] { color: #059669 !important; }
+html .main :not(button):not(a)[style*="#10B981"] { color: #059669 !important; }
 
 html .db-root :not(button):not(a)[style*="#00C9FF"] { color: #0891b2 !important; }
 
-html .db-root :not(button):not(a)[style*="#4ade80"] { color: #16a34a !important; }
+html .main :not(button):not(a)[style*="#4ade80"] { color: #16a34a !important; }
 
 html .db-root :not(button):not(a)[style*="#34d399"] { color: #059669 !important; }
 
@@ -4192,11 +4192,11 @@ html .main [style*="color: rgb(167, 243, 208)"][style*="background"] { backgroun
    reserved for the small print that sits next to it. */
 html .main,
 html .app-shell-page-content,
-html .db-root p,
-html .db-root td,
-html .db-root li,
-html .db-root span:not([class]),
-html .db-root div:not([class]) { color: #1C2434; }
+html .main p,
+html .main td,
+html .main li,
+html .main span:not([class]),
+html .main div:not([class]) { color: #1C2434; }
 
 html .main h1, html .main h2, html .main h3,
 html .main h4, html .main h5, html .main th { color: #1C2434; font-weight: 600; }
@@ -4313,3 +4313,39 @@ html .main [style*="background:#0C0F17"],
 html .main [style*="background: #0C0F17"],
 html .main [style*="background:#0c0f17"],
 html .main [style*="background: #0c0f17"] { background: #EEF0F7 !important; border-color: #D0D6E7 !important; color: #273968 !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SIDEBAR — FINAL WORD. Nothing after this may darken text on the rail.
+   ══════════════════════════════════════════════════════════════════════════
+   I have now broken the sidebar twice the same way: writing a page-wide text
+   rule against `.db-root`, forgetting that `.db-root` CONTAINS the sidebar.
+   Both times the menu labels turned #1C2434 on a #1C2434 rail and vanished,
+   leaving a column of icons with no words.
+
+   Page text rules therefore target `.main` — never `.db-root`. This block is
+   the backstop: it sits last, so even a future rule written the wrong way
+   cannot black out the navigation. */
+html .sidebar,
+html .sidebar p,
+html .sidebar span,
+html .sidebar div,
+html .sidebar li,
+html .sidebar a,
+html .sidebar button { color: #DEE4EE; }
+
+html .sidebar .nav-label { color: #8A99AF; }
+html .sidebar .brand-title { color: #FFFFFF; }
+html .sidebar .brand-subtitle { color: #8A99AF; }
+html .sidebar svg { color: #DEE4EE; }
+
+html .sidebar .nav-item:hover,
+html .sidebar .nav-item:hover span,
+html .sidebar .nav-item:hover svg { color: #FFFFFF; }
+
+html .sidebar .nav-item.active,
+html .sidebar .nav-item.active span,
+html .sidebar .nav-item.active svg { color: #FFFFFF; }
+
+/* TailAdmin marks the active item with the primary fill, not a gradient. */
+html .sidebar .nav-item.active { background: #3C50E0; border-radius: 6px; }
+html .sidebar .nav-item:hover:not(.active) { background: #333A48; border-radius: 6px; }
