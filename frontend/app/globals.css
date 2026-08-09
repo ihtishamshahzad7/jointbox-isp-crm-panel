@@ -1,3 +1,10 @@
+/* Inter — the typeface of the saas-ui template, for headings and body.
+   Loaded the same way as the two fonts already here: a CSS @import, which
+   the BROWSER fetches at runtime. Deliberately not next/font/google, which
+   downloads at BUILD time and fails on a server with no route to Google
+   (see the note in layout.tsx). If the fetch fails the stack below falls
+   back to the system UI font, so a blocked CDN costs polish, not layout. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import url('./components/nova-ui.css');
@@ -67,24 +74,96 @@ body {
      the glass look is preserved with none of the stacking problems. */
   /* Default dark palette = "Night tower". Switchable via the theme picker
      (adds a data-theme="<id>" on <html>). Named blocks below define the others. */
-  /* Defaults mirror the "Aurora" theme below, so the app looks right even
-     before the theme attribute is applied (no flash of a different palette). */
-  --bg: #0A0C18;
-  --surface: #12162A;
-  --surface-2: #1A1F3A; --surface2: #1A1F3A;
-  --border: #262C4D;
-  --text: #E6E9F7;
-  --muted: #8E97BC;
-  --accent: #8B5CF6; --accent-2: #EC4899; --accent2: #EC4899;
-  --grad: linear-gradient(135deg, #8B5CF6 0%, #C13BB0 50%, #F0708A 100%);
-  --grad-soft: linear-gradient(135deg, rgba(139,92,246,.16), rgba(236,72,153,.10));
-  --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 34px rgba(0,0,0,.32);
+  /* Defaults mirror the "Saas" theme below, so the app looks right even
+     before the theme attribute is applied. These MUST stay in step with
+     the default theme: if they described a different palette, every page
+     would paint in one set of colours and then repaint in another as the
+     attribute lands — a visible flash on every single load. */
+  --bg: #171923;
+  --surface: #1A202C;
+  --surface-2: #2D3748; --surface2: #2D3748;
+  --border: #2D3748;
+  --text: #FFFFFF;
+  --muted: #A0AEC0;
+  --accent: #9F7AEA; --accent-2: #805AD5; --accent2: #805AD5;
+  --grad: linear-gradient(135deg, #9F7AEA 0%, #805AD5 100%);
+  --grad-soft: linear-gradient(135deg, rgba(159,122,234,.14), rgba(128,90,213,.08));
+  --card-shadow: 0 1px 2px rgba(0,0,0,.30), 0 6px 18px rgba(0,0,0,.22);
   /* Semantic status colours stay constant across every theme. */
   --online: #639922; --warning: #BA7517; --danger: #E24B4A;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   AURORA — the default. A deep indigo base lit by a violet→pink→amber
+   SAAS — THE DEFAULT.
+   Ported from the saas-ui-nextjs-landing-page template (Chakra UI +
+   Saas UI). That theme is defined entirely in Chakra colour TOKENS
+   (gray.900, primary.500) rather than hex values, so the mapping below
+   resolves each token to Chakra v2's documented palette:
+
+     gray.900 #171923   gray.800 #1A202C   gray.700 #2D3748
+     gray.600 #4A5568   gray.400 #A0AEC0   gray.50  #F7FAFC
+
+   The template's `styles.global` sets `_dark: { color: white, bg:
+   gray.900 }` and light mode to `bg: white, color: gray.900` — so the
+   surfaces here are the Chakra greys, not the indigo of Aurora.
+
+   ACCENT: the template calls it `colorScheme="primary"`, a Saas UI
+   token whose value lives inside the npm package. That package is not
+   in the folder you shared, so rather than invent a hex I used Chakra
+   purple.400/500 — the same family the template reaches for directly
+   in its announcement banner and pricing highlight
+   (`colorScheme="purple"`). If your brand accent differs, change the
+   three --accent lines below and nothing else needs touching.
+   ═══════════════════════════════════════════════════════════════════ */
+html[data-theme="saas"] {
+  --bg:        #171923;   /* gray.900 — page background          */
+  --surface:   #1A202C;   /* gray.800 — cards, panels            */
+  --surface-2: #2D3748;   /* gray.700 — inputs, nested panels    */
+  --surface2:  #2D3748;
+  --border:    #2D3748;   /* gray.700 — Chakra's dark border     */
+  --text:      #FFFFFF;   /* the template sets plain white       */
+  --muted:     #A0AEC0;   /* gray.400 ≈ whiteAlpha.700           */
+  --accent:    #9F7AEA;   /* purple.400                          */
+  --accent-2:  #805AD5;   /* purple.500                          */
+  --accent2:   #805AD5;
+  --grad: linear-gradient(135deg, #9F7AEA 0%, #805AD5 100%);
+  --grad-soft: linear-gradient(135deg, rgba(159,122,234,.14), rgba(128,90,213,.08));
+  /* Chakra's cards are flatter than Aurora's — a hairline and a soft
+     drop, not a deep glow. */
+  --card-shadow: 0 1px 2px rgba(0,0,0,.30), 0 6px 18px rgba(0,0,0,.22);
+  --radius: 8px;          /* Chakra md radius, not Aurora's 14px */
+}
+
+/* Chakra is a flat design system: no aurora wash behind the app. */
+html[data-theme="saas"] body {
+  background: var(--bg);
+  background-image: none;
+}
+
+/* Inter is the template's typeface for BOTH headings and body. */
+html[data-theme="saas"] body,
+html[data-theme="saas"] .app-font,
+html[data-theme="saas"] .db-root {
+  font-family: 'Inter', 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Solid primary buttons — Chakra's `colorScheme="primary"` is a flat
+   fill, so the app's gradient buttons are overridden to match. */
+html[data-theme="saas"] .db-root button[style*="linear-gradient(135deg,#6C3CE1"],
+html[data-theme="saas"] .db-root button[style*="linear-gradient(135deg,#7C4DFF"],
+html[data-theme="saas"] .db-root button[style*="linear-gradient(135deg,#8B5CF6"] {
+  background: var(--accent) !important;
+}
+html[data-theme="saas"] .db-root button[style*="linear-gradient"]:hover {
+  filter: brightness(1.08);
+}
+
+html[data-theme="saas"] .hub-tab.on { color: var(--accent); }
+html[data-theme="saas"] .st,
+html[data-theme="saas"] .nt { box-shadow: var(--card-shadow); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   AURORA — a deep indigo base lit by a violet→pink→amber
    gradient. The gradient is expressed once as --grad and reused for the
    active nav item, primary buttons, headings and accents, so the whole
    product reads as one designed surface rather than assorted colours.

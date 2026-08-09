@@ -44,7 +44,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="aurora" suppressHydrationWarning>
+    <html lang="en" data-theme="saas" suppressHydrationWarning>
       <body className="app-font">
         <AppShellGate>{children}</AppShellGate>
       </body>

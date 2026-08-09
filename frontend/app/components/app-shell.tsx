@@ -100,7 +100,8 @@ const menuItems = menuGroups.flatMap((g) => g.items);
 // Two dark themes here; "Light" is rendered separately below the divider in the
 // picker, giving exactly three choices in total.
 const THEMES = [
-  { id: 'aurora', name: 'Aurora (default)', dot: '#8B5CF6' },
+  { id: 'saas', name: 'Saas (default)', dot: '#9F7AEA' },
+  { id: 'aurora', name: 'Aurora', dot: '#8B5CF6' },
   { id: 'winbox', name: 'WinBox (beta)', dot: '#4a9eff' },
 ];
 
@@ -224,21 +225,38 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [updating, setUpdating] = useState(false);
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
   const [light, setLight] = useState(false);
-  const [theme, setThemeState] = useState('aurora');
+  const [theme, setThemeState] = useState('saas');
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    // Only three themes are offered now. Anyone still on a retired palette is
-    // migrated to Aurora rather than left on a theme they can no longer pick.
-    const ALLOWED = ['aurora', 'winbox', 'light'];
-    let saved = localStorage.getItem('jb_theme') || 'aurora';
-    if (!ALLOWED.includes(saved)) { saved = 'aurora'; localStorage.setItem('jb_theme', saved); }
+    const ALLOWED = ['saas', 'aurora', 'winbox', 'light'];
+
+    /**
+     * ONE-TIME MIGRATION TO THE NEW DEFAULT.
+     *
+     * Changing the default only affects people with no saved theme — and
+     * everyone who has ever loaded the panel has one, because the old default
+     * was written to localStorage on first visit. Without this they would all
+     * stay on Aurora and never see the new design.
+     *
+     * The migration is deliberately narrow: 'aurora' was the OLD DEFAULT, so
+     * having it means the theme was never actually chosen. Anyone who went and
+     * picked WinBox or Light made a real decision, and that is left alone.
+     */
+    if (localStorage.getItem('jb_theme_v') !== '2') {
+      const current = localStorage.getItem('jb_theme');
+      if (!current || current === 'aurora') localStorage.setItem('jb_theme', 'saas');
+      localStorage.setItem('jb_theme_v', '2');
+    }
+
+    let saved = localStorage.getItem('jb_theme') || 'saas';
+    if (!ALLOWED.includes(saved)) { saved = 'saas'; localStorage.setItem('jb_theme', saved); }
     const isLight = saved === 'light';
     setLight(isLight);
-    setThemeState(isLight ? 'aurora' : saved);
+    setThemeState(isLight ? 'saas' : saved);
     document.documentElement.setAttribute('data-theme', saved);
   }, []);
   const applyTheme = (id: string) => {
