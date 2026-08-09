@@ -98,6 +98,46 @@ export function SubscriberTable({
     });
   }, [rows, sort]);
 
+  /**
+   * Column widths, dragged by the operator and remembered per browser.
+   *
+   * Different jobs need different columns wide: someone chasing renewals wants
+   * Expiry roomy, someone auditing dealers wants Owner. Rather than guess, let
+   * them drag — and keep it, so the layout they set is the layout they get back.
+   */
+  const [widths, setWidths] = React.useState<Record<string, number>>({});
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem("jb_subcols");
+      if (raw) setWidths(JSON.parse(raw));
+    } catch { /* ignore malformed state */ }
+  }, []);
+
+  const startResize = (key: string) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // never trigger the header's sort while resizing
+    const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+
+    const move = (ev: MouseEvent) => {
+      const next = Math.max(70, Math.round(startW + (ev.clientX - startX)));
+      setWidths((w) => ({ ...w, [key]: next }));
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      document.body.style.userSelect = "";
+      setWidths((w) => {
+        try { localStorage.setItem("jb_subcols", JSON.stringify(w)); } catch { /* quota */ }
+        return w;
+      });
+    };
+    document.body.style.userSelect = "none"; // stop text selection mid-drag
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  };
+
   /** Click cycles ascending → descending → off, so the original order is
       always reachable without reloading the page. */
   const head = (key: string, label: string) => {
@@ -105,11 +145,23 @@ export function SubscriberTable({
     return (
       <th
         className={`srt ${active ? "on" : ""}`}
+        style={widths[key] ? { width: widths[key] } : undefined}
         onClick={() => setSort(!active ? { key, dir: 1 } : sort!.dir === 1 ? { key, dir: -1 } : null)}
         title={`Sort by ${label.toLowerCase()}`}
       >
         {label}
         <i>{active ? (sort!.dir === 1 ? "▲" : "▼") : "⇅"}</i>
+        {/* Drag handle — double-click resets this column to automatic. */}
+        <span className="rsz" onMouseDown={startResize(key)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setWidths((w) => {
+              const n = { ...w }; delete n[key];
+              try { localStorage.setItem("jb_subcols", JSON.stringify(n)); } catch {}
+              return n;
+            });
+          }}
+          title="Drag to resize · double-click to reset" />
       </th>
     );
   };
@@ -279,6 +331,16 @@ const CSS = `
   border-bottom:1px solid var(--border);white-space:nowrap;backdrop-filter:blur(6px)}
 .st th.pick,.st td.pick{width:38px;padding-right:0}
 .st .pick input{width:15px;height:15px;accent-color:#7C4DFF;cursor:pointer}
+
+/* Column resize handle — invisible until you approach the column edge, so it
+   never competes with the header text. */
+.st th{position:relative}
+.st .rsz{position:absolute;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;
+  z-index:3;background:transparent}
+.st .rsz::after{content:"";position:absolute;top:22%;right:3px;width:2px;height:56%;
+  border-radius:2px;background:var(--border);opacity:0;transition:opacity .12s ease}
+.st th:hover .rsz::after{opacity:1}
+.st .rsz:hover::after{background:var(--accent);opacity:1}
 
 .st th.srt{cursor:pointer;user-select:none;transition:color .12s ease}
 .st th.srt:hover{color:var(--text)}
