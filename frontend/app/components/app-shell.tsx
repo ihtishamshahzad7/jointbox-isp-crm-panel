@@ -96,17 +96,6 @@ const menuGroups = [
 // Flat list kept for title lookup / active-menu detection.
 const menuItems = menuGroups.flatMap((g) => g.items);
 
-// Selectable dark themes (palettes defined in globals.css by data-theme id).
-// Three themes only. A long palette list was choice for its own sake — these
-// are the three people actually asked for. The other palettes still exist in
-// globals.css and keep working for anyone who already selected one.
-// Two dark themes here; "Light" is rendered separately below the divider in the
-// picker, giving exactly three choices in total.
-const THEMES = [
-  { id: 'saas', name: 'Saas (default)', dot: '#9F7AEA' },
-  { id: 'aurora', name: 'Aurora', dot: '#8B5CF6' },
-  { id: 'winbox', name: 'WinBox (beta)', dot: '#4a9eff' },
-];
 
 function getInitials(name = ''): string {
   if (!name) return 'U';
@@ -227,52 +216,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
-  const [light, setLight] = useState(false);
-  const [theme, setThemeState] = useState('saas');
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
 
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const ALLOWED = ['saas', 'aurora', 'winbox', 'light'];
-
-    /**
-     * ONE-TIME MIGRATION TO THE NEW DEFAULT (Light / TailAdmin).
-     *
-     * Changing the default alone reaches nobody: every user who has ever
-     * opened the panel already has jb_theme in localStorage, because the old
-     * default was written there on first visit. Without this they would all
-     * stay on whatever they were given and never see the new design.
-     *
-     * Only previous DEFAULTS are migrated — 'aurora' and 'saas' were handed
-     * out, never chosen. Someone who went to the picker and selected WinBox
-     * made a real decision, and it is left alone.
-     */
-    if (localStorage.getItem('jb_theme_v') !== '3') {
-      const current = localStorage.getItem('jb_theme');
-      if (!current || current === 'aurora' || current === 'saas') {
-        localStorage.setItem('jb_theme', 'light');
-      }
-      localStorage.setItem('jb_theme_v', '3');
-    }
-
-    let saved = localStorage.getItem('jb_theme') || 'light';
-    if (!ALLOWED.includes(saved)) { saved = 'light'; localStorage.setItem('jb_theme', saved); }
-    const isLight = saved === 'light';
-    setLight(isLight);
-    // `theme` tracks which DARK palette to return to when Light is toggled off.
-    setThemeState(isLight ? 'saas' : saved);
-    document.documentElement.setAttribute('data-theme', saved);
-  }, []);
-  const applyTheme = (id: string) => {
-    setThemeMenuOpen(false);
-    if (id === 'light') { setLight(true); }
-    else { setLight(false); setThemeState(id); }
-    localStorage.setItem('jb_theme', id);
-    document.documentElement.setAttribute('data-theme', id);
-  };
-  const toggleTheme = () => applyTheme(light ? theme : 'light');
   const activeMenu = useMemo(() => getActiveMenu(pathname || '/dashboard'), [pathname]);
 
   /**
@@ -925,38 +871,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 )}
               </div>
             )}
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                onClick={() => setThemeMenuOpen((o) => !o)}
-                title="Theme"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '50%', fontSize: 14, cursor: 'pointer' }}
-              >
-                {light ? '🌙' : '🎨'}
-              </button>
-              {themeMenuOpen && (
-                <>
-                  <div onClick={() => setThemeMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                  <div style={{ position: 'absolute', right: 0, top: 40, zIndex: 41, width: 210, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 8, boxShadow: '0 20px 50px rgba(0,0,0,.45)' }}>
-                    <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '4px 8px' }}>Theme</div>
-                    {THEMES.map((t) => (
-                      <button key={t.id} onClick={() => applyTheme(t.id)}
-                        style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', background: (!light && theme === t.id) ? 'var(--surface-2)' : 'transparent', border: 'none', color: 'var(--text)', borderRadius: 8, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}>
-                        <span style={{ width: 12, height: 12, borderRadius: '50%', background: t.dot, flexShrink: 0 }} />
-                        {t.name}
-                        {!light && theme === t.id && <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>✓</span>}
-                      </button>
-                    ))}
-                    <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0' }} />
-                    <button onClick={() => applyTheme('light')}
-                      style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', background: light ? 'var(--surface-2)' : 'transparent', border: 'none', color: 'var(--text)', borderRadius: 8, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}>
-                      <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#eef2f7', border: '1px solid var(--border)', flexShrink: 0 }} />
-                      Light {light && <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>✓</span>}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
             <div className="status-pill">
               <span className="status-dot" />
               Online
