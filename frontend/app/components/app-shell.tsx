@@ -9,8 +9,9 @@ import { NovaStyles } from './ui';
 import { usePathname, useRouter } from 'next/navigation';
 import { silent } from './silent';
 import { Icons } from './icons';
+import API_BASE from "./api";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:'http://localhost:3001');
+const API = API_BASE;
 
 interface UserProfile {
   id: string;

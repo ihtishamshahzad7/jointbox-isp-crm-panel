@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "./currency";
 import { silent } from "./silent";
+import API_BASE from "./api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 /**
  * Static IP renewal banner.

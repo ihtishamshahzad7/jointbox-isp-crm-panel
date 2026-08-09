@@ -6,8 +6,9 @@ import { UserWizard } from "./user-wizard";
 import ImageUpload from "../components/image-upload";
 import { Icons as SIcons } from "../components/icons";
 import { GroupPanel } from "../components/group-panel";
+import API_BASE from "../components/api";
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 // Strict one-level-down creation: each role creates only the role directly below it.
 const NEXT_ROLE: Record<string, string | null> = {

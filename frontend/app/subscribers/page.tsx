@@ -102,7 +102,7 @@ interface OverviewStats extends Stats {
   todaySignups?: number;
 }
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 import { Icons } from "../components/icons";
 
@@ -185,6 +185,7 @@ const statusColor = (s: string) => ({
 // ─── Main Page ──────────────────────────────────────────────────────────────
 // Kept in its own file so a mistake here cannot take down the whole page.
 import { SubscriberWizard } from "./subscriber-wizard";
+import API_BASE from "../components/api";
 
 const EMPTY_FORM = {
   fullName: "", phone: "", email: "", address: "", username: "",

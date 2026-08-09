@@ -7,10 +7,10 @@ import {
   Modal, Field, Input, Segmented, Empty, Callout, Meter, useToast, NV,
 } from "../components/ui";
 import { money } from "../components/currency";
+import API_BASE from "../components/api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 /**
  * Compliance — CNIC verification and data-usage enforcement.

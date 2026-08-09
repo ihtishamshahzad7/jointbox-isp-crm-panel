@@ -2,6 +2,7 @@
 
 import React from "react";
 import { silent } from "../components/silent";
+import API_BASE from "../components/api";
 
 /**
  * Router Console — a WinBox-style workspace, wired to live data.
@@ -22,8 +23,7 @@ type WinId = "iface" | "ppp-active" | "ppp-secret" | "ip-addr" | "queues" | "log
 
 const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 const TITLE: Record<WinId, string> = {
   iface: "Interface List", "ppp-active": "PPP Active Connections", "ppp-secret": "PPP Secrets",

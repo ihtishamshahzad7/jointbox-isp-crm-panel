@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
+import API_BASE from "../components/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface FiberSummary {
@@ -39,7 +40,7 @@ interface OltTree {
   }>;
 }
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 const Ic = { ...SIcons };
 

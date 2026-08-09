@@ -1,10 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
+import API_BASE from "./api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 // Turn a stored "/uploads/xyz.jpg" into a full URL the browser can load.
 export function fileUrl(u?: string | null): string {

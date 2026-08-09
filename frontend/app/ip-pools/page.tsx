@@ -28,12 +28,13 @@ interface IpPoolStats {
   packages: number;
 }
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 /** ISP-level roles bypass every reseller ownership gate. */
 const isAdminRole = (role?: string) => role === "ADMIN" || role === "SUPER_ADMIN";
 
 import { Icons } from "../components/icons";
+import API_BASE from "../components/api";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 const Ic = {

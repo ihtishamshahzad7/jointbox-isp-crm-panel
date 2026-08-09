@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
+import API_BASE from "../components/api";
 
 interface Voucher {
   id: number;
@@ -25,7 +26,7 @@ interface Subscriber {
   phone: string;
 }
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const Ic = { ...SIcons };

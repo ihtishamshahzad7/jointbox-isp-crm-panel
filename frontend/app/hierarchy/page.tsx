@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
+import API_BASE from "../components/api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 const T = {
   card: "var(--surface)", border: "var(--border)", row: "var(--surface-2)",

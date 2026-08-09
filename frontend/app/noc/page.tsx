@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import LiveFeed from "../components/live-feed";
+import API_BASE from "../components/api";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+const API = API_BASE;
 
 const verdictColor = (v: string) =>
   /Mass outage/i.test(v) ? "#ef4444" : /Elevated/i.test(v) ? "#f59e0b" : /Load-shedding/i.test(v) ? "#8b5cf6" : "#22c55e";

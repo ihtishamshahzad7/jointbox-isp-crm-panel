@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import API_BASE from "../components/api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 const fmt = (n: number) => new Intl.NumberFormat().format(Math.round(n || 0));
 

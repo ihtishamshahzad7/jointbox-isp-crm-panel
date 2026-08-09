@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import API_BASE from "../components/api";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+const API = API_BASE;
 
 const STATUS_STYLE: Record<string, { bg: string; color: string; label: string }> = {
   QUEUED:  { bg: "rgba(148,163,184,.15)", color: "#94a3b8", label: "Queued" },

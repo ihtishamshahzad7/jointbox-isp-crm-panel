@@ -5,8 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import { fileUrl } from "../../components/image-upload";
 import { RecordNotes } from "../../components/record-notes";
 import { silent } from "../../components/silent";
+import API_BASE from "../../components/api";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+const API = API_BASE;
 
 const T = {
   bg: "var(--bg)", card: "var(--surface)", border: "var(--border)", row: "var(--surface-2)",

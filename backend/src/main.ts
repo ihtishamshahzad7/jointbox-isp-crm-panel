@@ -60,6 +60,63 @@ async function bootstrap() {
   // Create the default admin on a fresh database (first Ubuntu install / new VM).
   await ensureDefaultAdmin(app);
 
+  // Keep the published demo login working (created once, password kept in step
+  // with DEMO_PASSWORD). Never fatal: a demo problem must not stop the panel.
+  try {
+    const { DemoService } = require('./demo/demo.service');
+    await app.get(DemoService, { strict: false })?.ensureShared?.();
+  } catch (e: any) {
+    console.warn(`⚠ Shared demo account not ready: ${e?.message || e}`);
+  }
+
+  /**
+   * Behind a TLS terminator, EVERY request arrives from 127.0.0.1 unless we
+   * say otherwise. That silently breaks three things that matter here:
+   *   • the login brute-force lockout, which keys on the client IP,
+   *   • the rate limiter below, which would throttle all users as one,
+   *   • the audit log, which would record the proxy for every action.
+   * Trusting one hop restores the real client IP from X-Forwarded-For.
+   */
+  app.set('trust proxy', 1);
+
+  /**
+   * Global rate limit — a blunt instrument on purpose.
+   *
+   * Login already has a per-account lockout, but nothing stopped a script
+   * hammering the rest of the API. On a public IP that is a matter of when,
+   * not if. In-memory and dependency-free: it protects a single box, which is
+   * exactly the deployment this is.
+   */
+  const RL_WINDOW = 60_000;
+  const RL_MAX = Number(process.env.RATE_LIMIT_PER_MIN || 600);
+  const RL_MAX_AUTH = Number(process.env.RATE_LIMIT_AUTH_PER_MIN || 20);
+  const hits = new Map<string, { n: number; until: number }>();
+  setInterval(() => {                       // keep the map from growing forever
+    const now = Date.now();
+    for (const [k, v] of hits) if (v.until < now) hits.delete(k);
+  }, RL_WINDOW).unref();
+
+  app.use((req: any, res: any, next: any) => {
+    const path = String(req.originalUrl || req.url || '');
+    // Health checks must never be throttled — that would make a monitor look
+    // like an outage.
+    if (path.startsWith('/health')) return next();
+    const sensitive = /^\/(auth|demo)\b/.test(path);
+    const key = `${sensitive ? 'a' : 'g'}:${req.ip}`;
+    const limit = sensitive ? RL_MAX_AUTH : RL_MAX;
+    const now = Date.now();
+    const rec = hits.get(key);
+    if (!rec || rec.until < now) {
+      hits.set(key, { n: 1, until: now + RL_WINDOW });
+      return next();
+    }
+    if (++rec.n > limit) {
+      res.setHeader('Retry-After', Math.ceil((rec.until - now) / 1000));
+      return res.status(429).json({ statusCode: 429, message: 'Too many requests. Please slow down.' });
+    }
+    next();
+  });
+
   // Security headers (no extra dependency). Hardens the API against clickjacking,
   // MIME-sniffing, referrer leakage and forces HTTPS where a proxy sets it.
   app.use((_req: any, res: any, next: any) => {
@@ -69,7 +126,12 @@ async function bootstrap() {
     res.setHeader('X-XSS-Protection', '0');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
-    if (process.env.FORCE_HTTPS === '1') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    // Send HSTS whenever the request actually arrived over TLS, not only when
+    // an operator remembered to set FORCE_HTTPS. Sending it on a plain-HTTP
+    // LAN install would be actively harmful — the browser would then refuse to
+    // load that host over HTTP at all — so the proxy header decides.
+    const secure = process.env.FORCE_HTTPS === '1' || _req.headers?.['x-forwarded-proto'] === 'https';
+    if (secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     next();
   });
 
@@ -79,10 +141,41 @@ async function bootstrap() {
   // ⚡ Phase 0: strong ETags → browsers/axios revalidate instead of re-downloading
   app.getHttpAdapter().getInstance().set('etag', 'strong');
 
-  // Enable CORS for frontend access
-  const corsOrigin = process.env.CORS_ORIGIN || '*';
+  /**
+   * CORS — permissive on a LAN, closed on the public internet.
+   *
+   * The old default was `*`, which with `credentials: true` tells the browser
+   * that ANY website may make authenticated calls to this API. That is an
+   * acceptable shortcut on a private network and not something to publish on a
+   * public IP. The allow-list below keeps every existing install working (the
+   * panel is served from the same machine on a different port, which is
+   * cross-origin as far as the browser is concerned) while refusing origins
+   * that have nothing to do with this server.
+   */
+  const explicitOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  const publicHosts = (process.env.PUBLIC_HOST || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  const isPrivateHost = (h: string) =>
+    h === 'localhost' || h === '127.0.0.1' || h === '::1' ||
+    /^10\./.test(h) || /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+
   app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((s) => s.trim()),
+    origin: (origin, cb) => {
+      // No Origin header at all: curl, server-to-server, or a same-origin
+      // request. Never a cross-site attack, so always allowed.
+      if (!origin) return cb(null, true);
+      if (explicitOrigins.includes('*')) return cb(null, true);
+      if (explicitOrigins.includes(origin)) return cb(null, true);
+      try {
+        const host = new URL(origin).hostname;
+        if (isPrivateHost(host) || publicHosts.includes(host)) return cb(null, true);
+      } catch { /* malformed Origin — fall through and refuse */ }
+      // Refuse by omitting the CORS headers rather than throwing: a 500 here
+      // would turn a blocked page into a confusing server error in the logs.
+      return cb(null, false);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
@@ -127,7 +220,13 @@ async function bootstrap() {
       serverAdapter.setBasePath('/admin/queues');
       createBullBoard({ queues: queues.map((q: any) => new BullMQAdapter(q)), serverAdapter });
       const U = process.env.QUEUE_DASHBOARD_USER || process.env.ADMIN_EMAIL || 'admin';
-      const P = process.env.QUEUE_DASHBOARD_PASS || process.env.ADMIN_PASSWORD || 'admin123';
+      const P = process.env.QUEUE_DASHBOARD_PASS || process.env.ADMIN_PASSWORD || '';
+      // Basic-auth over the public internet with a guessable password is not a
+      // door worth leaving open. No explicit password → no dashboard.
+      if (!P || P === 'admin123') {
+        console.log('  - Queue dashboard DISABLED (set QUEUE_DASHBOARD_PASS to enable it).');
+        throw new Error('queue dashboard not configured');
+      }
       app.use('/admin/queues', (req: any, res: any, next: any) => {
         const [, b64] = String(req.headers['authorization'] || '').split(' ');
         const [u, p] = Buffer.from(b64 || '', 'base64').toString().split(':');

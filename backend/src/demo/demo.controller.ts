@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Ip, Post } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Ip, Post } from '@nestjs/common';
 import { DemoService } from './demo.service';
 
 /**
@@ -16,6 +16,19 @@ export class DemoController {
   private static readonly lastByIp = new Map<string, number>();
 
   constructor(private readonly demo: DemoService) {}
+
+  /**
+   * The shared demo credentials, for the login screen to display.
+   *
+   * Deliberately public: these are meant to be printed on a website. The
+   * account they unlock is a sandbox that can only ever see its own data, so
+   * publishing them gives away nothing a visitor could not get by clicking
+   * "Try the demo" anyway.
+   */
+  @Get('public')
+  publicDemo() {
+    return this.demo.publicCredentials();
+  }
 
   @Post('create')
   async create(@Ip() ip: string) {

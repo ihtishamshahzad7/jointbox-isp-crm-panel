@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
 import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
+import API_BASE from "../components/api";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -71,7 +72,7 @@ type NasDevice = {
 
 type DashboardTab = "home" | "reports" | "subscribers" | "accounting" | "users" | "expiring";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 const sectionTabs: Array<{ id: DashboardTab; label: string; caption: string }> = [
   { id: "home", label: "Home", caption: "Overview" },

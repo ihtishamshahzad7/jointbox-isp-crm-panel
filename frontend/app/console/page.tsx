@@ -3,6 +3,7 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
+import API_BASE from "../components/api";
 
 /**
  * Server Console — ISP owner only.
@@ -14,8 +15,7 @@ import { silent } from "../components/silent";
  */
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 type Tab = "terminal" | "backend" | "frontend" | "system";
 

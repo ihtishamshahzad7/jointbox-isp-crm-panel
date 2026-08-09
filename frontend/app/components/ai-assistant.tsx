@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { AssistantChat } from "./assistant-chat";
+import API_BASE from "./api";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+const API = API_BASE;
 
 export default function AiAssistant() {
   const router = useRouter();

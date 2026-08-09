@@ -8,6 +8,7 @@ import { BandwidthChart } from "../../components/bandwidth-chart";
 import DailyUsageBars from "./bandwidth-panel";
 import LinkPath from "./link-path";
 import BoostButton from "./boost-button";
+import API_BASE from "../../components/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Subscriber {
@@ -41,7 +42,7 @@ interface RadiusCheck {
   id:number; username:string; attribute:string; op:string; value:string;
 }
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const Ic = {

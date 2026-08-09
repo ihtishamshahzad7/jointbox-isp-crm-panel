@@ -2,6 +2,7 @@
 
 import React from "react";
 import { silent } from "./silent";
+import API_BASE from "./api";
 
 /**
  * RecordNotes — a notes/comments panel for ANY record.
@@ -16,8 +17,7 @@ import { silent } from "./silent";
  */
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 type Note = { id: number; body: string; pinned: boolean; createdByName?: string | null; createdAt: string };
 

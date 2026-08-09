@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import API_BASE from "../components/api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 /** A single progress ring ("goal circle"). */
 function Ring({ value, total, color, label, sub }: { value: number; total: number; color: string; label: string; sub?: string }) {

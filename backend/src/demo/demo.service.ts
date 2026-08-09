@@ -61,6 +61,100 @@ export class DemoService {
     };
   }
 
+  // ── Shared public demo ────────────────────────────────────────────────────
+  // One published login that anyone can use, as opposed to a fresh throwaway
+  // account per visitor. Its credentials are fixed so they can be printed on a
+  // website, and its DATA is wiped weekly rather than the account itself —
+  // deleting the account would break every link that points at it.
+  private get sharedEmail() { return (process.env.DEMO_EMAIL || 'demo@jointbox.net').toLowerCase(); }
+  private get sharedPassword() { return process.env.DEMO_PASSWORD || 'JointboxDemo2026'; }
+
+  /** The credentials to publish. Safe to call from an unauthenticated route. */
+  publicCredentials() {
+    return {
+      enabled: process.env.DEMO_PUBLIC !== '0',
+      email: this.sharedEmail,
+      password: this.sharedPassword,
+      role: 'Franchise (sandbox)',
+      note:
+        'Shared demo. You see only this sandbox account\'s own data — never a real ' +
+        'customer\'s. Server console, RADIUS admin and system logs are disabled, and ' +
+        'everything created here is wiped every week.',
+    };
+  }
+
+  /**
+   * Create the shared demo account if it is missing, and keep its password in
+   * step with the environment. Runs at boot.
+   *
+   * `demoExpiresAt` is set far in the future ON PURPOSE: the nightly purge
+   * deletes expired demo accounts, and this one must survive that. Its content
+   * is cleared by resetShared() instead.
+   */
+  async ensureShared() {
+    if (process.env.DEMO_PUBLIC === '0') return;
+    const hash = await bcrypt.hash(this.sharedPassword, 10);
+    const far = new Date(Date.now() + 3650 * 86400_000);
+    const existing = await this.prisma.user.findFirst({
+      where: { email: this.sharedEmail },
+      select: { id: true },
+    });
+    if (existing) {
+      await this.prisma.user.update({
+        where: { id: existing.id },
+        data: { password: hash, isDemo: true, isActive: true, demoExpiresAt: far },
+      });
+      return;
+    }
+    const u = await this.prisma.user.create({
+      data: {
+        name: 'Jointbox Demo',
+        email: this.sharedEmail,
+        password: hash,
+        role: 'RESELLER',
+        isActive: true,
+        isDemo: true,
+        demoExpiresAt: far,
+        canAddNas: true,
+        canTopupDownline: true,
+        canSetPackagePrice: true,
+        balance: 100000,
+      },
+      select: { id: true },
+    });
+    this.log.log(`Shared public demo account ready (#${u.id}, ${this.sharedEmail})`);
+  }
+
+  /** Weekly: wipe what visitors made in the shared demo, keep the account. */
+  @Cron('0 4 * * 1')
+  async resetShared() {
+    if (!isPrimaryInstance() || process.env.DEMO_PUBLIC === '0') return;
+    const u = await this.prisma.user.findFirst({
+      where: { email: this.sharedEmail, isDemo: true },
+      select: { id: true },
+    });
+    if (!u) return;
+    // purgeAccount removes the subtree the account created. Passing its own id
+    // would delete the account too, so clear the children and reset the wallet.
+    const kids = await this.prisma.user.findMany({
+      where: { parentId: u.id }, select: { id: true },
+    });
+    for (const k of kids) await this.purgeAccount(k.id).catch(() => null);
+    await this.purgeSubscribersOf(u.id).catch(() => null);
+    await this.prisma.user.update({ where: { id: u.id }, data: { balance: 100000 } }).catch(() => null);
+    this.log.log('Shared demo account reset for the week.');
+  }
+
+  /** Delete just the subscribers belonging to one account (not the account). */
+  private async purgeSubscribersOf(userId: number) {
+    const subs = await this.prisma.subscriber.findMany({
+      where: { userId }, select: { id: true },
+    });
+    if (!subs.length) return;
+    const ids = subs.map((s) => s.id);
+    await this.prisma.subscriber.deleteMany({ where: { id: { in: ids } } }).catch(() => null);
+  }
+
   /** Daily: delete demo accounts past their expiry, and everything they made. */
   @Cron('30 3 * * *')
   async cleanupExpired() {

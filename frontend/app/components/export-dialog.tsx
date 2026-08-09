@@ -4,10 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal, Button, Field, Input, Segmented, Badge, NV } from "./ui";
 import { exportCsv, exportExcel } from "./export-file";
 import { silent } from "./silent";
+import API_BASE from "./api";
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 /**
  * ExportDialog — build a filtered subscriber extract.

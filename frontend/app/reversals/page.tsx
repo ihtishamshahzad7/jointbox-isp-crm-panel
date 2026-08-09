@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import API_BASE from "../components/api";
 
 /**
  * Disputes / Reversals — one consolidated view of every activation reversal
@@ -13,8 +14,7 @@ import React from "react";
  */
 
 const API =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 const REASON_CODES = [
   { v: "DUPLICATE", label: "Duplicate activation" },

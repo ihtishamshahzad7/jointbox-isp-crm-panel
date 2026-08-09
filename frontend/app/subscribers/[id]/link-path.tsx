@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import API_BASE from "../../components/api";
 
-const API = (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+const API = API_BASE;
 
 /**
  * Live connection path for one subscriber:

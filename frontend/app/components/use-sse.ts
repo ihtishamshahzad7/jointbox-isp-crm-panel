@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import API_BASE from "./api";
 
 interface SSEHandlers {
   /** Called when the stream first connects or reconnects. */
@@ -54,9 +55,7 @@ export function useSSE(handlers: SSEHandlers = {}): SSEState {
     if (!token) return;
 
     const API =
-      typeof window !== "undefined"
-        ? `http://${window.location.hostname}:3001`
-        : "http://localhost:3001";
+      API_BASE;
 
     const url = `${API}/events?token=${encodeURIComponent(token)}`;
     const es = new EventSource(url);

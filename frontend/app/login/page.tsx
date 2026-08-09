@@ -3,12 +3,22 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Logo } from "../components/logo";
+import API_BASE from "../components/api";
 
 const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const SUPPORT = "ehtisham@jointbox.net";
 
-// Helper function to get backend URL - safely handles window object
-const getBackendUrl = () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+/**
+ * Backend URL for the login screen.
+ *
+ * This used to fall back to "http://localhost:3001" whenever
+ * NEXT_PUBLIC_BACKEND_URL was unset — meaning a client opening the panel from
+ * their own machine would try to reach a backend on THEIR computer, not the
+ * server. It only ever worked because the build happened to define that
+ * variable. Now it shares the same resolver as every other screen, which also
+ * makes login work over HTTPS.
+ */
+const getBackendUrl = () => API_BASE;
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -131,8 +141,17 @@ export default function LoginPage() {
     setLoading(true);
     setMessage("Creating a demo account…");
     try {
-      const base = (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "");
-      const r = await fetch(`${base}/demo/create`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      // Shared demo: one published login rather than a new throwaway account
+      // per visitor. Falls back to creating a private sandbox if the shared
+      // one has been switched off (DEMO_PUBLIC=0).
+      const shared = await fetch(`${API_BASE}/demo/public`).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+      if (shared?.enabled) {
+        setEmail(shared.email);
+        setPassword(shared.password);
+        setMessage(`✅ Demo ready — click Sign In. ${shared.note}`);
+        return;
+      }
+      const r = await fetch(`${API_BASE}/demo/create`, { method: "POST", headers: { "Content-Type": "application/json" } });
       const d = await r.json();
       if (!r.ok) throw new Error(d?.message || "Could not create a demo account");
       setEmail(d.email);

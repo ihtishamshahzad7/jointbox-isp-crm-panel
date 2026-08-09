@@ -6,7 +6,7 @@ import { money, currencySymbol } from "../components/currency";
 import { silent } from "../components/silent";
 import { PackageShareModal } from "./package-share-modal";
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 type StatusFilter = "ALL" | "ACTIVE" | "INACTIVE";
 type ServiceType = "RESIDENTIAL" | "BUSINESS" | "CORPORATE" | "EDUCATIONAL" | "GOVERNMENT";
@@ -86,6 +86,7 @@ import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { SkeletonTable } from "../components/skeleton";
 import { PackageTable } from "../components/network-tables";
+import API_BASE from "../components/api";
 
 const packageDefaults = {
   name: "",

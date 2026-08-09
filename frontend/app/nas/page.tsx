@@ -103,13 +103,14 @@ interface ViewDetail {
   detailsError: string | null;
 }
 
-const API = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:"http://localhost:3001");
+const API = API_BASE;
 
 /** ISP-level roles bypass every reseller permission gate. */
 const isAdminRole = (role?: string) => role === 'ADMIN' || role === 'SUPER_ADMIN';
 
 // ─── SVG Icons ──────────────────────────────────────────────────────
 import { Icons as SharedIcons } from "../components/icons";
+import API_BASE from "../components/api";
 
 /** NAS-specific diagnostics icons not in the shared set. */
 const __nasIcons = {

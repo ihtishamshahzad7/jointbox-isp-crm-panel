@@ -155,7 +155,16 @@ pm2 save >/dev/null 2>&1 || true
 # the kernel and RE-APPLY it on every deploy so it can never be lost (the old
 # approach of binding the frontend to :80 via FRONTEND_PORT was fragile because
 # --update-env dropped the env each deploy). Idempotent + persisted.
-if [ "$(id -u)" -eq 0 ]; then
+#
+# ...UNLESS TLS is in front. scripts/setup-https.sh puts Caddy on :80/:443 and
+# drops this marker. Re-adding the redirect on the next deploy would send port
+# 80 straight past Caddy — which silently breaks the ACME renewal challenge, so
+# roughly six days later the certificate would expire and every client would
+# get a browser security warning instead of a login page.
+#
+if [ -f /etc/jointbox-tls-enabled ]; then
+  echo "🔒 TLS is enabled (Caddy owns :80/:443) — skipping the port-80 bridge."
+elif [ "$(id -u)" -eq 0 ]; then
   WEBPORT="$(pm2 jlist 2>/dev/null | grep -o '"PORT":"[0-9]*"' | head -1 | grep -o '[0-9]*')"; WEBPORT="${WEBPORT:-3000}"
   if [ "$WEBPORT" != "80" ]; then
     iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports "$WEBPORT" 2>/dev/null || {

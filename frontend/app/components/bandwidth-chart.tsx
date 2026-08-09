@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import API_BASE from "./api";
 
 interface BWPoint {
   timestamp: string;
@@ -24,9 +25,7 @@ interface BWChartProps {
  * Pure SVG — zero dependencies. Renders a 600×240 responsive chart.
  */
 export function BandwidthChart({ username, minutes = 60, darkMode = true }: BWChartProps) {
-  const API = typeof window !== "undefined"
-    ? `http://${window.location.hostname}:3001`
-    : "http://localhost:3001";
+  const API = API_BASE;
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { Authorization: `Bearer ${token}` };
 

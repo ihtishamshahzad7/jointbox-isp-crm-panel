@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
+import API_BASE from "../components/api";
 
 /**
  * ENHANCED DASHBOARD v2
@@ -18,7 +19,7 @@ import { money, currencySymbol } from "../components/currency";
  * • Action quick-links
  */
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+const API = API_BASE;
 
 // ═══════════════════════════════════════════════════════════════════════
 // ENHANCED METRIC CARD COMPONENT

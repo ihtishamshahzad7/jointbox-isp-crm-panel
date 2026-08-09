@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import API_BASE from "../../components/api";
 
 const API =
-  (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
+  API_BASE;
 
 /**
  * Temporary Boost / speed change for a subscriber. Both options in one dialog:
