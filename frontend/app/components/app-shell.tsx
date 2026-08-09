@@ -91,17 +91,14 @@ const menuGroups = [
 const menuItems = menuGroups.flatMap((g) => g.items);
 
 // Selectable dark themes (palettes defined in globals.css by data-theme id).
+// Three themes only. A long palette list was choice for its own sake — these
+// are the three people actually asked for. The other palettes still exist in
+// globals.css and keep working for anyone who already selected one.
+// Two dark themes here; "Light" is rendered separately below the divider in the
+// picker, giving exactly three choices in total.
 const THEMES = [
   { id: 'aurora', name: 'Aurora (default)', dot: '#8B5CF6' },
-  { id: 'winbox', name: 'Flat / compact', dot: '#4a9eff' },
-  { id: 'night-tower', name: 'Night tower', dot: '#378ADD' },
-  { id: 'signal-room', name: 'Signal room', dot: '#1D9E75' },
-  { id: 'fiber-glass', name: 'Fiber glass', dot: '#7F77DD' },
-  { id: 'copper-clay', name: 'Copper and clay', dot: '#D85A30' },
-  { id: 'terminal-phosphor', name: 'Terminal phosphor', dot: '#639922' },
-  { id: 'dusk-bazaar', name: 'Dusk bazaar', dot: '#EF9F27' },
-  { id: 'cold-steel', name: 'Cold steel', dot: '#378ADD' },
-  { id: 'monsoon-sky', name: 'Monsoon sky', dot: '#85B7EB' },
+  { id: 'winbox', name: 'WinBox (beta)', dot: '#4a9eff' },
 ];
 
 function getInitials(name = ''): string {
@@ -231,7 +228,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    const saved = localStorage.getItem('jb_theme') || 'aurora';
+    // Only three themes are offered now. Anyone still on a retired palette is
+    // migrated to Aurora rather than left on a theme they can no longer pick.
+    const ALLOWED = ['aurora', 'winbox', 'light'];
+    let saved = localStorage.getItem('jb_theme') || 'aurora';
+    if (!ALLOWED.includes(saved)) { saved = 'aurora'; localStorage.setItem('jb_theme', saved); }
     const isLight = saved === 'light';
     setLight(isLight);
     setThemeState(isLight ? 'aurora' : saved);
@@ -906,7 +907,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <>
                   <div onClick={() => setThemeMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
                   <div style={{ position: 'absolute', right: 0, top: 40, zIndex: 41, width: 210, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 8, boxShadow: '0 20px 50px rgba(0,0,0,.45)' }}>
-                    <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '4px 8px' }}>Dark themes</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '4px 8px' }}>Theme</div>
                     {THEMES.map((t) => (
                       <button key={t.id} onClick={() => applyTheme(t.id)}
                         style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', background: (!light && theme === t.id) ? 'var(--surface-2)' : 'transparent', border: 'none', color: 'var(--text)', borderRadius: 8, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}>
