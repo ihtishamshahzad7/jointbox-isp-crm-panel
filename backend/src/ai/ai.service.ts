@@ -47,6 +47,10 @@ export class AiService {
     { t: 'Change package / pro-rata', k: 'change upgrade downgrade package plan prorata pro-rata switch move plan', a: 'Open the subscriber → Edit → change the package. Mid-cycle changes are pro-rated: unused days credited, remaining days charged at the new price, expiry kept.' },
     { t: 'Move customer between dealers', k: 'move transfer reseller dealer ownership reassign migrate handover', a: 'Open the subscriber → Move/Transfer → pick the destination account. Pricing recalculates for the new owner and settles pro-rata. Bulk: Subscribers → select → bulk-transfer.' },
     { t: 'Suspend / hold a customer', k: 'suspend hold disable pause block stop unpaid dunning grace deactivate', a: 'Auto-suspend runs daily past the grace period. To hold manually: open the subscriber → Hold/Dispute (with a reason). A held customer is skipped by auto-suspend.' },
+    { t: 'RADIUS timeout on the router', k: 'radius timeout authentication failed reject router mikrotik not answering no response unknown client secret 1812 firewall', a: 'The router says "radius timeout" when the RADIUS server never replied — the customer\'s details are usually fine. Check in this order: 1) Network → NAS — is this router listed with the SAME IP the router actually sends from (check /ip address print on the device, not what you assume)? An unlisted IP is an unknown client and gets no reply at all. 2) Is the RADIUS secret here character-for-character identical to the one on the router? 3) Can the router reach port 1812/1813 UDP — press Ping on the NAS row to test. 4) If it works when you run freeradius -X by hand but not as a service, the config files are owned by root: the service runs as user freerad and cannot read them.' },
+    { t: 'Deactivate / turn off a subscriber', k: 'deactivate disconnect disable turn off switch off stop cut shut down kill terminate cancel service end subscriber off del row buttons', a: 'Subscribers → find the row → the small buttons on the right are Edit, Move, Off and Del. 1) "Off" disables the account: their internet stops at the next reconnect and they cannot log back in — press it again to switch them back on. 2) To cut someone off THIS SECOND while they are connected, use Network → Live Network → Disconnect (that drops the live session but they can redial). 3) "Del" removes the customer permanently — invoices and payments are kept. Off is the reversible one; use it unless you really mean delete.' },
+    { t: 'Row buttons on the subscriber list (Edit, Move, Off, Del)', k: 'edit move off del row button small buttons right side list what does mean column actions', a: 'Every subscriber row ends with four small buttons. Edit = open the record to change details (nothing changes until you Save). Move = hand the customer to another dealer, which really transfers ownership and re-prices them. Off = disable the account so they cannot connect, reversible any time. Del = delete the customer permanently; their invoices and payments are kept but the record does not come back.' },
+    { t: 'Subscriber logs / history / what happened to this customer', k: 'log logs history activity audit record session past events happened check see view trail radius login attempt subscriber', a: 'Two places. 1) For ONE customer: open them → the tabs on their profile show Sessions (every login, IP, duration, data), Router Log (live fault from the router), RADIUS (auth attempts) and Notes. 2) For everyone: Insights → Logs, which has Activity, Login, Network, System, Sessions, Failed and RADIUS tabs, each filterable. You only ever see records for your own accounts and those below you.' },
     { t: 'Delete / bulk delete subscribers', k: 'delete remove bulk delete subscriber customer purge', a: 'Open a subscriber → Delete, or Subscribers → select rows → bulk delete. Their financial records (invoices/payments) are preserved and detach rather than being destroyed.' },
     { t: 'Notes on records', k: 'note comment remark annotate transmission history log record', a: 'Subscribers, users, packages, IP pools and NAS all have a Notes panel — add transmission details, follow-ups, or any context; each note keeps who wrote it and when.' },
     { t: 'Search / trace anything', k: 'search find trace lookup phone username cnic ip locate who', a: 'Daily Work → Trace Search (or the header search). Find anyone by name, username, phone, IP or CNIC.' },
@@ -192,29 +196,277 @@ export class AiService {
     { t: 'Keyboard shortcuts', k: 'keyboard shortcut ctrl k command palette search quickly hotkey', a: 'Ctrl+K (or ⌘K, or /) opens the command palette — type to jump to any screen or action. Ctrl+F focuses the Find box on a list. Esc closes dialogs and the expanded view.' },
   ];
 
-  private localAnswer(question: string) {
-    const stop = new Set(['the','a','an','how','do','i','to','my','in','on','of','is','for','what','where','it','and','me','with','you','we','our','this','that','get','see','use','need','want','does','are','when','why','should','if']);
-    const terms = (question.toLowerCase().match(/[a-z0-9]+/g) || []).filter((w) => w.length > 1 && !stop.has(w));
+  /**
+   * Direct answer for "what does this button do / what happens if I press X",
+   * asked while standing on the screen that has X.
+   *
+   * This runs BEFORE the keyword search because the search answers with an
+   * article, and someone hovering over a red button wants one sentence about
+   * that button — not a paragraph about the feature it belongs to.
+   * Returns '' when the question is not about a button, so the normal search
+   * takes over.
+   */
+  private answerAboutButton(question: string, clean: string, top: string, tabRoute?: string): string {
+    const q = (question || '').toLowerCase();
+    const buttons = this.buttonsFor(clean, top, tabRoute);
+    if (!buttons.length) return '';
+
+    // "what is this screen for" — the vaguest question there is, and the one a
+    // nervous first-day user actually asks. Keyword search scores it near zero
+    // (almost every word is a stop word), so it used to fall through to "I
+    // didn't understand that". We already know exactly which screen they are
+    // on, so answer from that instead of searching.
+    if (/^(what|whats|what's)\b[^?]*\b(this|here|screen|page|tab)\b/.test(q)
+        && !/\b(button|buttons|option|options|click|press|tap)\b/.test(q)
+        && !buttons.some((b) => b.label.length > 2 && q.includes(b.label.toLowerCase()))) {
+      const help = this.pageHelp(tabRoute || clean);
+      const risky = buttons.filter((b) => b.risk === 'high').map((b) => b.label);
+      return [
+        help.title || 'This screen',
+        '',
+        help.intro || 'This is one of the panel screens.',
+        '',
+        `There are ${buttons.length} things you can click here. Ask me "what does each button do here" and I'll go through every one.`,
+        risky.length ? `\n⚠ Take care with: ${risky.join(', ')} — those change money, service or someone's internet.` : '',
+      ].filter(Boolean).join('\n');
+    }
+
+    // "what are the buttons here" / "what can I click on this screen"
+    if (/\b(button|buttons|option|options|click|press|tap)\b/.test(q)
+        && /\b(this|here|screen|page|each|all|what|which)\b/.test(q)
+        && !buttons.some((b) => q.includes(b.label.toLowerCase()))) {
+      const lines = buttons.map((b) => {
+        const mark = b.risk === 'high' ? '🔴' : b.risk === 'medium' ? '🟡' : '🟢';
+        return b.does ? `${mark} ${b.label} — ${b.does}` : `${mark} ${b.label}`;
+      });
+      return [
+        'Here is every button on this screen and what it does.',
+        '',
+        ...lines,
+        '',
+        '🔴 = changes money, service or data — read the warning before pressing.',
+        '🟡 = makes a real change, but shows you a preview first.',
+        '🟢 = safe, changes nothing on its own.',
+        '',
+        'Ask me about any one of them by name and I will tell you exactly what happens.',
+      ].join('\n');
+    }
+
+    // "what happens if I press <label>" — pick the longest label mentioned so
+    // "mass delete" beats "delete".
+    const named = buttons
+      .filter((b) => b.label.length > 2 && q.includes(b.label.toLowerCase()))
+      .sort((a, b) => b.label.length - a.label.length)[0];
+
+    /**
+     * Only answer ABOUT the button when they are really asking about it.
+     *
+     * A loose guard here was worse than no guard: "how do I add a customer"
+     * mentions the word "add", matched the Add button, and got back "Opens a
+     * form to create a new record" instead of the actual step-by-step. So a
+     * "how do I…" task question always goes to the knowledge base, and only
+     * an explicit what-happens/is-it-safe/what-does-this-button phrasing gets
+     * the button card.
+     */
+    const asksAboutButton =
+      /\bbutton\b/.test(q)
+      || /\bwhat (does|do|happens|will happen|is)\b/.test(q)
+      || /\b(safe|undo|reversible|dangerous|careful)\b/.test(q)
+      || /\bif i (press|click|tap|hit)\b/.test(q);
+    const isHowTo = /\b(how (do|can|to)|where (do|is|can))\b/.test(q);
+
+    if (named && asksAboutButton && !isHowTo) {
+      if (!named.does) return '';
+      return [
+        `The "${named.label}" button`,
+        '',
+        `What it does: ${named.does}`,
+        `Before you press it: ${named.careful}`,
+        named.risk === 'high'
+          ? '\n⚠ This one changes money, service or data. Read the line above twice — it is not easily undone.'
+          : named.risk === 'medium'
+            ? '\nℹ This makes a real change, but you get a preview or confirmation first.'
+            : '\n✓ This one is safe. Nothing changes because you pressed it.',
+      ].join('\n');
+    }
+    return '';
+  }
+
+  private static readonly STOP = new Set([
+    'the','a','an','how','do','i','to','my','in','on','of','is','for','what','where','it','and','me',
+    'with','you','we','our','this','that','get','see','use','need','want','does','are','when','why',
+    'should','if','can','or','be','am','was','will','would','there','here','from','out','any','some',
+    'please','tell','show','help','know','make','let','one','also','have','has','had','been','they',
+  ]);
+
+  /**
+   * Crude stemmer — plural and simple verb endings only.
+   *
+   * "logs of subscribers" scored ZERO on "logs" and "subscribers" because the
+   * knowledge base says "log" and "subscriber". No stemming meant the two words
+   * that carried the entire question were thrown away. Deliberately shallow:
+   * an aggressive stemmer starts merging words that mean different things.
+   */
+  private stem(w: string): string {
+    if (w.length > 4 && w.endsWith('ies')) return `${w.slice(0, -3)}y`;
+    if (w.length > 4 && (w.endsWith('ses') || w.endsWith('xes') || w.endsWith('ches'))) return w.slice(0, -2);
+    if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
+    if (w.length > 5 && w.endsWith('ing')) return w.slice(0, -3);
+    if (w.length > 4 && w.endsWith('ed')) return w.slice(0, -2);
+    return w;
+  }
+
+  private tokens(text: string): string[] {
+    return (text.toLowerCase().match(/[a-z0-9]+/g) || [])
+      .filter((w) => w.length > 1 && !AiService.STOP.has(w))
+      .map((w) => this.stem(w));
+  }
+
+  /**
+   * How rare each word is across the whole knowledge base (classic IDF).
+   *
+   * THE BUG THIS FIXES: every term scored the same, so "renew subscriber"
+   * gave one point for "renew" and one for "subscriber" — but "subscriber"
+   * appears in half the entries and tells us nothing, while "renew" is the
+   * entire question. Four entries tied on 2 points and the winner was simply
+   * whichever sat earliest in the array: "Add a subscriber". Weighting each
+   * term by its rarity makes the meaningful word decide the answer.
+   */
+  private readonly IDF: Map<string, number> = (() => {
+    const df = new Map<string, number>();
+    const all = [...this.KB, ...this.GEN.entries];
+    for (const e of all) {
+      for (const w of new Set(this.tokens(`${e.t} ${e.k}`))) df.set(w, (df.get(w) || 0) + 1);
+    }
+    const idf = new Map<string, number>();
+    for (const [w, n] of df) idf.set(w, Math.log(all.length / (1 + n)) + 0.2);
+    return idf;
+  })();
+
+  /** Levenshtein distance — used only to forgive typos. */
+  private dist(a: string, b: string): number {
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+
+  /**
+   * Closest known word to a misspelling, or the word unchanged.
+   *
+   * Must pick the CLOSEST candidate, not the first acceptable one: "desconnect"
+   * is 1 edit from "disconnect" and 3 from "reconnect", but a first-match scan
+   * returned whichever happened to be earlier in the vocabulary — and answered
+   * a question about disconnecting someone with the reconnect-loop article.
+   */
+  private correct(word: string): string {
+    if (this.IDF.has(word) || word.length < 5) return word;
+    const limit = word.length > 7 ? 2 : 1;
+    let best = word, bestD = limit + 1;
+    for (const v of this.IDF.keys()) {
+      if (Math.abs(v.length - word.length) > limit) continue;
+      const d = this.dist(word, v);
+      if (d < bestD) { bestD = d; best = v; if (d === 1) break; }
+    }
+    return bestD <= limit ? best : word;
+  }
+
+  private localAnswer(question: string, pageKeys?: string[]) {
+    const terms = this.tokens(question);
+    // Unknown words are usually typos ("desconnect"), and a typo used to delete
+    // the most important word in the question. Map each one to the closest
+    // word the knowledge base actually knows.
+    const resolved = terms.map((t) => this.correct(t));
+    const maxIdf = Math.max(1, ...resolved.map((t) => this.IDF.get(t) || 0));
+
     const scored = this.ALL.map((e) => {
       const title = e.t.toLowerCase();
-      const words = new Set(`${e.t} ${e.k}`.toLowerCase().match(/[a-z0-9]+/g) || []);
+      const titleWords = new Set(this.tokens(e.t));
+      const words = new Set(this.tokens(`${e.t} ${e.k}`));
       let score = 0;
-      for (const term of terms) {
-        if (words.has(term)) score += 2;            // whole-word keyword hit
-        else if (title.includes(term)) score += 1;  // partial title hit
+      for (const term of resolved) {
+        const weight = this.IDF.get(term) || maxIdf;   // unknown word = treat as rare
+        if (titleWords.has(term)) score += weight * 2.5;  // the title IS the topic
+        else if (words.has(term)) score += weight;
+        else if (title.includes(term)) score += weight * 0.4;
+      }
+      // Hand-written entries are more precise than generated ones; this only
+      // matters when scores are otherwise equal.
+      if (this.KB.includes(e as any)) score += 0.15;
+
+      /**
+       * Page context is a TIE-BREAKER, never the main signal.
+       *
+       * The first version appended the page's keywords to the question, so a
+       * two-word query like "nas add" competed against eleven injected terms —
+       * and an entry that merely mentioned lots of page words (NOC/uptime) beat
+       * the one actually about adding a router. Here the bonus is capped at +1
+       * in total, so it only decides between entries the QUESTION already
+       * ranked closely.
+       */
+      if (pageKeys?.length) {
+        const hay = `${e.t} ${e.k}`.toLowerCase();
+        if (pageKeys.some((k) => hay.includes(k))) score += maxIdf * 0.35;
       }
       return { score, entry: e };
-    }).sort((a, b) => b.score - a.score);
+    }).sort((a, b) => (
+      // Exact ties are common ("renew subscriber" tied Activate-or-renew with
+      // Renew-on-credit). Break them on title length: the shorter title is the
+      // more general topic, which is the safer answer to a general question.
+      b.score - a.score || a.entry.t.length - b.entry.t.length
+    ));
 
+    // Scores are now weighted, not counted, so the cut-off has to scale with
+    // them: "did we match at least one word that actually mattered?"
+    const floor = maxIdf * 0.8;
     const best = scored[0];
-    if (!best || best.score < 2) {
-      const topics = ['Add a subscriber', 'Activate or renew', 'Refund', 'Customer is offline', 'Disconnect a live user', 'Reseller pricing', 'Reports', 'Vouchers'].map((t) => `• ${t}`).join('\n');
-      return `I can help with most Jointbox tasks. Try a keyword like "refund", "offline", "renew", "voucher", "reseller pricing", "close books"…\n\nCommon topics:\n${topics}`;
+    if (!best || best.score < floor) {
+      const topics = ['Add a subscriber', 'Activate or renew', 'Refund a customer', 'Customer is offline', 'Disconnect a live user', 'Reseller pricing', 'Reports', 'Vouchers'].map((t) => `• ${t}`).join('\n');
+      return [
+        "I didn't understand that one — but I probably know the answer, so try again in plain words.",
+        '',
+        'You can ask me things like:',
+        '• "how do I add a customer"',
+        '• "what does this button do"',
+        '• "what happens if I press delete"',
+        '• "why is my customer offline"',
+        '',
+        'Common topics:',
+        topics,
+      ].join('\n');
     }
     // Broad question → offer the closest related topics too.
-    const related = scored.slice(1, 4).filter((s) => s.score >= Math.max(2, best.score - 2)).map((s) => s.entry.t);
+    const related = scored.slice(1, 4).filter((s) => s.score >= best.score * 0.6).map((s) => s.entry.t);
     const relatedLine = related.length ? `\n\nRelated: ${related.join(' · ')}` : '';
-    return best.entry.a + relatedLine;
+    return this.explain(best.entry.a) + relatedLine;
+  }
+
+  /**
+   * Re-present a knowledge answer so a first-day user cannot misread it.
+   *
+   * Almost every entry is written as "Where → To → Go. Then do this." — the
+   * location and the instructions run together in one block, which is exactly
+   * the shape people skim past and then click the wrong thing. Splitting the
+   * menu path onto its own labelled line, and numbered steps onto their own
+   * lines, changes nothing about the content and a great deal about whether it
+   * gets followed correctly.
+   */
+  private explain(answer: string): string {
+    const text = (answer || '').trim();
+    // A leading "A → B → C." (optionally "A → B → C → Button.") is the path.
+    const m = /^([^.]{3,80}?→[^.]{1,80}?)\.\s+([\s\S]+)$/.exec(text);
+    if (!m) return text;
+    const [, where, rest] = m;
+
+    // "1) do this. 2) do that." → one numbered step per line, so nobody merges
+    // two steps into one click.
+    const body = rest.replace(/\s(?=\d\)\s)/g, '\n');
+    return `📍 Go to: ${where.trim()}\n\n${body.trim()}`;
   }
 
   /**
@@ -225,7 +477,11 @@ export class AiService {
    * stop the backend booting: no file simply means the assistant falls back to
    * the hand-written entries above.
    */
-  private readonly GENERATED: Array<{ t: string; k: string; a: string }> = (() => {
+  private readonly GEN: {
+    entries: Array<{ t: string; k: string; a: string }>;
+    tabs: Record<string, Array<{ id: string; label: string; hint: string; route?: string }>>;
+    buttons: Record<string, Array<{ label: string; does: string; careful: string; risk: string }>>;
+  } = (() => {
     const candidates = [
       path.join(__dirname, 'knowledge.generated.json'),               // dist
       path.join(process.cwd(), 'src/ai/knowledge.generated.json'),    // src
@@ -235,15 +491,53 @@ export class AiService {
       try {
         if (!fs.existsSync(p)) continue;
         const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-        if (Array.isArray(data?.entries)) return data.entries;
+        if (Array.isArray(data?.entries)) {
+          return { entries: data.entries, tabs: data.tabs || {}, buttons: data.buttons || {} };
+        }
       } catch { /* try the next path */ }
     }
-    return [];
+    return { entries: [], tabs: {}, buttons: {} };
   })();
+
+  private get GENERATED() { return this.GEN.entries; }
 
   /** Hand-written entries first (they are more precise), then generated ones. */
   private get ALL() {
     return [...this.KB, ...this.GENERATED];
+  }
+
+  /**
+   * Split a route into the screen and the tab inside it.
+   *
+   * Hub screens (Network, Billing, Administration, My Work…) put eight or more
+   * different tools behind ONE route and switch with `?tab=`. Before this, the
+   * assistant saw only `/network-center` — so standing on the Outages tab it
+   * would happily explain IP pools. The tab is the more specific answer, so it
+   * wins whenever we know it.
+   */
+  private splitRoute(route?: string) {
+    const raw = route || '';
+    const [pathPart, queryPart] = raw.split('?');
+    const clean = pathPart.replace(/^\/+/, '').replace(/\/+$/, '');
+    const top = clean.split('/')[0] || 'dashboard';
+    const tabId = /(?:^|&)tab=([^&]+)/.exec(queryPart || '')?.[1] || '';
+    const tab = (this.GEN.tabs[clean] || this.GEN.tabs[top] || [])
+      .find((t) => t.id === decodeURIComponent(tabId));
+    return { clean, top, tab };
+  }
+
+  /**
+   * "What does this button do?" — answered from the REAL labels on the screen.
+   *
+   * The scan reads labels straight out of the JSX, so the assistant can never
+   * describe a button that is not there; the consequence text is hand-written
+   * per action, because no scan can know that Suspend cuts someone's internet.
+   */
+  private buttonsFor(clean: string, top: string, tabRoute?: string) {
+    // A hub tab renders another screen's component, so its buttons belong to
+    // THAT screen. Looking only at the hub route listed almost nothing.
+    if (tabRoute && this.GEN.buttons[tabRoute]) return this.GEN.buttons[tabRoute];
+    return this.GEN.buttons[clean] || this.GEN.buttons[top] || [];
   }
 
   /**
@@ -320,33 +614,53 @@ export class AiService {
 
   /** Guidance for the screen the user is currently on. */
   pageHelp(route?: string) {
-    const clean = (route || '').split('?')[0].replace(/^\/+/, '');
-    const top = clean.split('/')[0] || 'dashboard';
+    const { clean, top, tab } = this.splitRoute(route);
     const page = this.PAGES[clean] || this.PAGES[top];
+    const buttons = this.buttonsFor(clean, top, tab?.route);
 
-    if (!page) {
+    // Title/intro come from the TAB when we know it, because the tab is what
+    // the user is actually looking at.
+    const title = tab ? `${page?.title || top} → ${tab.label}` : page?.title;
+    const intro = tab?.hint || page?.intro;
+
+    if (!page && !tab) {
       return {
-        scoped: false,
+        scoped: buttons.length > 0,
         title: 'This screen',
-        intro: 'I don\'t have a dedicated guide for this screen yet — ask me anything and I\'ll search the whole guide.',
+        intro: buttons.length
+          ? 'I don\'t have a written guide for this screen yet, but here is what every button on it does.'
+          : 'I don\'t have a dedicated guide for this screen yet — ask me anything and I\'ll search the whole guide.',
         topics: [],
-        questions: ['What can I do on this screen?', 'How do I get started?'],
+        buttons,
+        questions: ['What can I do on this screen?', 'What does each button do here?'],
       };
     }
 
-    // Pull the knowledge entries whose keywords overlap this page's topics.
+    // Rank knowledge by this screen's keywords, and by the tab's own words when
+    // there is a tab — otherwise every tab of a hub gets the same eight topics.
+    const keys = [
+      ...(page?.keys || []),
+      ...(tab ? (tab.label.toLowerCase().match(/[a-z0-9]+/g) || []) : []),
+    ];
+    const tabWords = tab ? new Set(tab.label.toLowerCase().match(/[a-z0-9]+/g) || []) : null;
     const scored = this.ALL.map((e) => {
       const hay = `${e.t} ${e.k}`.toLowerCase();
-      const score = page.keys.reduce((n, k) => (hay.includes(k) ? n + 1 : n), 0);
+      let score = keys.reduce((n, k) => (hay.includes(k) ? n + 1 : n), 0);
+      if (tabWords) for (const w of tabWords) if (hay.includes(w)) score += 3;
       return { e, score };
     }).filter((s) => s.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
 
     return {
       scoped: true,
-      title: page.title,
-      intro: page.intro,
+      title,
+      intro,
       topics: scored.map((s) => ({ title: s.e.t, answer: s.e.a })),
-      questions: page.ask,
+      // Every control on the screen, in plain words, with the risky ones
+      // flagged — so nobody has to press one to find out what it does.
+      buttons,
+      questions: tab
+        ? [`What is the ${tab.label} tab for?`, `What does each button do here?`, ...(page?.ask || []).slice(0, 2)]
+        : ['What does each button do here?', ...(page?.ask || [])],
     };
   }
 
@@ -380,9 +694,17 @@ export class AiService {
     // tells us which screen they are on, append that page's keywords to the
     // query so "how do I add one?" resolves against THIS screen's topics.
     if (!this.llmEnabled) {
-      const page = route ? this.PAGES[(route.split('?')[0].replace(/^\/+/, '').split('/')[0])] : null;
-      const q = page ? `${lastUser} ${page.keys.join(' ')}` : lastUser;
-      return { ok: true, mode: 'local', reply: this.localAnswer(q) };
+      const { clean, top, tab } = this.splitRoute(route);
+      const page = route ? (this.PAGES[clean] || this.PAGES[top]) : null;
+      // A question asked while standing on a screen is usually ABOUT something
+      // on that screen — check its real buttons before searching the whole KB.
+      const direct = route ? this.answerAboutButton(lastUser, clean, top, tab?.route) : '';
+      if (direct) return { ok: true, mode: 'local', reply: direct };
+      const keys = [
+        ...(page?.keys || []),
+        ...(tab ? (tab.label.toLowerCase().match(/[a-z0-9]+/g) || []) : []),
+      ];
+      return { ok: true, mode: 'local', reply: this.localAnswer(lastUser, keys.length ? keys : undefined) };
     }
 
     // Optional LLM mode (only if configured).

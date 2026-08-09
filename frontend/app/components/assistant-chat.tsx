@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import API from "./api";
 
 /**
@@ -31,7 +31,20 @@ const SUGGESTIONS = [
   "How do I set up Discord alerts?",
 ];
 
+/**
+ * `useSearchParams` forces a component out of static prerendering unless it
+ * sits under a Suspense boundary — and this chat is mounted from the root
+ * layout, so without this wrapper EVERY page would fail `next build`.
+ */
 export function AssistantChat({ big = false }: { big?: boolean }) {
+  return (
+    <Suspense fallback={null}>
+      <AssistantChatInner big={big} />
+    </Suspense>
+  );
+}
+
+function AssistantChatInner({ big = false }: { big?: boolean }) {
   const [msgs, setMsgs] = useState<Msg[]>([GREETING]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -46,19 +59,27 @@ export function AssistantChat({ big = false }: { big?: boolean }) {
    * the question is broader.
    */
   const pathname = usePathname() || "/";
+  const search = useSearchParams();
+  /**
+   * Hub screens hold eight tools behind ONE route and switch with `?tab=`, so
+   * the path alone told the assistant nothing about what the user was looking
+   * at — standing on Outages it would explain IP pools. The tab goes with it.
+   */
+  const route = `${pathname}${search?.get("tab") ? `?tab=${search.get("tab")}` : ""}`;
   const [scope, setScope] = useState<"page" | "all">("page");
   const [help, setHelp] = useState<any>(null);
+  const [showButtons, setShowButtons] = useState(false);
 
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
     if (!token) return;
-    fetch(`${API}/ai/page-help?route=${encodeURIComponent(pathname)}`, {
+    fetch(`${API}/ai/page-help?route=${encodeURIComponent(route)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setHelp(d))
       .catch(() => setHelp(null));
-  }, [pathname]);
+  }, [route]);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -79,7 +100,7 @@ export function AssistantChat({ big = false }: { big?: boolean }) {
       // answered in the context of the screen they are actually looking at.
       const r = await fetch(`${API}/ai/chat`, {
         method: "POST", headers,
-        body: JSON.stringify({ messages: next, route: scope === "page" ? pathname : undefined }),
+        body: JSON.stringify({ messages: next, route: scope === "page" ? route : undefined }),
       });
       const d = await r.json();
       setMsgs((m) => [...m, { role: "assistant", content: d?.reply || "Sorry, something went wrong." }]);
@@ -162,6 +183,63 @@ export function AssistantChat({ big = false }: { big?: boolean }) {
                           cursor: "pointer", fontFamily: "inherit",
                         }}>› {t.title}</button>
                     ))}
+                  </div>
+                )}
+
+                {/**
+                 * BUTTON GUIDE.
+                 *
+                 * The commonest support question is not "where is X" but "what
+                 * happens if I press this" — and someone guessing at a red
+                 * button is exactly how a customer base gets mass-deleted. The
+                 * labels are read out of the real screen code, so nothing here
+                 * describes a button that isn't there.
+                 */}
+                {help.buttons?.length > 0 && (
+                  <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 9 }}>
+                    <button onClick={() => setShowButtons((v) => !v)}
+                      style={{
+                        background: "transparent", border: "none", color: "var(--accent)",
+                        fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0,
+                        fontFamily: "inherit",
+                      }}>
+                      {showButtons ? "▾" : "▸"} What every button here does ({help.buttons.length})
+                    </button>
+                    {showButtons && (
+                      <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                        {help.buttons.map((b: any) => (
+                          <div key={b.label} style={{
+                            background: "var(--surface)", border: "1px solid var(--border)",
+                            borderLeft: `3px solid ${b.risk === "high" ? "#ef4444" : b.risk === "medium" ? "#f59e0b" : "#4ade80"}`,
+                            borderRadius: 8, padding: "7px 10px",
+                          }}>
+                            <div style={{ fontSize: 12, fontWeight: 700 }}>
+                              {b.risk === "high" ? "🔴" : b.risk === "medium" ? "🟡" : "🟢"} {b.label}
+                            </div>
+                            {b.does && (
+                              <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.6, marginTop: 2 }}>
+                                {b.does}
+                              </div>
+                            )}
+                            {b.careful && (
+                              <div style={{ fontSize: 11.5, color: b.risk === "high" ? "#f59e0b" : "var(--muted)", lineHeight: 1.6, marginTop: 3 }}>
+                                {b.risk === "high" ? "⚠ " : ""}{b.careful}
+                              </div>
+                            )}
+                            {!b.does && (
+                              <button onClick={() => ask(`What does the ${b.label} button do?`)}
+                                style={{
+                                  background: "none", border: "none", color: "var(--accent)", padding: 0,
+                                  fontSize: 11.5, cursor: "pointer", marginTop: 2, fontFamily: "inherit",
+                                }}>Ask what this one does →</button>
+                            )}
+                          </div>
+                        ))}
+                        <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.6 }}>
+                          🔴 changes money, service or data · 🟡 real change, but previews first · 🟢 safe, changes nothing
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -2,9 +2,1910 @@
   "generated": true,
   "note": "Auto-generated from the codebase by tools/build_ai_knowledge.py. Do not edit by hand — re-run the script instead.",
   "counts": {
-    "screens": 56,
+    "screens": 57,
     "actions": 49,
-    "total": 105
+    "tabs": 50,
+    "buttons": 72,
+    "total": 228
+  },
+  "tabs": {
+    "admin-center": [
+      {
+        "id": "organization",
+        "label": "Organization",
+        "hint": "Franchises, dealers and retailers under you.",
+        "route": "organization"
+      },
+      {
+        "id": "hierarchy",
+        "label": "Network Tree",
+        "hint": "The whole downline as a chart.",
+        "route": "hierarchy"
+      },
+      {
+        "id": "users",
+        "label": "Users & Staff",
+        "hint": "Logins, roles and permissions.",
+        "route": "users"
+      },
+      {
+        "id": "security",
+        "label": "Security",
+        "hint": "API keys, webhooks and access control.",
+        "route": "security"
+      },
+      {
+        "id": "settings",
+        "label": "Settings",
+        "hint": "Currency, branding and system options.",
+        "route": "settings"
+      }
+    ],
+    "billing-center": [
+      {
+        "id": "accounting",
+        "label": "Accounting",
+        "hint": "Wallets, ledger and reseller settlement.",
+        "route": "accounting"
+      },
+      {
+        "id": "earnings",
+        "label": "Collections",
+        "hint": "What you collected, by day, package and method.",
+        "route": "earnings"
+      },
+      {
+        "id": "invoices",
+        "label": "Invoices",
+        "hint": "What has been billed, paid and outstanding.",
+        "route": "invoices"
+      },
+      {
+        "id": "payments",
+        "label": "Payments",
+        "hint": "Money received against those invoices.",
+        "route": "payments"
+      },
+      {
+        "id": "gateways",
+        "label": "Online Gateways",
+        "hint": "Stripe, bKash, JazzCash and other payment providers.",
+        "route": "gateways"
+      },
+      {
+        "id": "vouchers",
+        "label": "Vouchers",
+        "hint": "Prepaid codes for top-ups and activations.",
+        "route": "vouchers"
+      },
+      {
+        "id": "pricing",
+        "label": "Reseller Pricing",
+        "hint": "What each account pays, and the margin at every tier.",
+        "route": "pricing"
+      },
+      {
+        "id": "reversals",
+        "label": "Disputes & Reversals",
+        "hint": "Reversed commissions and the audit trail behind them.",
+        "route": "reversals"
+      }
+    ],
+    "insights": [
+      {
+        "id": "segments",
+        "label": "Segments",
+        "hint": "Subscribers by VLAN, router, area and reseller — with how many are actually up.",
+        "route": "segments"
+      },
+      {
+        "id": "analytics",
+        "label": "Analytics",
+        "hint": "Growth, revenue and churn over time.",
+        "route": "analytics"
+      },
+      {
+        "id": "reports",
+        "label": "Reports",
+        "hint": "Exportable summaries for a period.",
+        "route": "reports"
+      },
+      {
+        "id": "logs",
+        "label": "Logs",
+        "hint": "RADIUS, system and audit records.",
+        "route": "logs"
+      }
+    ],
+    "my-work": [
+      {
+        "id": "business",
+        "label": "My Business",
+        "hint": "Wallet, customer health, this month's revenue and dues.",
+        "route": "my-business"
+      },
+      {
+        "id": "connect",
+        "label": "Quick Connect",
+        "hint": "Add and activate a customer in one screen.",
+        "route": "quick-connect"
+      },
+      {
+        "id": "renewals",
+        "label": "Renewals",
+        "hint": "Due this week and expired — one tap to renew and collect.",
+        "route": "renewals"
+      }
+    ],
+    "network-center": [
+      {
+        "id": "ops",
+        "label": "Operations",
+        "hint": "Alerts, router health and what needs attention now.",
+        "route": "operations"
+      },
+      {
+        "id": "noc",
+        "label": "NOC / Uptime",
+        "hint": "Segment health, uptime and the outage timeline.",
+        "route": "noc"
+      },
+      {
+        "id": "live",
+        "label": "Live Network",
+        "hint": "Who is online right now, per router.",
+        "route": "network"
+      },
+      {
+        "id": "nas",
+        "label": "NAS / Routers",
+        "hint": "Your MikroTiks and their RADIUS settings.",
+        "route": "nas"
+      },
+      {
+        "id": "fiber",
+        "label": "FTTH / Fiber",
+        "hint": "OLTs, PON ports, ONUs and fiber topology.",
+        "route": "fiber"
+      },
+      {
+        "id": "pools",
+        "label": "IP Pools",
+        "hint": "Address ranges handed out to customers automatically.",
+        "route": "ip-pools"
+      },
+      {
+        "id": "static",
+        "label": "Static IPs",
+        "hint": "Fixed addresses sold as a monthly add-on.",
+        "route": "static-ips"
+      },
+      {
+        "id": "outages",
+        "label": "Outages & Power",
+        "hint": "Load-shedding, power cuts and network faults.",
+        "route": "outages"
+      }
+    ],
+    "segments": [
+      {
+        "id": "vlan",
+        "label": "VLAN",
+        "hint": "Load and health per VLAN — the fastest way to spot a failing segment."
+      },
+      {
+        "id": "nas",
+        "label": "Router",
+        "hint": "How subscribers are spread across your MikroTiks."
+      },
+      {
+        "id": "area",
+        "label": "Area",
+        "hint": "Coverage areas — a quiet area usually means an outage."
+      },
+      {
+        "id": "reseller",
+        "label": "Reseller",
+        "hint": "Who owns which customers down the chain."
+      },
+      {
+        "id": "tier",
+        "label": "Franchise / Dealer",
+        "hint": "Base split across ISP, franchise, dealer and sub-dealer tiers."
+      },
+      {
+        "id": "package",
+        "label": "Package",
+        "hint": "Which plans are actually selling."
+      },
+      {
+        "id": "cnic",
+        "label": "CNIC / KYC",
+        "hint": "Identity coverage — verified, pending, missing. PTA compliance at a glance."
+      },
+      {
+        "id": "uptime",
+        "label": "Uptime",
+        "hint": "Stable vs down vs flapping — connection quality across the base."
+      },
+      {
+        "id": "outage",
+        "label": "Outage",
+        "hint": "How many customers sit inside an area with an active outage right now."
+      },
+      {
+        "id": "authMethod",
+        "label": "Auth Type",
+        "hint": "PPPoE, hotspot, static or DHCP."
+      }
+    ],
+    "service-catalog": [
+      {
+        "id": "packages",
+        "label": "Packages",
+        "hint": "Speed, price, quota and FUP for each plan.",
+        "route": "packages"
+      },
+      {
+        "id": "areas",
+        "label": "Areas",
+        "hint": "Coverage areas and the customers in them.",
+        "route": "areas"
+      },
+      {
+        "id": "inventory",
+        "label": "Inventory",
+        "hint": "Routers, ONTs and cable stock, and who holds them.",
+        "route": "inventory"
+      },
+      {
+        "id": "franchiseGroups",
+        "label": "Franchise Groups",
+        "hint": "Organize franchises and control package visibility.",
+        "route": "franchise-groups"
+      }
+    ],
+    "subscribers": [
+      {
+        "id": "FULL",
+        "label": "Full period",
+        "hint": "One package cycle from the current expiry"
+      },
+      {
+        "id": "DAYS",
+        "label": "Set days",
+        "hint": "Any number of days, priced pro-rata"
+      },
+      {
+        "id": "DATE",
+        "label": "Until a date",
+        "hint": "Exact expiry — use to align to month end"
+      },
+      {
+        "id": "BALANCE",
+        "label": "Use balance",
+        "hint": "Spend their wallet and grant the days it buys"
+      },
+      {
+        "id": "CREDIT",
+        "label": "On credit",
+        "hint": "Activate now, record what they owe"
+      }
+    ],
+    "support-center": [
+      {
+        "id": "complaints",
+        "label": "Complaints",
+        "hint": "Tickets raised by customers.",
+        "route": "complaints"
+      },
+      {
+        "id": "field-jobs",
+        "label": "Field Jobs",
+        "hint": "Installations and repairs assigned to staff.",
+        "route": "field-jobs"
+      },
+      {
+        "id": "communication",
+        "label": "Communication",
+        "hint": "SMS and email sent, and the templates behind them.",
+        "route": "communication"
+      }
+    ]
+  },
+  "buttons": {
+    "accounting": [
+      {
+        "label": "Save",
+        "does": "Writes your changes.",
+        "careful": "Nothing you typed takes effect until you press this.",
+        "risk": "low"
+      },
+      {
+        "label": "⤓ CSV",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Add expense",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Confirm",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "admin-center": [
+      {
+        "label": "Organization",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Network Tree",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Users & Staff",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Security",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Settings",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "analytics": [
+      {
+        "label": "VLAN",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Area",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Dealer",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Router",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Package",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "areas": [
+      {
+        "label": "Total Areas",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Active Areas",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Inactive Areas",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "billing-center": [
+      {
+        "label": "Accounting",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Collections",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Invoices",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Payments",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Online Gateways",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Vouchers",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Reseller Pricing",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Disputes & Reversals",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "communication": [
+      {
+        "label": "Queue broadcast",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Send test",
+        "does": "Sends a real message to real people.",
+        "careful": "It cannot be unsent. Check the recipient list first.",
+        "risk": "high"
+      }
+    ],
+    "complaints": [
+      {
+        "label": "Technical",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Billing",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Complaint",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Installation",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Disconnection",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "⭕ Closed",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🔥 Escalated",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total Tickets",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Open Tickets",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "In Progress",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Resolved",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Closed",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "compliance": [
+      {
+        "label": "All",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Pending",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Incomplete",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Expired",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "console": [
+      {
+        "label": "Run",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "dashboard": [
+      {
+        "label": "Home",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Reports",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Subscribers",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Accounting",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Users",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Expiring",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "docs": [
+      {
+        "label": "Getting started",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Daily work",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Billing & money",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Network & NAS",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "People & access",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Alerts & messaging",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Advanced & admin",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "earnings": [
+      {
+        "label": "⬇ Export",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      }
+    ],
+    "fiber": [
+      {
+        "label": "Assign ONU",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total OLTs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "PON Ports",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total ONUs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Assigned",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Active",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Utilization",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "OLTs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "ONUs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "field-jobs": [
+      {
+        "label": "Create job",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "gateways": [
+      {
+        "label": "Stripe",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "bKash",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "SSLCommerz",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "JazzCash",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Easypaisa",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Available Gateways",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total Transactions",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Pending/Initiated",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Successful",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Gateways",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Transactions",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "hierarchy": [
+      {
+        "label": "ISP",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Franchise",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Dealer",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Retailer",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Staff",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "insights": [
+      {
+        "label": "Segments",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Analytics",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Reports",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Logs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "inventory": [
+      {
+        "label": "Save item",
+        "does": "Writes your changes.",
+        "careful": "Nothing you typed takes effect until you press this.",
+        "risk": "low"
+      }
+    ],
+    "invoices": [
+      {
+        "label": "+ Add Item",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Create Invoice",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total Invoices",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Unpaid",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Overdue",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Paid",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "ip-pools": [
+      {
+        "label": "Add",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Import",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "Export",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      }
+    ],
+    "logs": [
+      {
+        "label": "Login",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Activity",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Network",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🖥️ Console",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🧾 Activity Logs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🔑 Login Logs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "📋 Timeline",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🔐 Login",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "📝 Activity",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🖧 Network",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "⚙️ System",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🟢 Sessions",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "⛔ Failed",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🩺 RADIUS",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "my-work": [
+      {
+        "label": "My Business",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Quick Connect",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Renewals",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "nas": [
+      {
+        "label": "Owner",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Type",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Site",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Add",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Import",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "Export",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Secret",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "API Port",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Device",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      }
+    ],
+    "network": [
+      {
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Bind",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Auto-learn",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Bind the MAC from the current live session",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "network-center": [
+      {
+        "label": "Operations",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "NOC / Uptime",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Live Network",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "NAS / Routers",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "FTTH / Fiber",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "IP Pools",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Static IPs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Outages & Power",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "organization": [
+      {
+        "label": "Add ISP",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Add branch",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Apply",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "packages/allocations": [
+      {
+        "label": "+ Add Allocation",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Delete Forever",
+        "does": "Destroys the record permanently.",
+        "careful": "This is the confirmed step — there is no recycle bin behind it.",
+        "risk": "high"
+      }
+    ],
+    "packages": [
+      {
+        "label": "Add New Package",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "+ Add Package",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Update Package",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Create Tax/Fee",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Create Policy",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Create Allocation",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Delete Forever",
+        "does": "Destroys the record permanently.",
+        "careful": "This is the confirmed step — there is no recycle bin behind it.",
+        "risk": "high"
+      },
+      {
+        "label": "Add",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Import",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "Export",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      }
+    ],
+    "packages/policies": [
+      {
+        "label": "+ Add Policy",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Delete Forever",
+        "does": "Destroys the record permanently.",
+        "careful": "This is the confirmed step — there is no recycle bin behind it.",
+        "risk": "high"
+      }
+    ],
+    "packages/taxes": [
+      {
+        "label": "+ Add Tax/Fee",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Delete Forever",
+        "does": "Destroys the record permanently.",
+        "careful": "This is the confirmed step — there is no recycle bin behind it.",
+        "risk": "high"
+      }
+    ],
+    "payments": [
+      {
+        "label": "Try Again",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total Payments",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Total Amount",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Card Payments",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Cash Payments",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "quick-connect": [
+      {
+        "label": "Suggest",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "radius-admin": [
+      {
+        "label": "Save & restart",
+        "does": "Restarts a server service.",
+        "careful": "Customers already online stay online, but new logins fail for a few seconds.",
+        "risk": "high"
+      }
+    ],
+    "renewals": [
+      {
+        "label": "↻ Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      }
+    ],
+    "reports": [
+      {
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Export CSV",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Daily",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Weekly",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Monthly",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "reversals": [
+      {
+        "label": "⤓ CSV",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "router-console": [
+      {
+        "label": "Add",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Remove",
+        "does": "Takes this item out of the list.",
+        "careful": "Check you are on the right row — the row you are hovering is the one that goes.",
+        "risk": "high"
+      },
+      {
+        "label": "Enable",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Disable",
+        "does": "Switches this record off so it stops being used.",
+        "careful": "Anyone relying on it loses access until you enable it again.",
+        "risk": "high"
+      },
+      {
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Interface List",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Active Connections",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Secrets",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Addresses",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Simple Queues",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Log",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "security": [
+      {
+        "label": "Save",
+        "does": "Writes your changes.",
+        "careful": "Nothing you typed takes effect until you press this.",
+        "risk": "low"
+      },
+      {
+        "label": "Save permissions",
+        "does": "Writes your changes.",
+        "careful": "Nothing you typed takes effect until you press this.",
+        "risk": "low"
+      },
+      {
+        "label": "Disable 2FA",
+        "does": "Switches this record off so it stops being used.",
+        "careful": "Anyone relying on it loses access until you enable it again.",
+        "risk": "high"
+      },
+      {
+        "label": "Activate",
+        "does": "Starts the customer's service and their billing period.",
+        "careful": "This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
+        "risk": "medium"
+      },
+      {
+        "label": "Enroll now",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "segments": [
+      {
+        "label": "VLAN",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Router",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Area",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Reseller",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Franchise / Dealer",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Package",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "CNIC / KYC",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Uptime",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Outage",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Auth Type",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "service-catalog": [
+      {
+        "label": "Packages",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Areas",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Inventory",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Franchise Groups",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "settings": [
+      {
+        "label": "Email Address",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Role",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Build Date",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "API Endpoint",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Environment",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Server Status",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Database Status",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "RADIUS Service",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "No gateways loaded",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Clear System Cache",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Backup Database",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "View System Logs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Generate Report",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "setup": [
+      {
+        "label": "Re-check",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "subscribers": [
+      {
+        "label": "Add subscriber",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Activation",
+        "does": "Opens the activate/renew screen for this customer.",
+        "careful": "The next screen previews the price and the new expiry before charging anything.",
+        "risk": "medium"
+      },
+      {
+        "label": "Import subscribers",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "Export",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Sync all to RADIUS",
+        "does": "Rewrites EVERY customer's login into FreeRADIUS.",
+        "careful": "Safe, but on a big base it runs for several minutes and loads the server. Use the per-customer Force Sync if only one person is broken.",
+        "risk": "medium"
+      },
+      {
+        "label": "Mass delete",
+        "does": "Removes EVERY customer you ticked, all at once.",
+        "careful": "Count the ticked rows before confirming. There is no single Undo for a mass delete.",
+        "risk": "high"
+      },
+      {
+        "label": "Mass service settings",
+        "does": "Applies one setting to EVERY customer you ticked.",
+        "careful": "Check the ticked count before confirming — it changes all of them together.",
+        "risk": "high"
+      },
+      {
+        "label": "Move to another account",
+        "does": "Hands this customer over to a different dealer or account.",
+        "careful": "Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
+        "risk": "high"
+      },
+      {
+        "label": "Add",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Activate",
+        "does": "Starts the customer's service and their billing period.",
+        "careful": "This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
+        "risk": "medium"
+      },
+      {
+        "label": "Grace",
+        "does": "Gives the customer extra days without paying yet.",
+        "careful": "Their expiry moves forward and auto-suspend skips them until it passes.",
+        "risk": "medium"
+      },
+      {
+        "label": "Message",
+        "does": "Sends a real SMS or notification to real customers.",
+        "careful": "It cannot be unsent. Check exactly who is selected first.",
+        "risk": "high"
+      },
+      {
+        "label": "Remove",
+        "does": "Takes this item out of the list.",
+        "careful": "Check you are on the right row — the row you are hovering is the one that goes.",
+        "risk": "high"
+      },
+      {
+        "label": "Disable",
+        "does": "Switches this record off so it stops being used.",
+        "careful": "Anyone relying on it loses access until you enable it again.",
+        "risk": "high"
+      },
+      {
+        "label": "Move",
+        "does": "Hands this customer over to a different dealer or account.",
+        "careful": "Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
+        "risk": "high"
+      },
+      {
+        "label": "Import",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "Sync RADIUS",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Full period",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Set days",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Until a date",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Use balance",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "On credit",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "support-center": [
+      {
+        "label": "Complaints",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Field Jobs",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Communication",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "users": [
+      {
+        "label": "Total Users",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Admins",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Sales",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Resellers",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Role",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Parent",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "KYC status",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "vouchers": [
+      {
+        "label": "Total Vouchers",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Unused",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Used",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Expired",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ]
   },
   "entries": [
     {
@@ -29,6 +1930,12 @@
       "t": "Screen: Areas",
       "k": "areas areas page screen where find open go to areas",
       "a": "Operations → Plans & Stock → Areas. The response was never checked. `await fetch(...)` resolves for a 403 or a 500 exactly as it does for a 201 — fetch only rejects on a network failure.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Assistant",
+      "k": "assistant assistant page screen where find open go to assistant",
+      "a": "/assistant. Assistant — the full-page view of the same guide as the floating ✦ popup. The popup is right for a quick \"where is X\" while you work; this is for actually reading a long answer, or working through a setup step by step.",
       "src": "screens"
     },
     {
@@ -352,7 +2259,7 @@
     {
       "t": "What the panel can do: ai",
       "k": "ai ai api action endpoint capability can i",
-      "a": "The help knowledge base, exposed so the in-app Documentation page renders from the SAME source the assistant answers from. One place to update means the docs and the AI can never drift apart. Available actions: create/run /ai/chat; view /ai/docs; view /ai/status.",
+      "a": "The help knowledge base, exposed so the in-app Documentation page renders from the SAME source the assistant answers from. One place to update means the docs and the AI can never drift apart. Available actions: create/run /ai/chat; view /ai/docs; view /ai/page-help; view /ai/status.",
       "src": "actions"
     },
     {
@@ -636,6 +2543,738 @@
       "k": "vouchers vouchers api action endpoint capability can i",
       "a": "Available actions: create/run /vouchers/bulk; create/run /vouchers/redeem; remove /vouchers/:id; view /vouchers; view /vouchers/:id; view /vouchers/code/:code; view /vouchers/stats.",
       "src": "actions"
+    },
+    {
+      "t": "Organization tab",
+      "k": "organization organization tab admin-center admin center what is this screen",
+      "a": "System → Administration → Organization tab. Franchises, dealers and retailers under you.",
+      "src": "tabs"
+    },
+    {
+      "t": "Network Tree tab",
+      "k": "hierarchy network tree tab admin-center admin center what is this screen",
+      "a": "System → Administration → Network Tree tab. The whole downline as a chart.",
+      "src": "tabs"
+    },
+    {
+      "t": "Users & Staff tab",
+      "k": "users users & staff tab admin-center admin center what is this screen",
+      "a": "System → Administration → Users & Staff tab. Logins, roles and permissions.",
+      "src": "tabs"
+    },
+    {
+      "t": "Security tab",
+      "k": "security security tab admin-center admin center what is this screen",
+      "a": "System → Administration → Security tab. API keys, webhooks and access control.",
+      "src": "tabs"
+    },
+    {
+      "t": "Settings tab",
+      "k": "settings settings tab admin-center admin center what is this screen",
+      "a": "System → Administration → Settings tab. Currency, branding and system options.",
+      "src": "tabs"
+    },
+    {
+      "t": "Accounting tab",
+      "k": "accounting accounting tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Accounting tab. Wallets, ledger and reseller settlement.",
+      "src": "tabs"
+    },
+    {
+      "t": "Collections tab",
+      "k": "earnings collections tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Collections tab. What you collected, by day, package and method.",
+      "src": "tabs"
+    },
+    {
+      "t": "Invoices tab",
+      "k": "invoices invoices tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Invoices tab. What has been billed, paid and outstanding.",
+      "src": "tabs"
+    },
+    {
+      "t": "Payments tab",
+      "k": "payments payments tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Payments tab. Money received against those invoices.",
+      "src": "tabs"
+    },
+    {
+      "t": "Online Gateways tab",
+      "k": "gateways online gateways tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Online Gateways tab. Stripe, bKash, JazzCash and other payment providers.",
+      "src": "tabs"
+    },
+    {
+      "t": "Vouchers tab",
+      "k": "vouchers vouchers tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Vouchers tab. Prepaid codes for top-ups and activations.",
+      "src": "tabs"
+    },
+    {
+      "t": "Reseller Pricing tab",
+      "k": "pricing reseller pricing tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Reseller Pricing tab. What each account pays, and the margin at every tier.",
+      "src": "tabs"
+    },
+    {
+      "t": "Disputes & Reversals tab",
+      "k": "reversals disputes & reversals tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Disputes & Reversals tab. Reversed commissions and the audit trail behind them.",
+      "src": "tabs"
+    },
+    {
+      "t": "Segments tab",
+      "k": "segments segments tab insights insights what is this screen",
+      "a": "Business → Insights → Segments tab. Subscribers by VLAN, router, area and reseller — with how many are actually up.",
+      "src": "tabs"
+    },
+    {
+      "t": "Analytics tab",
+      "k": "analytics analytics tab insights insights what is this screen",
+      "a": "Business → Insights → Analytics tab. Growth, revenue and churn over time.",
+      "src": "tabs"
+    },
+    {
+      "t": "Reports tab",
+      "k": "reports reports tab insights insights what is this screen",
+      "a": "Business → Insights → Reports tab. Exportable summaries for a period.",
+      "src": "tabs"
+    },
+    {
+      "t": "Logs tab",
+      "k": "logs logs tab insights insights what is this screen",
+      "a": "Business → Insights → Logs tab. RADIUS, system and audit records.",
+      "src": "tabs"
+    },
+    {
+      "t": "My Business tab",
+      "k": "business my business tab my-work my work what is this screen",
+      "a": "Daily Work → My Work → My Business tab. Wallet, customer health, this month's revenue and dues.",
+      "src": "tabs"
+    },
+    {
+      "t": "Quick Connect tab",
+      "k": "connect quick connect tab my-work my work what is this screen",
+      "a": "Daily Work → My Work → Quick Connect tab. Add and activate a customer in one screen.",
+      "src": "tabs"
+    },
+    {
+      "t": "Renewals tab",
+      "k": "renewals renewals tab my-work my work what is this screen",
+      "a": "Daily Work → My Work → Renewals tab. Due this week and expired — one tap to renew and collect.",
+      "src": "tabs"
+    },
+    {
+      "t": "Operations tab",
+      "k": "ops operations tab network-center network center what is this screen",
+      "a": "Operations → Network → Operations tab. Alerts, router health and what needs attention now.",
+      "src": "tabs"
+    },
+    {
+      "t": "NOC / Uptime tab",
+      "k": "noc noc / uptime tab network-center network center what is this screen",
+      "a": "Operations → Network → NOC / Uptime tab. Segment health, uptime and the outage timeline.",
+      "src": "tabs"
+    },
+    {
+      "t": "Live Network tab",
+      "k": "live live network tab network-center network center what is this screen",
+      "a": "Operations → Network → Live Network tab. Who is online right now, per router.",
+      "src": "tabs"
+    },
+    {
+      "t": "NAS / Routers tab",
+      "k": "nas nas / routers tab network-center network center what is this screen",
+      "a": "Operations → Network → NAS / Routers tab. Your MikroTiks and their RADIUS settings.",
+      "src": "tabs"
+    },
+    {
+      "t": "FTTH / Fiber tab",
+      "k": "fiber ftth / fiber tab network-center network center what is this screen",
+      "a": "Operations → Network → FTTH / Fiber tab. OLTs, PON ports, ONUs and fiber topology.",
+      "src": "tabs"
+    },
+    {
+      "t": "IP Pools tab",
+      "k": "pools ip pools tab network-center network center what is this screen",
+      "a": "Operations → Network → IP Pools tab. Address ranges handed out to customers automatically.",
+      "src": "tabs"
+    },
+    {
+      "t": "Static IPs tab",
+      "k": "static static ips tab network-center network center what is this screen",
+      "a": "Operations → Network → Static IPs tab. Fixed addresses sold as a monthly add-on.",
+      "src": "tabs"
+    },
+    {
+      "t": "Outages & Power tab",
+      "k": "outages outages & power tab network-center network center what is this screen",
+      "a": "Operations → Network → Outages & Power tab. Load-shedding, power cuts and network faults.",
+      "src": "tabs"
+    },
+    {
+      "t": "VLAN tab",
+      "k": "vlan vlan tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → VLAN tab. Load and health per VLAN — the fastest way to spot a failing segment.",
+      "src": "tabs"
+    },
+    {
+      "t": "Router tab",
+      "k": "nas router tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Router tab. How subscribers are spread across your MikroTiks.",
+      "src": "tabs"
+    },
+    {
+      "t": "Area tab",
+      "k": "area area tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Area tab. Coverage areas — a quiet area usually means an outage.",
+      "src": "tabs"
+    },
+    {
+      "t": "Reseller tab",
+      "k": "reseller reseller tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Reseller tab. Who owns which customers down the chain.",
+      "src": "tabs"
+    },
+    {
+      "t": "Franchise / Dealer tab",
+      "k": "tier franchise / dealer tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Franchise / Dealer tab. Base split across ISP, franchise, dealer and sub-dealer tiers.",
+      "src": "tabs"
+    },
+    {
+      "t": "Package tab",
+      "k": "package package tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Package tab. Which plans are actually selling.",
+      "src": "tabs"
+    },
+    {
+      "t": "CNIC / KYC tab",
+      "k": "cnic cnic / kyc tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → CNIC / KYC tab. Identity coverage — verified, pending, missing. PTA compliance at a glance.",
+      "src": "tabs"
+    },
+    {
+      "t": "Uptime tab",
+      "k": "uptime uptime tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Uptime tab. Stable vs down vs flapping — connection quality across the base.",
+      "src": "tabs"
+    },
+    {
+      "t": "Outage tab",
+      "k": "outage outage tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Outage tab. How many customers sit inside an area with an active outage right now.",
+      "src": "tabs"
+    },
+    {
+      "t": "Auth Type tab",
+      "k": "authMethod auth type tab segments segments what is this screen",
+      "a": "Business → Insights → Segments → Auth Type tab. PPPoE, hotspot, static or DHCP.",
+      "src": "tabs"
+    },
+    {
+      "t": "Packages tab",
+      "k": "packages packages tab service-catalog service catalog what is this screen",
+      "a": "Operations → Plans & Stock → Packages tab. Speed, price, quota and FUP for each plan.",
+      "src": "tabs"
+    },
+    {
+      "t": "Areas tab",
+      "k": "areas areas tab service-catalog service catalog what is this screen",
+      "a": "Operations → Plans & Stock → Areas tab. Coverage areas and the customers in them.",
+      "src": "tabs"
+    },
+    {
+      "t": "Inventory tab",
+      "k": "inventory inventory tab service-catalog service catalog what is this screen",
+      "a": "Operations → Plans & Stock → Inventory tab. Routers, ONTs and cable stock, and who holds them.",
+      "src": "tabs"
+    },
+    {
+      "t": "Franchise Groups tab",
+      "k": "franchiseGroups franchise groups tab service-catalog service catalog what is this screen",
+      "a": "Operations → Plans & Stock → Franchise Groups tab. Organize franchises and control package visibility.",
+      "src": "tabs"
+    },
+    {
+      "t": "Full period tab",
+      "k": "FULL full period tab subscribers subscribers what is this screen",
+      "a": "Daily Work → Subscribers → Full period tab. One package cycle from the current expiry",
+      "src": "tabs"
+    },
+    {
+      "t": "Set days tab",
+      "k": "DAYS set days tab subscribers subscribers what is this screen",
+      "a": "Daily Work → Subscribers → Set days tab. Any number of days, priced pro-rata",
+      "src": "tabs"
+    },
+    {
+      "t": "Until a date tab",
+      "k": "DATE until a date tab subscribers subscribers what is this screen",
+      "a": "Daily Work → Subscribers → Until a date tab. Exact expiry — use to align to month end",
+      "src": "tabs"
+    },
+    {
+      "t": "Use balance tab",
+      "k": "BALANCE use balance tab subscribers subscribers what is this screen",
+      "a": "Daily Work → Subscribers → Use balance tab. Spend their wallet and grant the days it buys",
+      "src": "tabs"
+    },
+    {
+      "t": "On credit tab",
+      "k": "CREDIT on credit tab subscribers subscribers what is this screen",
+      "a": "Daily Work → Subscribers → On credit tab. Activate now, record what they owe",
+      "src": "tabs"
+    },
+    {
+      "t": "Complaints tab",
+      "k": "complaints complaints tab support-center support center what is this screen",
+      "a": "Daily Work → Support → Complaints tab. Tickets raised by customers.",
+      "src": "tabs"
+    },
+    {
+      "t": "Field Jobs tab",
+      "k": "field-jobs field jobs tab support-center support center what is this screen",
+      "a": "Daily Work → Support → Field Jobs tab. Installations and repairs assigned to staff.",
+      "src": "tabs"
+    },
+    {
+      "t": "Communication tab",
+      "k": "communication communication tab support-center support center what is this screen",
+      "a": "Daily Work → Support → Communication tab. SMS and email sent, and the templates behind them.",
+      "src": "tabs"
+    },
+    {
+      "t": "Buttons on Accounting",
+      "k": "accounting buttons button options controls what can i click press tap here accounting",
+      "a": "Business → Billing & Accounting → Accounting. The controls on this screen are: Save, ⤓ CSV, Add expense, Confirm.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Admin Center",
+      "k": "admin-center buttons button options controls what can i click press tap here admin center",
+      "a": "System → Administration. The controls on this screen are: Organization, Network Tree, Users & Staff, Security, Settings.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Analytics",
+      "k": "analytics buttons button options controls what can i click press tap here analytics",
+      "a": "/analytics. The controls on this screen are: VLAN, Area, Dealer, Router, Package.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Areas",
+      "k": "areas buttons button options controls what can i click press tap here areas",
+      "a": "Operations → Plans & Stock → Areas. The controls on this screen are: Total Areas, Active Areas, Inactive Areas.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Billing Center",
+      "k": "billing-center buttons button options controls what can i click press tap here billing center",
+      "a": "Business → Billing & Accounting. The controls on this screen are: Accounting, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Communication",
+      "k": "communication buttons button options controls what can i click press tap here communication",
+      "a": "Daily Work → Support → Communication. The controls on this screen are: Queue broadcast, Send test.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Send test\" button (Communication)",
+      "k": "send test communication button what happens if i press click send test safe undo",
+      "a": "Daily Work → Support → Communication → Send test. What it does: Sends a real message to real people. Before you press: It cannot be unsent. Check the recipient list first.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Complaints",
+      "k": "complaints buttons button options controls what can i click press tap here complaints",
+      "a": "Daily Work → Support → Complaints. The controls on this screen are: Technical, Billing, Complaint, Installation, Disconnection, ⭕ Closed, 🔥 Escalated, Total Tickets, Open Tickets, In Progress, Resolved, Closed.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Compliance",
+      "k": "compliance buttons button options controls what can i click press tap here compliance",
+      "a": "Business → KYC & Data Usage. The controls on this screen are: All, Pending, Incomplete, Expired.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Console",
+      "k": "console buttons button options controls what can i click press tap here console",
+      "a": "System → Server Console (ISP owner only). The controls on this screen are: Run.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Dashboard",
+      "k": "dashboard buttons button options controls what can i click press tap here dashboard",
+      "a": "Daily Work → Dashboard. The controls on this screen are: Home, Reports, Subscribers, Accounting, Users, Expiring.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Docs",
+      "k": "docs buttons button options controls what can i click press tap here docs",
+      "a": "System → Documentation. The controls on this screen are: Getting started, Daily work, Billing & money, Network & NAS, People & access, Alerts & messaging, Advanced & admin.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Earnings",
+      "k": "earnings buttons button options controls what can i click press tap here earnings",
+      "a": "Business → Billing & Accounting → Collections. The controls on this screen are: ⬇ Export.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Fiber",
+      "k": "fiber buttons button options controls what can i click press tap here fiber",
+      "a": "Operations → Network → FTTH / Fiber. The controls on this screen are: Assign ONU, Total OLTs, PON Ports, Total ONUs, Assigned, Active, Utilization, OLTs, ONUs.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Field Jobs",
+      "k": "field-jobs buttons button options controls what can i click press tap here field jobs",
+      "a": "Daily Work → Support → Field Jobs. The controls on this screen are: Create job.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Gateways",
+      "k": "gateways buttons button options controls what can i click press tap here gateways",
+      "a": "/gateways. The controls on this screen are: Stripe, bKash, SSLCommerz, JazzCash, Easypaisa, Available Gateways, Total Transactions, Pending/Initiated, Successful, Gateways, Transactions.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Hierarchy",
+      "k": "hierarchy buttons button options controls what can i click press tap here hierarchy",
+      "a": "/hierarchy. The controls on this screen are: ISP, Franchise, Dealer, Retailer, Staff.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Insights",
+      "k": "insights buttons button options controls what can i click press tap here insights",
+      "a": "Business → Insights. The controls on this screen are: Segments, Analytics, Reports, Logs.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Inventory",
+      "k": "inventory buttons button options controls what can i click press tap here inventory",
+      "a": "Operations → Plans & Stock → Inventory. The controls on this screen are: Save item.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Invoices",
+      "k": "invoices buttons button options controls what can i click press tap here invoices",
+      "a": "Business → Billing & Accounting → Invoices. The controls on this screen are: + Add Item, Create Invoice, Total Invoices, Unpaid, Overdue, Paid.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Ip Pools",
+      "k": "ip-pools buttons button options controls what can i click press tap here ip pools",
+      "a": "Operations → Network → IP Pools. The controls on this screen are: Add, Import, Export.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Import\" button (Ip Pools)",
+      "k": "import ip-pools button what happens if i press click import safe undo",
+      "a": "Operations → Network → IP Pools → Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Logs",
+      "k": "logs buttons button options controls what can i click press tap here logs",
+      "a": "Business → Insights → Logs. The controls on this screen are: Login, Activity, Network, 🖥️ Console, 🧾 Activity Logs, 🔑 Login Logs, 📋 Timeline, 🔐 Login, 📝 Activity, 🖧 Network, ⚙️ System, 🟢 Sessions, ⛔ Failed, 🩺 RADIUS.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on My Work",
+      "k": "my-work buttons button options controls what can i click press tap here my work",
+      "a": "Daily Work → My Work. The controls on this screen are: My Business, Quick Connect, Renewals.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Nas",
+      "k": "nas buttons button options controls what can i click press tap here nas",
+      "a": "Operations → Network → NAS / Routers. The controls on this screen are: Owner, Type, Site, Add, Import, Export, Secret, API Port, Device, Refresh.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Import\" button (Nas)",
+      "k": "import nas button what happens if i press click import safe undo",
+      "a": "Operations → Network → NAS / Routers → Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Network",
+      "k": "network buttons button options controls what can i click press tap here network",
+      "a": "/network. The controls on this screen are: Refresh, Bind, Auto-learn, Bind the MAC from the current live session.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Network Center",
+      "k": "network-center buttons button options controls what can i click press tap here network center",
+      "a": "Operations → Network. The controls on this screen are: Operations, NOC / Uptime, Live Network, NAS / Routers, FTTH / Fiber, IP Pools, Static IPs, Outages & Power.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Organization",
+      "k": "organization buttons button options controls what can i click press tap here organization",
+      "a": "System → Administration → Organization. The controls on this screen are: Add ISP, Add branch, Apply.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Packages/Allocations",
+      "k": "packages/allocations buttons button options controls what can i click press tap here packages/allocations",
+      "a": "Operations → Plans & Stock → Packages. The controls on this screen are: + Add Allocation, Delete Forever.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete Forever\" button (Packages/Allocations)",
+      "k": "delete forever packages/allocations button what happens if i press click delete forever safe undo",
+      "a": "Operations → Plans & Stock → Packages → Delete Forever. What it does: Destroys the record permanently. Before you press: This is the confirmed step — there is no recycle bin behind it.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Packages",
+      "k": "packages buttons button options controls what can i click press tap here packages",
+      "a": "Operations → Plans & Stock → Packages. The controls on this screen are: Add New Package, + Add Package, Update Package, Create Tax/Fee, Create Policy, Create Allocation, Delete Forever, Add, Import, Export.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete Forever\" button (Packages)",
+      "k": "delete forever packages button what happens if i press click delete forever safe undo",
+      "a": "Operations → Plans & Stock → Packages → Delete Forever. What it does: Destroys the record permanently. Before you press: This is the confirmed step — there is no recycle bin behind it.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Import\" button (Packages)",
+      "k": "import packages button what happens if i press click import safe undo",
+      "a": "Operations → Plans & Stock → Packages → Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Packages/Policies",
+      "k": "packages/policies buttons button options controls what can i click press tap here packages/policies",
+      "a": "Operations → Plans & Stock → Packages. The controls on this screen are: + Add Policy, Delete Forever.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete Forever\" button (Packages/Policies)",
+      "k": "delete forever packages/policies button what happens if i press click delete forever safe undo",
+      "a": "Operations → Plans & Stock → Packages → Delete Forever. What it does: Destroys the record permanently. Before you press: This is the confirmed step — there is no recycle bin behind it.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Packages/Taxes",
+      "k": "packages/taxes buttons button options controls what can i click press tap here packages/taxes",
+      "a": "Operations → Plans & Stock → Packages. The controls on this screen are: + Add Tax/Fee, Delete Forever.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete Forever\" button (Packages/Taxes)",
+      "k": "delete forever packages/taxes button what happens if i press click delete forever safe undo",
+      "a": "Operations → Plans & Stock → Packages → Delete Forever. What it does: Destroys the record permanently. Before you press: This is the confirmed step — there is no recycle bin behind it.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Payments",
+      "k": "payments buttons button options controls what can i click press tap here payments",
+      "a": "Business → Billing & Accounting → Payments. The controls on this screen are: Try Again, Total Payments, Total Amount, Card Payments, Cash Payments.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Quick Connect",
+      "k": "quick-connect buttons button options controls what can i click press tap here quick connect",
+      "a": "Daily Work → My Work → Quick Connect. The controls on this screen are: Suggest.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Radius Admin",
+      "k": "radius-admin buttons button options controls what can i click press tap here radius admin",
+      "a": "System → FreeRADIUS & Database (ISP owner only). The controls on this screen are: Save & restart.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Save & restart\" button (Radius Admin)",
+      "k": "save & restart radius-admin button what happens if i press click save & restart safe undo",
+      "a": "System → FreeRADIUS & Database (ISP owner only) → Save & restart. What it does: Restarts a server service. Before you press: Customers already online stay online, but new logins fail for a few seconds.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Renewals",
+      "k": "renewals buttons button options controls what can i click press tap here renewals",
+      "a": "Daily Work → My Work → Renewals. The controls on this screen are: ↻ Refresh.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Reports",
+      "k": "reports buttons button options controls what can i click press tap here reports",
+      "a": "/reports. The controls on this screen are: Refresh, Export CSV, Daily, Weekly, Monthly.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Reversals",
+      "k": "reversals buttons button options controls what can i click press tap here reversals",
+      "a": "Business → Billing & Accounting → Disputes & Reversals. The controls on this screen are: ⤓ CSV.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Router Console",
+      "k": "router-console buttons button options controls what can i click press tap here router console",
+      "a": "/router-console. The controls on this screen are: Add, Remove, Enable, Disable, Refresh, Interface List, Active Connections, Secrets, Addresses, Simple Queues, Log.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Remove\" button (Router Console)",
+      "k": "remove router-console button what happens if i press click remove safe undo",
+      "a": "/router-console → Remove. What it does: Takes this item out of the list. Before you press: Check you are on the right row — the row you are hovering is the one that goes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Disable\" button (Router Console)",
+      "k": "disable router-console button what happens if i press click disable safe undo",
+      "a": "/router-console → Disable. What it does: Switches this record off so it stops being used. Before you press: Anyone relying on it loses access until you enable it again.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Security",
+      "k": "security buttons button options controls what can i click press tap here security",
+      "a": "System → Administration → Security. The controls on this screen are: Save, Save permissions, Disable 2FA, Activate, Enroll now.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Disable 2FA\" button (Security)",
+      "k": "disable 2fa security button what happens if i press click disable 2fa safe undo",
+      "a": "System → Administration → Security → Disable 2FA. What it does: Switches this record off so it stops being used. Before you press: Anyone relying on it loses access until you enable it again.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Activate\" button (Security)",
+      "k": "activate security button what happens if i press click activate safe undo",
+      "a": "System → Administration → Security → Activate. What it does: Starts the customer's service and their billing period. Before you press: This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Segments",
+      "k": "segments buttons button options controls what can i click press tap here segments",
+      "a": "Business → Insights → Segments. The controls on this screen are: VLAN, Router, Area, Reseller, Franchise / Dealer, Package, CNIC / KYC, Uptime, Outage, Auth Type.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Service Catalog",
+      "k": "service-catalog buttons button options controls what can i click press tap here service catalog",
+      "a": "Operations → Plans & Stock. The controls on this screen are: Packages, Areas, Inventory, Franchise Groups.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Settings",
+      "k": "settings buttons button options controls what can i click press tap here settings",
+      "a": "System → Administration → Settings. The controls on this screen are: Email Address, Role, Build Date, API Endpoint, Environment, Server Status, Database Status, RADIUS Service, No gateways loaded, Clear System Cache, Backup Database, View System Logs, Generate Report.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Setup",
+      "k": "setup buttons button options controls what can i click press tap here setup",
+      "a": "System → Setup Checklist. The controls on this screen are: Re-check.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Subscribers",
+      "k": "subscribers buttons button options controls what can i click press tap here subscribers",
+      "a": "Daily Work → Subscribers. The controls on this screen are: Add subscriber, Activation, Import subscribers, Export, Sync all to RADIUS, Mass delete, Mass service settings, Move to another account, Add, Activate, Grace, Message, Remove, Disable, Move, Import, Sync RADIUS, Full period, Set days, Until a date, Use balance, On credit.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Activation\" button (Subscribers)",
+      "k": "activation subscribers button what happens if i press click activation safe undo",
+      "a": "Daily Work → Subscribers → Activation. What it does: Opens the activate/renew screen for this customer. Before you press: The next screen previews the price and the new expiry before charging anything.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Import subscribers\" button (Subscribers)",
+      "k": "import subscribers subscribers button what happens if i press click import subscribers safe undo",
+      "a": "Daily Work → Subscribers → Import subscribers. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Sync all to RADIUS\" button (Subscribers)",
+      "k": "sync all to radius subscribers button what happens if i press click sync all to radius safe undo",
+      "a": "Daily Work → Subscribers → Sync all to RADIUS. What it does: Rewrites EVERY customer's login into FreeRADIUS. Before you press: Safe, but on a big base it runs for several minutes and loads the server. Use the per-customer Force Sync if only one person is broken.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Mass delete\" button (Subscribers)",
+      "k": "mass delete subscribers button what happens if i press click mass delete safe undo",
+      "a": "Daily Work → Subscribers → Mass delete. What it does: Removes EVERY customer you ticked, all at once. Before you press: Count the ticked rows before confirming. There is no single Undo for a mass delete.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Mass service settings\" button (Subscribers)",
+      "k": "mass service settings subscribers button what happens if i press click mass service settings safe undo",
+      "a": "Daily Work → Subscribers → Mass service settings. What it does: Applies one setting to EVERY customer you ticked. Before you press: Check the ticked count before confirming — it changes all of them together.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Move to another account\" button (Subscribers)",
+      "k": "move to another account subscribers button what happens if i press click move to another account safe undo",
+      "a": "Daily Work → Subscribers → Move to another account. What it does: Hands this customer over to a different dealer or account. Before you press: Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Activate\" button (Subscribers)",
+      "k": "activate subscribers button what happens if i press click activate safe undo",
+      "a": "Daily Work → Subscribers → Activate. What it does: Starts the customer's service and their billing period. Before you press: This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Grace\" button (Subscribers)",
+      "k": "grace subscribers button what happens if i press click grace safe undo",
+      "a": "Daily Work → Subscribers → Grace. What it does: Gives the customer extra days without paying yet. Before you press: Their expiry moves forward and auto-suspend skips them until it passes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Message\" button (Subscribers)",
+      "k": "message subscribers button what happens if i press click message safe undo",
+      "a": "Daily Work → Subscribers → Message. What it does: Sends a real SMS or notification to real customers. Before you press: It cannot be unsent. Check exactly who is selected first.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Remove\" button (Subscribers)",
+      "k": "remove subscribers button what happens if i press click remove safe undo",
+      "a": "Daily Work → Subscribers → Remove. What it does: Takes this item out of the list. Before you press: Check you are on the right row — the row you are hovering is the one that goes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Disable\" button (Subscribers)",
+      "k": "disable subscribers button what happens if i press click disable safe undo",
+      "a": "Daily Work → Subscribers → Disable. What it does: Switches this record off so it stops being used. Before you press: Anyone relying on it loses access until you enable it again.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Move\" button (Subscribers)",
+      "k": "move subscribers button what happens if i press click move safe undo",
+      "a": "Daily Work → Subscribers → Move. What it does: Hands this customer over to a different dealer or account. Before you press: Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Import\" button (Subscribers)",
+      "k": "import subscribers button what happens if i press click import safe undo",
+      "a": "Daily Work → Subscribers → Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Support Center",
+      "k": "support-center buttons button options controls what can i click press tap here support center",
+      "a": "Daily Work → Support. The controls on this screen are: Complaints, Field Jobs, Communication.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Users",
+      "k": "users buttons button options controls what can i click press tap here users",
+      "a": "System → Administration → Users. The controls on this screen are: Total Users, Admins, Sales, Resellers, Role, Parent, KYC status.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Vouchers",
+      "k": "vouchers buttons button options controls what can i click press tap here vouchers",
+      "a": "Business → Billing & Accounting → Vouchers. The controls on this screen are: Total Vouchers, Unused, Used, Expired.",
+      "src": "buttons"
     }
   ]
 }
