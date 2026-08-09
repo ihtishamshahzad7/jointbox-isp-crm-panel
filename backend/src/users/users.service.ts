@@ -1005,7 +1005,18 @@ export class UsersService {
      * no way to tell afterwards where it went — the parent had already paid it
      * out, so the loss is real, not notional.
      */
-    if (user.balance && Math.abs(user.balance) > 0.009) {
+    /**
+     * DEMO ACCOUNTS ARE EXEMPT — their balance is not money.
+     *
+     * A sandbox account is seeded with a fake wallet (100,000) purely so the
+     * activation and billing flows can be exercised. Nobody funded it and
+     * there is nothing to withdraw, so the guard below was refusing to delete
+     * demo accounts to protect money that does not exist. Even a SUPER_ADMIN
+     * could not remove them, which is why they piled up in the user list.
+     */
+    const isSandbox = (user as any).isDemo === true;
+
+    if (!isSandbox && user.balance && Math.abs(user.balance) > 0.009) {
       throw new BadRequestException(
         `${user.name} still holds a wallet balance of ${user.balance.toFixed(0)}. ` +
         `Withdraw it back to the parent account first — deleting now would destroy that money ` +
