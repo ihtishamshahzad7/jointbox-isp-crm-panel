@@ -9,6 +9,21 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import url('./components/nova-ui.css');
 
+/* ── SATOSHI ────────────────────────────────────────────────────────
+   The template's actual typeface, self-hosted from the files it ships
+   (frontend/public/fonts, 176 KB for six weights). Self-hosted rather
+   than a CDN link on purpose: this panel runs on servers with no route
+   to the public internet, where a webfont @import silently fails and
+   everything falls back to Segoe UI.
+   `font-display: swap` means text is readable immediately and reflows
+   once Satoshi arrives, rather than being invisible while it loads. */
+@font-face { font-family:'Satoshi'; src:url('/fonts/Satoshi-Light.woff2')    format('woff2'); font-weight:300; font-style:normal; font-display:swap; }
+@font-face { font-family:'Satoshi'; src:url('/fonts/Satoshi-Regular.woff2')  format('woff2'); font-weight:400; font-style:normal; font-display:swap; }
+@font-face { font-family:'Satoshi'; src:url('/fonts/Satoshi-Medium.woff2')   format('woff2'); font-weight:500; font-style:normal; font-display:swap; }
+@font-face { font-family:'Satoshi'; src:url('/fonts/Satoshi-Bold.woff2')     format('woff2'); font-weight:700; font-style:normal; font-display:swap; }
+@font-face { font-family:'Satoshi'; src:url('/fonts/Satoshi-Black.woff2')    format('woff2'); font-weight:900; font-style:normal; font-display:swap; }
+@font-face { font-family:'Satoshi'; src:url('/fonts/Satoshi-Variable.woff2') format('woff2'); font-weight:300 900; font-style:normal; font-display:swap; }
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -2502,3 +2517,131 @@ html[data-theme="light"] .db-root svg text { fill: #64748B; }
 html[data-theme="light"] .db-root svg .grid line,
 html[data-theme="light"] .db-root svg line[stroke="#262C4D"],
 html[data-theme="light"] .db-root svg line[stroke="#2D3748"] { stroke: #E2E8F0; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME — TEXT AND TYPEFACE CORRECTIONS
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Satoshi everywhere in the light theme — the template's own typeface for
+   both headings and body. */
+html[data-theme="light"] body,
+html[data-theme="light"] .app-font,
+html[data-theme="light"] .db-root,
+html[data-theme="light"] .db-root input,
+html[data-theme="light"] .db-root select,
+html[data-theme="light"] .db-root textarea,
+html[data-theme="light"] .db-root button {
+  font-family: 'Satoshi', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ── THE INVISIBLE SIDEBAR TEXT ────────────────────────────────────────────
+   This is a bug I introduced. The light theme carries a sweep that rewrites
+   any inline `color:#fff` to a dark colour, because on a white page white text
+   is invisible. It is scoped to `.db-root` — and `.db-root` CONTAINS the
+   sidebar. The moment the sidebar became dark (#1C2434, as the template has
+   it) that sweep started painting dark text onto a dark rail, so the menu went
+   blank and looked broken rather than merely mis-coloured.
+
+   The sidebar is now excluded and its text restored to the template's own
+   values. These rules sit after the sweep so they win at equal specificity. */
+html[data-theme="light"] .sidebar,
+html[data-theme="light"] .sidebar * {
+  --text: #DEE4EE;
+}
+html[data-theme="light"] .sidebar [style*="color:#fff"],
+html[data-theme="light"] .sidebar [style*="color: #fff"],
+html[data-theme="light"] .sidebar [style*="color:#ffffff"],
+html[data-theme="light"] .sidebar [style*="color: #ffffff"],
+html[data-theme="light"] .sidebar [style*="rgb(255, 255, 255)"] { color: #FFFFFF !important; }
+
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.9)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.8)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.7)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.6)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.5)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.4)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.35)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.3)"],
+html[data-theme="light"] .sidebar [style*="rgba(255, 255, 255, 0.25)"] { color: #8A99AF !important; }
+
+/* Icons in the rail are strokes, not text, so they need saying separately. */
+html[data-theme="light"] .sidebar svg { color: #DEE4EE; }
+html[data-theme="light"] .sidebar .nav-item.active svg,
+html[data-theme="light"] .sidebar .nav-item:hover svg { color: #FFFFFF; }
+
+/* ── PAGE TEXT: retune to the template's own two greys ─────────────────────
+   The sweep rewrote white text to #0f172a / #475569 — the previous light
+   palette. TailAdmin uses #1C2434 for headings and #64748B for body, and
+   mixing the two families is what makes text look faintly "off" rather than
+   plainly wrong. */
+html[data-theme="light"] .main [style*="color:#fff"],
+html[data-theme="light"] .main [style*="color: #fff"],
+html[data-theme="light"] .main [style*="color:#ffffff"],
+html[data-theme="light"] .main [style*="color: #ffffff"],
+html[data-theme="light"] .main [style*="rgb(255, 255, 255)"] { color: #1C2434 !important; }
+
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.7)"],
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.6)"],
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.5)"],
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.4)"],
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.35)"],
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.3)"],
+html[data-theme="light"] .main [style*="rgba(255, 255, 255, 0.25)"] { color: #64748B !important; }
+
+/* Buttons and links keep white text — they sit on a coloured fill. This must
+   come last, or the sweep above would black out every primary button label. */
+html[data-theme="light"] .main button[style*="#fff"],
+html[data-theme="light"] .main a[style*="#fff"],
+html[data-theme="light"] .main button[style*="rgb(255, 255, 255)"],
+html[data-theme="light"] .main a[style*="rgb(255, 255, 255)"] { color: #FFFFFF !important; }
+
+/* Muted greys from the dark palettes are too faint on white. */
+html[data-theme="light"] .main [style*="color:#8E97BC"],
+html[data-theme="light"] .main [style*="color: #8E97BC"],
+html[data-theme="light"] .main [style*="color:#A0AEC0"],
+html[data-theme="light"] .main [style*="color: #A0AEC0"],
+html[data-theme="light"] .main [style*="color:#94a3b8"],
+html[data-theme="light"] .main [style*="color: #94a3b8"] { color: #64748B !important; }
+
+/* Headings should be the near-black, not the body grey. */
+html[data-theme="light"] .main h1,
+html[data-theme="light"] .main h2,
+html[data-theme="light"] .main h3,
+html[data-theme="light"] .main h4 { color: #1C2434; }
+
+/* ── Sidebar chrome on the dark rail ───────────────────────────────────────
+   The brand block, collapse toggle and footer all inherit page colours, which
+   were tuned for a WHITE sidebar. On the template's dark rail they need the
+   light values or they disappear into it — the collapse button in particular
+   became an invisible dark shape on a dark background, which is exactly the
+   kind of thing that reads as "the sidebar doesn't work". */
+html[data-theme="light"] .sidebar-brand { border-bottom-color: #2E3A47; }
+html[data-theme="light"] .brand-subtitle { color: #8A99AF; }
+html[data-theme="light"] .sidebar-toggle {
+  background: transparent;
+  border: 1px solid #2E3A47;
+  color: #DEE4EE;
+}
+html[data-theme="light"] .sidebar-toggle:hover {
+  background: #333A48;
+  border-color: #3d4d60;
+  color: #FFFFFF;
+}
+html[data-theme="light"] .sidebar-footer,
+html[data-theme="light"] .sidebar-footer * { color: #8A99AF; }
+html[data-theme="light"] .sidebar-footer a:hover,
+html[data-theme="light"] .sidebar-footer button:hover { color: #FFFFFF; }
+
+/* The mobile drawer's backdrop and the hamburger, which sit on the light
+   header rather than the rail. */
+html[data-theme="light"] .topbar-sidebar-toggle {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  color: #1C2434;
+}
+html[data-theme="light"] .topbar-sidebar-toggle:hover { background: #F7F9FC; }
+
+/* Tap targets: the drawer must be dismissable by tapping anywhere off it.
+   The backdrop is rendered only while the drawer is open, so it can safely
+   cover the whole screen beneath it. */
+.sidebar-backdrop { cursor: pointer; }
