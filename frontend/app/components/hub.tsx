@@ -87,8 +87,13 @@ function HubInner({
 
   return (
     <div>
+      {/* On a phone these eight labels wrapped onto five rows and ate half the
+          screen — and the sliding underline, measured with offsetLeft, then
+          drew itself under the wrong row. The mobile stylesheet turns this
+          into a single swipeable row, which fixes both at once. */}
       <div
         ref={barRef}
+        className="hub-tabs"
         style={{
           display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center",
           borderBottom: "1px solid var(--border)", marginBottom: 18,

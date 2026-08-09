@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./dashboard.css";
 import { AppShellGate } from "./components/app-shell";
@@ -16,6 +16,26 @@ export const metadata: Metadata = {
     shortcut: "/favicon.svg",
     apple: "/favicon.svg",
   },
+};
+
+/**
+ * Next.js supplies a default viewport tag, but not `viewportFit: "cover"` —
+ * without it the `env(safe-area-inset-*)` values used by the mobile stylesheet
+ * all resolve to 0px, so the sidebar footer and the assistant button sit under
+ * the home-indicator bar on notched phones and cannot be tapped.
+ *
+ * `maximumScale` is deliberately left alone: locking zoom is an accessibility
+ * failure, and the real cause of unwanted zooming (inputs below 16px) is fixed
+ * properly in globals.css instead.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0b1020" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+  ],
 };
 
 export default function RootLayout({

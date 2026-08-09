@@ -2137,3 +2137,150 @@ html, body {
    touch less washed out so it's readable at a glance. */
 :root                    { --muted: #AEB7CC; }
 html[data-theme="light"] { --muted: #586074; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE / TOUCH
+   ══════════════════════════════════════════════════════════════════════════
+   Deliberately the LAST block in this file. Several desktop corrections above
+   use `!important` on the same properties, and with equal specificity the
+   later rule wins — so mobile overrides that lived halfway up the file were
+   being silently undone by the zoom-compensation block below them. That is
+   why the phone layout stayed broken no matter what was added at line 852. */
+
+@media (max-width: 900px) {
+  /* ── 1. Undo the desktop zoom hack ──────────────────────────────────────
+     `:root { zoom: 0.9 }` shrinks the whole UI to 90%, and the file then
+     compensates by sizing the shell to 111.12vh. That trade is reasonable on
+     a monitor and wrong on a phone twice over: 12px body text becomes 10.8px
+     (below comfortable reading size, and `zoom` is unevenly implemented on
+     mobile browsers), and forcing the shell to 111vh makes it taller than the
+     screen ON PURPOSE — so the sidebar's last items and the bottom of every
+     page sat below the fold with nothing to scroll them into view. */
+  :root {
+    zoom: 1 !important;
+    --app-zoom: 1;
+    --app-vh: 100dvh;
+    --app-vw: 100vw;
+  }
+
+  /* dvh, not vh: on phones `100vh` is the height WITHOUT the address bar, so
+     a 100vh shell is always slightly taller than what you can actually see.
+     `dvh` tracks the bar as it hides and shows.
+     The plain `vh` line above each one is a real fallback, not decoration: a
+     browser too old for `dvh` DROPS that declaration, and without something
+     valid underneath it would fall back to the 111.12vh desktop rule — i.e.
+     straight back to the bug this block exists to fix. */
+  .db-root,
+  .main {
+    height: auto !important;
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+  }
+
+  .sidebar {
+    height: 100vh !important;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    /* Clear the home-indicator bar on notched phones so the last menu item is
+       tappable rather than sitting under the system gesture area. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* ── 2. Dialogs become full-width sheets ────────────────────────────────
+     The desktop rule offsets overlays by -5.56% to cancel the zoom. With zoom
+     off that inset pushes the dialog off-screen instead of centring it. */
+  div[style*="position: fixed"][style*="inset: 0"],
+  div[style*="position:fixed"][style*="inset:0"] {
+    inset: 0 !important;
+    padding: 10px !important;
+  }
+  div[style*="position: fixed"][style*="inset: 0"] > div,
+  div[style*="position:fixed"][style*="inset:0"] > div {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 90dvh !important;
+  }
+}
+
+@media (max-width: 768px) {
+  /* ── 3. Hub tabs: one swipeable row ─────────────────────────────────────
+     Eight wrapped labels cost five rows of vertical space before any content,
+     and broke the sliding underline (it is positioned from offsetLeft, which
+     assumes a single row). Scrolling horizontally fixes the height and the
+     underline together. */
+  .hub-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .hub-tabs::-webkit-scrollbar { display: none; }
+  .hub-tabs .hub-tab {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+
+  /* The WinBox toolbar (.wbtb) has up to eleven buttons plus a search box.
+     It is left WRAPPING on purpose: making it a single scrolling row would
+     push "Find subscriber…" off the right edge, and search is the control
+     people reach for most on a phone. Instead the search gets its own full
+     width row above the buttons. */
+  .wbtb { padding: 8px !important; }
+  .wbtb .wbspacer { display: none; }
+  .wbtb .wbfind {
+    order: -1;
+    width: 100%;
+    height: 38px;
+    margin-bottom: 6px;
+  }
+  .wbtb .wbfind input { width: 100%; }
+
+  /* ── 4. Stop iOS zooming the page on every field ────────────────────────
+     Mobile Safari zooms in whenever a focused input has a font smaller than
+     16px, and the panel's inputs are 12–13px. Tapping the subscriber search
+     therefore zoomed the entire layout, and nothing zoomed it back out. */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+
+  /* ── 5. Touch targets ───────────────────────────────────────────────────
+     Edit / Move / Off / Del sit side by side on every subscriber row. At
+     desktop sizes they are a few pixels apart, which on a fingertip is the
+     difference between disabling a customer and deleting one. */
+  .db-root td button,
+  .db-root td a,
+  .wbbtn,
+  .hub-tab {
+    min-height: 36px;
+  }
+  .db-root td button + button { margin-left: 6px; }
+
+  /* ── 6. Cards and grids ─────────────────────────────────────────────────
+     190px minimum leaves a 320px screen with one column and wide side gaps;
+     150px fits two, which is what these small number tiles are for. */
+  .stat-grid, .nova-grid, .db-stats {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+    gap: 10px !important;
+  }
+
+  /* Tables already sit in scrolling wrappers, so they do not need to become
+     block boxes — that hack also forced `nowrap` onto every cell, so long
+     customer names could never wrap. Let names wrap; keep numbers intact. */
+  .db-root table { display: table !important; white-space: normal !important; }
+  .db-root th, .db-root td { white-space: nowrap; }
+  .db-root td.wrap, .db-root td[data-wrap] { white-space: normal !important; }
+
+  /* ── 7. Keep the assistant clear of the system gesture bar ──────────── */
+  .jb-assist-panel { bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important; }
+}
+
+/* Very small phones (360px and under). */
+@media (max-width: 380px) {
+  .app-shell-page-content { padding: 12px !important; }
+  .stat-grid, .nova-grid, .db-stats {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
