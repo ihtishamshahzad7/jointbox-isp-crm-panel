@@ -64,20 +64,55 @@ if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/tools/build_ai_knowledge.py
     || echo "⚠ Assistant knowledge not regenerated (non-fatal)"
 fi
 
+# -----------------------------------------------------------------------------
+# BUILD TOOLS MUST BE INSTALLED — even in production.
+#
+# `npm install` silently SKIPS devDependencies whenever NODE_ENV=production, and
+# this server sets exactly that (ecosystem.config.js, and the panel's Update
+# button runs this script as a child of the pm2 backend process, inheriting it).
+# The Nest CLI and TypeScript live in devDependencies, so the install quietly
+# removed them and the build died with:
+#
+#     sh: 1: nest: not found
+#
+# `set -e` then aborted the deploy, leaving the OLD dist running — which is why
+# a fix could be pushed, pulled and "deployed" without ever taking effect.
+# --include=dev overrides NODE_ENV and is safe on every install.
+# -----------------------------------------------------------------------------
+NPM_INSTALL="npm install --no-audit --no-fund --include=dev"
+
 echo "🗄️  Applying database migrations + reconcile..."
 cd "$REPO/backend"
-npm install --no-audit --no-fund
+$NPM_INSTALL
+
+# Belt and braces: if the CLI is still absent (older npm ignores --include=dev,
+# or a half-pruned node_modules), fetch it rather than failing the deploy.
+if [ ! -x "$REPO/backend/node_modules/.bin/nest" ]; then
+  echo "⚠ Nest CLI missing — installing build tools explicitly..."
+  npm install --no-audit --no-fund --no-save @nestjs/cli@^11 || true
+fi
 # migrate deploy (versioned) + idempotent db push safety net. Guarantees the DB
 # always matches schema.prisma, on a fresh, drifted, or clean server. See
 # scripts/db-deploy.sh and MIGRATIONS.md.
 npm run db:deploy
 
 echo "🔧 Building backend..."
-npm run build            # produces backend/dist/main.js
+# A failed build must be UNMISSABLE. Previously `set -e` just ended the script
+# mid-scroll, so the last thing on screen was a compiler message and it looked
+# like the deploy had finished — while pm2 happily kept serving the old dist.
+if ! npm run build; then   # produces backend/dist/main.js
+  echo ""
+  echo "❌ BACKEND BUILD FAILED — nothing was deployed."
+  echo "   The previous version is still running, so the panel stays up."
+  echo "   Fix the error above, then run this script again."
+  exit 1
+fi
 
 echo "🎨 Building frontend..."
 cd "$REPO/frontend"
-npm install --no-audit --no-fund
+# Same reason as the backend: `next build` needs TypeScript, which is a
+# devDependency and therefore skipped under NODE_ENV=production.
+$NPM_INSTALL
 # Always start from a CLEAN .next. A stale/half-old build (or one whose files
 # were written by a different user in a mixed root/jointbox setup) makes
 # `next start` return HTTP 500 for /_next/static chunks → the UI hangs with a
