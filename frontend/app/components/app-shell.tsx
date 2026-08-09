@@ -235,27 +235,30 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const ALLOWED = ['saas', 'aurora', 'winbox', 'light'];
 
     /**
-     * ONE-TIME MIGRATION TO THE NEW DEFAULT.
+     * ONE-TIME MIGRATION TO THE NEW DEFAULT (Light / TailAdmin).
      *
-     * Changing the default only affects people with no saved theme — and
-     * everyone who has ever loaded the panel has one, because the old default
-     * was written to localStorage on first visit. Without this they would all
-     * stay on Aurora and never see the new design.
+     * Changing the default alone reaches nobody: every user who has ever
+     * opened the panel already has jb_theme in localStorage, because the old
+     * default was written there on first visit. Without this they would all
+     * stay on whatever they were given and never see the new design.
      *
-     * The migration is deliberately narrow: 'aurora' was the OLD DEFAULT, so
-     * having it means the theme was never actually chosen. Anyone who went and
-     * picked WinBox or Light made a real decision, and that is left alone.
+     * Only previous DEFAULTS are migrated — 'aurora' and 'saas' were handed
+     * out, never chosen. Someone who went to the picker and selected WinBox
+     * made a real decision, and it is left alone.
      */
-    if (localStorage.getItem('jb_theme_v') !== '2') {
+    if (localStorage.getItem('jb_theme_v') !== '3') {
       const current = localStorage.getItem('jb_theme');
-      if (!current || current === 'aurora') localStorage.setItem('jb_theme', 'saas');
-      localStorage.setItem('jb_theme_v', '2');
+      if (!current || current === 'aurora' || current === 'saas') {
+        localStorage.setItem('jb_theme', 'light');
+      }
+      localStorage.setItem('jb_theme_v', '3');
     }
 
-    let saved = localStorage.getItem('jb_theme') || 'saas';
-    if (!ALLOWED.includes(saved)) { saved = 'saas'; localStorage.setItem('jb_theme', saved); }
+    let saved = localStorage.getItem('jb_theme') || 'light';
+    if (!ALLOWED.includes(saved)) { saved = 'light'; localStorage.setItem('jb_theme', saved); }
     const isLight = saved === 'light';
     setLight(isLight);
+    // `theme` tracks which DARK palette to return to when Light is toggled off.
     setThemeState(isLight ? 'saas' : saved);
     document.documentElement.setAttribute('data-theme', saved);
   }, []);

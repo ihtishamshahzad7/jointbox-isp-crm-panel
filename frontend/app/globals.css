@@ -74,21 +74,21 @@ body {
      the glass look is preserved with none of the stacking problems. */
   /* Default dark palette = "Night tower". Switchable via the theme picker
      (adds a data-theme="<id>" on <html>). Named blocks below define the others. */
-  /* Defaults mirror the "Saas" theme below, so the app looks right even
+  /* Defaults mirror the "Light" (TailAdmin) theme below, so the app looks right even
      before the theme attribute is applied. These MUST stay in step with
      the default theme: if they described a different palette, every page
      would paint in one set of colours and then repaint in another as the
      attribute lands — a visible flash on every single load. */
-  --bg: #171923;
-  --surface: #1A202C;
-  --surface-2: #2D3748; --surface2: #2D3748;
-  --border: #2D3748;
-  --text: #FFFFFF;
-  --muted: #A0AEC0;
-  --accent: #9F7AEA; --accent-2: #805AD5; --accent2: #805AD5;
-  --grad: linear-gradient(135deg, #9F7AEA 0%, #805AD5 100%);
-  --grad-soft: linear-gradient(135deg, rgba(159,122,234,.14), rgba(128,90,213,.08));
-  --card-shadow: 0 1px 2px rgba(0,0,0,.30), 0 6px 18px rgba(0,0,0,.22);
+  --bg: #F1F5F9;
+  --surface: #FFFFFF;
+  --surface-2: #F7F9FC; --surface2: #F7F9FC;
+  --border: #E2E8F0;
+  --text: #1C2434;
+  --muted: #64748B;
+  --accent: #3C50E0; --accent-2: #80CAEE; --accent2: #80CAEE;
+  --grad: linear-gradient(135deg, #3C50E0 0%, #80CAEE 100%);
+  --grad-soft: linear-gradient(135deg, rgba(60,80,224,.10), rgba(128,202,238,.08));
+  --card-shadow: 0px 8px 13px -3px rgba(0, 0, 0, 0.07);
   /* Semantic status colours stay constant across every theme. */
   --online: #639922; --warning: #BA7517; --danger: #E24B4A;
 }
@@ -341,32 +341,103 @@ html[data-theme="winbox"] .st .pill.up { color:#7bd88a !important; }
 /* Accent follows the theme on the active nav pill (was a fixed gradient). */
 html:not([data-theme="light"]) .nav-item.active { background: var(--accent); color: var(--bg); box-shadow: none; }
 
+/* ═══════════════════════════════════════════════════════════════════
+   LIGHT — THE DEFAULT. Ported from the TailAdmin Next.js admin
+   dashboard (free-nextjs-admin-dashboard-1.3).
+
+   Unlike the saas-ui template, TailAdmin states every value as a real
+   hex in tailwind.config.ts, so nothing here is inferred:
+
+     whiten  #F1F5F9  page background     body    #64748B  body text
+     white   #FFFFFF  cards               black   #1C2434  headings
+     stroke  #E2E8F0  borders             primary #3C50E0  accent
+     gray-2  #F7F9FC  inset rows          secondary #80CAEE
+     success #219653  danger #D34053      warning #FFA70B
+
+   Note the SIDEBAR stays dark (#1C2434) in light mode — that is
+   TailAdmin's own `bg-black` aside, not an oversight. It is the single
+   most recognisable thing about the design.
+   ═══════════════════════════════════════════════════════════════════ */
 html[data-theme="light"] {
-  --bg: #eef2f7;
-  --surface: #ffffff;
-  --surface-2: #f4f7fb;
-  --border: #e4e9f0;
-  --text: #0f172a;
-  --muted: #64748b;
-  --card-shadow: 0 1px 2px rgba(15,23,42,.05), 0 8px 22px rgba(15,23,42,.08);
+  --bg: #F1F5F9;          /* whiten  */
+  --surface: #FFFFFF;     /* white   */
+  --surface-2: #F7F9FC;   /* gray.2  */
+  --surface2: #F7F9FC;
+  --border: #E2E8F0;      /* stroke  */
+  --text: #1C2434;        /* black   */
+  --muted: #64748B;       /* body    */
+  --accent: #3C50E0;      /* primary */
+  --accent-2: #80CAEE;    /* secondary */
+  --accent2: #80CAEE;
+  --grad: linear-gradient(135deg, #3C50E0 0%, #80CAEE 100%);
+  --grad-soft: linear-gradient(135deg, rgba(60,80,224,.10), rgba(128,202,238,.08));
+  /* TailAdmin's `shadow-default`, verbatim. */
+  --card-shadow: 0px 8px 13px -3px rgba(0, 0, 0, 0.07);
+  --radius: 6px;
+  --online: #219653; --warning: #FFA70B; --danger: #D34053;
 }
 
 /* ═══════════ SHELL light overrides (frame is class-styled) ═══════════ */
 /* Body background is lightened ONLY when the dashboard shell is present, so the
    login/landing pages (which render outside .db-root) keep their dark body. */
-html[data-theme="light"] body:has(.db-root) { background: #eef2f7; }
-html[data-theme="light"] .db-root { background: #eef2f7; color: #0f172a; }
-html[data-theme="light"] .sidebar { background: #ffffff; border-right-color: #e4e9f0; color: #334155; }
-html[data-theme="light"] .brand-title,
-html[data-theme="light"] .user-name { color: #0f172a; }
-html[data-theme="light"] .nav-item { color: #334155; }
-html[data-theme="light"] .nav-item:hover { background: #f1f5f9; }
-html[data-theme="light"] .nav-item.active { background: #0ea5e9; color: #ffffff; }
-html[data-theme="light"] .topbar { background: #ffffff; border-bottom-color: #e4e9f0; }
-html[data-theme="light"] .topbar-title { color: #0f172a; }
+html[data-theme="light"] body:has(.db-root) { background: #F1F5F9; }
+html[data-theme="light"] .db-root { background: #F1F5F9; color: #1C2434; }
+
+/* THE DARK SIDEBAR. TailAdmin's aside is `bg-black` (#1C2434) in light
+   mode as well as dark — a white page with a dark rail. Getting this
+   wrong is what makes a copy of this design look like a different
+   product, so it is set explicitly rather than left to a token. */
+html[data-theme="light"] .sidebar {
+  background: #1C2434;
+  border-right: none;
+  color: #DEE4EE;                       /* bodydark1 */
+}
+html[data-theme="light"] .brand-title { color: #FFFFFF; }
+html[data-theme="light"] .user-name { color: #FFFFFF; }
+html[data-theme="light"] .nav-label { color: #8A99AF; }  /* bodydark2 */
+html[data-theme="light"] .nav-item { color: #DEE4EE; }
+html[data-theme="light"] .nav-item:hover { background: #333A48; }  /* graydark */
+html[data-theme="light"] .nav-item.active { background: #333A48; color: #FFFFFF; }
+html[data-theme="light"] .sidebar-footer { border-top-color: #2E3A47; }
+
+/* Header: white with TailAdmin's drop-shadow-1, not a hairline border. */
+html[data-theme="light"] .topbar {
+  background: #FFFFFF;
+  border-bottom: none;
+  box-shadow: 0px 1px 0px #E2E8F0;
+}
+html[data-theme="light"] .topbar-title { color: #1C2434; }
 html[data-theme="light"] .main,
-html[data-theme="light"] .app-shell-page-content { background: #eef2f7; }
-html[data-theme="light"] .app-shell-footer { background: #ffffff; color: #64748b; border-top-color: #e4e9f0; }
+html[data-theme="light"] .app-shell-page-content { background: #F1F5F9; }
+html[data-theme="light"] .app-shell-footer { background: #FFFFFF; color: #64748B; border-top-color: #E2E8F0; }
+
+/* Cards: white, hairline stroke, soft drop — TailAdmin's card recipe
+   (`rounded-sm border border-stroke bg-white shadow-default`). */
+html[data-theme="light"] .st,
+html[data-theme="light"] .nt,
+html[data-theme="light"] .lrt {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  box-shadow: var(--card-shadow);
+}
+html[data-theme="light"] .st thead th,
+html[data-theme="light"] .nt thead th,
+html[data-theme="light"] .lrt thead th {
+  background: #F7F9FC;                  /* gray.2 header row */
+  color: #1C2434;
+  border-bottom: 1px solid #E2E8F0;
+}
+html[data-theme="light"] .hub-tab.on { color: #3C50E0; }
+
+/* Primary buttons: flat #3C50E0. The app ships gradient buttons; the
+   template has none, so they are flattened here rather than in 60 files. */
+html[data-theme="light"] .db-root button[style*="linear-gradient(135deg,#6C3CE1"],
+html[data-theme="light"] .db-root button[style*="linear-gradient(135deg,#7C4DFF"],
+html[data-theme="light"] .db-root button[style*="linear-gradient(135deg,#8B5CF6"],
+html[data-theme="light"] .db-root button[style*="linear-gradient(135deg,#9F7AEA"] {
+  background: #3C50E0 !important;
+  color: #FFFFFF !important;
+}
 
 /* ═══ LIGHT MODE: fix leftover hardcoded WHITE text + faint labels + bright
    accents that the token conversion didn't cover. Matches both the hex form
@@ -2363,3 +2434,71 @@ html[data-theme="light"] { --muted: #586074; }
     grid-template-columns: 1fr 1fr !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME — CHART SERIES (TailAdmin)
+   ══════════════════════════════════════════════════════════════════════════
+   Every chart in the app is hand-built SVG (no canvas anywhere), which is the
+   only reason this works: SVG presentation attributes like fill="#6C3CE1" are
+   overridable by CSS, so the series can be retinted from here instead of
+   editing three chart components and every page that passes a colour in.
+
+   The dark palettes were chosen to glow on near-black. On #F1F5F9 the same
+   colours read as neon and the light greens all but vanish, so each is mapped
+   to its nearest TailAdmin equivalent:
+     #3C50E0 primary   #80CAEE secondary  #0FADCF meta.10
+     #3056D3 deep      #6577F3 mid        #219653 success
+   ────────────────────────────────────────────────────────────────────────── */
+html[data-theme="light"] {
+  --chart-1: #3C50E0;
+  --chart-2: #80CAEE;
+  --chart-3: #0FADCF;
+  --chart-4: #6577F3;
+  --chart-5: #219653;
+  --chart-6: #FFA70B;
+}
+
+/* Violet / magenta brand series → TailAdmin primary + mid blue. */
+html[data-theme="light"] .db-root [fill="#6C3CE1"],
+html[data-theme="light"] .db-root [fill="#8B5CF6"],
+html[data-theme="light"] .db-root [fill="#4A00E0"],
+html[data-theme="light"] .db-root [fill="#9F7AEA"]   { fill: #3C50E0; }
+html[data-theme="light"] .db-root [stroke="#6C3CE1"],
+html[data-theme="light"] .db-root [stroke="#8B5CF6"],
+html[data-theme="light"] .db-root [stroke="#4A00E0"],
+html[data-theme="light"] .db-root [stroke="#9F7AEA"] { stroke: #3C50E0; }
+
+html[data-theme="light"] .db-root [fill="#E9408B"],
+html[data-theme="light"] .db-root [fill="#EC4899"]   { fill: #6577F3; }
+html[data-theme="light"] .db-root [stroke="#E9408B"],
+html[data-theme="light"] .db-root [stroke="#EC4899"] { stroke: #6577F3; }
+
+/* Cyans → meta.10; the dark theme's #00C9FF is unreadable on white. */
+html[data-theme="light"] .db-root [fill="#00C9FF"],
+html[data-theme="light"] .db-root [fill="#38BDF8"]   { fill: #0FADCF; }
+html[data-theme="light"] .db-root [stroke="#00C9FF"],
+html[data-theme="light"] .db-root [stroke="#38BDF8"] { stroke: #0FADCF; }
+
+/* Greens → success #219653. The pastel greens disappear on a light card. */
+html[data-theme="light"] .db-root [fill="#10B981"],
+html[data-theme="light"] .db-root [fill="#10b981"],
+html[data-theme="light"] .db-root [fill="#6EE7B7"],
+html[data-theme="light"] .db-root [fill="#38ef7d"],
+html[data-theme="light"] .db-root [fill="#4ade80"]   { fill: #219653; }
+html[data-theme="light"] .db-root [stroke="#10B981"],
+html[data-theme="light"] .db-root [stroke="#10b981"],
+html[data-theme="light"] .db-root [stroke="#6EE7B7"],
+html[data-theme="light"] .db-root [stroke="#38ef7d"],
+html[data-theme="light"] .db-root [stroke="#4ade80"] { stroke: #219653; }
+
+/* Status colours → TailAdmin's own. */
+html[data-theme="light"] .db-root [fill="#EF4444"]   { fill: #D34053; }
+html[data-theme="light"] .db-root [stroke="#EF4444"] { stroke: #D34053; }
+html[data-theme="light"] .db-root [fill="#F59E0B"]   { fill: #FFA70B; }
+html[data-theme="light"] .db-root [stroke="#F59E0B"] { stroke: #FFA70B; }
+
+/* Axis text and gridlines: near-invisible dark-theme greys → TailAdmin body. */
+html[data-theme="light"] .db-root svg text { fill: #64748B; }
+html[data-theme="light"] .db-root svg .grid line,
+html[data-theme="light"] .db-root svg line[stroke="#262C4D"],
+html[data-theme="light"] .db-root svg line[stroke="#2D3748"] { stroke: #E2E8F0; }
