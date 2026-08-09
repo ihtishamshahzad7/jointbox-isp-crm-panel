@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useColResize, COL_RESIZE_CSS } from "./use-col-resize";
 
 /**
  * Composed tables for NAS, IP Pools and Packages.
@@ -74,6 +75,7 @@ export function NasTable({
 }) {
   const isIsp = !me || me.role === "ADMIN" || me.role === "SUPER_ADMIN";
   const ctx = useCtxMenu();
+  const col = useColResize("jb_nascols");
 
   return (
     <div className="nt">
@@ -82,7 +84,12 @@ export function NasTable({
         <thead>
           <tr>
             <th className="flg" title="R: reachable/active · X: disabled">Flags</th>
-            <th>Router</th><th>Reachability</th><th>Sessions</th><th>Ports</th><th>Site</th><th>Access</th><th />
+            <th style={col.style("router")}>Router{col.handle("router")}</th>
+            <th style={col.style("reach")}>Reachability{col.handle("reach")}</th>
+            <th style={col.style("sess")}>Sessions{col.handle("sess")}</th>
+            <th style={col.style("ports")}>Ports{col.handle("ports")}</th>
+            <th style={col.style("site")}>Site{col.handle("site")}</th>
+            <th style={col.style("access")}>Access{col.handle("access")}</th><th />
           </tr>
         </thead>
         <tbody>
@@ -290,6 +297,7 @@ export function PackageTable({
   onShare?: (r: Row) => void;
 }) {
   const ctx = useCtxMenu();
+  const col = useColResize("jb_pkgcols");
   return (
     <div className="nt">
       <style>{CSS}</style>
@@ -297,8 +305,11 @@ export function PackageTable({
         <thead>
           <tr>
             <th className="flg" title="R: active · X: inactive">Flags</th>
-            <th>Package</th><th>Speed</th><th>{isIsp ? "Base price" : "You pay"}</th>
-            <th>Allowance</th><th>Customers</th><th />
+            <th style={col.style("pkg")}>Package{col.handle("pkg")}</th>
+            <th style={col.style("speed")}>Speed{col.handle("speed")}</th>
+            <th style={col.style("price")}>{isIsp ? "Base price" : "You pay"}{col.handle("price")}</th>
+            <th style={col.style("allow")}>Allowance{col.handle("allow")}</th>
+            <th style={col.style("cust")}>Customers{col.handle("cust")}</th><th />
           </tr>
         </thead>
         <tbody>
@@ -382,6 +393,7 @@ export function PackageTable({
 }
 
 const CSS = `
+${COL_RESIZE_CSS}
 .nt{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:auto;position:relative}
 .nt table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px}
 
