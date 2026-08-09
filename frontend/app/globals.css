@@ -85,7 +85,7 @@ body {
      A translucent --surface looked right on a flat page but broke two things:
      sticky table headers showed rows scrolling underneath, and nested panels
      compounded into progressively lighter boxes. These values are the exact
-     colours that rgba(255,255,255,.04) and .07 RESOLVE TO over #0B0E1A, so
+     colours that #64748B and .07 RESOLVE TO over #0B0E1A, so
      the glass look is preserved with none of the stacking problems. */
   /* ONE THEME. The panel used to ship four palettes plus a light mode bolted
      on top; these values are now the only ones, taken from the TailAdmin
@@ -530,7 +530,7 @@ body {
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.15em;
   text-transform: uppercase;
-  color: rgba(255,255,255,0.15);
+  color: #64748B;
   padding: 0 10px;
   margin-bottom: 8px;
 }
@@ -597,8 +597,8 @@ body {
   gap: 10px;
   padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.04);
+  background: #F7F9FC;
+  border: 1px solid #E2E8F0;
   margin-bottom: 8px;
 }
 
@@ -633,7 +633,7 @@ body {
 .user-email {
   font-size: 9px;
   font-family: 'JetBrains Mono', monospace;
-  color: rgba(255,255,255,0.25);
+  color: #64748B;
   margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
@@ -678,7 +678,7 @@ body {
   flex: 1;
   padding: 24px 28px;
   overflow-y: auto;
-  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 35%);
+  background: linear-gradient(180deg, #F7F9FC, transparent 35%);
 }
 
 .app-shell-page-content::-webkit-scrollbar {
@@ -768,15 +768,15 @@ body {
   align-items: center;
   justify-content: center;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid #E2E8F0;
   border-radius: 7px;
-  color: rgba(255,255,255,0.6);
+  color: #64748B;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .topbar-sidebar-toggle:hover {
-  color: rgba(255,255,255,0.9);
+  color: #1C2434;
   border-color: rgba(14,165,233,0.45);
   background: rgba(14,165,233,0.1);
 }
@@ -790,7 +790,7 @@ body {
 .topbar-sub {
   font-size: 10px;
   font-family: 'JetBrains Mono', monospace;
-  color: rgba(255,255,255,0.25);
+  color: #64748B;
   margin-top: 1px;
 }
 
@@ -803,11 +803,11 @@ body {
 .topbar-clock {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
-  color: rgba(255,255,255,0.35);
-  background: rgba(255,255,255,0.03);
+  color: #64748B;
+  background: #F7F9FC;
   padding: 4px 12px;
   border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.04);
+  border: 1px solid #E2E8F0;
   letter-spacing: 0.04em;
   min-width: 90px;
   text-align: center;
@@ -989,8 +989,8 @@ body {
   --g-secondary: linear-gradient(135deg, #00C9FF, #92FE9D);
   --g-accent: linear-gradient(135deg, #F7971E, #FFD200);
   --glow-primary: rgba(140, 90, 255, 0.25);
-  --glass: rgba(255, 255, 255, 0.04);
-  --glass-hover: rgba(255, 255, 255, 0.07);
+  --glass: #F7F9FC;
+  --glass-hover: #EEF2F7;
 }
 
 /* ── Ambient background: two drifting gradient blobs + a dot grid.
@@ -1107,7 +1107,7 @@ body {
 .nova-ripple {
   position: absolute;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.4);
+  background: #EEF2F7;
   transform: scale(0);
   animation: nova-rip 0.55s ease-out forwards;
   pointer-events: none;
@@ -1566,7 +1566,7 @@ thead th {
 
 /* Zebra striping at very low contrast — enough to track a row across a wide
    table, not enough to compete with the data. */
-tbody tr:nth-child(even) { background: rgba(255, 255, 255, .014); }
+tbody tr:nth-child(even) { background: #F7F9FC; }
 tbody tr { border-bottom: 1px solid var(--border); }
 tbody tr:last-child { border-bottom: none; }
 
@@ -1772,7 +1772,7 @@ tbody td [class*="mono"] {
   font-family: 'JetBrains Mono', ui-monospace, monospace !important;
   font-size: 11px !important;
   letter-spacing: -.02em;
-  background: rgba(255, 255, 255, .04);
+  background: #F7F9FC;
   padding: 1px 6px;
   border-radius: 5px;
 }
@@ -1837,7 +1837,7 @@ thead th:has(> input[type="checkbox"]) { width: 34px; padding-right: 0 !importan
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent);
+  background: linear-gradient(90deg, transparent, #F7F9FC, transparent);
   animation: sk 1.3s infinite;
 }
 @keyframes sk { to { transform: translateX(100%); } }
@@ -1846,7 +1846,7 @@ thead th:has(> input[type="checkbox"]) { width: 34px; padding-right: 0 !importan
    The active item should be obvious at a glance from across a desk, not
    something you work out by reading. */
 .nav-item { position: relative; transition: background .14s ease, color .14s ease; }
-.nav-item:hover:not(.active) { background: rgba(255,255,255,.04); }
+.nav-item:hover:not(.active) { background: #F7F9FC; }
 .nav-item.active::before {
   content: "";
   position: absolute;
@@ -3142,7 +3142,7 @@ body,
    end of the file restores the order.
    ────────────────────────────────────────────────────────────────────── */
 
-html html:not([data-theme="light"]) .nav-item.active { background: var(--accent); color: var(--bg); box-shadow: none; }
+
 
 html  {
   --bg: #F1F5F9;          /* whiten  */
@@ -3226,11 +3226,11 @@ html .db-root button[style*="linear-gradient(135deg,#9F7AEA"] {
   color: #FFFFFF !important;
 }
 
-html .db-root [style*="color:#fff"],
-html .db-root [style*="color: #fff"],
-html .db-root [style*="color:#ffffff"],
-html .db-root [style*="color: #ffffff"],
-html .db-root [style*="rgb(255, 255, 255)"] { color: #0f172a !important; }
+html .main [style*="color:#fff"],
+html .main [style*="color: #fff"],
+html .main [style*="color:#ffffff"],
+html .main [style*="color: #ffffff"],
+html .main [style*="rgb(255, 255, 255)"] { color: #1C2434 !important; }
 
 html .main [style*="rgba(255,255,255,0.9)"],
 html .main [style*="rgba(255, 255, 255, 0.9)"],
@@ -3262,7 +3262,7 @@ html .db-root :not(button):not(a)[style*="#00C9FF"] { color: #0891b2 !important;
 
 html .main :not(button):not(a)[style*="#4ade80"] { color: #16a34a !important; }
 
-html .db-root :not(button):not(a)[style*="#34d399"] { color: #059669 !important; }
+html .main :not(button):not(a)[style*="#34d399"] { color: #059669 !important; }
 
 html .db-root :not(button):not(a)[style*="#60a5fa"] { color: #2563eb !important; }
 
@@ -3273,76 +3273,30 @@ html .db-root [style*="linear-gradient"][style*="#0b0e18"],
 html .db-root [style*="linear-gradient"][style*="rgb(7, 9, 15)"],
 html .db-root [style*="linear-gradient"][style*="rgb(11, 14, 24)"] { background: #eef2f7 !important; }
 
-html html:not([data-theme="light"]) .db-root {
-  position: relative;
-}
 
-html html:not([data-theme="light"]) .db-root::before,
-html html:not([data-theme="light"]) .db-root::after {
-  content: "";
-  position: fixed;
-  border-radius: 50%;
-  filter: blur(120px);
-  opacity: 0.10;
-  pointer-events: none;
-  z-index: 0;
-  animation: nova-drift 26s ease-in-out infinite alternate;
-}
 
-html html:not([data-theme="light"]) .db-root::before {
-  width: 480px; height: 480px;
-  background: #6C3CE1;
-  top: -140px; left: 14%;
-}
 
-html html:not([data-theme="light"]) .db-root::after {
-  width: 420px; height: 420px;
-  background: #E9408B;
-  bottom: -140px; right: 6%;
-  animation-delay: -12s;
-}
 
-html html:not([data-theme="light"]) .app-shell-page-content {
-  background-image:
-    radial-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(255,255,255,0.015), transparent 35%);
-  background-size: 28px 28px, auto;
-}
+
+
+
+
+
 
 html .nav-item.active {
   background: #6C3CE1;
   box-shadow: 0 6px 18px rgba(108, 60, 225, 0.30);
 }
 
-html html:not([data-theme="light"]) .sg-card,
-html html:not([data-theme="light"]) .rp-card,
-html html:not([data-theme="light"]) .sg-strip,
-html html:not([data-theme="light"]) .rp-kpis {
-  background: var(--glass);
-  backdrop-filter: blur(18px);
-  border-color: rgba(255, 255, 255, 0.08);
-  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
-              box-shadow 0.25s, border-color 0.25s;
-}
 
-html html:not([data-theme="light"]) .sg-card:hover,
-html html:not([data-theme="light"]) .rp-card:hover {
-  border-color: var(--glow-primary);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35), 0 0 30px rgba(140, 90, 255, 0.10);
-}
 
-html html:not([data-theme="light"]) .db-root div[style*="background: var(--surface)"],
-html html:not([data-theme="light"]) .db-root section[style*="background: var(--surface)"] {
-  transition: border-color 0.25s, box-shadow 0.25s;
-}
 
-html html:not([data-theme="light"]) .db-root div[style*="background: var(--surface)"]:hover {
-  border-color: rgba(140, 90, 255, 0.28) !important;
-}
 
-html html:not([data-theme="light"]) .db-root div[style*="position: fixed"][style*="inset: 0"] {
-  backdrop-filter: blur(4px);
-}
+
+
+
+
+
 
 html  { --muted: #586074; }
 
@@ -4427,3 +4381,43 @@ html div[style*="position:fixed"][style*="inset:0"] {
 
 /* The AI assistant sits above dialogs so it can be opened from one. */
 html .jb-assist-panel { z-index: 2100 !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TOPBAR CHIPS — readable on a white header
+   ══════════════════════════════════════════════════════════════════════════
+   The clock, wallet and status pill were coloured for a dark header: white at
+   35% opacity, and mid-tone greens and ambers that sit at 2.1–2.5:1 against
+   white. Each keeps its meaning — green for funded, amber for low, green for
+   online — at the darker end of the same hue, which is how the template does
+   status colours on a light surface. */
+html .topbar-clock {
+  color: #64748B;
+  background: #F7F9FC;
+  border: 1px solid #E2E8F0;
+}
+html .topbar-sub { color: #64748B; }
+
+html .status-pill {
+  background: #E7F6EC;
+  border: 1px solid #C6E9D3;
+  color: #157F43;
+}
+html .status-pill .status-dot { background: #219653; }
+
+html .nv-wallet {
+  background: #E7F6EC;
+  border: 1px solid #C6E9D3;
+  color: #157F43;
+}
+html .nv-wallet.low {
+  background: #FDF3E3;
+  border-color: #F5DFB4;
+  color: #8A6209;
+}
+html .nv-wallet.empty {
+  background: #FDE8EA;
+  border-color: #F5C2C7;
+  color: #B02A37;
+}
+/* The glow was designed to read on black; on white it just smears. */
+html .nv-wallet:hover { box-shadow: 0 1px 3px rgba(0,0,0,.10); transform: none; }
