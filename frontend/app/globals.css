@@ -2645,3 +2645,388 @@ html[data-theme="light"] .topbar-sidebar-toggle:hover { background: #F7F9FC; }
    The backdrop is rendered only while the drawer is open, so it can safely
    cover the whole screen beneath it. */
 .sidebar-backdrop { cursor: pointer; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME — TEXT COLOURS THAT WERE INVISIBLE ON WHITE   (generated)
+   ══════════════════════════════════════════════════════════════════════════
+   Every hex used as a TEXT colour anywhere in the app was measured against
+   #FFFFFF. Sixty of the eighty-one failed WCAG AA (4.5:1): they were chosen
+   to glow on a near-black page, so on white they run from faint to
+   unreadable. #FCD34D scored 1.44:1 — which is why a log row could only be
+   read by dragging the cursor over it to invert it.
+
+   Each colour is darkened along its OWN hue until it reaches 4.6:1, so green
+   stays green and danger stays red; only lightness moves. Generated rather
+   than hand-written because hand-writing the list is what missed 54 of them.
+
+   THE :not([style*="background"]) GUARD MATTERS. A pale colour is often
+   text sitting ON a coloured badge — pale mint on a green pill, say. There
+   the colour is already correct, and darkening it would swap one invisible
+   combination for another. So any element painting its own background is
+   left alone; only text on the page surface is touched.
+
+   Scoped to .main: the sidebar is a dark rail, where these values are right.
+   Both the hex form (server-rendered HTML) and the rgb() form (React
+   re-serialises inline styles after hydration) are matched — miss either and
+   the fix works on only half of page loads.
+   ────────────────────────────────────────────────────────────────────── */
+html[data-theme="light"] .main [style*="color:#4ADE80"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #4ADE80"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#4ade80"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #4ade80"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(74, 222, 128)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(74, 222, 128)"]:not([style*="background"]) { color: #198641 !important; }
+html[data-theme="light"] .main [style*="color:#F87171"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F87171"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f87171"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f87171"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(248, 113, 113)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(248, 113, 113)"]:not([style*="background"]) { color: #DD3131 !important; }
+html[data-theme="light"] .main [style*="color:#FBBF24"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FBBF24"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#fbbf24"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #fbbf24"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(251, 191, 36)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(251, 191, 36)"]:not([style*="background"]) { color: #927018 !important; }
+html[data-theme="light"] .main [style*="color:#FCA5A5"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FCA5A5"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#fca5a5"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #fca5a5"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(252, 165, 165)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(252, 165, 165)"]:not([style*="background"]) { color: #DD3131 !important; }
+html[data-theme="light"] .main [style*="color:#EF4444"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #EF4444"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ef4444"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ef4444"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(239, 68, 68)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(239, 68, 68)"]:not([style*="background"]) { color: #DD3131 !important; }
+html[data-theme="light"] .main [style*="color:#F59E0B"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F59E0B"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f59e0b"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f59e0b"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(245, 158, 11)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(245, 158, 11)"]:not([style*="background"]) { color: #9C6B19 !important; }
+html[data-theme="light"] .main [style*="color:#10B981"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #10B981"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#10b981"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #10b981"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(16, 185, 129)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(16, 185, 129)"]:not([style*="background"]) { color: #168560 !important; }
+html[data-theme="light"] .main [style*="color:#6EE7B7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #6EE7B7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#6ee7b7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #6ee7b7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(110, 231, 183)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(110, 231, 183)"]:not([style*="background"]) { color: #168559 !important; }
+html[data-theme="light"] .main [style*="color:#FCD34D"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FCD34D"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#fcd34d"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #fcd34d"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(252, 211, 77)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(252, 211, 77)"]:not([style*="background"]) { color: #8D7217 !important; }
+html[data-theme="light"] .main [style*="color:#38BDF8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #38BDF8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#38bdf8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #38bdf8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(56, 189, 248)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(56, 189, 248)"]:not([style*="background"]) { color: #1C7DA9 !important; }
+html[data-theme="light"] .main [style*="color:#C4B5FD"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #C4B5FD"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#c4b5fd"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #c4b5fd"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(196, 181, 253)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(196, 181, 253)"]:not([style*="background"]) { color: #7A5EE5 !important; }
+html[data-theme="light"] .main [style*="color:#60A5FA"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #60A5FA"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#60a5fa"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #60a5fa"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(96, 165, 250)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(96, 165, 250)"]:not([style*="background"]) { color: #2374D8 !important; }
+html[data-theme="light"] .main [style*="color:#A78BFA"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #A78BFA"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#a78bfa"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #a78bfa"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(167, 139, 250)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(167, 139, 250)"]:not([style*="background"]) { color: #7F5CE5 !important; }
+html[data-theme="light"] .main [style*="color:#94A3B8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #94A3B8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#94a3b8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #94a3b8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(148, 163, 184)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(148, 163, 184)"]:not([style*="background"]) { color: #627693 !important; }
+html[data-theme="light"] .main [style*="color:#2DD4BF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #2DD4BF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#2dd4bf"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #2dd4bf"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(45, 212, 191)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(45, 212, 191)"]:not([style*="background"]) { color: #1B8376 !important; }
+html[data-theme="light"] .main [style*="color:#D97706"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #D97706"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#d97706"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #d97706"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(217, 119, 6)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(217, 119, 6)"]:not([style*="background"]) { color: #A7661B !important; }
+html[data-theme="light"] .main [style*="color:#22C55E"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #22C55E"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#22c55e"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #22c55e"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(34, 197, 94)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(34, 197, 94)"]:not([style*="background"]) { color: #178640 !important; }
+html[data-theme="light"] .main [style*="color:#34D399"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #34D399"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#34d399"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #34d399"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(52, 211, 153)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(52, 211, 153)"]:not([style*="background"]) { color: #1D845F !important; }
+html[data-theme="light"] .main [style*="color:#059669"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #059669"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#059669"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #059669"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(5, 150, 105)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(5, 150, 105)"]:not([style*="background"]) { color: #168462 !important; }
+html[data-theme="light"] .main [style*="color:#00C9FF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #00C9FF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#00c9ff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #00c9ff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(0, 201, 255)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(0, 201, 255)"]:not([style*="background"]) { color: #197F9B !important; }
+html[data-theme="light"] .main [style*="color:#F0A500"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F0A500"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f0a500"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f0a500"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(240, 165, 0)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(240, 165, 0)"]:not([style*="background"]) { color: #966E18 !important; }
+html[data-theme="light"] .main [style*="color:#FECACA"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FECACA"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#fecaca"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #fecaca"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(254, 202, 202)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(254, 202, 202)"]:not([style*="background"]) { color: #DD3131 !important; }
+html[data-theme="light"] .main [style*="color:#FF7070"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FF7070"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ff7070"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ff7070"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(255, 112, 112)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(255, 112, 112)"]:not([style*="background"]) { color: #DD3131 !important; }
+html[data-theme="light"] .main [style*="color:#CBD5E1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #CBD5E1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#cbd5e1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #cbd5e1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(203, 213, 225)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(203, 213, 225)"]:not([style*="background"]) { color: #5A779B !important; }
+html[data-theme="light"] .main [style*="color:#93C5FD"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #93C5FD"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#93c5fd"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #93c5fd"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(147, 197, 253)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(147, 197, 253)"]:not([style*="background"]) { color: #2275D3 !important; }
+html[data-theme="light"] .main [style*="color:#F1F5F9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F1F5F9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f1f5f9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f1f5f9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(241, 245, 249)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(241, 245, 249)"]:not([style*="background"]) { color: #4878A9 !important; }
+html[data-theme="light"] .main [style*="color:#CCFBF1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #CCFBF1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ccfbf1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ccfbf1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(204, 251, 241)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(204, 251, 241)"]:not([style*="background"]) { color: #16846D !important; }
+html[data-theme="light"] .main [style*="color:#CFFAFE"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #CFFAFE"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#cffafe"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #cffafe"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(207, 250, 254)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(207, 250, 254)"]:not([style*="background"]) { color: #17818B !important; }
+html[data-theme="light"] .main [style*="color:#8B5CF6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #8B5CF6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#8b5cf6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #8b5cf6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(139, 92, 246)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(139, 92, 246)"]:not([style*="background"]) { color: #845AE4 !important; }
+html[data-theme="light"] .main [style*="color:#4A9EFF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #4A9EFF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#4a9eff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #4a9eff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(74, 158, 255)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(74, 158, 255)"]:not([style*="background"]) { color: #2275D4 !important; }
+html[data-theme="light"] .main [style*="color:#7CC0FF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #7CC0FF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#7cc0ff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #7cc0ff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(124, 192, 255)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(124, 192, 255)"]:not([style*="background"]) { color: #2177C8 !important; }
+html[data-theme="light"] .main [style*="color:#3B82F6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #3B82F6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#3b82f6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #3b82f6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(59, 130, 246)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(59, 130, 246)"]:not([style*="background"]) { color: #3071DD !important; }
+html[data-theme="light"] .main [style*="color:#DBEAFE"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #DBEAFE"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#dbeafe"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #dbeafe"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(219, 234, 254)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(219, 234, 254)"]:not([style*="background"]) { color: #2573DC !important; }
+html[data-theme="light"] .main [style*="color:#00B4D8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #00B4D8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#00b4d8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #00b4d8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(0, 180, 216)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(0, 180, 216)"]:not([style*="background"]) { color: #188095 !important; }
+html[data-theme="light"] .main [style*="color:#EF9A9A"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #EF9A9A"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ef9a9a"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ef9a9a"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(239, 154, 154)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(239, 154, 154)"]:not([style*="background"]) { color: #DD3131 !important; }
+html[data-theme="light"] .main [style*="color:#F9A8D4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F9A8D4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f9a8d4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f9a8d4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(249, 168, 212)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(249, 168, 212)"]:not([style*="background"]) { color: #D92386 !important; }
+html[data-theme="light"] .main [style*="color:#7DD3FC"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #7DD3FC"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#7dd3fc"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #7dd3fc"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(125, 211, 252)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(125, 211, 252)"]:not([style*="background"]) { color: #1C7CAB !important; }
+html[data-theme="light"] .main [style*="color:#F44336"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F44336"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f44336"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f44336"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(244, 67, 54)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(244, 67, 54)"]:not([style*="background"]) { color: #DC3428 !important; }
+html[data-theme="light"] .main [style*="color:#FF9800"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FF9800"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ff9800"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ff9800"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(255, 152, 0)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(255, 152, 0)"]:not([style*="background"]) { color: #9F6A1A !important; }
+html[data-theme="light"] .main [style*="color:#6366F1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #6366F1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#6366f1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #6366f1"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(99, 102, 241)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(99, 102, 241)"]:not([style*="background"]) { color: #6365E6 !important; }
+html[data-theme="light"] .main [style*="color:#0EA5E9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #0EA5E9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#0ea5e9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #0ea5e9"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(14, 165, 233)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(14, 165, 233)"]:not([style*="background"]) { color: #1C7DAA !important; }
+html[data-theme="light"] .main [style*="color:#F97316"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F97316"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f97316"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f97316"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(249, 115, 22)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(249, 115, 22)"]:not([style*="background"]) { color: #B75C1E !important; }
+html[data-theme="light"] .main [style*="color:#E9408B"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #E9408B"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#e9408b"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #e9408b"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(233, 64, 139)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(233, 64, 139)"]:not([style*="background"]) { color: #DB2576 !important; }
+html[data-theme="light"] .main [style*="color:#86EFAC"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #86EFAC"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#86efac"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #86efac"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(134, 239, 172)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(134, 239, 172)"]:not([style*="background"]) { color: #16863F !important; }
+html[data-theme="light"] .main [style*="color:#E7ECF6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #E7ECF6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#e7ecf6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #e7ecf6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(231, 236, 246)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(231, 236, 246)"]:not([style*="background"]) { color: #4F73BD !important; }
+html[data-theme="light"] .main [style*="color:#FFFFFF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #FFFFFF"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ffffff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ffffff"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(255, 255, 255)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(255, 255, 255)"]:not([style*="background"]) { color: #757575 !important; }
+html[data-theme="light"] .main [style*="color:#A5B4FC"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #A5B4FC"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#a5b4fc"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #a5b4fc"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(165, 180, 252)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(165, 180, 252)"]:not([style*="background"]) { color: #516BE3 !important; }
+html[data-theme="light"] .main [style*="color:#4CAF50"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #4CAF50"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#4caf50"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #4caf50"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(76, 175, 80)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(76, 175, 80)"]:not([style*="background"]) { color: #3A843D !important; }
+html[data-theme="light"] .main [style*="color:#85B7EB"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #85B7EB"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#85b7eb"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #85b7eb"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(133, 183, 235)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(133, 183, 235)"]:not([style*="background"]) { color: #2276CF !important; }
+html[data-theme="light"] .main [style*="color:#14B8A6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #14B8A6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#14b8a6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #14b8a6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(20, 184, 166)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(20, 184, 166)"]:not([style*="background"]) { color: #158377 !important; }
+html[data-theme="light"] .main [style*="color:#EAB308"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #EAB308"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#eab308"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #eab308"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(234, 179, 8)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(234, 179, 8)"]:not([style*="background"]) { color: #8F7117 !important; }
+html[data-theme="light"] .main [style*="color:#84CC16"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #84CC16"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#84cc16"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #84cc16"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(132, 204, 22)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(132, 204, 22)"]:not([style*="background"]) { color: #578115 !important; }
+html[data-theme="light"] .main [style*="color:#7EE787"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #7EE787"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#7ee787"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #7ee787"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(126, 231, 135)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(126, 231, 135)"]:not([style*="background"]) { color: #198723 !important; }
+html[data-theme="light"] .main [style*="color:#ED6A20"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ED6A20"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#ed6a20"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #ed6a20"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(237, 106, 32)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(237, 106, 32)"]:not([style*="background"]) { color: #BC581F !important; }
+html[data-theme="light"] .main [style*="color:#A855F7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #A855F7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#a855f7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #a855f7"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(168, 85, 247)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(168, 85, 247)"]:not([style*="background"]) { color: #9A4EE2 !important; }
+html[data-theme="light"] .main [style*="color:#F472B6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #F472B6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#f472b6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #f472b6"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(244, 114, 182)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(244, 114, 182)"]:not([style*="background"]) { color: #DA2483 !important; }
+html[data-theme="light"] .main [style*="color:#818CF8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #818CF8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#818cf8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #818cf8"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(129, 140, 248)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(129, 140, 248)"]:not([style*="background"]) { color: #5C68E4 !important; }
+html[data-theme="light"] .main [style*="color:#99F6E4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #99F6E4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#99f6e4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #99f6e4"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(153, 246, 228)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(153, 246, 228)"]:not([style*="background"]) { color: #16846F !important; }
+html[data-theme="light"] .main [style*="color:#A7F3D0"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #A7F3D0"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#a7f3d0"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #a7f3d0"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(167, 243, 208)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(167, 243, 208)"]:not([style*="background"]) { color: #168552 !important; }
+html[data-theme="light"] .main [style*="color:#16A34A"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #16A34A"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:#16a34a"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: #16a34a"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color:rgb(22, 163, 74)"]:not([style*="background"]),
+html[data-theme="light"] .main [style*="color: rgb(22, 163, 74)"]:not([style*="background"]) { color: #16863F !important; }
