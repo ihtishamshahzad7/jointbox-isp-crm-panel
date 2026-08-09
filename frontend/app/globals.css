@@ -4421,3 +4421,40 @@ html .nv-wallet.empty {
 }
 /* The glow was designed to read on black; on white it just smears. */
 html .nv-wallet:hover { box-shadow: 0 1px 3px rgba(0,0,0,.10); transform: none; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOTION & HOVER — quiet, consistent, international-grade
+   ══════════════════════════════════════════════════════════════════════════
+   One transition curve for everything interactive, so the whole product feels
+   like one piece rather than each control animating its own way. Kept subtle:
+   a 1px lift and a soft shadow, never a bounce or a glow. */
+html .main button,
+html .main a[role="button"],
+html .main .st tbody tr,
+html .main .nt tbody tr,
+html .main [class*="card"] {
+  transition: background-color .15s ease, border-color .15s ease,
+              box-shadow .15s ease, transform .15s ease, color .15s ease;
+}
+
+/* Table rows respond to the pointer so the eye can track one line across. */
+html .main .st tbody tr:hover,
+html .main .nt tbody tr:hover,
+html .main table tbody tr:hover { background: #F7F9FC; }
+
+/* Buttons lift a hair and deepen their shadow — TailAdmin's own hover feel. */
+html .main button:hover:not(:disabled) { box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+html .main button:active:not(:disabled) { transform: translateY(1px); }
+
+/* Dialogs arrive rather than snap. */
+html div[style*="position: fixed"][style*="inset: 0"] > div,
+html div[style*="position:fixed"][style*="inset:0"] > div {
+  animation: jbDialogIn .18s cubic-bezier(.2,.8,.3,1) both;
+}
+@keyframes jbDialogIn {
+  from { opacity: 0; transform: translateY(8px) scale(.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Sidebar items glide on hover instead of flicking. */
+html .sidebar .nav-item { transition: background-color .15s ease, color .15s ease; }

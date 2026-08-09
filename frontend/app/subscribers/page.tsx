@@ -11,6 +11,7 @@ import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
 import { silent } from "../components/silent";
+import Portal from "../components/portal";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface Package {
@@ -2230,8 +2231,9 @@ export default function SubscribersPage() {
 
       {/* MODAL: Subscriber Detail (Full Tabbed View) */}
       {detailSub && (
+        <Portal>
         <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setDetailSub(null)}
         >
           <div
@@ -2802,6 +2804,7 @@ export default function SubscribersPage() {
             </div>
           </div>
         </div>
+        </Portal>
       )}
 
       {/* Activation / Renewal Modal */}
