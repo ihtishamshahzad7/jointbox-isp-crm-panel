@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -17,13 +17,19 @@ export class AiController {
     return this.ai.knowledgeBase();
   }
 
+  /** Guidance for the screen the user is on, e.g. ?route=/nas. */
+  @Get('page-help')
+  pageHelp(@Query('route') route?: string) {
+    return this.ai.pageHelp(route);
+  }
+
   @Get('status')
   status() {
     return { configured: this.ai.configured };
   }
 
   @Post('chat')
-  chat(@Body() body: { messages: Array<{ role: string; content: string }> }, @Req() req: any) {
-    return this.ai.chat(body?.messages || [], req.user);
+  chat(@Body() body: { messages: Array<{ role: string; content: string }>; route?: string }, @Req() req: any) {
+    return this.ai.chat(body?.messages || [], req.user, body?.route);
   }
 }

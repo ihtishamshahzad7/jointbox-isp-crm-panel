@@ -247,6 +247,110 @@ export class AiService {
   }
 
   /**
+   * PAGE-AWARE HELP.
+   *
+   * Someone standing on the NAS screen almost never wants generic guidance —
+   * they want "what is this screen for, and what do I do here". So each route
+   * declares what it is and which words identify its topics; we then pull the
+   * matching entries out of the knowledge base rather than writing the help
+   * twice. Unknown routes fall back to global help instead of an empty panel.
+   */
+  private readonly PAGES: Record<string, { title: string; intro: string; keys: string[]; ask: string[] }> = {
+    nas: {
+      title: 'NAS / Routers',
+      intro: 'Every router that authenticates your customers. Add each one here with the RADIUS secret that matches the device, then monitor its traffic, VLANs and link health.',
+      keys: ['nas', 'router', 'mikrotik', 'radius', 'secret', 'traffic', 'vlan', 'signal', 'port', 'coa', 'monitor'],
+      ask: ['How do I add a router?', 'Why does my NAS say RADIUS timeout?', 'How do I see traffic graphs?', 'How do I monitor only some ports?'],
+    },
+    subscribers: {
+      title: 'Subscribers',
+      intro: 'Your customer list. Add, activate, renew, suspend and group customers — and open any one of them for their full profile, sessions and billing.',
+      keys: ['subscriber', 'customer', 'activate', 'renew', 'suspend', 'import', 'export', 'group', 'boost', 'grace'],
+      ask: ['How do I add a subscriber?', 'How do I activate someone?', 'How do I give a temporary speed boost?', 'How do I group customers by NAS?'],
+    },
+    'admin-center': {
+      title: 'Administration',
+      intro: 'Accounts and configuration: your organisation, the reseller/dealer tree, staff users, roles and permissions, and system settings.',
+      keys: ['user', 'role', 'permission', 'organization', 'hierarchy', 'reseller', 'dealer', 'franchise', 'staff', 'security', 'settings'],
+      ask: ['How do I create a dealer?', 'How do permissions work?', 'How do I add staff?', 'What can each role do?'],
+    },
+    'billing-center': {
+      title: 'Billing & Accounting',
+      intro: 'Everything about money: the ledger, invoices, payments received, collections, vouchers, reseller pricing and reversals.',
+      keys: ['invoice', 'payment', 'billing', 'accounting', 'ledger', 'wallet', 'collection', 'voucher', 'pricing', 'refund', 'reversal', 'commission'],
+      ask: ['How do I record a payment?', 'How do I refund a customer?', 'Where do I see what I collected?', 'How does reseller pricing work?'],
+    },
+    'network-center': {
+      title: 'Network',
+      intro: 'The whole network in one place: live sessions, routers, fiber, IP pools, static IPs, outages and the operations view.',
+      keys: ['network', 'nas', 'online', 'session', 'pool', 'static', 'fiber', 'olt', 'outage', 'operations', 'noc', 'uptime'],
+      ask: ['Who is online right now?', 'How do I handle an outage?', 'What is an IP pool for?', 'How do I check uptime?'],
+    },
+    'my-work': {
+      title: 'My Work',
+      intro: 'Your daily loop as a franchise or dealer: see your business, connect a new customer, and renew the ones falling due.',
+      keys: ['my business', 'quick connect', 'renewal', 'wallet', 'commission', 'collect', 'expiring'],
+      ask: ['How do I add and activate a customer fast?', 'Who is due for renewal?', 'Where do I see my commission?'],
+    },
+    compliance: {
+      title: 'KYC & Data Usage',
+      intro: 'Identity verification for customers and accounts, plus fair-usage/data-cap enforcement.',
+      keys: ['kyc', 'cnic', 'verify', 'identity', 'fup', 'quota', 'data', 'compliance'],
+      ask: ['How do I verify a CNIC?', 'What happens if I skip KYC?', 'How does the data cap work?'],
+    },
+    packages: {
+      title: 'Packages',
+      intro: 'The plans you sell: speed, price, duration, data allowance and the IP pool each one uses.',
+      keys: ['package', 'plan', 'speed', 'price', 'duration', 'quota', 'fup', 'pool'],
+      ask: ['How do I create a package?', 'How do I set a data cap?', 'How do I change a price?'],
+    },
+    communication: {
+      title: 'Communication',
+      intro: 'Messages to customers (SMS templates and sends) and operational alerts to Discord/WhatsApp.',
+      keys: ['sms', 'message', 'template', 'notification', 'alert', 'discord', 'whatsapp'],
+      ask: ['How do I set up Discord alerts?', 'How do I message all customers on a NAS?', 'How do SMS templates work?'],
+    },
+    outages: {
+      title: 'Outages & Power',
+      intro: 'Detected mass disconnections and load-shedding windows, with one-click notification of the affected area.',
+      keys: ['outage', 'power', 'load shedding', 'mass', 'disconnect', 'notify', 'area'],
+      ask: ['How do I notify an affected area?', 'How are outages detected?'],
+    },
+  };
+
+  /** Guidance for the screen the user is currently on. */
+  pageHelp(route?: string) {
+    const clean = (route || '').split('?')[0].replace(/^\/+/, '');
+    const top = clean.split('/')[0] || 'dashboard';
+    const page = this.PAGES[clean] || this.PAGES[top];
+
+    if (!page) {
+      return {
+        scoped: false,
+        title: 'This screen',
+        intro: 'I don\'t have a dedicated guide for this screen yet — ask me anything and I\'ll search the whole guide.',
+        topics: [],
+        questions: ['What can I do on this screen?', 'How do I get started?'],
+      };
+    }
+
+    // Pull the knowledge entries whose keywords overlap this page's topics.
+    const scored = this.ALL.map((e) => {
+      const hay = `${e.t} ${e.k}`.toLowerCase();
+      const score = page.keys.reduce((n, k) => (hay.includes(k) ? n + 1 : n), 0);
+      return { e, score };
+    }).filter((s) => s.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
+
+    return {
+      scoped: true,
+      title: page.title,
+      intro: page.intro,
+      topics: scored.map((s) => ({ title: s.e.t, answer: s.e.a })),
+      questions: page.ask,
+    };
+  }
+
+  /**
    * The knowledge base as data, for the in-app Documentation page.
    * Entries are grouped by the section headings used in the KB array, so the
    * docs page and the assistant always describe the same product.
@@ -268,13 +372,17 @@ export class AiService {
     ].filter(Boolean).join('\n');
   }
 
-  async chat(messages: Array<{ role: string; content: string }>, user?: { role?: string }) {
+  async chat(messages: Array<{ role: string; content: string }>, user?: { role?: string }, route?: string) {
     const history = (messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
     const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content || '';
 
-    // Local, zero-RAM mode (default): knowledge-base search.
+    // Local, zero-RAM mode (default): knowledge-base search. When the caller
+    // tells us which screen they are on, append that page's keywords to the
+    // query so "how do I add one?" resolves against THIS screen's topics.
     if (!this.llmEnabled) {
-      return { ok: true, mode: 'local', reply: this.localAnswer(lastUser) };
+      const page = route ? this.PAGES[(route.split('?')[0].replace(/^\/+/, '').split('/')[0])] : null;
+      const q = page ? `${lastUser} ${page.keys.join(' ')}` : lastUser;
+      return { ok: true, mode: 'local', reply: this.localAnswer(q) };
     }
 
     // Optional LLM mode (only if configured).
