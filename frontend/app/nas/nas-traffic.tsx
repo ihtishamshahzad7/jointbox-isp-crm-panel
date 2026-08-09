@@ -2,6 +2,7 @@
 
 import React from "react";
 import API from "../components/api";
+import { SkeletonChart } from "../components/skeleton";
 
 /** MRTG-style traffic graph + VLAN breakdown for one NAS. */
 const RANGES = [
@@ -28,6 +29,7 @@ export function NasTraffic({ nasId }: { nasId: number }) {
   const [links, setLinks] = React.useState<any[]>([]);
   const [uptime, setUptime] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
+  const [hover, setHover] = React.useState<{ i: number; x: number } | null>(null);
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const h = { Authorization: `Bearer ${token}` };
 
@@ -70,15 +72,44 @@ export function NasTraffic({ nasId }: { nasId: number }) {
       </div>
 
       {loading ? (
-        <div className="nt-empty">Loading…</div>
+        <SkeletonChart height={150} />
       ) : pts.length < 2 ? (
         <div className="nt-empty">Not enough samples yet — traffic is sampled every 5 minutes. Check back shortly.</div>
       ) : (
         <>
-          <svg viewBox={`0 0 ${W} ${H}`} className="nt-svg" preserveAspectRatio="none">
-            <path d={path("inBps")} className="area-dl" />
-            <path d={path("outBps")} className="area-ul" />
-          </svg>
+          {/* Hover anywhere to read the exact value at that moment. The SVG
+              scales to the container, so pointer x is converted back into a
+              sample index rather than assuming a fixed pixel width. */}
+          <div className="nt-plot"
+            onMouseLeave={() => setHover(null)}
+            onMouseMove={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+              setHover({ i: Math.round(frac * (pts.length - 1)), x: frac * 100 });
+            }}>
+            <svg viewBox={`0 0 ${W} ${H}`} className="nt-svg" preserveAspectRatio="none">
+              {/* horizontal gridlines at 25/50/75% of peak */}
+              {[0.25, 0.5, 0.75].map((g) => (
+                <line key={g} x1={pad} x2={W - pad} y1={H - pad - g * (H - pad * 2)} y2={H - pad - g * (H - pad * 2)} className="grid" />
+              ))}
+              <path d={path("inBps")} className="area-dl" />
+              <path d={path("outBps")} className="area-ul" />
+              {hover && (
+                <line className="cross" x1={`${hover.x}%`} x2={`${hover.x}%`} y1={0} y2={H} />
+              )}
+            </svg>
+            {/* scale labels */}
+            <span className="nt-ymax">{bps(max)}</span>
+            <span className="nt-y0">0</span>
+            {hover && pts[hover.i] && (
+              <div className="nt-tip" style={{ left: `${hover.x}%` }}>
+                <div className="tt-time">{new Date(pts[hover.i].ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+                <div className="tt-row"><i className="dl" />↓ {bps(pts[hover.i].inBps)}</div>
+                <div className="tt-row"><i className="ul" />↑ {bps(pts[hover.i].outBps)}</div>
+                <div className="tt-row muted">{pts[hover.i].online} online</div>
+              </div>
+            )}
+          </div>
           <div className="nt-peaks">
             <span>Peak ↓ <b>{bps(data.peakIn)}</b></span>
             <span>Peak ↑ <b>{bps(data.peakOut)}</b></span>
@@ -139,7 +170,21 @@ const CSS = `
 .nt-ranges button{background:var(--surface);border:1px solid var(--border);color:var(--muted);
   border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit}
 .nt-ranges button.on{border-color:var(--accent);color:var(--accent)}
-.nt-svg{width:100%;height:150px;display:block;background:var(--bg);border-radius:8px}
+.nt-plot{position:relative}
+.nt-svg{width:100%;height:150px;display:block;background:var(--bg);border-radius:8px;cursor:crosshair}
+.nt-svg .grid{stroke:var(--border);stroke-width:.5;stroke-dasharray:3 4;opacity:.55}
+.nt-svg .cross{stroke:var(--accent);stroke-width:1;opacity:.8;pointer-events:none}
+.nt-ymax,.nt-y0{position:absolute;left:6px;font-size:9.5px;color:var(--muted);pointer-events:none}
+.nt-ymax{top:4px}
+.nt-y0{bottom:4px}
+.nt-tip{position:absolute;top:6px;transform:translateX(-50%);pointer-events:none;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+  padding:7px 10px;font-size:11px;white-space:nowrap;box-shadow:0 8px 22px rgba(0,0,0,.45);z-index:2}
+.nt-tip .tt-time{color:var(--muted);font-size:10px;margin-bottom:4px}
+.nt-tip .tt-row{display:flex;align-items:center;gap:6px;font-weight:700;color:var(--text)}
+.nt-tip .tt-row.muted{color:var(--muted);font-weight:400}
+.nt-tip i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.nt-tip .dl{background:#4a9eff}.nt-tip .ul{background:#4ade80}
 .area-dl{fill:rgba(74,158,255,.25);stroke:#4a9eff;stroke-width:1.2}
 .area-ul{fill:rgba(74,222,128,.18);stroke:#4ade80;stroke-width:1.2}
 .nt-peaks{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}

@@ -3,6 +3,7 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
+import { SkeletonTable } from "../components/skeleton";
 
 /**
  * Operations — the ISP owner's single "what needs my attention now" screen:
@@ -60,7 +61,7 @@ export default function OperationsPage() {
         <M label="Open alerts" value={String(alerts.length)} tone={alerts.length ? "warn" : "ok"} />
       </div>
 
-      {loading ? <div className="op-load">Loading…</div> : (
+      {loading ? <div className="op-cols"><SkeletonTable rows={4} cols={2} /><SkeletonTable rows={4} cols={2} /></div> : (
         <div className="op-cols">
           {/* Alerts */}
           <div className="op-panel">

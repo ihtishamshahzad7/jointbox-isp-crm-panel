@@ -4,6 +4,7 @@ import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
+import { SkeletonTable } from "../components/skeleton";
 import { PoolTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -541,7 +542,7 @@ export default function IpPoolsPage() {
             </div>
 
             {loading ? (
-              <div style={{ textAlign:"center", padding:50, color:t.textMuted }}>⏳ Loading pools…</div>
+              <SkeletonTable rows={5} cols={5} />
             ) : filtered.length === 0 ? (
               <div style={{ textAlign:"center", padding:50, color:t.textMuted }}>
                 <div style={{ fontSize:32, marginBottom:8 }}>🗄️</div>

@@ -84,6 +84,7 @@ import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
+import { SkeletonTable } from "../components/skeleton";
 import { PackageTable } from "../components/network-tables";
 
 const packageDefaults = {
@@ -855,7 +856,7 @@ export default function PackagesPage() {
       {/* Table */}
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderTop: "none", borderRadius: "0 0 14px 14px", overflow: "hidden", marginBottom: "12px" }}>
         {isLoading ? (
-          <div style={{ textAlign: "center", padding: 50, color: "rgba(255,255,255,0.35)" }}>⏳ Loading packages…</div>
+          <SkeletonTable rows={6} cols={5} />
         ) : !pagedPackages.length ? (
           <div style={{ padding: "48px 24px", textAlign: "center", color: "rgba(255,255,255,0.3)" }}>
             <div style={{ fontSize: "48px", marginBottom: "12px" }}>📦</div>

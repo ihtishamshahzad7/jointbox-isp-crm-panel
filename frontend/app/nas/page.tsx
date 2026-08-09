@@ -8,6 +8,7 @@ import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { GroupPanel } from "../components/group-panel";
 import { NasTraffic } from "./nas-traffic";
+import { SkeletonTable } from "../components/skeleton";
 import { NasTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
@@ -927,7 +928,7 @@ export default function NasPage() {
               </span>
             </div>
             {loading ? (
-              <div style={{ textAlign:'center', padding:40, color:t.textMuted }}>⏳ Loading NAS devices…</div>
+              <SkeletonTable rows={6} cols={6} />
             ) : filteredNasList.length === 0 ? (
               <div style={{ textAlign:'center', padding:40, color:t.textMuted }}>
                 <div style={{ fontSize:32, marginBottom:8 }}>📡</div>

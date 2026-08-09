@@ -4,6 +4,7 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
 import { money } from "../components/currency";
+import { SkeletonCards, SkeletonChart } from "../components/skeleton";
 
 /** Collections / earnings report — totals, daily trend, per-package & method. */
 export default function EarningsPage() {
@@ -14,6 +15,7 @@ export default function EarningsPage() {
   const [range, setRange] = React.useState(30);
   const [d, setD] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(true);
+  const [hoverDay, setHoverDay] = React.useState<number | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -54,7 +56,7 @@ export default function EarningsPage() {
         </div>
       </div>
 
-      {loading || !d ? <div className="er-load">Loading…</div> : (
+      {loading || !d ? <><SkeletonCards count={3} min={170} /><div style={{height:16}} /><SkeletonChart height={150} /></> : (
         <>
           <div className="er-kpis">
             <div className="er-k"><span>Total collected</span><b>{money(d.totalCollected)}</b><i>{d.paymentCount} payments</i></div>
@@ -66,10 +68,18 @@ export default function EarningsPage() {
             <div className="er-t">Daily collections</div>
             {d.daily.length === 0 ? <div className="er-empty">No payments in this range.</div> : (
               <div className="er-bars">
-                {d.daily.map((x: any) => (
-                  <div key={x.day} className="er-bar" title={`${x.day}: ${money(x.total)} (${x.count})`}>
+                {d.daily.map((x: any, i: number) => (
+                  <div key={x.day} className="er-bar"
+                    onMouseEnter={() => setHoverDay(i)} onMouseLeave={() => setHoverDay(null)}>
                     <div className="b"><span style={{ height: `${Math.max(3, (x.total/maxDay)*100)}%` }} /></div>
                     <div className="lb">{x.day.slice(5)}</div>
+                    {hoverDay === i && (
+                      <div className="er-tip">
+                        <b>{money(x.total)}</b>
+                        <span>{new Date(x.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</span>
+                        <span>{x.count} payment{x.count === 1 ? "" : "s"}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -119,7 +129,15 @@ const CSS = `
 .er-bar{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:16px;flex:1}
 .er-bar .b{width:100%;height:120px;display:flex;align-items:flex-end;background:var(--surface-2);border-radius:4px;overflow:hidden}
 .er-bar .b span{display:block;width:100%;background:linear-gradient(180deg,#7C4DFF,#4ade80)}
+.er-bar{position:relative}
+.er-bar:hover .b span{filter:brightness(1.25)}
 .er-bar .lb{font-size:8.5px;color:var(--muted);white-space:nowrap}
+.er-tip{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:6px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;
+  display:flex;flex-direction:column;gap:2px;white-space:nowrap;z-index:3;pointer-events:none;
+  box-shadow:0 8px 22px rgba(0,0,0,.45)}
+.er-tip b{font-size:13px;color:var(--text)}
+.er-tip span{font-size:10px;color:var(--muted)}
 .er-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:700px){.er-cols{grid-template-columns:1fr}}
 .er-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px}

@@ -4,6 +4,7 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
 import { money } from "../components/currency";
+import { SkeletonCards } from "../components/skeleton";
 
 /** My Business — reseller/franchise operations snapshot. */
 export default function MyBusinessPage() {
@@ -25,7 +26,17 @@ export default function MyBusinessPage() {
     load(); const t = setInterval(load, 60000); return () => clearInterval(t);
   }, [token, load]);
 
-  if (loading) return <div className="mb-wrap"><style>{CSS}</style><div className="mb-load">Loading your business…</div></div>;
+  // Skeleton mirrors the real layout (wallet hero + KPI grid), so nothing
+  // shifts when the data lands.
+  if (loading) return (
+    <div className="mb-wrap">
+      <style>{CSS}</style>
+      <div className="mb-head"><div><h1>My Business</h1><div className="mb-sub">Loading your snapshot…</div></div></div>
+      <SkeletonCards count={2} min={280} />
+      <div style={{ height: 16 }} />
+      <SkeletonCards count={6} min={180} />
+    </div>
+  );
   if (!d) return <div className="mb-wrap"><style>{CSS}</style><div className="mb-load">Couldn’t load right now.</div></div>;
 
   const w = d.wallet, c = d.customers, m = d.month, r = d.receivables;

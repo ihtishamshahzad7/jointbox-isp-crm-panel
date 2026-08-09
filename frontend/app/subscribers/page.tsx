@@ -6,6 +6,7 @@ import { SubscriberTable } from "./subscriber-table";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { SubscriberGroups } from "./subscriber-groups";
+import { SkeletonTable } from "../components/skeleton";
 import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
@@ -1610,7 +1611,7 @@ export default function SubscribersPage() {
             </div>
 
             {loading ? (
-              <div style={{ textAlign: "center", padding: 50, color: t.textMuted }}>⏳ Loading subscribers…</div>
+              <SkeletonTable rows={8} cols={6} />
             ) : filtered.length === 0 ? (
               <div style={{ textAlign: "center", padding: 50, color: t.textMuted }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>👥</div>

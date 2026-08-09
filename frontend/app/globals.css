@@ -151,6 +151,42 @@ html[data-theme="aurora"] .nt thead th {
 html[data-theme="aurora"] .st tbody tr:hover,
 html[data-theme="aurora"] .nt tbody tr:hover { background: var(--grad-soft); }
 
+/* ═══════════════════════════════════════════════════════════════════
+   MOTION — small, consistent transitions.
+   Interactive things should acknowledge the pointer, and new content should
+   arrive rather than snap in. Durations stay short (120–260ms) so the app
+   still feels immediate; anything slower reads as lag, not polish.
+   Every rule here is disabled under prefers-reduced-motion.
+   ═══════════════════════════════════════════════════════════════════ */
+@keyframes jbFadeUp { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+@keyframes jbFade   { from { opacity: 0 } to { opacity: 1 } }
+@keyframes jbPop    { from { opacity: 0; transform: scale(.97) } to { opacity: 1; transform: none } }
+
+/* Page/tab content arrives instead of snapping. */
+.db-root main > *, .hub-body { animation: jbFadeUp .26s cubic-bezier(.22,.61,.36,1) both; }
+
+/* Controls acknowledge the pointer. */
+.db-root button, .db-root .nav-item, .db-root a[role="button"] {
+  transition: background-color .16s ease, border-color .16s ease,
+              color .16s ease, transform .12s ease, box-shadow .16s ease;
+}
+.db-root button:active { transform: translateY(1px) }
+
+/* Rows and cards lift slightly on hover so the target is obvious. */
+.db-root tbody tr { transition: background-color .14s ease }
+
+/* Modals and menus scale in rather than appear. */
+.db-root [role="dialog"], .db-root .modal, .cmdp, .nt-ctx, .st .ctxmenu {
+  animation: jbPop .16s cubic-bezier(.22,.61,.36,1) both;
+}
+.cmdp-back { animation: jbFade .14s ease both }
+
+@media (prefers-reduced-motion: reduce) {
+  .db-root main > *, .hub-body, .db-root [role="dialog"], .db-root .modal,
+  .cmdp, .cmdp-back, .nt-ctx, .st .ctxmenu { animation: none !important }
+  .db-root button, .db-root .nav-item, .db-root tbody tr { transition: none !important }
+}
+
 /* ── Selectable dark themes (mapped onto the app's token names) ── */
 html[data-theme="night-tower"] { --bg:#0C0F1A; --surface:#141826; --surface-2:#1B2032; --surface2:#1B2032; --border:#262D42; --text:#DEE3F0; --muted:#8D96B0; --accent:#378ADD; --accent-2:#FAC775; --accent2:#FAC775; }
 html[data-theme="signal-room"] { --bg:#0E1418; --surface:#161D23; --surface-2:#1D252C; --surface2:#1D252C; --border:#2A343C; --text:#DCE3E7; --muted:#8B99A3; --accent:#1D9E75; --accent-2:#378ADD; --accent2:#378ADD; }
