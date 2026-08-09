@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fileUrl } from "../components/image-upload";
+import ImageUpload from "../components/image-upload";
+import Avatar from "../components/avatar";
 import API_BASE from "../components/api";
 
 const API = API_BASE;
@@ -19,6 +21,8 @@ const fdt = (d?: string | null) => (d ? new Date(d).toLocaleString([], { dateSty
 export default function MyProfilePage() {
   const router = useRouter();
   const [p, setP] = useState<any>(null);
+  const [editingPhoto, setEditingPhoto] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const load = useCallback(async () => {
@@ -27,6 +31,25 @@ export default function MyProfilePage() {
     if (r.ok) setP(await r.json());
   }, [token]);
   useEffect(() => { if (!token) { router.push("/login"); return; } load(); }, []);
+
+  /**
+   * Save the new photo, then refresh both this page AND the header avatar.
+   * The header reads its own /auth/profile, so we fire a window event it
+   * listens for rather than reloading the whole app.
+   */
+  const savePhoto = useCallback(async (url: string) => {
+    setSaving(true);
+    try {
+      await fetch(`${API}/users/me/profile`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ photoUrl: url }),
+      });
+      setP((prev: any) => ({ ...prev, photoUrl: url }));
+      setEditingPhoto(false);
+      window.dispatchEvent(new Event("profile-photo-changed"));
+    } finally { setSaving(false); }
+  }, [token]);
 
   const card: React.CSSProperties = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16 };
   const rowLabel: React.CSSProperties = { color: T.muted, fontSize: 12 };
@@ -54,13 +77,25 @@ export default function MyProfilePage() {
     <div style={{ padding: 20, color: T.text }}>
       {/* Header */}
       <div style={{ ...card, marginBottom: 16, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        {p.photoUrl ? (
-          <img src={fileUrl(p.photoUrl)} alt={p.name} style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", border: `2px solid ${T.border}` }} />
-        ) : (
-          <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg,#0ea5e9,#2563eb)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800, color: "#fff" }}>
-            {(p.name || "U").split(" ").map((s: string) => s[0]).join("").slice(0, 2).toUpperCase()}
-          </div>
-        )}
+        {/* Avatar with a hover "change" affordance. */}
+        <div style={{ position: "relative", flex: "none" }}>
+          <Avatar name={p.name} photoUrl={p.photoUrl} size={56} />
+          <button
+            onClick={() => setEditingPhoto((v) => !v)}
+            title="Change profile picture"
+            aria-label="Change profile picture"
+            style={{
+              position: "absolute", right: -2, bottom: -2, width: 22, height: 22,
+              borderRadius: "50%", border: "2px solid var(--surface)", background: "#3C50E0",
+              color: "#fff", cursor: "pointer", display: "flex", alignItems: "center",
+              justifyContent: "center", padding: 0, fontSize: 11,
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </button>
+        </div>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>{p.name}</div>
           <div style={{ fontSize: 12, color: T.muted }}>{p.role} · created by {p.createdBy}</div>
@@ -69,6 +104,32 @@ export default function MyProfilePage() {
           {p.isActive ? "● Active" : "○ Inactive"}
         </div>
       </div>
+
+      {/* Photo editor — appears under the header when the pencil is clicked. */}
+      {editingPhoto && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Profile picture</div>
+          <ImageUpload
+            label="Upload a photo"
+            shape="avatar"
+            value={p.photoUrl || ""}
+            onChange={(url) => savePhoto(url)}
+          />
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            {p.photoUrl && (
+              <button onClick={() => savePhoto("")} disabled={saving}
+                style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.muted, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                Remove photo
+              </button>
+            )}
+            <button onClick={() => setEditingPhoto(false)}
+              style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.muted, borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+              Done
+            </button>
+            {saving && <span style={{ fontSize: 12, color: T.muted, alignSelf: "center" }}>Saving…</span>}
+          </div>
+        </div>
+      )}
 
       {/* Count tiles */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 12, marginBottom: 16 }}>

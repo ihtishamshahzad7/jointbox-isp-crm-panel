@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { fileUrl } from "../components/image-upload";
 
 /**
  * SubscriberTable — the list, composed rather than tabulated.
@@ -212,7 +213,12 @@ export function SubscriberTable({
                 {/* Who. Avatar anchors the row; name loud, identifiers quiet. */}
                 <td data-label="Subscriber">
                   <div className="who">
-                    <span className={`av ${online ? "on" : ""}`} aria-hidden>{initials}</span>
+                    {/* Photo when the subscriber has one, initials otherwise —
+                        the online ring stays either way. */}
+                    <span className={`av ${online ? "on" : ""}`} aria-hidden
+                      style={r.photoUrl ? { backgroundImage: `url(${fileUrl(r.photoUrl)})`, backgroundSize: "cover", backgroundPosition: "center", color: "transparent" } : undefined}>
+                      {r.photoUrl ? "" : initials}
+                    </span>
                     <span className="whoTxt">
                       <span className="nm">{r.fullName || r.username}</span>
                       <span className="sub">

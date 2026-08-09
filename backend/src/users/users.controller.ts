@@ -30,6 +30,22 @@ export class UsersController {
     return this.usersService.myProfile(req.user);
   }
 
+  /**
+   * Update the fields a person is allowed to change on their OWN account.
+   *
+   * Deliberately narrow: name, phone and photo only. Role, balance, parent and
+   * permissions are NOT here — letting someone PATCH their own record with an
+   * arbitrary body is how a normal user grants themselves admin. The service
+   * whitelists these three fields and ignores anything else in the body.
+   */
+  @Patch('me/profile')
+  updateMyProfile(
+    @Req() req: any,
+    @Body() body: { name?: string; phone?: string; photoUrl?: string },
+  ) {
+    return this.usersService.updateMyProfile(req.user, body);
+  }
+
   /** Reseller/franchise operations snapshot: wallet, customers, revenue, dues. */
   @Get('me/business')
   myBusiness(@Req() req: any) {

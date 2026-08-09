@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { UserWizard } from "./user-wizard";
 import ImageUpload from "../components/image-upload";
+import Avatar from "../components/avatar";
 import { Icons as SIcons } from "../components/icons";
 import { GroupPanel } from "../components/group-panel";
 import API_BASE from "../components/api";
@@ -445,9 +446,8 @@ export default function UsersPage() {
                           {treeExpanded[u.id] ? "−" : "+"}
                         </button>
                       ) : <span style={{ width: 20, flexShrink: 0 }} />}
-                      <div style={{ width: 30, height: 30, borderRadius: 9, background: "rgba(14,165,233,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: t.accent, flexShrink: 0 }}>
-                        {getInitials(u.name)}
-                      </div>
+                      <Avatar name={u.name} photoUrl={u.photoUrl} size={30} />
+
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: 12.5, fontWeight: 600, color: t.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {u.name}{!u.isActive && <span style={{ color: "#f87171", fontSize: 10, marginLeft: 6 }}>inactive</span>}
@@ -505,9 +505,8 @@ export default function UsersPage() {
                         >
                           <td style={{ padding: "10px 14px" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <div style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(14,165,233,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: t.accent }}>
-                                {getInitials(u.name)}
-                              </div>
+                              <Avatar name={u.name} photoUrl={u.photoUrl} size={34} />
+
                               <div>
                                 <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{u.name || "-"}</div>
                                 <div style={{ fontSize: 10, color: t.textMuted }}>ID: {u.id}</div>

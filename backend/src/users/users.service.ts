@@ -162,6 +162,24 @@ export class UsersService {
   }
 
   /** The logged-in user's own profile: details, organization, downline counts, balance. */
+  /**
+   * Self-service profile edit. Only the three fields a person owns about
+   * themselves — never role, balance, permissions or parent. Anything else in
+   * the body is dropped rather than trusted, so this endpoint can never be used
+   * to escalate an account.
+   */
+  async updateMyProfile(actor: Actor, body: { name?: string; phone?: string; photoUrl?: string }) {
+    const id = this.scope.actorId(actor);
+    if (!id) throw new BadRequestException('No account in session.');
+    const data: Record<string, any> = {};
+    if (typeof body?.name === 'string' && body.name.trim()) data.name = body.name.trim();
+    if (typeof body?.phone === 'string') data.phone = body.phone.trim() || null;
+    if (typeof body?.photoUrl === 'string') data.photoUrl = body.photoUrl.trim() || null;
+    if (!Object.keys(data).length) return { ok: true, unchanged: true };
+    await this.prisma.user.update({ where: { id }, data });
+    return { ok: true };
+  }
+
   async myProfile(actor?: Actor) {
     const id = this.scope.actorId(actor);
     const me = await this.prisma.user.findUnique({
@@ -221,6 +239,7 @@ export class UsersService {
         address:   true,
         isActive:  true,
         balance:   true,
+        photoUrl:  true,
         createdAt: true,
         updatedAt: true,
         parentId:  true,

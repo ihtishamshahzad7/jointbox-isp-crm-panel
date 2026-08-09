@@ -418,18 +418,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
 
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-    fetch(`${API}/auth/profile`, { headers })
-      .then((res) => {
-        if (!res.ok) throw new Error('Profile fetch failed');
-        return res.json();
-      })
-      .then((data) => setUser(data?.user ?? data))
-      .catch(() => router.replace('/login'));
+    const loadProfile = () =>
+      fetch(`${API}/auth/profile`, { headers })
+        .then((res) => {
+          if (!res.ok) throw new Error('Profile fetch failed');
+          return res.json();
+        })
+        .then((data) => setUser(data?.user ?? data))
+        .catch(() => router.replace('/login'));
+    loadProfile();
+
+    // The My Profile page fires this after saving a new picture, so the header
+    // avatar updates immediately without a full reload.
+    const onPhoto = () => loadProfile();
+    window.addEventListener('profile-photo-changed', onPhoto);
 
     fetch(`${API}/communication/latest`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setLatestNotice(data || null))
       .catch(() => setLatestNotice(null));
+
+    return () => window.removeEventListener('profile-photo-changed', onPhoto);
   }, []);
 
   useEffect(() => {
