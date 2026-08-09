@@ -239,7 +239,7 @@ body {
    TailAdmin's own `bg-black` aside, not an oversight. It is the single
    most recognisable thing about the design.
    ═══════════════════════════════════════════════════════════════════ */
-{
+:root {
   --bg: #F1F5F9;          /* whiten  */
   --surface: #FFFFFF;     /* white   */
   --surface-2: #F7F9FC;   /* gray.2  */
@@ -2116,8 +2116,7 @@ html, body {
 
 /* Very slight, subtle contrast lift for muted text — same greys, just a
    touch less washed out so it's readable at a glance. */
-:root                    { --muted: #AEB7CC; }
-{ --muted: #586074; }
+:root { --muted: #586074; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    MOBILE / TOUCH
@@ -2280,7 +2279,7 @@ html, body {
      #3C50E0 primary   #80CAEE secondary  #0FADCF meta.10
      #3056D3 deep      #6577F3 mid        #219653 success
    ────────────────────────────────────────────────────────────────────────── */
-{
+:root {
   --chart-1: #3C50E0;
   --chart-2: #80CAEE;
   --chart-3: #0FADCF;

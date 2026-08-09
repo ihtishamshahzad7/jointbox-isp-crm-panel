@@ -108,6 +108,19 @@ if ! npm run build; then   # produces backend/dist/main.js
   exit 1
 fi
 
+# Validate the stylesheet BEFORE the build spends two minutes discovering the
+# same thing. An empty selector or a misplaced @import fails the Turbopack
+# build outright, and the error arrives after the backend has already been
+# rebuilt — so the deploy stops halfway with the frontend left on old chunks.
+if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/tools/check_css.py" ]; then
+  if ! python3 "$REPO/tools/check_css.py" "$REPO/frontend/app/globals.css"; then
+    echo ""
+    echo "❌ CSS is invalid — the frontend build would fail. Nothing was deployed."
+    echo "   Fix the lines listed above and run this script again."
+    exit 1
+  fi
+fi
+
 echo "🎨 Building frontend..."
 cd "$REPO/frontend"
 # Same reason as the backend: `next build` needs TypeScript, which is a
