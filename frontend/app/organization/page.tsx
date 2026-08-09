@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API = API_BASE;
 
@@ -289,7 +290,7 @@ export default function OrganizationPage() {
           </table>
 
           {walletFor && (
-            <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }} onClick={() => setWalletFor(null)}>
+            <Portal><div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }} onClick={() => setWalletFor(null)}>
               <div style={{ ...card, width: 460, maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
                 <h3 style={{ margin: "0 0 10px", fontSize: 15 }}>Wallet — {walletFor.name} <span style={{ color: T.green }}>({fmt(walletFor.balance)})</span></h3>
                 <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -317,7 +318,7 @@ export default function OrganizationPage() {
                 ))}
                 {!walletHistory.length && <div style={{ fontSize: 12, color: T.muted }}>No wallet history yet.</div>}
               </div>
-            </div>
+            </div></Portal>
           )}
         </div>
       )}

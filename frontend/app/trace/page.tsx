@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API = API_BASE;
 
@@ -131,7 +132,7 @@ export default function TracePage() {
 
       {/* Timeline drawer */}
       {timeline && (
-        <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", justifyContent: "flex-end", zIndex: 2000 }} onClick={() => setTimeline(null)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", justifyContent: "flex-end", zIndex: 2000 }} onClick={() => setTimeline(null)}>
           <div style={{ width: 520, maxWidth: "100%", height: "100%", background: T.card, borderLeft: `1px solid ${T.border}`, overflowY: "auto", padding: 20 }} onClick={(e) => e.stopPropagation()}>
             {timeline.loading ? <div style={{ color: T.muted }}>Loading timeline…</div> : timeline.subscriber ? (
               <>
@@ -163,7 +164,7 @@ export default function TracePage() {
               </>
             ) : <div style={{ color: T.muted }}>Subscriber not found.</div>}
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

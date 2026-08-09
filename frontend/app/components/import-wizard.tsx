@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import API_BASE from "./api";
+import Portal from "../components/portal";
 
 const API =
   API_BASE;
@@ -155,7 +156,7 @@ export default function ImportWizard({ config, onClose, onDone }: {
   const blanks = (f: string) => (rows || []).filter((r) => !String(r[f] ?? "").trim()).length;
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
+    <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 18, width: "100%", maxWidth: 760, maxHeight: "90vh", overflowY: "auto", color: "var(--text)" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{config.title}</div>
         <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 12 }}>Upload CSV / Excel / JSON, or paste below. Headers from other panels are matched automatically.</div>
@@ -249,6 +250,6 @@ export default function ImportWizard({ config, onClose, onDone }: {
           </button>
         </div>
       </div>
-    </div>
+    </div></Portal>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 interface Ticket {
   id: number;
@@ -493,7 +494,7 @@ export default function ComplaintsPage() {
 
       {/* Create Ticket Modal */}
       {showForm && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowForm(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowForm(false)}>
           <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: t.text, margin: 0 }}>🎫 Create New Ticket</h2>
@@ -593,12 +594,12 @@ export default function ComplaintsPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Ticket Details Modal */}
       {showDetailsModal && selectedTicket && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowDetailsModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowDetailsModal(false)}>
           <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 600, maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
@@ -698,7 +699,7 @@ export default function ComplaintsPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

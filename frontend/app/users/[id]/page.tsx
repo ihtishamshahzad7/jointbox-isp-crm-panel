@@ -6,6 +6,7 @@ import { fileUrl } from "../../components/image-upload";
 import { RecordNotes } from "../../components/record-notes";
 import { silent } from "../../components/silent";
 import API_BASE from "../../components/api";
+import Portal from "../../components/portal";
 
 const API = API_BASE;
 
@@ -729,7 +730,7 @@ function UpdateUserModal({ user, token, onClose, onSaved, onError }: {
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       onClick={onClose}>
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 20, padding: 28, maxWidth: 800, width: "100%", maxHeight: "90vh", overflowY: "auto" }}
         onClick={(e) => e.stopPropagation()}>
@@ -836,7 +837,7 @@ function UpdateUserModal({ user, token, onClose, onSaved, onError }: {
             {saving ? "Saving…" : "Update User"}</button>
         </div>
       </div>
-    </div>
+    </div></Portal>
   );
 }
 
@@ -882,7 +883,7 @@ function AddBalanceModal({ userId, userName, token, onClose, onDone, onError }: 
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       onClick={onClose}>
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 20, padding: 28, maxWidth: 450, width: "100%" }}
         onClick={(e) => e.stopPropagation()}>
@@ -918,6 +919,6 @@ function AddBalanceModal({ userId, userName, token, onClose, onDone, onError }: 
             {saving ? "…" : "Add Balance"}</button>
         </div>
       </div>
-    </div>
+    </div></Portal>
   );
 }

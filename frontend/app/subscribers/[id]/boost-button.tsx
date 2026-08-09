@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import API_BASE from "../../components/api";
+import Portal from "../../components/portal";
 
 const API =
   API_BASE;
@@ -47,7 +48,7 @@ export default function BoostButton({ subscriberId }: { subscriberId: number }) 
       </button>
 
       {open && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setOpen(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setOpen(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 18, width: "100%", maxWidth: 420, color: "var(--text)" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>⚡ Temporary Boost / speed change</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>Applies live via CoA. A timed boost reverts to the plan speed automatically; “Permanent” stays until you change it.</div>
@@ -78,7 +79,7 @@ export default function BoostButton({ subscriberId }: { subscriberId: number }) 
               </button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
     </>
   );

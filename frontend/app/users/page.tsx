@@ -7,6 +7,7 @@ import ImageUpload from "../components/image-upload";
 import { Icons as SIcons } from "../components/icons";
 import { GroupPanel } from "../components/group-panel";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API = API_BASE;
 
@@ -562,7 +563,7 @@ export default function UsersPage() {
 
       {/* Add/Edit User Modal */}
       {showForm && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={() => setShowForm(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }} onClick={() => setShowForm(false)}>
           <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: t.text, margin: 0 }}>{editingUser ? "✏️ Edit User" : "➕ Add New User"}</h2>
@@ -648,7 +649,7 @@ export default function UsersPage() {
             </form>
             )}
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

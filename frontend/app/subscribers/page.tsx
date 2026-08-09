@@ -186,6 +186,7 @@ const statusColor = (s: string) => ({
 // Kept in its own file so a mistake here cannot take down the whole page.
 import { SubscriberWizard } from "./subscriber-wizard";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const EMPTY_FORM = {
   fullName: "", phone: "", email: "", address: "", username: "",
@@ -1773,7 +1774,7 @@ export default function SubscribersPage() {
 
           {/* RADIUS details popup */}
           {showRadiusDetail && (
-            <div
+            <Portal><div
               onClick={() => setShowRadiusDetail(false)}
               style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}
             >
@@ -1812,14 +1813,14 @@ export default function SubscribersPage() {
                   <div style={{ fontSize: 13, color: t.textMuted }}>Loading RADIUS status…</div>
                 )}
               </div>
-            </div>
+            </div></Portal>
           )}
         </div>
       </div>
 
       {/* MODAL: Create / Edit Subscriber */}
       {showForm && (
-        <div
+        <Portal><div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setShowForm(false)}
         >
@@ -2225,12 +2226,12 @@ export default function SubscribersPage() {
               </span>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* MODAL: Subscriber Detail (Full Tabbed View) */}
       {detailSub && (
-        <div
+        <Portal><div
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setDetailSub(null)}
         >
@@ -2801,12 +2802,12 @@ export default function SubscribersPage() {
               <Btn variant="ghost" onClick={() => setDetailSub(null)}>Close</Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Activation / Renewal Modal */}
       {showActivationModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowActivationModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowActivationModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Activation / Renewal</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -2935,12 +2936,12 @@ export default function SubscribersPage() {
               </Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Import Modal */}
       {showImportModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowImportModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowImportModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Import Subscribers</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -3111,12 +3112,12 @@ export default function SubscribersPage() {
               <Btn variant="primary" onClick={runImport}>Import</Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Move subscribers to another account */}
       {showTransferModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowTransferModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowTransferModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 20, width: "100%", maxWidth: 560, maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>
               Move {selectedIds.length} subscriber(s) to another account
@@ -3178,12 +3179,12 @@ export default function SubscribersPage() {
               </Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Mass Delete Modal */}
       {showMassDeleteModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassDeleteModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassDeleteModal(false)}>
           <div style={{ background: t.card, border: "1px solid #7f1d1d", borderRadius: 12, padding: 18, width: "100%", maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, color: "#f87171", marginBottom: 8 }}>Mass Delete Subscribers</div>
             <div style={{ fontSize: 12, color: t.textSub, marginBottom: 8 }}>Selected subscribers: {selectedIds.length}</div>
@@ -3196,12 +3197,12 @@ export default function SubscribersPage() {
               <Btn variant="danger" onClick={runMassDelete}>Delete All</Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Mass Service Settings Modal */}
       {showMassSettingsModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassSettingsModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassSettingsModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 760, maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Mass Service Settings ({selectedIds.length} selected)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -3260,7 +3261,7 @@ export default function SubscribersPage() {
               <Btn variant="primary" onClick={runMassSettings}>Apply to All</Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Export Modal */}
@@ -3270,7 +3271,7 @@ export default function SubscribersPage() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
-        <div
+        <Portal><div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setDeleteConfirm(null)}
         >
@@ -3311,7 +3312,7 @@ export default function SubscribersPage() {
               </Btn>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

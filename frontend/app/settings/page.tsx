@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API = API_BASE;
 
@@ -278,7 +279,7 @@ export default function SettingsPage() {
 
       {/* ── Password Change Modal ── */}
       {showPassword && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
           onClick={() => { setShowPassword(false); setPwCurrent(""); setPwNew(""); setPwConfirm(""); }}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 20, padding: 28, maxWidth: 450, width: "100%" }}
             onClick={(e) => e.stopPropagation()}>
@@ -331,7 +332,7 @@ export default function SettingsPage() {
                 {pwSaving ? "Updating…" : "Update Password"}</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

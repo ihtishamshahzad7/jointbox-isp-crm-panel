@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import Portal from "../components/portal";
 
 /**
  * Global quick-launcher (Ctrl/⌘+K). Type to find and jump to ANY feature or
@@ -118,7 +119,7 @@ export default function CommandPalette() {
   if (!open || !mounted) return null;
 
   return createPortal(
-    <div onClick={() => setOpen(false)}
+    <Portal><div onClick={() => setOpen(false)}
       style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "12vh" }}>
       <div onClick={(e) => e.stopPropagation()}
         style={{ width: 560, maxWidth: "92vw", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", boxShadow: "0 30px 70px rgba(0,0,0,.5)" }}>
@@ -148,7 +149,7 @@ export default function CommandPalette() {
           <span>↑↓ navigate</span><span>⏎ open</span><span>esc close</span><span style={{ marginLeft: "auto" }}>Ctrl/⌘ K anytime</span>
         </div>
       </div>
-    </div>,
+    </div></Portal>,
     document.body
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import useSWR from "swr";
 import API_BASE from "../../components/api";
+import Portal from "../../components/portal";
 
 const API = API_BASE;
 
@@ -427,7 +428,7 @@ export default function PoliciesPage() {
 
       {/* Modal */}
       {showModal && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowModal(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowModal(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "700px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>{editItem ? "✏️ Edit Policy" : "➕ Add Policy"}</h2>
@@ -477,12 +478,12 @@ export default function PoliciesPage() {
               <button style={{ padding: "10px 24px", borderRadius: "10px", fontSize: "13px", fontWeight: "600", border: "none", cursor: "pointer", background: "#155e75", color: "#cffafe" }} onClick={submit}>{editItem ? "Update" : "Create"}</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Delete Modal */}
       {deleteId !== null && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setDeleteId(null)}>
+        <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setDeleteId(null)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "450px", width: "100%" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ textAlign: "center" }}>
               <div style={{ fontSize: "48px", marginBottom: "12px" }}>🗑️</div>
@@ -494,7 +495,7 @@ export default function PoliciesPage() {
               <button style={{ padding: "10px 24px", borderRadius: "10px", fontSize: "13px", fontWeight: "600", border: "none", cursor: "pointer", background: "rgba(127,29,29,0.8)", color: "#fecaca" }} onClick={remove}>Delete Forever</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

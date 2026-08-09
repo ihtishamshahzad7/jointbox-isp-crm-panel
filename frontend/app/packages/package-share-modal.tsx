@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { money } from "../components/currency";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API = API_BASE;
 
@@ -199,7 +200,7 @@ export function PackageShareModal({
   return (
     <>
       {/* Backdrop */}
-      <div
+      <Portal><div
         style={{
           position: "fixed",
           inset: 0,
@@ -553,7 +554,7 @@ export function PackageShareModal({
             </div>
           )}
         </div>
-      </div>
+      </div></Portal>
 
       <style>{`
         @keyframes spin {

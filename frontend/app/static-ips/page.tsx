@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API =
   API_BASE;
@@ -330,7 +331,7 @@ export default function StaticIpsPage() {
 
       {/* Assign modal */}
       {assigning && (
-        <div onClick={() => setAssigning(null)} style={{
+        <Portal><div onClick={() => setAssigning(null)} style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "flex",
           alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16,
         }}>
@@ -382,12 +383,12 @@ export default function StaticIpsPage() {
               <button style={{ ...btn(T.muted, true), flex: 1 }} onClick={() => setAssigning(null)}>Cancel</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* Detail + history */}
       {detail && (
-        <div onClick={() => setDetail(null)} style={{
+        <Portal><div onClick={() => setDetail(null)} style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "flex",
           alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16,
         }}>
@@ -415,7 +416,7 @@ export default function StaticIpsPage() {
             <button style={{ ...btn(T.accent, true), width: "100%", marginTop: 14 }}
               onClick={() => setDetail(null)}>Close</button>
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

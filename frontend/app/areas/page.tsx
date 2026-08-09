@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Wizard, Field } from "../components/wizard";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 const API = API_BASE;
 
@@ -308,7 +309,7 @@ export default function AreasPage() {
 
       {/* Add/Edit Modal */}
       {showForm && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowForm(false)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowForm(false)}>
           <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: t.text, margin: 0 }}>{editItem ? '✏️ Edit Area' : '📍 Add New Area'}</h2>
@@ -401,12 +402,12 @@ export default function AreasPage() {
             </form>
             )}
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {/* View Modal */}
       {viewItem && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setViewItem(null)}>
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setViewItem(null)}>
           <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 450 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: t.text, margin: 0 }}>📍 Area Details</h2>
@@ -435,7 +436,7 @@ export default function AreasPage() {
               <button onClick={() => setViewItem(null)} style={{ flex: 1, background: "transparent", border: `1px solid ${t.cardBorder}`, color: t.textSub, padding: "10px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Close</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
     </div>
   );

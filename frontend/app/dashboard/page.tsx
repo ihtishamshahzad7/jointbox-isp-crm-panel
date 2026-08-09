@@ -8,6 +8,7 @@ import { money, currencySymbol } from "../components/currency";
 import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
 import API_BASE from "../components/api";
+import Portal from "../components/portal";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -1154,7 +1155,7 @@ export default function DashboardPage() {
       )}
 
       {selectedSubscriber && (
-        <div onClick={() => setSelectedSubscriber(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
+        <Portal><div onClick={() => setSelectedSubscriber(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(900px, 100%)", maxHeight: "88vh", overflow: "auto", ...cardStyle }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
@@ -1207,11 +1208,11 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {showInvoiceQuick && (
-        <div onClick={() => setShowInvoiceQuick(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
+        <Portal><div onClick={() => setShowInvoiceQuick(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 100%)", ...cardStyle }}>
             <div style={{ fontWeight: 800, marginBottom: 10 }}>Quick Invoice Generation</div>
             <div style={{ display: "grid", gap: 10 }}>
@@ -1228,11 +1229,11 @@ export default function DashboardPage() {
               <button style={btnStyle} disabled={busyAction === "invoice"} onClick={submitQuickInvoice}>{busyAction === "invoice" ? "Generating..." : "Generate"}</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       {showUserForm && (
-        <div onClick={() => setShowUserForm(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
+        <Portal><div onClick={() => setShowUserForm(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 100%)", ...cardStyle }}>
             <div style={{ fontWeight: 800, marginBottom: 10 }}>{editingUser ? "Edit User" : "Create User"}</div>
             <div style={{ display: "grid", gap: 10 }}>
@@ -1251,7 +1252,7 @@ export default function DashboardPage() {
               <button style={btnStyle} disabled={busyAction === "user-form"} onClick={submitUserForm}>{busyAction === "user-form" ? "Saving..." : "Save"}</button>
             </div>
           </div>
-        </div>
+        </div></Portal>
       )}
 
       <style>{`
