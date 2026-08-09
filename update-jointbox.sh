@@ -217,3 +217,39 @@ for i in 1 2 3 4 5 6 7 8; do
   sleep 2
 done
 [ -n "$webok" ] && echo "  Web OK (:$webok)" || echo "  ⚠ Web not responding on :3000 or :80 — pm2 logs jointbox-frontend"
+
+# -----------------------------------------------------------------------------
+# CHUNK SMOKE TEST — the check that actually matters.
+#
+# Fetching the HTML proves almost nothing: Next happily serves the page shell
+# while returning HTTP 500 for the JavaScript bundles behind it. The browser
+# then renders a page that looks completely normal and does absolutely nothing —
+# buttons don't even depress, because React never hydrated and no handler was
+# ever attached. There is no server-side symptom at all.
+#
+# So: pull a real chunk URL out of the served HTML and confirm it comes back as
+# executable JavaScript.
+# -----------------------------------------------------------------------------
+if [ -n "$webok" ]; then
+  BASEURL="http://localhost:${webok}"
+  CHUNK="$(curl -fsS "$BASEURL/login" 2>/dev/null \
+            | grep -o '/_next/static/chunks/[A-Za-z0-9._~-]*\.js' | head -1)"
+  if [ -z "$CHUNK" ]; then
+    echo "  ⚠ Could not find a chunk URL in the HTML — skipping the JS check."
+  else
+    CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASEURL$CHUNK")"
+    CTYPE="$(curl -s -o /dev/null -w '%{content_type}' "$BASEURL$CHUNK")"
+    case "$CODE:$CTYPE" in
+      200:*javascript*)
+        echo "  JS chunks OK (200, $CTYPE)" ;;
+      *)
+        echo ""
+        echo "  ❌ JAVASCRIPT IS BROKEN — the panel will load but nothing will click."
+        echo "     $CHUNK → HTTP $CODE ($CTYPE)"
+        echo "     Almost always a stale or unreadable .next. Fix with:"
+        echo "       cd $REPO/frontend && rm -rf .next && npm run build"
+        echo "       chmod -R a+rX .next && pm2 restart jointbox-frontend --update-env"
+        ;;
+    esac
+  fi
+fi
