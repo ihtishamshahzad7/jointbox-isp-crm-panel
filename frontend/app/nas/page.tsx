@@ -971,7 +971,7 @@ export default function NasPage() {
           MODAL: VIEW NAS DETAIL
       ══════════════════════════════════════ */}
       {viewDetail && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setViewDetail(null)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:820, maxHeight:'92vh', overflowY:'auto', display:'flex', flexDirection:'column', gap:0 }}
             onClick={e => e.stopPropagation()}>
@@ -1446,7 +1446,7 @@ export default function NasPage() {
       ══════════════════════════════════════ */}
       {/* ══════════ SHARE ROUTER WITH A DOWNSTREAM ACCOUNT ══════════ */}
       {shareFor && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setShareFor(null)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:520, maxHeight:'85vh', overflowY:'auto' }}
             onClick={e => e.stopPropagation()}>
@@ -1512,7 +1512,7 @@ export default function NasPage() {
       )}
 
       {showForm && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setShowForm(false)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:18, width:'100%', maxWidth:700, maxHeight:'95vh', overflowY:'auto' }}
             onClick={e => e.stopPropagation()}>
@@ -1860,7 +1860,7 @@ export default function NasPage() {
           MODAL: LOGS
       ══════════════════════════════════════ */}
       {showLogs && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setShowLogs(false)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:640, maxHeight:'80vh', display:'flex', flexDirection:'column' }}
             onClick={e => e.stopPropagation()}>
@@ -1892,7 +1892,7 @@ export default function NasPage() {
           MODAL: DELETE CONFIRM
       ══════════════════════════════════════ */}
       {deleteConfirm !== null && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setDeleteConfirm(null)}>
           <div style={{ background:t.card, border:'1px solid #7f1d1d', borderRadius:12, padding:24, width:'100%', maxWidth:380 }}
             onClick={e => e.stopPropagation()}>

@@ -953,7 +953,7 @@ export default function PackagesPage() {
           style={{ 
             position: "fixed", 
             inset: 0, 
-            zIndex: 50, 
+            zIndex: 2000, 
             background: "rgba(0,0,0,0.7)", 
             backdropFilter: "blur(8px)", 
             display: "flex", 
@@ -1168,7 +1168,7 @@ export default function PackagesPage() {
       {/* ADD TAX MODAL */}
       {/* ============================================================ */}
       {showTaxModal && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowTaxModal(false)}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowTaxModal(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>➕ Add Tax/Extra Fee</h2>
@@ -1219,7 +1219,7 @@ export default function PackagesPage() {
       {/* ADD POLICY MODAL */}
       {/* ============================================================ */}
       {showPolicyModal && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowPolicyModal(false)}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowPolicyModal(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>➕ Add Policy</h2>
@@ -1276,7 +1276,7 @@ export default function PackagesPage() {
       {/* ADD ALLOCATION MODAL */}
       {/* ============================================================ */}
       {showAllocationModal && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowAllocationModal(false)}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowAllocationModal(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>➕ Add Allocation</h2>
@@ -1355,7 +1355,7 @@ export default function PackagesPage() {
       {/* VIEW SUBSCRIBERS MODAL */}
       {/* ============================================================ */}
       {showSubscribersModal && selectedPackage && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowSubscribersModal(false)}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowSubscribersModal(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "800px", width: "100%", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>Subscribers on {selectedPackage.name}</h2>
@@ -1409,7 +1409,7 @@ export default function PackagesPage() {
       {/* DELETE CONFIRMATION MODAL */}
       {/* ============================================================ */}
       {showDeleteModal && selectedPackage && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowDeleteModal(false)}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowDeleteModal(false)}>
           <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "450px", width: "100%" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ textAlign: "center" }}>
               <div style={{ fontSize: "48px", marginBottom: "12px" }}>🗑️</div>

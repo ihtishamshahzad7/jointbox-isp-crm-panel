@@ -289,7 +289,7 @@ export default function OrganizationPage() {
           </table>
 
           {walletFor && (
-            <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setWalletFor(null)}>
+            <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }} onClick={() => setWalletFor(null)}>
               <div style={{ ...card, width: 460, maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
                 <h3 style={{ margin: "0 0 10px", fontSize: 15 }}>Wallet — {walletFor.name} <span style={{ color: T.green }}>({fmt(walletFor.balance)})</span></h3>
                 <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>

@@ -332,7 +332,7 @@ export default function StaticIpsPage() {
       {assigning && (
         <div onClick={() => setAssigning(null)} style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "flex",
-          alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16,
+          alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16,
         }}>
           <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: 420, maxWidth: "100%" }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>
@@ -389,7 +389,7 @@ export default function StaticIpsPage() {
       {detail && (
         <div onClick={() => setDetail(null)} style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "flex",
-          alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16,
+          alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16,
         }}>
           <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: 480, maxWidth: "100%", maxHeight: "80vh", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>

@@ -1154,7 +1154,7 @@ export default function DashboardPage() {
       )}
 
       {selectedSubscriber && (
-        <div onClick={() => setSelectedSubscriber(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 1100 }}>
+        <div onClick={() => setSelectedSubscriber(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(900px, 100%)", maxHeight: "88vh", overflow: "auto", ...cardStyle }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
@@ -1211,7 +1211,7 @@ export default function DashboardPage() {
       )}
 
       {showInvoiceQuick && (
-        <div onClick={() => setShowInvoiceQuick(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 1100 }}>
+        <div onClick={() => setShowInvoiceQuick(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 100%)", ...cardStyle }}>
             <div style={{ fontWeight: 800, marginBottom: 10 }}>Quick Invoice Generation</div>
             <div style={{ display: "grid", gap: 10 }}>
@@ -1232,7 +1232,7 @@ export default function DashboardPage() {
       )}
 
       {showUserForm && (
-        <div onClick={() => setShowUserForm(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 1100 }}>
+        <div onClick={() => setShowUserForm(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 2000 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 100%)", ...cardStyle }}>
             <div style={{ fontWeight: 800, marginBottom: 10 }}>{editingUser ? "Edit User" : "Create User"}</div>
             <div style={{ display: "grid", gap: 10 }}>

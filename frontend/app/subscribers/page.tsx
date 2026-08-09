@@ -11,7 +11,6 @@ import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
 import { silent } from "../components/silent";
-import Portal from "../components/portal";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface Package {
@@ -1776,7 +1775,7 @@ export default function SubscribersPage() {
           {showRadiusDetail && (
             <div
               onClick={() => setShowRadiusDetail(false)}
-              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}
             >
               <div
                 onClick={(e) => e.stopPropagation()}
@@ -1821,7 +1820,7 @@ export default function SubscribersPage() {
       {/* MODAL: Create / Edit Subscriber */}
       {showForm && (
         <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setShowForm(false)}
         >
           <div
@@ -2231,7 +2230,6 @@ export default function SubscribersPage() {
 
       {/* MODAL: Subscriber Detail (Full Tabbed View) */}
       {detailSub && (
-        <Portal>
         <div
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setDetailSub(null)}
@@ -2804,12 +2802,11 @@ export default function SubscribersPage() {
             </div>
           </div>
         </div>
-        </Portal>
       )}
 
       {/* Activation / Renewal Modal */}
       {showActivationModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowActivationModal(false)}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowActivationModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Activation / Renewal</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -2943,7 +2940,7 @@ export default function SubscribersPage() {
 
       {/* Import Modal */}
       {showImportModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowImportModal(false)}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowImportModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Import Subscribers</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -3119,7 +3116,7 @@ export default function SubscribersPage() {
 
       {/* Move subscribers to another account */}
       {showTransferModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowTransferModal(false)}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowTransferModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 20, width: "100%", maxWidth: 560, maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>
               Move {selectedIds.length} subscriber(s) to another account
@@ -3186,7 +3183,7 @@ export default function SubscribersPage() {
 
       {/* Mass Delete Modal */}
       {showMassDeleteModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassDeleteModal(false)}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassDeleteModal(false)}>
           <div style={{ background: t.card, border: "1px solid #7f1d1d", borderRadius: 12, padding: 18, width: "100%", maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, color: "#f87171", marginBottom: 8 }}>Mass Delete Subscribers</div>
             <div style={{ fontSize: 12, color: t.textSub, marginBottom: 8 }}>Selected subscribers: {selectedIds.length}</div>
@@ -3204,7 +3201,7 @@ export default function SubscribersPage() {
 
       {/* Mass Service Settings Modal */}
       {showMassSettingsModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassSettingsModal(false)}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowMassSettingsModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 760, maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Mass Service Settings ({selectedIds.length} selected)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -3274,7 +3271,7 @@ export default function SubscribersPage() {
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
         <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setDeleteConfirm(null)}
         >
           <div style={{ background: t.card, border: "1px solid #7f1d1d", borderRadius: 14, padding: 24, width: 400 }} onClick={(e) => e.stopPropagation()}>

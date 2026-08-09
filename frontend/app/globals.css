@@ -4458,3 +4458,14 @@ html div[style*="position:fixed"][style*="inset:0"] > div {
 
 /* Sidebar items glide on hover instead of flicking. */
 html .sidebar .nav-item { transition: background-color .15s ease, color .15s ease; }
+
+
+/* #f8fafc / #f1f5f9 — near-whites used as text inside NAS and other detail
+   modals. Invisible on white; these were below the generated sweep's net. */
+html .main [style*="color:#f8fafc"], html .main [style*="color: #f8fafc"],
+html .main [style*="color:#F8FAFC"], html .main [style*="color: #F8FAFC"],
+html .main [style*="color:#f1f5f9"], html .main [style*="color: #f1f5f9"] { color: #1C2434 !important; }
+
+/* Bright cyan link/code colour (#38bdf8) reads at 2.1:1 on white — deepen it. */
+html .main [style*="color:#38bdf8"], html .main [style*="color: #38bdf8"],
+html .main [style*="color:#38BDF8"], html .main [style*="color: #38BDF8"] { color: #0B76A8 !important; }

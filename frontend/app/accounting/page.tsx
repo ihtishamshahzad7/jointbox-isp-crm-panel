@@ -827,7 +827,7 @@ export default function AccountingPage() {
           </table>
 
           {topupFor && (
-            <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setTopupFor(null)}>
+            <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }} onClick={() => setTopupFor(null)}>
               <div style={{ ...card, width: 340 }} onClick={(e) => e.stopPropagation()}>
                 <h3 style={{ margin: "0 0 10px", fontSize: 15 }}>Top up — {topupFor.fullName}</h3>
                 <input style={{ ...input, width: "100%", marginBottom: 10 }} type="number" placeholder="Amount" value={topupAmount} onChange={(e) => setTopupAmount(e.target.value)} autoFocus />

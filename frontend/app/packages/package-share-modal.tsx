@@ -203,7 +203,7 @@ export function PackageShareModal({
         style={{
           position: "fixed",
           inset: 0,
-          zIndex: 50,
+          zIndex: 2000,
           background: "rgba(0,0,0,0.7)",
           backdropFilter: "blur(8px)",
           display: "flex",

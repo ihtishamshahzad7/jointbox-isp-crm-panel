@@ -266,7 +266,7 @@ export default function NetworkPage() {
       </div>
 
       {macFor && (
-        <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setMacFor(null)}>
+        <div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }} onClick={() => setMacFor(null)}>
           <div style={{ ...card, width: 420 }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ margin: "0 0 10px", fontSize: 15 }}>MAC binding — {macFor.username}</h3>
             <div style={{ fontSize: 12, color: T.muted, marginBottom: 10 }}>Bound MACs restrict this user to only authenticate from those devices.</div>

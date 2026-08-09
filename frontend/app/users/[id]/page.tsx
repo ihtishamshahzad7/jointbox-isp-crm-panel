@@ -729,7 +729,7 @@ function UpdateUserModal({ user, token, onClose, onSaved, onError }: {
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       onClick={onClose}>
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 20, padding: 28, maxWidth: 800, width: "100%", maxHeight: "90vh", overflowY: "auto" }}
         onClick={(e) => e.stopPropagation()}>
@@ -882,7 +882,7 @@ function AddBalanceModal({ userId, userName, token, onClose, onDone, onError }: 
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       onClick={onClose}>
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 20, padding: 28, maxWidth: 450, width: "100%" }}
         onClick={(e) => e.stopPropagation()}>

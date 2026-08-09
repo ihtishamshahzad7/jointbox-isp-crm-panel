@@ -568,7 +568,7 @@ export default function IpPoolsPage() {
 
       {/* ══ MODAL: CREATE / EDIT FORM ══ */}
       {showForm && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
           onClick={() => { setShowForm(false); setEditPool(null); }}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:14, padding:24, width:"100%", maxWidth:480, maxHeight:"90vh", overflowY:"auto" }}
             onClick={e => e.stopPropagation()}>
@@ -710,7 +710,7 @@ export default function IpPoolsPage() {
 
       {/* Detail Modal */}
       {detailPool && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
           onClick={() => setDetailPool(null)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:14, padding:24, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto" }}
             onClick={e => e.stopPropagation()}>
@@ -793,7 +793,7 @@ export default function IpPoolsPage() {
       {/* Delete Confirmation Modal */}
       {/* Share an address range with downstream accounts */}
       {shareFor && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.8)", zIndex:120, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.8)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
           onClick={() => setShareFor(null)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:22, width:"100%", maxWidth:520, maxHeight:"85vh", overflowY:"auto" }}
             onClick={e => e.stopPropagation()}>
@@ -843,7 +843,7 @@ export default function IpPoolsPage() {
       )}
 
       {deleteConfirm && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.8)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.8)", zIndex:2000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
           onClick={() => setDeleteConfirm(null)}>
           <div style={{ background:t.card, border:"1px solid #7f1d1d", borderRadius:14, padding:24, width:"100%", maxWidth:400 }}
             onClick={e => e.stopPropagation()}>
