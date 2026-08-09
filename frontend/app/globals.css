@@ -1443,7 +1443,10 @@ html, body {
    from all four sides instead, so the flex centring inside stays true. */
 div[style*="position: fixed"][style*="inset: 0"],
 div[style*="position:fixed"][style*="inset:0"] {
-  inset: -5.56% !important;
+  /* Was -5.56% to cancel `zoom: 0.9`. The zoom was removed with the dark
+     themes, so this offset started pushing dialogs up and to the LEFT —
+     the subscriber panel slid under the sidebar and lost its left edge. */
+  inset: 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -4349,3 +4352,48 @@ html .sidebar .nav-item.active svg { color: #FFFFFF; }
 /* TailAdmin marks the active item with the primary fill, not a gradient. */
 html .sidebar .nav-item.active { background: #3C50E0; border-radius: 6px; }
 html .sidebar .nav-item:hover:not(.active) { background: #333A48; border-radius: 6px; }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DARK PANELS WRITTEN AS rgba()
+   ══════════════════════════════════════════════════════════════════════════
+   The earlier surface sweep matched hex backgrounds only, so panels declared
+   as rgba(11,14,24,0.88) stayed black on a white page — the dashboard tab rail
+   and the expiring-subscribers card. Modal SCRIMS are deliberately excluded:
+   rgba(0,0,0,.7) behind a dialog is doing its job and must stay dark. */
+html .main [style*="rgba(11,14,24,0.88)"],
+html .main [style*="rgba(11, 14, 24, 0.88)"],
+html .main [style*="rgba(20,24,45,.86)"],
+html .main [style*="rgba(20, 24, 45, .86)"],
+html .main [style*="rgba(2,6,23,.62)"],
+html .main [style*="rgba(2, 6, 23, .62)"] {
+  background: #FFFFFF !important;
+  border-color: #E2E8F0 !important;
+  box-shadow: 0px 8px 13px -3px rgba(0,0,0,0.07) !important;
+}
+
+/* Tabs inside that rail were light-on-dark; on white they need the inverse. */
+html .main [style*="rgba(11,14,24,0.88)"] button,
+html .main [style*="rgba(11, 14, 24, 0.88)"] button {
+  background: #F7F9FC !important;
+  border: 1px solid #E2E8F0 !important;
+  color: #1C2434 !important;
+}
+html .main [style*="rgba(11,14,24,0.88)"] button span,
+html .main [style*="rgba(11, 14, 24, 0.88)"] button span { color: inherit !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BODY TEXT IS BOLD BLACK
+   ══════════════════════════════════════════════════════════════════════════
+   TailAdmin sets body copy at weight 500 in near-black. The panel was reading
+   thin and grey next to it. */
+html .main,
+html .main p,
+html .main td,
+html .main span:not([class]),
+html .main div:not([class]) { color: #1C2434; }
+
+html .main table tbody td { color: #1C2434; font-weight: 500; }
+html .main th { color: #1C2434; font-weight: 600; }
+html .main h1, html .main h2, html .main h3 { color: #1C2434; font-weight: 700; }
+html .main label { color: #1C2434; font-weight: 500; }
