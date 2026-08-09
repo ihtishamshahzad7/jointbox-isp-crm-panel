@@ -83,8 +83,9 @@ const menuGroups = [
     { id: 'console', label: 'Server Console', href: '/console', Icon: navIcons.NAS, ispOnly: true },
     // ISP owner only — FreeRADIUS module toggles, config-file editor and DB details.
     { id: 'radius-admin', label: 'FreeRADIUS & Database', href: '/radius-admin', Icon: navIcons.NAS, ispOnly: true },
-    // Documentation renders the same knowledge base the ✦ assistant answers
-    // from, so browsing and asking give identical guidance.
+    // Ask (conversation) and Documentation (browse) answer from the same
+    // knowledge base — some people ask, some prefer to read.
+    { id: 'assistant', label: 'AI Assistant', href: '/assistant', Icon: navIcons.Support },
     { id: 'docs', label: 'Documentation', href: '/docs', Icon: navIcons.Support },
   ]},
 ];

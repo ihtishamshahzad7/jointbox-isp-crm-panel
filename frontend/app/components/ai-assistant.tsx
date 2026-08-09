@@ -1,22 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
+import { AssistantChat } from "./assistant-chat";
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || (typeof window !== "undefined" ? `http://${window.location.hostname}:3001` : "http://localhost:3001");
 
-type Msg = { role: "user" | "assistant"; content: string };
-
 export default function AiAssistant() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "assistant", content: "Hi! I'm your Jointbox guide. I'll show you where things are, how to use each feature, and what happens before you do it.\n\nTry: \"how do I add a subscriber\", \"where do I take a payment\", \"what happens if I delete a customer\", \"what do I need before activating\"." },
-  ]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState(true);
   const [mounted, setMounted] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
 
@@ -34,23 +29,6 @@ export default function AiAssistant() {
     return () => window.removeEventListener("open-assistant", onOpen);
   }, []);
 
-  useEffect(() => { bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" }); }, [msgs, open]);
-
-  async function send() {
-    const text = input.trim();
-    if (!text || busy) return;
-    const next: Msg[] = [...msgs, { role: "user", content: text }];
-    setMsgs(next);
-    setInput("");
-    setBusy(true);
-    try {
-      const r = await fetch(`${API}/ai/chat`, { method: "POST", headers, body: JSON.stringify({ messages: next }) });
-      const d = await r.json();
-      setMsgs((m) => [...m, { role: "assistant", content: d?.reply || "Sorry, something went wrong." }]);
-    } catch {
-      setMsgs((m) => [...m, { role: "assistant", content: "Could not reach the assistant. Try again in a moment." }]);
-    } finally { setBusy(false); }
-  }
 
   if (!token || !mounted) return null;
 
@@ -83,65 +61,31 @@ export default function AiAssistant() {
           background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 16, display: "flex", flexDirection: "column", overflow: "hidden",
           boxShadow: "0 24px 60px rgba(0,0,0,0.4)",
         }}>
-          <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,#6C3CE1,#8B5CF6)", color: "#fff" }}>
-            <div style={{ fontWeight: 800, fontSize: 14 }}>✦ Jointbox Assistant</div>
-            <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v4</div>
+          <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,#6C3CE1,#8B5CF6)", color: "#fff",
+            display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>✦ Jointbox Assistant</div>
+              <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v5</div>
+            </div>
+            {/* Expand — a long answer is far easier to read on a full page than
+                in a 400px bubble, so hand the conversation over to /assistant. */}
+            <button
+              onClick={() => { setOpen(false); router.push("/assistant"); }}
+              title="Open in full page"
+              aria-label="Open assistant in full page"
+              style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.28)",
+                color: "#fff", borderRadius: 8, padding: "5px 9px", fontSize: 13, cursor: "pointer",
+                lineHeight: 1, flex: "none" }}>⛶</button>
           </div>
 
-          <div ref={bodyRef} className="jb-assist-body" style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: 12 }}>
-            {!configured && (
-              <div style={{ fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.3)", borderRadius: 10, padding: 10 }}>
-                Assistant not configured. An admin should set <code>AI_API_KEY</code> in the server .env (free key at console.groq.com) and restart the backend.
-              </div>
-            )}
-            {/* Wrapping is set INLINE, not via a stylesheet class. External CSS
-                can be overridden, arrive late, or be stripped by a theme rule —
-                and when that happened the reply ran off the right edge and was
-                unreadable. Inline styles win, so the text always wraps. */}
-            {msgs.map((m, i) => (
-              <div key={i} className={`jb-assist-row ${m.role === "user" ? "jb-assist-row-user" : ""}`}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  boxSizing: "border-box",
-                  textAlign: m.role === "user" ? "right" : "left",
-                  marginBottom: 10,
-                }}>
-                <div className="jb-assist-bubble" style={{
-                  background: m.role === "user" ? "var(--accent,#378ADD)" : "var(--surface-2)",
-                  color: m.role === "user" ? "#fff" : "var(--text)",
-                  border: m.role === "user" ? "none" : "1px solid var(--border)",
-                  display: "inline-block",
-                  maxWidth: "100%",
-                  boxSizing: "border-box",
-                  textAlign: "left",
-                  fontSize: 13,
-                  lineHeight: 1.55,
-                  padding: "9px 12px",
-                  borderRadius: 12,
-                  // The three properties that actually prevent the clipping.
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                  wordBreak: "break-word",
-                }}>{m.content}</div>
-              </div>
-            ))}
-            {busy && <div style={{ fontSize: 12, color: "var(--muted)", alignSelf: "flex-start" }}>Thinking…</div>}
-          </div>
-
-          <div style={{ padding: 10, borderTop: "1px solid var(--border)", display: "flex", gap: 8 }}>
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") send(); }}
-              placeholder="Ask how to do something…"
-              style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "9px 12px", color: "var(--text)", fontSize: 13 }}
-            />
-            <button onClick={send} disabled={busy || !input.trim()}
-              style={{ background: "var(--g-primary,#6C3CE1)", color: "#fff", border: "none", borderRadius: 10, padding: "0 14px", fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy || !input.trim() ? 0.5 : 1 }}>
-              ➤
-            </button>
-          </div>
+          {!configured && (
+            <div style={{ fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.3)", borderRadius: 10, padding: 10, margin: 12 }}>
+              Assistant not configured. An admin should set <code>AI_API_KEY</code> in the server .env (free key at console.groq.com) and restart the backend.
+            </div>
+          )}
+          {/* Same conversation component as the full page — one implementation,
+              so the popup and /assistant can never answer differently. */}
+          <AssistantChat />
         </div>
       )}
     </>,
