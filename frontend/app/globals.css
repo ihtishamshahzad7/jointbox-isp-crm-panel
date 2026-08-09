@@ -1009,7 +1009,22 @@ body {
    These previously all shared z-index:1, which meant page content (later in
    the DOM) painted over the topbar, hiding the "Act as" and account menus
    behind the dashboard. Chrome now owns a higher layer than the page. */
-.app-shell-page-inner { position: relative; z-index: 1; }
+/* NO z-index HERE — and that is the whole point.
+ *
+ * `z-index: 1` on this wrapper creates a STACKING CONTEXT. Everything the page
+ * renders is then confined to layer 1, so a modal inside it painted at
+ * z-index 100 is still below the sidebar at 40: the 100 only ranks it against
+ * its siblings inside layer 1, never against the shell. That is why opening a
+ * subscriber put the dialog UNDER the sidebar with its left edge cut off, and
+ * why raising the dialog's z-index changed nothing.
+ *
+ * The comment above describes the bug this was meant to fix — page content
+ * painting over the topbar — but that was back when the topbar ALSO sat at
+ * z-index 1. The topbar now owns 50 and the sidebar 40, so ordinary page
+ * content (unpositioned, or positioned without a z-index) still sits below
+ * them, while a dialog at 100 can rise above both, which is what a dialog is
+ * for. */
+.app-shell-page-inner { position: relative; }
 .app-shell-footer { position: relative; z-index: 10; }
 .sidebar { z-index: 40; }
 /* relative, not sticky: .main is a fixed-height flex column with the content
@@ -4397,3 +4412,18 @@ html .main table tbody td { color: #1C2434; font-weight: 500; }
 html .main th { color: #1C2434; font-weight: 600; }
 html .main h1, html .main h2, html .main h3 { color: #1C2434; font-weight: 700; }
 html .main label { color: #1C2434; font-weight: 500; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FULL-SCREEN OVERLAYS ALWAYS WIN
+   ══════════════════════════════════════════════════════════════════════════
+   A belt-and-braces floor for dialogs. The pages set their own z-index —
+   100 here, 1000 there — and those numbers were chosen before the shell had a
+   sidebar at 40 and a topbar at 50. Rather than hunt through every page, any
+   element that covers the whole viewport is lifted above the chrome. */
+html div[style*="position: fixed"][style*="inset: 0"],
+html div[style*="position:fixed"][style*="inset:0"] {
+  z-index: 2000 !important;
+}
+
+/* The AI assistant sits above dialogs so it can be opened from one. */
+html .jb-assist-panel { z-index: 2100 !important; }
