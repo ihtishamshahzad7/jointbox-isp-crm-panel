@@ -10,6 +10,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { silent } from './silent';
 import { Icons } from './icons';
 import API_BASE from "./api";
+import NotificationBell from './notification-bell';
+import Avatar from './avatar';
 
 const API = API_BASE;
 
@@ -20,6 +22,7 @@ interface UserProfile {
   role?: string;
   balance?: number;
   parentId?: number | null;
+  photoUrl?: string | null;
 }
 
 const navIcons = {
@@ -964,6 +967,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 switching accounts are things you do occasionally, so they
                 belong in the corner rather than taking permanent space in the
                 navigation. */}
+            {/* Notification bell — the actor's photo on every row. Placed left
+                of the account avatar, matching the template's header order. */}
+            <NotificationBell />
+
             <div style={{ position: 'relative' }}>
               <button
                 type="button"
@@ -977,7 +984,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   boxShadow: '0 4px 14px rgba(233,64,139,.3)',
                 }}
               >
-                {getInitials(user?.name)}
+                {user?.photoUrl
+                  ? <Avatar name={user?.name} photoUrl={user.photoUrl} size={30} />
+                  : getInitials(user?.name)}
               </button>
 
               {accountOpen && (

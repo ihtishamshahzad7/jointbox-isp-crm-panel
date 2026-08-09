@@ -322,6 +322,10 @@ export class AuthService {
         // decides whether their next activation will go through, and finding
         // out only at the point of failure wastes the customer's visit.
         balance: true,
+        // The header shows the signed-in person's own picture. Without this in
+        // the select the avatar silently falls back to initials forever, which
+        // reads as "uploads don't work" rather than "field not requested".
+        photoUrl: true,
         parentId: true,
         canTopupDownline: true,
         canSetPackagePrice: true,

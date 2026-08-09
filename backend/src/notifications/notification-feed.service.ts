@@ -52,9 +52,18 @@ export class NotificationFeedService {
   async feed(actor: Actor, since?: string, limit = 20) {
     const where: any = { action: { in: Object.keys(NotificationFeedService.INTERESTING) } };
 
-    // Non-admins see only their own subtree's activity.
+    /**
+     * Non-admins see only their own subtree's activity.
+     *
+     * The id MUST come from scope.rootId(), not from a hand-read property.
+     * The JWT puts the user id on `sub`, so an earlier version of this reading
+     * `actor.userId ?? actor.id` produced NaN, which made descendantIds()
+     * return nothing and the feed silently empty for every reseller. rootId()
+     * also handles the SALES role, whose activity belongs to its parent.
+     */
     if (!this.scope.isAdmin(actor?.role)) {
-      const ids = await this.scope.descendantIds(Number((actor as any)?.userId ?? (actor as any)?.id));
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      // Fail CLOSED: an unresolvable actor sees nothing rather than everything.
       where.userId = { in: ids.length ? ids : [-1] };
     }
 

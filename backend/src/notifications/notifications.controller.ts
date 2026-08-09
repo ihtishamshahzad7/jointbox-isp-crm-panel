@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { AlertsService } from './alerts.service';
+import { NotificationFeedService } from './notification-feed.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 
@@ -10,7 +11,17 @@ export class NotificationsController {
   constructor(
     private readonly notifications: NotificationsService,
     private readonly alerts: AlertsService,
+    private readonly feed: NotificationFeedService,
   ) {}
+
+  /**
+   * The header bell. Scoped to the caller's own subtree by the service — a
+   * dealer must never learn that another dealer signed up a customer.
+   */
+  @Get('feed')
+  notificationFeed(@Request() req: any, @Query('since') since?: string) {
+    return this.feed.feed(req.user, since);
+  }
 
   @Get('status')
   async status() {
