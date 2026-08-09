@@ -7,6 +7,16 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class AiController {
   constructor(private readonly ai: AiService) {}
 
+  /**
+   * The help knowledge base, exposed so the in-app Documentation page renders
+   * from the SAME source the assistant answers from. One place to update means
+   * the docs and the AI can never drift apart.
+   */
+  @Get('docs')
+  docs() {
+    return this.ai.knowledgeBase();
+  }
+
   @Get('status')
   status() {
     return { configured: this.ai.configured };

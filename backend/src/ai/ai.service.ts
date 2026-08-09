@@ -147,6 +147,47 @@ export class AiService {
     { t: 'What if I don\'t verify KYC / upload CNIC', k: 'what happens no cnic kyc verify skip compliance pta document missing', a: 'Verification is refused without the CNIC number, both image sides, and a non-expired CNIC — so an unverified customer stays flagged. Recording identity is a PTA licence requirement and your defence against resale fraud.' },
     { t: 'What if I don\'t set a data cap / FUP', k: 'what happens no fup quota unlimited cap not set data', a: 'Leave the FUP speed blank and the data quota is never enforced — the plan behaves as unlimited. Set a Data Quota + FUP speed on the package only when you want throttling/blocking past the cap.' },
     { t: 'Is an action reversible / can I undo it', k: 'undo reversible revert mistake cancel take back safe permanent', a: 'Money actions are reversible via offsetting entries (refund, invoice reversal, wallet top-up reversal) and never edit the originals, so there\'s always an audit trail. Deleting a subscriber and closing/deleting are the actions to be careful with — prefer suspend/reopen where possible.' },
+
+    // ══════════════════════════════════════════════════════════════
+    //  Daily-work hubs (My Work: My Business · Quick Connect · Renewals)
+    // ══════════════════════════════════════════════════════════════
+    { t: 'My Work hub', k: 'my work hub daily loop business quick connect renewals franchise dealer where start', a: 'Daily Work → My Work holds the three screens a franchise/dealer uses all day, as tabs: My Business (money + customer health), Quick Connect (add & activate), Renewals (who is due). Use it as your home screen instead of hunting the sidebar.' },
+    { t: 'My Business dashboard', k: 'my business wallet balance snapshot revenue commission receivables health low balance dealer franchise earnings month', a: 'My Work → My Business. One live snapshot: wallet balance and spendable (incl. credit limit, amber when low), customers active/expiring-in-7-days/expired/suspended, this month\'s new connections, collected revenue and commission, plus receivables (unpaid invoices). Every tile clicks through to the screen that fixes it. Refreshes each minute.' },
+    { t: 'Quick Connect — add and activate in one screen', k: 'quick connect new connection add activate fast one screen wizard collect cash first payment', a: 'Daily Work → Quick Connect. One form: name, phone, username/password (Suggest generates them), package, area, NAS. It tells you exactly what activation will charge, and the checkbox records the customer\'s first cash payment automatically. ⚡ Activate & connect runs the whole flow — package → invoice → wallet charge → RADIUS — so the customer is online immediately. A double-click cannot double-charge (idempotency key).' },
+    { t: 'Renewals worklist', k: 'renewals due this week expired renew collect one tap worklist month end win back', a: 'Daily Work → Renewals. Groups your customers into Expired (win back), Due this week, and Coming up (30 days), with package, price and days left. "Renew + cash" does invoice + payment + back-online in one tap; "Wallet" renews from the customer\'s own balance. Scoped to your own customers only.' },
+    { t: 'Collections & earnings report', k: 'collections earnings report daily trend by package method csv export how much did i collect commission', a: 'Business → Billing & Accounting → Collections (or /earnings). Pick 7/30/90 days: total collected, commission earned, average per day, a daily bar chart (hover any bar for the exact amount and payment count), and breakdowns by package and payment method. ⬇ Export downloads it as CSV.' },
+
+    // ══════════════════════════════════════════════════════════════
+    //  NAS monitoring (traffic, VLAN, signal, uptime, ports)
+    // ══════════════════════════════════════════════════════════════
+    { t: 'NAS traffic graphs (MRTG style)', k: 'mrtg traffic graph bandwidth chart 1h 6h 7 days 30 days nas router usage peak throughput', a: 'Open Network → NAS → click a router. The Traffic panel plots download/upload over 1h / 6h / 7 days / 30 days with peak ↓/↑, current online and uptime %. Hover anywhere for a crosshair and the exact values at that moment. Data comes from RADIUS accounting sampled every 5 minutes, so a new install needs ~15 minutes before the first curve appears.' },
+    { t: 'VLAN breakdown per NAS', k: 'vlan breakdown per vlan port online traffic split nas which vlan', a: 'In a NAS\'s detail, under the traffic graph, the VLAN breakdown lists each VLAN (from nasportid) with how many subscribers are online on it and its up/down bytes — useful for spotting one VLAN carrying everything or a VLAN that has gone quiet.' },
+    { t: 'Link up/down and optical signal (dBm)', k: 'signal dbm optical onu ont link up down fiber weak degrading los rx power', a: 'A NAS\'s detail shows "Links up/down & optical signal": every ONU with a green/red status dot, its Rx power in dBm, and a colour band for quality (green ≥ −25, amber ≥ −28, red below). Down/critical links sort first. Requires SNMP-enabled OLT/ONU.' },
+    { t: 'Monitor only chosen ports / discover interfaces', k: 'monitored ports interfaces discover snmp which port register only monitor specific', a: 'In a NAS\'s detail, "Monitored ports": click Discover to SNMP-walk the router and list its real interface names (with up/down), then keep only the ones you care about (e.g. ether1-wan, vlan100) and Save. Only those interfaces are then polled. Leave it blank to monitor every interface.' },
+    { t: 'NAS uptime %', k: 'uptime percent availability downtime nas router sla history reliability', a: 'The NAS traffic panel shows Uptime % and minutes down for the selected range (green ≥99, amber ≥95, red below). It is derived from gaps in the 5-minute samples: a gap over 12 minutes counts as the router not reporting.' },
+    { t: 'Operations screen (what needs attention)', k: 'operations screen noc alerts nas down attention isp owner overview problems now', a: 'Operations (inside Network) is the ISP owner\'s "what needs my attention now" screen: online now, NAS reporting X/Y, active outages, problem areas, open alerts, a live alert feed, routers not reporting, and the busiest routers. Refreshes every 30 seconds.' },
+
+    // ══════════════════════════════════════════════════════════════
+    //  Alerts (Discord / WhatsApp)
+    // ══════════════════════════════════════════════════════════════
+    { t: 'Discord / WhatsApp alerts', k: 'discord whatsapp alert notify webhook uptime kuma nas down outage mass disconnect telegram', a: 'Communication → Alerts. Paste a Discord webhook (Server Settings → Integrations → Webhooks → New Webhook → Copy URL) and Save, then Send test alert. You are then alerted when a NAS mass-disconnects, goes down, recovers, or an outage is detected. WhatsApp works too via CallMeBot (free) or Meta Cloud API. Values are encrypted at rest and only ever shown masked.' },
+    { t: 'My own alert channel (per account)', k: 'my alert channel own discord franchise dealer separate alerts not isp only mine', a: 'Communication → Alerts → "My alert channel". Every account — franchise, dealer, staff — can point alerts about THEIR OWN routers and customers at their own Discord/WhatsApp, independent of the ISP owner\'s. You can only ever set your own channel.' },
+
+    // ══════════════════════════════════════════════════════════════
+    //  Grouping, bulk actions, temporary boost, demo
+    // ══════════════════════════════════════════════════════════════
+    { t: 'Group subscribers (classification)', k: 'group grouping classify by nas area dealer package status same router together clean', a: 'On Subscribers click "Group subscribers" and choose NAS/Router, Area, Dealer/Parent, Package or Status. You get a card per group with total + active counts and an active-ratio bar; clicking a card filters the list to it. NAS and Users have the same panel (Group NAS by owner/type/site, Group accounts by role/parent/KYC).' },
+    { t: 'Bulk and group actions', k: 'bulk multiple select many at once activate deactivate message grace whole nas area group blast', a: 'On Subscribers, select rows and use the toolbar: Activate, Grace, Message, Remove, Disable, Move. To act on a WHOLE group without selecting, hover a group card and use ✓ activate, ⊘ deactivate, ✉ message or ⏳ grace. You can also right-click a NAS → "Message subscribers…" to notify everyone on that router (maintenance notice).' },
+    { t: 'Temporary speed boost', k: 'boost temporary speed upgrade 30mb one day extra speed revert automatically', a: 'Open a subscriber → ⚡ Temporary Boost. Set the speed and a duration (1h / 6h / 1 day / 3 days, or Permanent). It applies live via RADIUS CoA; a timed boost reverts to the plan speed automatically when it expires, so nobody has to remember.' },
+    { t: 'Grace period', k: 'grace period extra days keep online past expiry goodwill awaiting payment temporary', a: 'Open a subscriber → Grace Period, enter days (1–90). If they were expired/inactive they are reactivated immediately and put back into RADIUS; the daily expiry sweep will not cut them until the grace ends. No charge and no invoice — it is goodwill, and it is audit-logged.' },
+    { t: 'Demo accounts', k: 'demo sandbox trial try test account 7 days auto delete franchise', a: 'The login page has "Try a demo account": it creates a sandbox FRANCHISE account with full franchise powers and a test wallet. Console, RADIUS admin and logs are blocked in demo for security, and the whole account plus everything it created is deleted automatically after 7 days. Creation is rate-limited (one per IP per hour).' },
+
+    // ══════════════════════════════════════════════════════════════
+    //  Interface, themes, tables
+    // ══════════════════════════════════════════════════════════════
+    { t: 'Themes / change the look', k: 'theme colour color dark light winbox aurora appearance look change ui', a: 'Click the 🎨 icon in the header. Three themes: Aurora (the gradient default), WinBox (beta) — flat and compact like MikroTik WinBox — and Light (white). Your choice is remembered per browser.' },
+    { t: 'Resize table columns / expand a table', k: 'column width resize drag table expand full screen bigger view wide', a: 'Drag the edge of any column header on Subscribers, NAS or Packages to resize it; double-click the edge to reset. Widths are remembered. Each list also has ⛶ Expand for a full-screen view (Esc to close), and Find/Ctrl+F to search.' },
+    { t: 'Keyboard shortcuts', k: 'keyboard shortcut ctrl k command palette search quickly hotkey', a: 'Ctrl+K (or ⌘K, or /) opens the command palette — type to jump to any screen or action. Ctrl+F focuses the Find box on a list. Esc closes dialogs and the expanded view.' },
   ];
 
   private localAnswer(question: string) {
@@ -172,6 +213,18 @@ export class AiService {
     const related = scored.slice(1, 4).filter((s) => s.score >= Math.max(2, best.score - 2)).map((s) => s.entry.t);
     const relatedLine = related.length ? `\n\nRelated: ${related.join(' · ')}` : '';
     return best.entry.a + relatedLine;
+  }
+
+  /**
+   * The knowledge base as data, for the in-app Documentation page.
+   * Entries are grouped by the section headings used in the KB array, so the
+   * docs page and the assistant always describe the same product.
+   */
+  knowledgeBase() {
+    return {
+      count: this.KB.length,
+      topics: this.KB.map((e) => ({ title: e.t, keywords: e.k, answer: e.a })),
+    };
   }
 
   private knowledgePrompt(role?: string) {

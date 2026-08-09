@@ -83,8 +83,9 @@ const menuGroups = [
     { id: 'console', label: 'Server Console', href: '/console', Icon: navIcons.NAS, ispOnly: true },
     // ISP owner only — FreeRADIUS module toggles, config-file editor and DB details.
     { id: 'radius-admin', label: 'FreeRADIUS & Database', href: '/radius-admin', Icon: navIcons.NAS, ispOnly: true },
-    // Help is now the ✦ assistant (bottom-right) — clicking here opens it.
-    { id: 'help', label: 'Help (ask assistant)', href: '#assistant', Icon: navIcons.Support },
+    // Documentation renders the same knowledge base the ✦ assistant answers
+    // from, so browsing and asking give identical guidance.
+    { id: 'docs', label: 'Documentation', href: '/docs', Icon: navIcons.Support },
   ]},
 ];
 // Flat list kept for title lookup / active-menu detection.
