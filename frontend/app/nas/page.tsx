@@ -777,16 +777,10 @@ export default function NasPage() {
                 </div>
               )}
             </div>
-            {(!me || isAdminRole(me.role) || me.canAddNas) && (
-              <Btn onClick={() => { resetForm(); setEditItem(null); setShowForm(true); }} variant="primary" style={{ padding:'9px 14px', fontSize:13 }}><Icons.Plus /> Add NAS</Btn>
-            )}
-            {(!me || isAdminRole(me.role) || me.canAddNas) && (
-              <Btn onClick={() => setShowImport(true)} variant="ghost" style={{ padding:'9px 14px', fontSize:13 }}>⬆ Import</Btn>
-            )}
-            <Btn onClick={() => downloadCsv("nas.csv", nasList.map((n:any)=>({ nasName:n.shortname||n.nasname, nasIp:n.nasIp||n.nasname, secret:n.secret, apiPort:n.apiPort, nasType:n.type, deviceType:(n as any).deviceType })), [
-              { key:"nasName", label:"nasName" }, { key:"nasIp", label:"nasIp" }, { key:"secret", label:"secret" },
-              { key:"apiPort", label:"apiPort" }, { key:"nasType", label:"nasType" }, { key:"deviceType", label:"deviceType" },
-            ])} variant="ghost" style={{ padding:'9px 14px', fontSize:13 }}>⬇ Export</Btn>
+            {/* Add / Import / Export live in the toolbar docked to the table
+                below — the same place as on Subscribers, Packages and IP Pools.
+                They used to ALSO sit here, so every action appeared twice and
+                the buttons floated beside an explanatory paragraph. */}
             {showImport && (
               <ImportWizard
                 onClose={() => setShowImport(false)}
@@ -902,9 +896,16 @@ export default function NasPage() {
             onFind={setSearchQ}
             findPlaceholder="Find NAS name or IP…"
             groups={[
-              [{ label: "Add", icon: "＋", tone: "primary", title: "Add NAS / router", onClick: () => { resetForm(); setEditItem(null); setShowForm(true); } }],
+              // Add/Import are hidden for an account that may only use routers
+              // handed down to it — showing them would offer an action that
+              // always fails at save time.
+              ...((!me || isAdminRole(me.role) || me.canAddNas)
+                ? [[{ label: "Add", icon: "＋", tone: "primary" as const, title: "Add NAS / router", onClick: () => { resetForm(); setEditItem(null); setShowForm(true); } }]]
+                : []),
               [
-                { label: "Import", icon: "⬆", onClick: () => setShowImport(true) },
+                ...((!me || isAdminRole(me.role) || me.canAddNas)
+                  ? [{ label: "Import", icon: "⬆", onClick: () => setShowImport(true) }]
+                  : []),
                 { label: "Export", icon: "⬇", onClick: () => downloadCsv("nas.csv", nasList.map((n:any)=>({ nasName:n.shortname||n.nasname, nasIp:n.nasIp||n.nasname, secret:n.secret, apiPort:n.apiPort, nasType:n.type, deviceType:(n as any).deviceType })), [
                   { key:"nasName", label:"NAS Name" }, { key:"nasIp", label:"NAS IP" }, { key:"secret", label:"Secret" }, { key:"apiPort", label:"API Port" }, { key:"nasType", label:"Type" }, { key:"deviceType", label:"Device" },
                 ]) },

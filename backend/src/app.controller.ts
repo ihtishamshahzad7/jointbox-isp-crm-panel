@@ -392,7 +392,7 @@ export class AppController {
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Post('update/pull')
-  async pullUpdate(@Req() req: any) {
+  async pullUpdate(@Req() req: any, @Body() body?: { force?: boolean }) {
     this.assertSuperAdmin(req);
 
     // WHY delegate to update-jointbox.sh instead of running git/build inline:
@@ -413,10 +413,43 @@ export class AppController {
       }
 
       const gitBranch = (await runGitCommand('git rev-parse --abbrev-ref HEAD')).stdout.trim();
-      await runGitCommand(`git fetch origin ${gitBranch}`).catch(() => undefined);
-      const localHash = (await runGitCommand('git rev-parse HEAD')).stdout.trim();
-      const remoteHash = (await runGitCommand(`git rev-parse origin/${gitBranch}`).catch(() => ({ stdout: localHash }) as any)).stdout.trim();
-      if (localHash === remoteHash) {
+
+      /**
+       * WHY the button used to do nothing.
+       *
+       * `git fetch` was wrapped in `.catch(() => undefined)` and, when it
+       * failed, remoteHash fell back to localHash — so the hashes matched, the
+       * method returned "Already up to date" and the update NEVER RAN. From the
+       * UI that looks like a dead button, which is exactly what operators saw,
+       * while `bash update-jointbox.sh` on the server worked fine.
+       *
+       * Fetch can legitimately fail here even when it works in a shell: the pm2
+       * environment differs, and git refuses a repo owned by another user
+       * ("dubious ownership") unless it is marked safe. So:
+       *   1. mark the repo safe before any git call,
+       *   2. never swallow a fetch failure — surface it,
+       *   3. when the operator explicitly clicks Update, RUN THE SCRIPT even if
+       *      we cannot tell whether we are behind. The script does its own
+       *      fetch/reset/pull and is safe to run when already current.
+       */
+      await runGitCommand(`git config --global --add safe.directory "${repoRoot}"`).catch(() => undefined);
+
+      let fetchFailed = false;
+      try {
+        await runGitCommand(`git fetch origin ${gitBranch}`, repoRoot);
+      } catch (e: any) {
+        fetchFailed = true;
+        this.logger?.warn?.(`update: git fetch failed (${e?.message || e}) — running the update script anyway.`);
+      }
+
+      const localHash = (await runGitCommand('git rev-parse HEAD', repoRoot)).stdout.trim();
+      let remoteHash = '';
+      try {
+        remoteHash = (await runGitCommand(`git rev-parse origin/${gitBranch}`, repoRoot)).stdout.trim();
+      } catch { /* unknown — fall through and run the script */ }
+
+      // Only claim "up to date" when we actually PROVED it.
+      if (!fetchFailed && remoteHash && localHash === remoteHash && body?.force !== true) {
         return { ok: true, message: 'Already up to date.', branch: gitBranch };
       }
 
@@ -435,6 +468,7 @@ export class AppController {
         started: true,
         branch: gitBranch,
         message: 'Update started. The panel will pull the latest code, migrate the database, rebuild and restart automatically (about 1–2 minutes). Refresh the page shortly. Progress is logged to update.log on the server.',
+        logFile,
       };
     } catch (error: any) {
       throw new InternalServerErrorException(

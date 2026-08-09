@@ -525,9 +525,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (!token) return;
     setUpdating(true);
     try {
+      // force: the operator explicitly asked to update, so run the deploy script
+      // even if we can't prove we're behind (a failed `git fetch` used to make
+      // this silently report "already up to date" and do nothing).
       const res = await fetch(`${API}/update/pull`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ force: true }),
       });
       const data = await res.json();
       if (!res.ok) {
