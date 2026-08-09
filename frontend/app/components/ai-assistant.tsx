@@ -65,7 +65,7 @@ export default function AiAssistant() {
             display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800, fontSize: 14 }}>✦ Jointbox Assistant</div>
-              <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v5</div>
+              <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v6</div>
             </div>
             {/* Expand — a long answer is far easier to read on a full page than
                 in a 400px bubble, so hand the conversation over to /assistant. */}
@@ -74,8 +74,11 @@ export default function AiAssistant() {
               title="Open in full page"
               aria-label="Open assistant in full page"
               style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.28)",
-                color: "#fff", borderRadius: 8, padding: "5px 9px", fontSize: 13, cursor: "pointer",
-                lineHeight: 1, flex: "none" }}>⛶</button>
+                color: "#fff", borderRadius: 8, padding: "6px 11px", fontSize: 12, fontWeight: 700,
+                cursor: "pointer", lineHeight: 1, flex: "none", whiteSpace: "nowrap",
+                display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit" }}>
+              ⛶ Expand
+            </button>
           </div>
 
           {!configured && (
