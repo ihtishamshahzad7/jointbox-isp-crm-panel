@@ -53,10 +53,21 @@ export default function AiAssistant() {
 
       {open && (
         <div className="jb-assist-panel" style={{
-          // min() keeps the panel inside the viewport on a narrow window, where
-          // a fixed 400px would sit half off-screen and clip every message.
-          position: "fixed", right: 16, bottom: 88, zIndex: 2000,
-          width: "min(400px, calc(100vw - 32px))", height: 560, maxHeight: "78vh",
+          /**
+           * Anchored by BOTH insets instead of a computed width.
+           *
+           * `width: min(400px, calc(100vw - 32px))` still overflowed, because
+           * 100vw counts the scrollbar and ignores browser zoom — so on a narrow
+           * window the panel hung off the right edge and `overflow: hidden`
+           * chopped the text AND the Expand button clean off.
+           *
+           * left+right+auto width means the browser derives the width from the
+           * actual viewport: it can never exceed it. maxWidth caps it at 400px
+           * on a big screen and marginLeft:auto keeps it right-aligned.
+           */
+          position: "fixed", left: 16, right: 16, bottom: 88, zIndex: 2000,
+          width: "auto", maxWidth: 400, marginLeft: "auto",
+          height: 560, maxHeight: "78vh",
           boxSizing: "border-box",
           background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 16, display: "flex", flexDirection: "column", overflow: "hidden",
           boxShadow: "0 24px 60px rgba(0,0,0,0.4)",
@@ -65,7 +76,7 @@ export default function AiAssistant() {
             display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800, fontSize: 14 }}>✦ Jointbox Assistant</div>
-              <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v6</div>
+              <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v7</div>
             </div>
             {/* Expand — a long answer is far easier to read on a full page than
                 in a 400px bubble, so hand the conversation over to /assistant. */}

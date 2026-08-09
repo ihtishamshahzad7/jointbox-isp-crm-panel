@@ -81,8 +81,14 @@ export function AssistantChat({ big = false }: { big?: boolean }) {
 
   return (
     <>
+      {/* width:100% + maxWidth:100% + border-box: the scroll area takes its
+          width FROM the panel and can never be pushed wider by its content,
+          which is what let long replies spill past the right edge. */}
       <div ref={bodyRef}
-        style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: big ? "18px 4px" : 12 }}>
+        style={{
+          flex: 1, minWidth: 0, width: "100%", maxWidth: "100%", boxSizing: "border-box",
+          overflowY: "auto", overflowX: "hidden", padding: big ? "18px 4px" : 12,
+        }}>
         {msgs.map((m, i) => (
           <div key={i} style={{
             display: "block", width: "100%", boxSizing: "border-box",
