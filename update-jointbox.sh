@@ -55,6 +55,15 @@ if [ -f "$ENVF" ]; then
   chmod 600 "$ENVF" 2>/dev/null || true
 fi
 
+# Teach the assistant about any features shipped in this update: regenerate its
+# knowledge from the code (every screen + every backend action). Best-effort —
+# a missing python must never block a deploy.
+if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/tools/build_ai_knowledge.py" ]; then
+  python3 "$REPO/tools/build_ai_knowledge.py" >/dev/null 2>&1 \
+    && echo "🧠 Assistant knowledge regenerated from the codebase" \
+    || echo "⚠ Assistant knowledge not regenerated (non-fatal)"
+fi
+
 echo "🗄️  Applying database migrations + reconcile..."
 cd "$REPO/backend"
 npm install --no-audit --no-fund

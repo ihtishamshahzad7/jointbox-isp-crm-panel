@@ -1,0 +1,641 @@
+{
+  "generated": true,
+  "note": "Auto-generated from the codebase by tools/build_ai_knowledge.py. Do not edit by hand — re-run the script instead.",
+  "counts": {
+    "screens": 56,
+    "actions": 49,
+    "total": 105
+  },
+  "entries": [
+    {
+      "t": "Screen: Accounting",
+      "k": "accounting accounting page screen where find open go to accounting",
+      "a": "Business → Billing & Accounting → Accounting. Why the ledger is empty, when it is empty for a reason.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Admin Center",
+      "k": "admin-center admin center page screen where find open go to admin center",
+      "a": "System → Administration. Accounts and configuration. The reseller tree sits here rather than under billing because adding a dealer is an administrative act — the money side of that relationship lives in Billing.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Analytics",
+      "k": "analytics analytics page screen where find open go to analytics",
+      "a": "/analytics. Analytics. DESIGN INTENT — advanced underneath, simple on the surface.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Areas",
+      "k": "areas areas page screen where find open go to areas",
+      "a": "Operations → Plans & Stock → Areas. The response was never checked. `await fetch(...)` resolves for a 403 or a 500 exactly as it does for a 201 — fetch only rejects on a network failure.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Billing Center",
+      "k": "billing-center billing center page screen where find open go to billing center",
+      "a": "Business → Billing & Accounting. Money in one place — the ledger, what was billed, what was collected, and the prices that drive both.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Communication",
+      "k": "communication communication page screen where find open go to communication",
+      "a": "Daily Work → Support → Communication.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Complaints",
+      "k": "complaints complaints page screen where find open go to complaints",
+      "a": "Daily Work → Support → Complaints.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Compliance",
+      "k": "compliance compliance page screen where find open go to compliance",
+      "a": "Business → KYC & Data Usage. Compliance — CNIC verification and data-usage enforcement. First page migrated onto the Nova UI kit.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Console",
+      "k": "console console page screen where find open go to console",
+      "a": "System → Server Console (ISP owner only). Server Console — ISP owner only. A terminal into the host plus live tails of the backend, frontend and system logs.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Dashboard",
+      "k": "dashboard dashboard page screen where find open go to dashboard",
+      "a": "Daily Work → Dashboard. Nova: alternating purple→cyan gradient bars that grow in with a stagger.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Docs",
+      "k": "docs docs page screen where find open go to docs",
+      "a": "System → Documentation. Documentation — every feature, what it does, where it lives and when to use it. It renders the SAME knowledge base the built-in assistant answers from (/ai/docs), so the docs and the AI can never disagree: update the KB once and both change together.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Earnings",
+      "k": "earnings earnings page screen where find open go to earnings",
+      "a": "Business → Billing & Accounting → Collections. Collections / earnings report — totals, daily trend, per-package & method.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Fiber",
+      "k": "fiber fiber page screen where find open go to fiber",
+      "a": "Operations → Network → FTTH / Fiber.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Field Jobs",
+      "k": "field-jobs field jobs page screen where find open go to field jobs",
+      "a": "Daily Work → Support → Field Jobs.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Franchise Groups",
+      "k": "franchise-groups franchise groups page screen where find open go to franchise groups",
+      "a": "/franchise-groups.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Gateways",
+      "k": "gateways gateways page screen where find open go to gateways",
+      "a": "/gateways.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Hierarchy",
+      "k": "hierarchy hierarchy page screen where find open go to hierarchy",
+      "a": "/hierarchy. Each tier gets its own colour so depth is readable at a glance.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Insights",
+      "k": "insights insights page screen where find open go to insights",
+      "a": "Business → Insights. Looking backwards — trends, printable reports, and the raw record when a number needs explaining.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Inventory",
+      "k": "inventory inventory page screen where find open go to inventory",
+      "a": "Operations → Plans & Stock → Inventory.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Invoices",
+      "k": "invoices invoices page screen where find open go to invoices",
+      "a": "Business → Billing & Accounting → Invoices.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Ip Pools",
+      "k": "ip-pools ip pools page screen where find open go to ip pools",
+      "a": "Operations → Network → IP Pools. ISP-level roles bypass every reseller ownership gate.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Jobs",
+      "k": "jobs jobs page screen where find open go to jobs",
+      "a": "System → Background Jobs.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Logs",
+      "k": "logs logs page screen where find open go to logs",
+      "a": "Business → Insights → Logs.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: My Business",
+      "k": "my-business my business page screen where find open go to my business",
+      "a": "Daily Work → My Work → My Business. My Business — reseller/franchise operations snapshot.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: My Profile",
+      "k": "my-profile my profile page screen where find open go to my profile",
+      "a": "/my-profile.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: My Work",
+      "k": "my-work my work page screen where find open go to my work",
+      "a": "Daily Work → My Work. My Work — the franchise/dealer daily loop in one place: see the business, add a customer, renew the ones falling due. These three are used together all day, so they belong behind one sidebar entry rather than three.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Nas",
+      "k": "nas nas page screen where find open go to nas",
+      "a": "Operations → Network → NAS / Routers. Who registered this router. Null for legacy rows predating ownership.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Network",
+      "k": "network network page screen where find open go to network",
+      "a": "/network. Live throughput graph. The stat cards show CUMULATIVE bytes since each session began — that only ever grows, so it can't answer \"how much is flowing right now\".",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Network Center",
+      "k": "network-center network center page screen where find open go to network center",
+      "a": "Operations → Network. Everything that is \"the network\" in one place. These six screens are used together constantly — you look at who is online, see a router misbehaving, check its pool, and end up assigning an address.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Noc",
+      "k": "noc noc page screen where find open go to noc",
+      "a": "Operations → Network → NOC / Uptime.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Operations",
+      "k": "operations operations page screen where find open go to operations",
+      "a": "Operations → Network → Operations. Operations — the ISP owner's single \"what needs my attention now\" screen: live alerts, NAS/router health, active outages and the numbers that matter, all in one place with jump-offs to act.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Organization",
+      "k": "organization organization page screen where find open go to organization",
+      "a": "System → Administration → Organization. The three delegated rights, all switched from one place. They were scattered — price-setting had an endpoint but no UI, router registration had neither, and only balance-adding was reachable.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Outages",
+      "k": "outages outages page screen where find open go to outages",
+      "a": "Operations → Network → Outages & Power.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Packages → Allocations",
+      "k": "packages/allocations packages/allocations page screen where find open go to packages → allocations",
+      "a": "Operations → Plans & Stock → Packages.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Packages",
+      "k": "packages packages page screen where find open go to packages",
+      "a": "Operations → Plans & Stock → Packages. The catalogue belongs to the ISP. Everyone else reads it and prices it.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Packages → Policies",
+      "k": "packages/policies packages/policies page screen where find open go to packages → policies",
+      "a": "Operations → Plans & Stock → Packages.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Packages → Taxes",
+      "k": "packages/taxes packages/taxes page screen where find open go to packages → taxes",
+      "a": "Operations → Plans & Stock → Packages.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Payments",
+      "k": "payments payments page screen where find open go to payments",
+      "a": "Business → Billing & Accounting → Payments.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Pricing",
+      "k": "pricing pricing page screen where find open go to pricing",
+      "a": "Business → Billing & Accounting → Reseller Pricing. Reseller Pricing. REBUILT — the previous version could not do the one thing it existed for.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Quick Connect",
+      "k": "quick-connect quick connect page screen where find open go to quick connect",
+      "a": "Daily Work → My Work → Quick Connect. Quick Connect — one screen to add + activate a new customer: enter details, pick a package, click Activate. Creation runs the full flow (package → invoice → wallet charge → RADIUS), so the customer is online immediately.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Radius Admin",
+      "k": "radius-admin radius admin page screen where find open go to radius admin",
+      "a": "System → FreeRADIUS & Database (ISP owner only).",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Renewals",
+      "k": "renewals renewals page screen where find open go to renewals",
+      "a": "Daily Work → My Work → Renewals. Renewals worklist — due-this-week + expired customers with one-tap renew. Renewing runs activateRenewal, which raises the invoice, records the cash payment and puts the customer back online in a single action.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Reports",
+      "k": "reports reports page screen where find open go to reports",
+      "a": "/reports. Reports. The previous version drew a pie of package counts and two empty chart placeholders.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Reversals",
+      "k": "reversals reversals page screen where find open go to reversals",
+      "a": "Business → Billing & Accounting → Disputes & Reversals. Disputes / Reversals — one consolidated view of every activation reversal across the caller's dealer tree, plus a reason-coded \"reverse a charge\" form. A franchise sees its whole tree's reversals; a dealer only its own (scoped on the server).",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Router Console",
+      "k": "router-console router console page screen where find open go to router console",
+      "a": "/router-console. Router Console — a WinBox-style workspace, wired to live data. Pick a router at the top; each left-menu item opens a floating window over real data: Interfaces / IP Addresses / CPU-RAM-uptime → GET /nas/:id/sync (router API) PPP Active → GET /nas/:id/sessions PPP Secrets / Simple Queues → GET /subscribers (this NAS) Log → GET /logs/router?nasId= Disconnect on an active session is a real action (POST /network/disconnect).",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Security",
+      "k": "security security page screen where find open go to security",
+      "a": "System → Administration → Security.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Segments",
+      "k": "segments segments page screen where find open go to segments",
+      "a": "Business → Insights → Segments. Segments — subscriber base sliced by VLAN, router, area, reseller, package and auth method, with live availability per slice. LAYOUT NOTE This page must NOT use the `.db-root` class.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Service Catalog",
+      "k": "service-catalog service catalog page screen where find open go to service catalog",
+      "a": "Operations → Plans & Stock. What you sell and where you sell it — plans, coverage areas, and the equipment that goes out with an installation.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Settings",
+      "k": "settings settings page screen where find open go to settings",
+      "a": "System → Administration → Settings.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Setup",
+      "k": "setup setup page screen where find open go to setup",
+      "a": "System → Setup Checklist. Setup — the guided path from an empty panel to a customer who is online. The order of these steps was never written down anywhere.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Static Ips",
+      "k": "static-ips static ips page screen where find open go to static ips",
+      "a": "Operations → Network → Static IPs. Gradient KPI tile — the pool's health at a glance.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Subscribers",
+      "k": "subscribers subscribers page screen where find open go to subscribers",
+      "a": "Daily Work → Subscribers. Not in shared Icons — keep inline.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Support Center",
+      "k": "support-center support center page screen where find open go to support center",
+      "a": "Daily Work → Support. The customer-facing side of the day: what they reported, who is going out to fix it, and what you told them.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Trace",
+      "k": "trace trace page screen where find open go to trace",
+      "a": "Daily Work → Trace Search.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Users",
+      "k": "users users page screen where find open go to users",
+      "a": "System → Administration → Users.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Vouchers",
+      "k": "vouchers vouchers page screen where find open go to vouchers",
+      "a": "Business → Billing & Accounting → Vouchers.",
+      "src": "screens"
+    },
+    {
+      "t": "What the panel can do: accounting",
+      "k": "accounting accounting api action endpoint capability can i",
+      "a": "Trial balance — total debits vs credits + malformed-entry count. Available actions: create/run /accounting/balances/:subscriberId/topup; create/run /accounting/expense-requests/:id/approve; create/run /accounting/expense-requests/:id/reject; create/run /accounting/expenses; create/run /accounting/invoices/:id/reverse; create/run /accounting/payments/:id/refund; create/run /accounting/refund-requests/:id/approve; create/run /accounting/refund-requests/:id/reject; remove /accounting/expenses/:id; replace /accounting/finance-settings; replace /accounting/period-lock; view /accounting/balances; view /accounting/balances/:subscriberId/history; view /accounting/cashflow.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: ai",
+      "k": "ai ai api action endpoint capability can i",
+      "a": "The help knowledge base, exposed so the in-app Documentation page renders from the SAME source the assistant answers from. One place to update means the docs and the AI can never drift apart. Available actions: create/run /ai/chat; view /ai/docs; view /ai/status.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: analytics",
+      "k": "analytics analytics api action endpoint capability can i",
+      "a": "Headline KPIs: ARPU, churn, LTV, growth, revenue vs previous period. Available actions: view /analytics/areas; view /analytics/at-risk; view /analytics/hierarchy; view /analytics/leaderboard; view /analytics/overview; view /analytics/packages; view /analytics/trend.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: areas",
+      "k": "areas areas api action endpoint capability can i",
+      "a": "Available actions: create/run /areas; remove /areas/:id; replace /areas/:id; update /areas/:id/toggle; view /areas; view /areas/:id; view /areas/stats.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: auth",
+      "k": "auth auth api action endpoint capability can i",
+      "a": "Available actions: create/run /auth/impersonate-stop; create/run /auth/impersonate/:userId; create/run /auth/login; create/run /auth/logout; create/run /auth/refresh; create/run /auth/verify; view /auth/profile.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: billing",
+      "k": "billing billing api action endpoint capability can i",
+      "a": "Manually trigger a billing job. Add ?dryRun=1 to preview without changing anything. Available actions: create/run /billing/run/:type; view /billing/runs.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: billing ext",
+      "k": "billing-ext billing ext api action endpoint capability can i",
+      "a": "Billing extensions: • ProRatedBilling settings per package • SubscriberBilling (PREPAID / POSTPAID / HYBRID) • SubscriberBalance + ledger • Invoice reversal with full / pro-rata / partial support Available actions: create/run /billing-ext/invoices/:invoiceId/reverse; create/run /billing-ext/pro-rata/calculate; create/run /billing-ext/subscriber-balance/:subId/adjust; create/run /billing-ext/subscriber-balance/:subId/topup; replace /billing-ext/pro-rata/package/:pkgId; replace /billing-ext/subscriber-billing/:subId; view /billing-ext/pro-rata; view /billing-ext/pro-rata/package/:pkgId; view /billing-ext/reversals; view /billing-ext/reversals/:id; view /billing-ext/subscriber-balance/:subId; view /billing-ext/subscriber-balance/:subId/ledger; view /billing-ext/subscriber-billing/:subId.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: boost",
+      "k": "boost boost api action endpoint capability can i",
+      "a": "Available actions: create/run /boost/:id/revert; create/run /boost/apply; view /boost/active.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: compliance",
+      "k": "compliance compliance api action endpoint capability can i",
+      "a": "Verification coverage + what still needs attention. Available actions: create/run /compliance/fup/:subscriberId/extend; create/run /compliance/kyc/:subscriberId/cnic; create/run /compliance/kyc/users/:userId/cnic; update /compliance/fup/:subscriberId/release; update /compliance/kyc/:subscriberId/verify; update /compliance/kyc/users/:userId/verify; view /compliance/fup/:subscriberId; view /compliance/fup/report; view /compliance/kyc/duplicates; view /compliance/kyc/queue; view /compliance/kyc/register; view /compliance/kyc/stats; view /compliance/kyc/users/queue; view /compliance/kyc/users/stats.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: console",
+      "k": "console console api action endpoint capability can i",
+      "a": "Server console — ISP owner (SUPER_ADMIN) ONLY. Not behind PermissionsGuard's per-feature flags on purpose: this is not a delegable feature, it is the platform owner's root access to their own box. Available actions: create/run /console/exec; view /console/info; view /console/logs.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: demo",
+      "k": "demo demo api action endpoint capability can i",
+      "a": "Public demo-account creation. No auth required — anyone can spin up a sandbox franchise account to try the panel; it self-destructs in 7 days. Available actions: create/run /demo/create.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: fiber",
+      "k": "fiber fiber api action endpoint capability can i",
+      "a": "Available actions: create/run /fiber/olts; create/run /fiber/onus/:id/assign/:subscriberId; create/run /fiber/onus/:id/unassign; create/run /fiber/ports; remove /fiber/olts/:id; remove /fiber/onus/:id; remove /fiber/ports/:id; replace /fiber/olts/:id; replace /fiber/onus/:id; replace /fiber/ports/:id; replace /fiber/subscribers/:subscriberId; view /fiber/olts; view /fiber/olts/:id; view /fiber/olts/:id/tree.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: field jobs",
+      "k": "field-jobs field jobs api action endpoint capability can i",
+      "a": "Dispatch board: pending, overdue, unassigned, scheduled today. Available actions: create/run /field-jobs; create/run /field-jobs/from-ticket/:ticketId; remove /field-jobs/:id; replace /field-jobs/:id; update /field-jobs/:id/assign/:technicianId; update /field-jobs/:id/cancel; update /field-jobs/:id/complete; update /field-jobs/:id/start; view /field-jobs; view /field-jobs/:id; view /field-jobs/mine; view /field-jobs/performance; view /field-jobs/stats.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: gateway",
+      "k": "gateway gateway api action endpoint capability can i",
+      "a": "Sandbox checkout page — end-to-end test without a real gateway. Available actions: create/run /gateway/callback/easypaisa; create/run /gateway/callback/jazzcash; create/run /gateway/callback/razorpay; create/run /gateway/callback/sslcommerz; create/run /gateway/initiate/:invoiceId/:gateway; create/run /gateway/sandbox/confirm/:key; view /gateway/available; view /gateway/callback/bkash; view /gateway/callback/easypaisa; view /gateway/callback/jazzcash; view /gateway/callback/paypal; view /gateway/callback/razorpay; view /gateway/callback/sslcommerz; view /gateway/callback/stripe.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: groups",
+      "k": "groups groups api action endpoint capability can i",
+      "a": "Access Groups let the ISP say \"share this NAS / package with franchise A and dealer B, but hide it from dealer C\". A resource can be GLOBAL (no rows in the link table = everyone sees it), PERSONAL (only the owner sees it), or in one or more named groups (members of those groups see it, with optional inheritance to their downline). Available actions: create/run /groups; create/run /groups/:id/members; create/run /groups/:id/nas; create/run /groups/:id/packages; remove /groups/:id; remove /groups/:id/members/:userId; remove /groups/:id/nas/:nasId; remove /groups/:id/packages/:pkgId; replace /groups/:id; replace /groups/:id/members/:userId; view /groups; view /groups/:id; view /groups/:id/members; view /groups/:id/nas.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: insights",
+      "k": "insights insights api action endpoint capability can i",
+      "a": "Global trace search — paste any phone/username/invoice#/name/id. Available actions: view /insights/search; view /insights/timeline/:subscriberId.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: segmentation",
+      "k": "segmentation segmentation api action endpoint capability can i",
+      "a": "Every dimension at once — router, VLAN, area, reseller, package and auth method — each with counts, live online share and a health flag. Available actions: view /segments; view /segments/:dimension/:key; view /segments/command.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: integrations",
+      "k": "integrations integrations api action endpoint capability can i",
+      "a": "Management of integration credentials and endpoints. These routes are for logged-in humans — the public API itself is separate. Available actions: create/run /integrations/api-keys; create/run /integrations/webhooks; create/run /integrations/webhooks/:id/test; remove /integrations/api-keys/:id; remove /integrations/webhooks/:id; replace /integrations/webhooks/:id; view /integrations/api-keys; view /integrations/webhooks; view /integrations/webhooks/:id/deliveries; view /integrations/webhooks/events.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: public api",
+      "k": "public-api public api api action endpoint capability can i",
+      "a": "Public API v1 — key-authenticated REST endpoints for external integrations. All endpoints are scoped using @RequireScope('read'|'write'). Available actions: create/run /api/v1/billing/run/:type; create/run /api/v1/gateways/initiate/:invoiceId/:gateway; create/run /api/v1/invoices; create/run /api/v1/invoices/:id/payment; create/run /api/v1/subscribers; create/run /api/v1/subscribers/:id/bandwidth; create/run /api/v1/subscribers/:id/disconnect; create/run /api/v1/subscribers/:id/throttle; remove /api/v1/subscribers/:id; remove /api/v1/subscribers/:id/throttle; replace /api/v1/subscribers/:id; view /api/v1/analytics/overview; view /api/v1/areas; view /api/v1/fiber/olts.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: inventory",
+      "k": "inventory inventory api action endpoint capability can i",
+      "a": "Stock counts by status/type + warranty expiring in 30 days. Available actions: create/run /inventory; create/run /inventory/bulk; remove /inventory/:id; replace /inventory/:id; update /inventory/:id/assign/:userId; update /inventory/:id/install/:subscriberId; update /inventory/:id/return; view /inventory; view /inventory/:id; view /inventory/:id/history; view /inventory/stats.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: invoices",
+      "k": "invoices invoices api action endpoint capability can i",
+      "a": "Printable HTML invoice (browser print → Save as PDF). Available actions: create/run /invoices; create/run /invoices/:id/payment; view /invoices; view /invoices/:id; view /invoices/:id/pdf; view /invoices/stats; view /invoices/subscriber/:subscriberId.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: ip pool",
+      "k": "ip-pool ip pool api action endpoint capability can i",
+      "a": "Does every pool actually exist on the router? Declared before ':id' so that route doesn't swallow it. Available actions: create/run /ip-pools; create/run /ip-pools/:id/share/:userId; create/run /ip-pools/import; create/run /ip-pools/sync/apply; remove /ip-pools/:id; remove /ip-pools/:id/share/:userId; replace /ip-pools/:id; view /ip-pools; view /ip-pools/:id; view /ip-pools/stats; view /ip-pools/sync/check; view /ip-pools/verify.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: jobs",
+      "k": "jobs jobs api action endpoint capability can i",
+      "a": "Registered job types (for a \"run\" dropdown in the UI). Available actions: create/run /jobs; view /jobs; view /jobs/:id; view /jobs/types.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: logs",
+      "k": "logs logs api action endpoint capability can i",
+      "a": "Available actions: create/run /logs/radius/close-stale; view /logs/activity; view /logs/failed-activations; view /logs/login; view /logs/network; view /logs/radius-auth; view /logs/radius/diagnostics; view /logs/router/subscriber/:id; view /logs/sessions; view /logs/stats; view /logs/system; view /logs/timeline.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: nas",
+      "k": "nas nas api action endpoint capability can i",
+      "a": "Bulk: give several routers to several accounts at once. Available actions: create/run /nas; create/run /nas/:id/assign/:userId; create/run /nas/assign-bulk; create/run /nas/import; remove /nas/:id; remove /nas/:id/assign/:userId; replace /nas/:id; update /nas/:id/monitored-ports; update /nas/:id/toggle; view /nas; view /nas/:id; view /nas/:id/ping; view /nas/:id/quick-check; view /nas/:id/reachability.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: network",
+      "k": "network network api action endpoint capability can i",
+      "a": "SECURITY: verify the caller may act on this subscriber before any session-control action. Without this, a reseller could disconnect, re-speed or read the MAC of ANY customer in the whole ISP by guessing a username/id. Available actions: create/run /network/bandwidth/:subscriberId; create/run /network/disconnect/:username; create/run /network/mac/:username; create/run /network/mac/:username/autolearn; remove /network/mac/:username; view /network/live; view /network/live/stats; view /network/mac/:username; view /network/nas/:id/test-coa.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: notes",
+      "k": "notes notes api action endpoint capability can i",
+      "a": "GET /notes?entityType=SUBSCRIBER&entityId=12 Available actions: create/run /notes; remove /notes/:id; replace /notes/:id; view /notes.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: notifications",
+      "k": "notifications notifications api action endpoint capability can i",
+      "a": "Which alert channels are configured (Discord / WhatsApp), masked. Available actions: create/run /communication/alerts/config; create/run /communication/alerts/my-channels; create/run /communication/alerts/my-channels/test; create/run /communication/alerts/test; create/run /communication/messages/:id/retry; create/run /communication/send; create/run /communication/templates; create/run /communication/test; remove /communication/templates/:id; replace /communication/templates/:id; view /communication/alerts/my-channels; view /communication/alerts/status; view /communication/latest; view /communication/messages.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: organization",
+      "k": "organization organization api action endpoint capability can i",
+      "a": "This account's own books — sales, costs and what is actually left. Available actions: create/run /organization/branches; create/run /organization/branches/:id/assign; create/run /organization/isps; create/run /organization/pricing/assign-bulk; create/run /organization/pricing/reverse/:subscriberId; create/run /organization/pricing/settle/:subscriberId; create/run /organization/resellers/:id/wallet; create/run /organization/wallet/reverse-topup; remove /organization/branches/:id; remove /organization/franchise-pricing/:userId/:packageId; remove /organization/isps/:id; remove /organization/pricing/:userId/:packageId; replace /organization/branches/:id; replace /organization/franchise-pricing.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: outages",
+      "k": "outages outages api action endpoint capability can i",
+      "a": "Live board: which areas are dark, whether it's expected, and what to do. This is what support should check before dispatching a technician. Available actions: create/run /outages; create/run /outages/:id/notify; create/run /outages/schedules; remove /outages/schedules/:id; replace /outages/schedules/:id; update /outages/:id/classify; update /outages/:id/close; view /outages; view /outages/schedules/all; view /outages/status; view /outages/uptime.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: packages",
+      "k": "packages packages api action endpoint capability can i",
+      "a": "Bulk import packages from a file (used by the Import dialog). Available actions: create/run /packages; create/run /packages/:id/duplicate; create/run /packages/allocations; create/run /packages/import; create/run /packages/policies; create/run /packages/taxes; remove /packages/:id; remove /packages/allocations/:id; remove /packages/policies/:id; remove /packages/taxes/:id; replace /packages/:id; replace /packages/allocations/:id; replace /packages/policies/:id; replace /packages/taxes/:id.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: payment gateways",
+      "k": "payment-gateways payment gateways api action endpoint capability can i",
+      "a": "Payment gateways Two surfaces: /payment-gateways/portal/* — public, used by the subscriber portal at checkout (no auth, only safe publicConfig is exposed) /payment-gateways/admin/* — protected, full CRUD + secret management for ISP staff The actual gateway integrations live in the service. Each provider has its own method (createOrder, verifySignature, parseWebhook). Available actions: create/run /payment-gateways/admin; create/run /payment-gateways/portal/checkout; create/run /payment-gateways/portal/webhook/:provider; remove /payment-gateways/admin/:id; replace /payment-gateways/admin/:id; update /payment-gateways/admin/:id/toggle; view /payment-gateways/admin; view /payment-gateways/admin/:id; view /payment-gateways/admin/:id/transactions; view /payment-gateways/portal/active; view /payment-gateways/portal/transaction/:reference.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: payments",
+      "k": "payments payments api action endpoint capability can i",
+      "a": "Cash-collection reconciliation (who took how much, by method). Available actions: create/run /payments; remove /payments/:id; update /payments/:id; view /payments; view /payments/:id; view /payments/collections; view /payments/stats.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: portal",
+      "k": "portal portal api action endpoint capability can i",
+      "a": "Change the PPPoE password (also pushed to RADIUS). Available actions: create/run /portal/change-password; create/run /portal/invoices/:id/pay/:gateway; create/run /portal/login; create/run /portal/recharge; create/run /portal/register; create/run /portal/self-activate/:gateway; create/run /portal/tickets; create/run /portal/tickets/:id/reply; view /portal/activation-status; view /portal/gateways; view /portal/invoices; view /portal/me; view /portal/packages; view /portal/sessions.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: pricing",
+      "k": "pricing pricing api action endpoint capability can i",
+      "a": "Pricing — extra fees and subscriber-level discounts. Distinct from packages (which carry the headline price) and from taxes (which are recurring). Available actions: create/run /pricing/fees; create/run /pricing/subscriber-discounts; remove /pricing/fees/:id; remove /pricing/subscriber-discounts/:id; replace /pricing/fees/:id; replace /pricing/subscriber-discounts/:id; view /pricing/fees; view /pricing/fees/:id; view /pricing/fees/options; view /pricing/subscriber-discounts; view /pricing/subscriber-discounts/:id.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: radius admin",
+      "k": "radius-admin radius admin api action endpoint capability can i",
+      "a": "FreeRADIUS & database administration — ISP owner (SUPER_ADMIN) ONLY. Like the server console, this is the platform owner's control over their own box, not a delegable per-role feature, so the role check is absolute and repeated on every route. Available actions: create/run /radius-admin/control; create/run /radius-admin/file; create/run /radius-admin/module/toggle; view /radius-admin/database; view /radius-admin/file; view /radius-admin/files; view /radius-admin/modules; view /radius-admin/status.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: reports",
+      "k": "reports reports api action endpoint capability can i",
+      "a": "Revenue, growth, package mix and collections in one round trip. Available actions: view /reports/aged-debt; view /reports/analytics; view /reports/analytics/collections; view /reports/analytics/growth; view /reports/analytics/packages; view /reports/analytics/revenue; view /reports/dashboard; view /reports/reseller-performance; view /reports/revenue; view /reports/subscribers; view /reports/tickets.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: security",
+      "k": "security security api action endpoint capability can i",
+      "a": "Available actions: create/run /security/2fa/confirm; create/run /security/2fa/disable; create/run /security/2fa/enroll; remove /security/sessions/:sessionId; replace /security/child-permissions/:userId; replace /security/permissions/:role; view /security/2fa; view /security/child-permissions/:userId; view /security/child-permissions/catalog; view /security/meta; view /security/permissions; view /security/sessions.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: service settings",
+      "k": "service-settings service settings api action endpoint capability can i",
+      "a": "Effective IPv6 (manual override or auto-allocated) for this subscriber. Available actions: create/run /service-settings/subscriber/:subscriberId; create/run /service-settings/subscriber/:subscriberId/upsert; view /service-settings/subscriber/:subscriberId; view /service-settings/subscriber/:subscriberId/ipv6.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: setup",
+      "k": "setup setup api action endpoint capability can i",
+      "a": "Deliberately NOT behind PermissionsGuard. This endpoint tells an account what it still needs to configure. Available actions: view /setup/status.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: static ip",
+      "k": "static-ip static ip api action endpoint capability can i",
+      "a": "Pool utilisation, monthly revenue, expiring and overdue counts. Available actions: create/run /static-ips; create/run /static-ips/range; create/run /static-ips/subscriber/:subscriberId; remove /static-ips/:id; replace /static-ips/:id; update /static-ips/:id/assign; update /static-ips/:id/release; view /static-ips; view /static-ips/:id; view /static-ips/alerts; view /static-ips/stats; view /static-ips/subscriber/:subscriberId.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: subscribers",
+      "k": "subscribers subscribers api action endpoint capability can i",
+      "a": "Run the reminder + auto-suspend sweep now instead of waiting for 07:10. ISP only. Available actions: create/run /subscribers; create/run /subscribers/:id/deactivate; create/run /subscribers/:id/fix-radius-password; create/run /subscribers/:id/grace; create/run /subscribers/:id/sync-profile; create/run /subscribers/:id/sync-to-radius; create/run /subscribers/:id/transfer; create/run /subscribers/activate-renewal; create/run /subscribers/bulk-action; create/run /subscribers/bulk-sync-to-radius; create/run /subscribers/bulk-transfer; create/run /subscribers/export/panel; create/run /subscribers/export/preview; create/run /subscribers/export/run.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: telemetry",
+      "k": "telemetry telemetry api action endpoint capability can i",
+      "a": "One-off SNMP walk to list a NAS's interfaces for port registration. Available actions: view /telemetry/events; view /telemetry/feed; view /telemetry/nas-health; view /telemetry/nas/:id/discover-interfaces; view /telemetry/nas/:id/signals; view /telemetry/nas/:id/traffic; view /telemetry/nas/:id/uptime; view /telemetry/nas/:id/vlans; view /telemetry/onu/:id/signal; view /telemetry/ops-alerts; view /telemetry/subscriber/:id/path.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: throttle policies",
+      "k": "throttle-policies throttle policies api action endpoint capability can i",
+      "a": "Throttle policies — let the ISP say \"during peak hours, give this package 50% of its normal speed\". Implementation on the NAS is via RADIUS reply attributes written at session start; the policy is the user-friendly version of that. Available actions: create/run /throttle-policies; create/run /throttle-policies/:id/packages; create/run /throttle-policies/:id/subscribers; remove /throttle-policies/:id; remove /throttle-policies/:id/packages/:pkgId; remove /throttle-policies/:id/subscribers/:subId; replace /throttle-policies/:id; view /throttle-policies; view /throttle-policies/:id; view /throttle-policies/options.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: tickets",
+      "k": "tickets tickets api action endpoint capability can i",
+      "a": "SLA dashboard: what's late, due soon, and compliance over the period. Available actions: create/run /tickets; create/run /tickets/:id/message; create/run /tickets/sla/backfill; remove /tickets/:id; replace /tickets/:id; view /tickets; view /tickets/:id; view /tickets/sla/report; view /tickets/stats; view /tickets/subscriber/:subscriberId.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: topology",
+      "k": "topology topology api action endpoint capability can i",
+      "a": "What equipment is on the network, by manufacturer, with online rates. Available actions: create/run /topology/detect; create/run /topology/mac; create/run /topology/parse; view /topology/devices; view /topology/faults; view /topology/segments/inferred; view /topology/trace/:subscriberId; view /topology/tree.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: uploads",
+      "k": "uploads uploads api action endpoint capability can i",
+      "a": "Available actions: create/run /uploads.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: users",
+      "k": "users users api action endpoint capability can i",
+      "a": "Reseller/franchise operations snapshot: wallet, customers, revenue, dues. Available actions: create/run /users; create/run /users/:id/purge; remove /users/:id; replace /users/:id; replace /users/:id/packages/:packageId; update /users/:id/toggle; view /users; view /users/:id; view /users/:id/packages; view /users/grouped; view /users/me/business; view /users/me/earnings; view /users/me/profile; view /users/stats.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: vouchers",
+      "k": "vouchers vouchers api action endpoint capability can i",
+      "a": "Available actions: create/run /vouchers/bulk; create/run /vouchers/redeem; remove /vouchers/:id; view /vouchers; view /vouchers/:id; view /vouchers/code/:code; view /vouchers/stats.",
+      "src": "actions"
+    }
+  ]
+}

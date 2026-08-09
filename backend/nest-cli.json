@@ -5,6 +5,13 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "builder": "swc",
-    "typeCheck": false
+    "typeCheck": false,
+    "assets": [
+      {
+        "include": "ai/knowledge.generated.json",
+        "outDir": "dist"
+      }
+    ],
+    "watchAssets": true
   }
 }

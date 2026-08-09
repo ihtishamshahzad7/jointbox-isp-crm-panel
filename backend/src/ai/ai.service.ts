@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Injectable, Logger } from '@nestjs/common';
 
 /**
@@ -193,7 +195,7 @@ export class AiService {
   private localAnswer(question: string) {
     const stop = new Set(['the','a','an','how','do','i','to','my','in','on','of','is','for','what','where','it','and','me','with','you','we','our','this','that','get','see','use','need','want','does','are','when','why','should','if']);
     const terms = (question.toLowerCase().match(/[a-z0-9]+/g) || []).filter((w) => w.length > 1 && !stop.has(w));
-    const scored = this.KB.map((e) => {
+    const scored = this.ALL.map((e) => {
       const title = e.t.toLowerCase();
       const words = new Set(`${e.t} ${e.k}`.toLowerCase().match(/[a-z0-9]+/g) || []);
       let score = 0;
@@ -216,19 +218,48 @@ export class AiService {
   }
 
   /**
+   * Knowledge generated from the codebase by tools/build_ai_knowledge.py —
+   * every screen (with its menu path) and every backend capability.
+   *
+   * Loaded from disk rather than imported so a missing/!built file can never
+   * stop the backend booting: no file simply means the assistant falls back to
+   * the hand-written entries above.
+   */
+  private readonly GENERATED: Array<{ t: string; k: string; a: string }> = (() => {
+    const candidates = [
+      path.join(__dirname, 'knowledge.generated.json'),               // dist
+      path.join(process.cwd(), 'src/ai/knowledge.generated.json'),    // src
+      path.join(__dirname, '../../src/ai/knowledge.generated.json'),  // dist -> src
+    ];
+    for (const p of candidates) {
+      try {
+        if (!fs.existsSync(p)) continue;
+        const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (Array.isArray(data?.entries)) return data.entries;
+      } catch { /* try the next path */ }
+    }
+    return [];
+  })();
+
+  /** Hand-written entries first (they are more precise), then generated ones. */
+  private get ALL() {
+    return [...this.KB, ...this.GENERATED];
+  }
+
+  /**
    * The knowledge base as data, for the in-app Documentation page.
    * Entries are grouped by the section headings used in the KB array, so the
    * docs page and the assistant always describe the same product.
    */
   knowledgeBase() {
     return {
-      count: this.KB.length,
-      topics: this.KB.map((e) => ({ title: e.t, keywords: e.k, answer: e.a })),
+      count: this.ALL.length,
+      topics: this.ALL.map((e) => ({ title: e.t, keywords: e.k, answer: e.a })),
     };
   }
 
   private knowledgePrompt(role?: string) {
-    const kb = this.KB.map((e) => `- ${e.t}: ${e.a}`).join('\n');
+    const kb = this.ALL.map((e) => `- ${e.t}: ${e.a}`).join('\n');
     return [
       'You are the built-in help AI for the Jointbox ISP management panel. Answer ONLY about using Jointbox, concisely, and always point the user to the exact menu path. Never invent data values (you have no live DB access) — for "how many/how much" tell them which screen shows it.',
       role ? `The user's role is ${role}.` : '',
