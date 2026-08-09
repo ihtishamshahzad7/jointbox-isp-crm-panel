@@ -121,6 +121,28 @@ systemctl enable caddy >/dev/null 2>&1 || true
 systemctl restart caddy
 sleep 2
 
+# ── Certificate → Caddy handover ─────────────────────────────────────────────
+# certbot stores keys under /etc/letsencrypt/{live,archive} as root, mode 0700.
+# Caddy runs as the unprivileged "caddy" user and cannot read them, so it dies
+# with "permission denied" on start.
+#
+# The obvious fix — chmod -R 755 on /etc/letsencrypt — is wrong twice over: it
+# makes the PRIVATE KEY readable by every user on the box, and renewal writes a
+# fresh file into archive/ as root anyway, so Caddy breaks again about six days
+# later. Instead a deploy hook copies the pair to a caddy-owned directory with
+# key mode 0640, and that hook runs on every renewal.
+CERTDIR=/etc/caddy/certs
+mkdir -p "$CERTDIR"
+cat > /usr/local/bin/jointbox-cert-deploy <<HOOK
+#!/bin/bash
+# Written by scripts/setup-https.sh — runs after every certbot renewal.
+set -e
+install -o caddy -g caddy -m 0644 "$LIVE/fullchain.pem" "$CERTDIR/fullchain.pem"
+install -o caddy -g caddy -m 0640 "$LIVE/privkey.pem"   "$CERTDIR/privkey.pem"
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
+HOOK
+chmod 0755 /usr/local/bin/jointbox-cert-deploy
+
 echo "📜 Requesting the certificate from Let's Encrypt..."
 echo "   (IP certificates are always short-lived — 160 hours — so renewal is automatic.)"
 certbot certonly $STAGING \
@@ -128,7 +150,12 @@ certbot certonly $STAGING \
   --preferred-profile shortlived \
   --webroot --webroot-path "$WEBROOT" \
   --ip-address "$IP" \
-  --deploy-hook "systemctl reload caddy"
+  --deploy-hook /usr/local/bin/jointbox-cert-deploy
+
+# certbot skips the deploy hook when the certificate was "not yet due for
+# renewal" — which is exactly what happens when this script is re-run. Run the
+# hook by hand so Caddy always has a readable copy.
+if [ -f "$LIVE/fullchain.pem" ]; then /usr/local/bin/jointbox-cert-deploy || true; fi
 
 if [ ! -f "$LIVE/fullchain.pem" ]; then
   echo "❌ No certificate was issued. The panel is untouched and still on HTTP."
@@ -148,7 +175,8 @@ cat > "$CADDYFILE" <<EOF
 # HTTPS — the only address clients should ever use.
 # ---------------------------------------------------------------------------
 https://$IP {
-	tls $LIVE/fullchain.pem $LIVE/privkey.pem
+	# Caddy-owned copies, refreshed by the certbot deploy hook.
+	tls $CERTDIR/fullchain.pem $CERTDIR/privkey.pem
 
 	# The browser may not call http://ip:3001 from an https:// page (mixed
 	# content), so the API is served from the SAME origin under /api and
@@ -213,17 +241,62 @@ if [ -f "$ENVF" ]; then
   echo "📝 backend/.env updated: FORCE_HTTPS, PUBLIC_HOST, CORS_ORIGIN"
 fi
 
+# ── 5b. The frontend build-time override ─────────────────────────────────────
+# install.sh writes NEXT_PUBLIC_BACKEND_URL=http://<ip>:3001 into .env.local.
+# That value is baked into the JavaScript bundle at build time, and on an HTTPS
+# page the browser blocks every call to it as mixed content — the panel loads
+# and then does nothing at all, with no visible error. Point it at the proxied
+# path and rebuild, or the site is dead the moment TLS goes live.
+FRONT="$(cd "$(dirname "$0")/.." && pwd)/frontend"
+if [ -d "$FRONT" ]; then
+  echo "NEXT_PUBLIC_BACKEND_URL=https://$IP/api" > "$FRONT/.env.local"
+  echo "📝 frontend/.env.local → https://$IP/api"
+  echo "🎨 Rebuilding the frontend so the new URL is compiled in..."
+  ( cd "$FRONT" && rm -rf .next && npm run build >/dev/null 2>&1 ) \
+    && echo "   ✓ frontend rebuilt" \
+    || echo "   ⚠ frontend build failed — run 'npm run build' in frontend/ by hand"
+  chown -R "$(stat -c '%U' "$FRONT")" "$FRONT/.next" 2>/dev/null || true
+  chmod -R a+rX "$FRONT/.next" 2>/dev/null || true
+fi
+
 # ── 6. Prove it works ────────────────────────────────────────────────────────
 echo
 echo "🔍 Verifying..."
 sleep 2
-echo -n "   HTTPS responds : "; curl -sk -o /dev/null -w "%{http_code}\n" "https://$IP/" || echo "FAILED"
-echo -n "   API through TLS: "; curl -sk -o /dev/null -w "%{http_code}\n" "https://$IP/api/health" || echo "FAILED"
-echo -n "   HTTP redirects : "; curl -s -o /dev/null -w "%{http_code}\n" "http://$IP/" || echo "FAILED"
-echo -n "   Cert expires   : "; openssl x509 -enddate -noout -in "$LIVE/fullchain.pem" 2>/dev/null | cut -d= -f2
-echo -n "   Renewal timer  : "; systemctl is-active snap.certbot.renew.timer 2>/dev/null || echo "check: systemctl list-timers | grep certbot"
+FAILED=0
+check() {  # check <label> <expected-prefix> <url> [curl-flags]
+  local label="$1" want="$2" url="$3"; shift 3
+  local code; code="$(curl -s -o /dev/null -w '%{http_code}' "$@" "$url" 2>/dev/null || echo 000)"
+  if [ "$code" = "000" ]; then
+    printf '   %-16s ❌ no response (%s)\n' "$label" "$url"; FAILED=1
+  elif [ "${code:0:1}" != "$want" ]; then
+    printf '   %-16s ⚠  HTTP %s (expected %sxx)\n' "$label" "$code" "$want"; FAILED=1
+  else
+    printf '   %-16s ✓ HTTP %s\n' "$label" "$code"
+  fi
+}
+check "panel over TLS" 2 "https://$IP/" -k
+check "API over TLS"   2 "https://$IP/api/health" -k
+check "HTTP redirect"  3 "http://$IP/"
+printf '   %-16s %s\n' "cert expires" "$(openssl x509 -enddate -noout -in "$CERTDIR/fullchain.pem" 2>/dev/null | cut -d= -f2)"
+printf '   %-16s %s\n' "renewal timer" "$(systemctl is-active snap.certbot.renew.timer 2>/dev/null || echo 'check: systemctl list-timers | grep certbot')"
+
 echo
-echo "✅ Done. Restart the apps so they pick up the new .env:"
+if [ "$FAILED" -ne 0 ]; then
+  # Do NOT print a tick when the checks failed. The first version of this
+  # script said "✅ Done" under three lines of FAILED, which reads as success.
+  echo "❌ HTTPS is NOT working yet. Do not publish this address."
+  echo
+  echo "   Most likely causes, in order:"
+  echo "     1. Caddy could not read the certificate:"
+  echo "          systemctl status caddy --no-pager | tail -5"
+  echo "          /usr/local/bin/jointbox-cert-deploy    # re-copy and reload"
+  echo "     2. Something else holds port 80/443:  ss -tlnp | grep -E ':80|:443'"
+  echo "     3. The backend or frontend is down:   pm2 status"
+  exit 1
+fi
+
+echo "✅ HTTPS is live. Restart the apps so they pick up the new .env:"
 echo "     pm2 restart all --update-env"
 echo
 echo "   Clients should now use:  https://$IP"
