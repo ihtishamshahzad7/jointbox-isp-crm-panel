@@ -5291,3 +5291,64 @@ html .jb-portal [style*="color:#38bdf8"],
 html .jb-portal [style*="color: #38bdf8"],
 html .jb-portal [style*="color:#38BDF8"],
 html .jb-portal [style*="color: #38BDF8"] { color: #0B76A8 !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HORIZONTAL OVERFLOW — nothing runs past the right edge, on any device
+   ══════════════════════════════════════════════════════════════════════════
+   The subscriber full-view and several cards use two-column grids like
+   `grid-template-columns: 1fr 1fr`. A `1fr` track is really `minmax(auto,1fr)`,
+   and `auto` refuses to shrink below its content's minimum width. So a single
+   long unbreakable string — an email, a CNIC, an address — forces its column
+   wider than its share and shoves the whole layout past the right edge. That
+   is the "content goes beyond the right side" bug.
+
+   Two fixes, applied together:
+   1. Every grid and flex CHILD may shrink below its content (min-width: 0).
+      Without this, min-width defaults to `auto` = content width, which is the
+      root cause above.
+   2. Long values wrap instead of forcing width. */
+html .main [style*="grid"] > *,
+html .main [style*="flex"] > *,
+html .jb-portal [style*="grid"] > *,
+html .jb-portal [style*="flex"] > * { min-width: 0; }
+
+/* Emails, IPs, CNICs, addresses — break rather than push the page wide. */
+html .main code,
+html .main td,
+html .main .sub,
+html .main .nm,
+html .jb-portal code,
+html .jb-portal td { overflow-wrap: anywhere; word-break: break-word; }
+
+/* Two-column grids become one column when the viewport can't hold two
+   readable columns — a phone, or a narrow dialog. */
+@media (max-width: 640px) {
+  html .main [style*="grid-template-columns: 1fr 1fr"],
+  html .main [style*="grid-template-columns:1fr 1fr"],
+  html .jb-portal [style*="grid-template-columns: 1fr 1fr"],
+  html .jb-portal [style*="grid-template-columns:1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* Portalled dialogs use the whole screen on a phone. */
+  html .jb-portal > div > div { max-width: 100% !important; max-height: 94dvh !important; }
+}
+
+/* The scroll area itself can never be pushed wider than the viewport. */
+html, body { max-width: 100%; overflow-x: hidden; }
+html .app-shell-page-content,
+html .app-shell-page-inner { max-width: 100%; overflow-x: hidden; }
+
+/* Wide tables scroll inside their own card instead of stretching the page. */
+html .main table { max-width: 100%; }
+html .main .st,
+html .main .nt,
+html .main .lrt { max-width: 100%; overflow-x: auto; }
+
+/* Charts and canvases never exceed their card — belt-and-braces for any chart
+   that sets an intrinsic width. */
+html .main svg,
+html .main canvas,
+html .main .nova-chart,
+html .main .chart-wrap,
+html .jb-portal svg { max-width: 100%; }
+html .main .recharts-responsive-container { width: 100% !important; }
