@@ -105,4 +105,13 @@ export class NasController {
   getActiveSessions(@Param('id') id: string) {
     return this.nasService.getActiveSessions(+id);
   }
+
+  /**
+   * Accounting-pipeline health — a one-call answer to "why is nobody online?".
+   * Not per-NAS: it inspects the whole radacct/radpostauth flow.
+   */
+  @Get('diagnostics/accounting')
+  accountingHealth() {
+    return this.nasService.accountingHealth();
+  }
 }

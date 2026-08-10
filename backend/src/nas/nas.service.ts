@@ -797,6 +797,11 @@ export class NasService implements OnModuleInit {
     return this.radiusSync.getActiveSessions(nas.nasIp ?? undefined);
   }
 
+  /** Accounting-pipeline health — see RadiusSyncService.accountingHealth. */
+  async accountingHealth() {
+    return this.radiusSync.accountingHealth();
+  }
+
   // ── RADIUS-wide stats ───────────────────────────────────────
   async getRadiusStats() {
     const [alive, authStats] = await Promise.all([

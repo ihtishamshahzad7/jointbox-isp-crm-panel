@@ -735,6 +735,77 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Accounting-pipeline health — answers "why does nobody show online?".
+   *
+   * The panel reads live status from radacct. When a customer authenticates but
+   * never appears online, the fault is almost always that the router sends
+   * Access-Requests (auth, port 1812) but not Accounting packets (port 1813) —
+   * so radcheck/auth work while radacct stays empty. This inspects both tables
+   * and reports which half of the pipeline is alive, so the cause is obvious
+   * without shelling into the server.
+   */
+  async accountingHealth(): Promise<any> {
+    try {
+      this.ensureConnected();
+      const q = (sql: string) => this.pgClient.query(sql).then((r) => r.rows);
+
+      const [openRows, lastAcct, acct24, auth24, lastAuth] = await Promise.all([
+        q(`SELECT COUNT(*)::int AS n FROM radacct
+             WHERE acctstoptime IS NULL
+               AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`),
+        q(`SELECT MAX(GREATEST(acctstarttime, COALESCE(acctupdatetime, acctstarttime),
+                               COALESCE(acctstoptime, acctstarttime))) AS t FROM radacct`),
+        q(`SELECT COUNT(*)::int AS n FROM radacct WHERE acctstarttime > NOW() - INTERVAL '24 hours'`),
+        q(`SELECT COUNT(*)::int AS n FROM radpostauth
+             WHERE authdate > NOW() - INTERVAL '24 hours' AND reply = 'Access-Accept'`),
+        q(`SELECT MAX(authdate) AS t FROM radpostauth`),
+      ]);
+
+      const openSessions = openRows[0]?.n ?? 0;
+      const lastAccounting = lastAcct[0]?.t ?? null;
+      const acctStarts24h = acct24[0]?.n ?? 0;
+      const authAccepts24h = auth24[0]?.n ?? 0;
+      const lastAuthAt = lastAuth[0]?.t ?? null;
+
+      // Decide the verdict from the two signals.
+      let verdict: string;
+      let detail: string;
+      if (openSessions > 0) {
+        verdict = 'OK';
+        detail = `${openSessions} live session(s) in accounting — presence is working.`;
+      } else if (authAccepts24h > 0 && acctStarts24h === 0) {
+        verdict = 'ACCOUNTING_NOT_ARRIVING';
+        detail =
+          'Authentication works (recent Access-Accepts) but NO accounting has been ' +
+          'recorded. The router is not sending Accounting packets, or they are not ' +
+          'being written. Check: /ppp aaa accounting=yes interim-update=5m on the ' +
+          'MikroTik; that the `sql` module is listed in the accounting {} section of ' +
+          'sites-enabled/default; and that UDP 1813 is open from the router.';
+      } else if (authAccepts24h === 0) {
+        verdict = 'NO_AUTH';
+        detail = 'No Access-Accepts in 24h either — the router is not reaching RADIUS at all.';
+      } else {
+        verdict = 'STALE';
+        detail = 'Accounting exists but no session is currently open and fresh.';
+      }
+
+      return {
+        ok: true,
+        verdict,
+        detail,
+        openSessions,
+        acctStarts24h,
+        authAccepts24h,
+        lastAccounting,
+        lastAuthAt,
+        acctPort: parseInt(process.env.RADIUS_ACCT_PORT || '1813'),
+      };
+    } catch (error: any) {
+      return { ok: false, verdict: 'DB_UNREACHABLE', detail: error?.message || String(error) };
+    }
+  }
+
   async getAuthStats(): Promise<{ accepts: number; rejects: number }> {
     try {
       this.ensureConnected();
