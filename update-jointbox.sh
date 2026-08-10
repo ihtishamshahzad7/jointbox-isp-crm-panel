@@ -202,6 +202,12 @@ if [ -d /etc/freeradius/3.0 ]; then
   if [ -f backend/scripts/patch-postauth.sh ]; then
     bash backend/scripts/patch-postauth.sh || echo "⚠ post-auth capture patch skipped"
   fi
+  # Guarantee accounting actually writes to radacct — the reason users showed
+  # offline while connected. Idempotent and self-reverting; see the script.
+  if [ -f backend/scripts/ensure-radius-accounting.sh ]; then
+    echo "🩺 Verifying FreeRADIUS accounting pipeline…"
+    bash backend/scripts/ensure-radius-accounting.sh || echo "⚠ accounting check reported an issue (see above)"
+  fi
   chown -R freerad:freerad /etc/freeradius/3.0 /var/log/freeradius /var/run/freeradius 2>/dev/null || true
   systemctl restart freeradius 2>/dev/null || true
   systemctl is-active --quiet freeradius \
