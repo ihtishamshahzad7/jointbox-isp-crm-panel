@@ -5352,3 +5352,60 @@ html .main .nova-chart,
 html .main .chart-wrap,
 html .jb-portal svg { max-width: 100%; }
 html .main .recharts-responsive-container { width: 100% !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE TABLES & BUTTON GROUPS — nothing overlaps, nothing overflows
+   ══════════════════════════════════════════════════════════════════════════
+   The users, packages, invoices and log tables keep a min-width and scroll
+   sideways inside a wrapper. On a phone the row action buttons (Edit / Del …)
+   were laid out in a fixed row that ran off the cell and piled on top of each
+   other. These rules make any in-cell button group wrap, and guarantee wide
+   tables actually get their horizontal scrollbar instead of stretching the
+   page. */
+@media (max-width: 768px) {
+  /* Any wrapper holding a wide table scrolls rather than overflowing. */
+  html .main div[style*="overflowX"],
+  html .main div[style*="overflow-x"] {
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  /* Groups of buttons inside a table cell wrap instead of overlapping. */
+  html .main td > div[style*="display: flex"],
+  html .main td > div[style*="display:flex"] {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+  html .main td button { white-space: nowrap; }
+
+  /* Toolbar / action-bar button rows above tables wrap too. */
+  html .main [style*="display: flex"][style*="gap"] > button,
+  html .main [style*="display:flex"][style*="gap"] > button { flex: 0 0 auto; }
+
+  /* Stat/metric card grids: two per row on a phone, never a squashed four. */
+  html .main [style*="repeat(auto-fit"] {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
+  }
+
+  /* Modal dialogs (portalled or inline) fill the width on a phone. */
+  html .jb-portal > div > div,
+  html .main div[style*="position: fixed"] > div {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 92dvh !important;
+  }
+
+  /* Hub tab strips and pill rows scroll horizontally rather than wrapping into
+     a tall stack that pushes content down. */
+  html .main [role="tablist"],
+  html .main .hub-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Very small phones (≤380px): one action button per two, larger tap target. */
+@media (max-width: 380px) {
+  html .st td.act { grid-template-columns: 1fr 1fr !important; }
+}

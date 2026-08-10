@@ -471,10 +471,13 @@ const CSS = `
   .st td[data-label="Subscriber"]::before{display:none}
   .st td[data-label="Subscriber"] .who{width:100%}
   .st td.pick{position:absolute;opacity:0;pointer-events:none}
-  .st td.act{justify-content:flex-end;padding-top:11px;margin-top:5px;
-    border-top:1px solid var(--border)}
+  /* Action buttons: a wrapping grid so four controls never pile on top of one
+     another on a narrow phone. Each takes an equal share of the row and drops
+     to a second line when there isn't room, instead of overflowing the card. */
+  .st td.act{display:grid !important;grid-template-columns:repeat(4,1fr);gap:7px;
+    padding-top:11px;margin-top:5px;border-top:1px solid var(--border)}
   .st td.act::before{display:none}
-  .st td.act button{margin:0 0 0 7px}
+  .st td.act button{margin:0;width:100%;padding:9px 4px;font-size:12px;min-height:38px}
   .st .sub.mt{margin-top:2px}
 }
 `;
