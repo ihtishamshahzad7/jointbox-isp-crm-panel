@@ -29,9 +29,92 @@ export class NasMonitorService {
     private alerts: AlertsService,
   ) {}
 
+  /**
+   * Watch the accounting pipeline and record, in the panel's own logs, WHY
+   * presence would be wrong — so this class of problem is never again a silent
+   * mystery that needs an SSH session and freeradius -X to find.
+   *
+   * Two faults, both from the saga that produced this:
+   *   1. ROUTER CLOCK SKEW — the router stamps accounting with its own clock.
+   *      When that clock is wrong (one was stuck in 2024), every session lands
+   *      far from real time and the "online in the last 15 min" test fails, so
+   *      a connected user reads offline. We detect it by comparing the newest
+   *      accounting timestamp to the server's clock.
+   *   2. ACCOUNTING NOT ARRIVING — auth works but no accounting is written, so
+   *      radacct never sees a session. Detected as recent auth accepts with
+   *      zero recent accounting.
+   *
+   * De-duplicated to one log per fault per hour so it flags the problem without
+   * flooding the log.
+   */
+  private lastAcctWarn = 0;
+  private async diagnoseAccounting() {
+    if (!isPrimaryInstance()) return;
+    const now = Date.now();
+    if (now - this.lastAcctWarn < 3600_000) return; // at most hourly
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      newest_acct: Date | null; skew_seconds: number | null;
+      acct_15m: number; auth_15m: number;
+    }>>`
+      SELECT
+        (SELECT MAX(COALESCE(acctupdatetime, acctstarttime)) FROM radacct) AS newest_acct,
+        (SELECT EXTRACT(EPOCH FROM (NOW() - MAX(COALESCE(acctupdatetime, acctstarttime))))::int
+           FROM radacct WHERE acctstoptime IS NULL) AS skew_seconds,
+        (SELECT COUNT(*)::int FROM radacct
+           WHERE acctstarttime > NOW() - INTERVAL '15 minutes') AS acct_15m,
+        (SELECT COUNT(*)::int FROM radpostauth
+           WHERE authdate > NOW() - INTERVAL '15 minutes' AND reply = 'Access-Accept') AS auth_15m`;
+    const r = rows[0];
+    if (!r) return;
+
+    // Clock skew: an OPEN session whose latest timestamp is more than a day
+    // from now (in either direction) means the router clock is wrong.
+    if (r.skew_seconds != null && Math.abs(r.skew_seconds) > 86400) {
+      const days = Math.round(Math.abs(r.skew_seconds) / 86400);
+      await this.prisma.systemLog.create({
+        data: {
+          level: 'ERROR', source: 'radius-accounting',
+          message:
+            `Router clock skew detected: live accounting is timestamped ~${days} day(s) ` +
+            `${r.skew_seconds > 0 ? 'in the PAST' : 'in the FUTURE'} vs the server. ` +
+            `Online status will be wrong until the router's clock is fixed ` +
+            `(enable NTP on the MikroTik: /system ntp client set enabled=yes). ` +
+            `The server now stamps accounting with its own time, so new sessions ` +
+            `are unaffected — this warns about routers still sending bad timestamps.`,
+        },
+      }).catch(() => null);
+      this.log.error(`Router clock skew ~${days}d — see SystemLog`);
+      this.lastAcctWarn = now;
+      return;
+    }
+
+    // Auth working but accounting silent → the pipeline is broken.
+    if (r.auth_15m > 0 && r.acct_15m === 0) {
+      await this.prisma.systemLog.create({
+        data: {
+          level: 'ERROR', source: 'radius-accounting',
+          message:
+            `Accounting not arriving: ${r.auth_15m} authentication(s) in the last 15 min ` +
+            `but ZERO accounting sessions written. Users will show OFFLINE while connected. ` +
+            `Check: the router has /ppp aaa accounting=yes interim-update=5m; the 'sql' ` +
+            `module is in the accounting{} section of FreeRADIUS; and UDP 1813 is open ` +
+            `from the router. The deploy script re-checks the sql config on every update.`,
+        },
+      }).catch(() => null);
+      this.log.error('Auth working but accounting silent — see SystemLog');
+      this.lastAcctWarn = now;
+    }
+  }
+
   @Cron(CronExpression.EVERY_5_MINUTES)
   async sample() {
     if (!isPrimaryInstance()) return;
+    // Self-diagnose the exact fault that made everyone show offline: a router
+    // clock two years out, or accounting not arriving at all. Runs before the
+    // sampling so a broken pipeline is flagged even if sampling then finds
+    // nothing. Never throws — a diagnostic must not break the monitor.
+    await this.diagnoseAccounting().catch(() => null);
     try {
       const nases = await this.prisma.nas.findMany({ where: { isActive: true }, select: { id: true, nasIp: true, nasname: true, shortname: true, ownerId: true } });
       for (const nas of nases) {

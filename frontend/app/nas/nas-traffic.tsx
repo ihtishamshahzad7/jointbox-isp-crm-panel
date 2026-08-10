@@ -62,7 +62,10 @@ export function NasTraffic({ nasId }: { nasId: number }) {
     <div className="nt-traf">
       <style>{CSS}</style>
       <div className="nt-head">
-        <span className="nt-title">📈 Traffic</span>
+        {/* Make the scope explicit — a router has many interfaces and each can
+            carry many VLANs, so it must be clear this line is the WHOLE router
+            total, and the per-VLAN split is below. */}
+        <span className="nt-title">📈 Traffic — whole router <small style={{ fontWeight: 400, color: "var(--muted)" }}>(all interfaces &amp; VLANs combined)</small></span>
         <span className="nt-legend"><i className="dl" /> Download <i className="ul" /> Upload</span>
         <div className="nt-ranges">
           {RANGES.map((r) => (
@@ -122,7 +125,7 @@ export function NasTraffic({ nasId }: { nasId: number }) {
         </>
       )}
 
-      <div className="nt-vlan-h">VLAN breakdown (live)</div>
+      <div className="nt-vlan-h">Per-VLAN breakdown (live) — same traffic, split by VLAN</div>
       {vlans.length === 0 ? (
         <div className="nt-empty sm">No active sessions grouped by VLAN.</div>
       ) : (
