@@ -94,6 +94,23 @@ if ! awk '
   CHANGED=1
 fi
 
+# ── 4. Stamp accounting with SERVER time, not the router's clock ─────────────
+# The stock queries write AcctStartTime/AcctUpdateTime from the router's
+# Event-Timestamp. When a router's clock is wrong (very common — one here was
+# stuck in 2024), every session lands two years in the past, so the "active in
+# the last 15 minutes" check always fails and a live user reads as OFFLINE.
+# Replacing that expression with NOW() makes the SERVER the clock of record, so
+# presence is correct no matter what time the router thinks it is. Idempotent:
+# once replaced there is no Event-Timestamp left to match.
+QCONF="$RAD/mods-config/sql/main/postgresql/queries.conf"
+if [ -f "$QCONF" ] && grep -q 'TO_TIMESTAMP(%{%{integer:Event-Timestamp}:-%l})' "$QCONF"; then
+  qbackup="$BACKUP_DIR/queries.conf.$(date +%s)"
+  cp -a "$QCONF" "$qbackup"
+  sed -i 's/TO_TIMESTAMP(%{%{integer:Event-Timestamp}:-%l})/NOW()/g' "$QCONF"
+  echo "   • accounting now stamped with server time (router-clock-proof)"
+  CHANGED=1
+fi
+
 if [ "$CHANGED" -eq 0 ]; then
   rm -f "$backup"
   echo "   ✓ accounting already configured correctly — no change"
@@ -103,10 +120,13 @@ fi
 # ── 4. Validate before we let the service near it ────────────────────────────
 chown -R freerad:freerad "$RAD" 2>/dev/null || true
 if freeradius -XC >/dev/null 2>&1 || radiusd -XC >/dev/null 2>&1; then
-  rm -f "$backup"
+  rm -f "$backup" "${qbackup:-}"
   echo "   ✓ config valid — accounting repair applied"
+  # Reload so the change takes effect without waiting for the deploy's restart.
+  systemctl reload-or-restart freeradius 2>/dev/null || true
 else
   mv "$backup" "$SITE"
+  [ -n "${qbackup:-}" ] && [ -f "$qbackup" ] && mv "$qbackup" "$QCONF"
   echo "   ✗ config check FAILED after edit — reverted, nothing changed."
   echo "     Run 'freeradius -XC' by hand to see the error."
   exit 1
