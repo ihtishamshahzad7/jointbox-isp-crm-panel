@@ -1476,7 +1476,7 @@ export default function SubscribersPage() {
                 style={{ ...inputSt, paddingLeft: 30, width: "100%" }}
               />
             </div>
-            <div style={{ display: "flex", gap: 4 }}>
+            <div className="jb-status-filters" style={{ display: "flex", gap: 4 }}>
               {["ALL", "ACTIVE", "STALE", "EXPIRED", "SUSPENDED", "INACTIVE"].map((s) => (
                 <button
                   key={s}

@@ -5409,3 +5409,41 @@ html .main .recharts-responsive-container { width: 100% !important; }
 @media (max-width: 380px) {
   html .st td.act { grid-template-columns: 1fr 1fr !important; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SUBSCRIBER MANAGEMENT ON A PHONE
+   ══════════════════════════════════════════════════════════════════════════
+   The subscriber screen carries a lot of chrome above the list — KPI tiles, a
+   search box, six status-filter pills, and the WinBox action toolbar. On a
+   phone those rows overflowed sideways with no scroll, so half the controls
+   were unreachable. Each row that can't fit now scrolls horizontally instead
+   of clipping, and the list itself already becomes cards (see subscriber-
+   table.tsx). */
+@media (max-width: 768px) {
+  /* Status filter pills: swipe sideways rather than overflow off-screen. */
+  html .main .jb-status-filters {
+    overflow-x: auto;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  html .main .jb-status-filters::-webkit-scrollbar { display: none; }
+  html .main .jb-status-filters button { flex: 0 0 auto; min-height: 34px; }
+
+  /* KPI tiles: two per row, comfortably sized. */
+  html .main [style*="minmax(130px"],
+  html .main [style*="minmax(150px"],
+  html .main [style*="minmax(170px"] {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* The whole subscriber page gets breathing room, not edge-to-edge cramming. */
+  html .main { padding-left: 0; padding-right: 0; }
+
+  /* WinBox toolbar: search on its own full-width row, buttons wrap below —
+     already set for .wbtb; reassert here so the subscriber page inherits it. */
+  html .main .wbtb { padding: 8px !important; gap: 6px !important; }
+  html .main .wbtb .wbfind { order: -1; width: 100%; margin-bottom: 6px; }
+  html .main .wbtb .wbspacer { display: none; }
+}
