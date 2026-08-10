@@ -793,6 +793,47 @@ export class NasService implements OnModuleInit {
   async getActiveSessions(id: number) {
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
+
+    /**
+     * Prefer the router's OWN live session list over RADIUS accounting.
+     *
+     * radacct only knows what accounting packets told it, which is nothing when
+     * a router authenticates but never sends accounting — the exact case where
+     * "no active users show" despite people being connected. If the NAS has API
+     * credentials, ask it directly; fall back to radacct when it doesn't or the
+     * API is unreachable. The shape is normalised to what radacct returned so
+     * the frontend needs no change.
+     */
+    if (nas.nasIp && nas.apiUsername) {
+      try {
+        const live = await this.mikrotikSync.getActivePppoeUsers(
+          nas.nasIp, nas.apiPort || 8728, nas.apiUsername, nas.apiPassword || '',
+        );
+        if (Array.isArray(live) && live.length) {
+          const toSecs = (up?: string | null) => {
+            // MikroTik uptime like "1h2m3s" → seconds.
+            if (!up) return 0;
+            let s = 0;
+            for (const [, n, u] of up.matchAll(/(\d+)([dhms])/g)) {
+              const v = parseInt(n);
+              s += u === 'd' ? v * 86400 : u === 'h' ? v * 3600 : u === 'm' ? v * 60 : v;
+            }
+            return s;
+          };
+          return live.map((u) => ({
+            username:         u.username,
+            nasipaddress:     nas.nasIp,
+            framedipaddress:  u.address ?? null,
+            callingstationid: u.callerId ?? null,
+            acctstarttime:    null,
+            duration_seconds: toSecs(u.uptime),
+            upload_bytes:     u.uploadBytes ?? 0,
+            download_bytes:   u.downloadBytes ?? 0,
+            source:           'router',
+          }));
+        }
+      } catch { /* API unreachable — fall through to accounting */ }
+    }
     // Pass nasIp to filter sessions only for this NAS
     return this.radiusSync.getActiveSessions(nas.nasIp ?? undefined);
   }

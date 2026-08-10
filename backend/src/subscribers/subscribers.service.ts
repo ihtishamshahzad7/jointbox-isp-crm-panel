@@ -811,6 +811,44 @@ export class SubscribersService implements OnModuleInit {
     'Callback':            'Callback',
   };
 
+  /**
+   * Usernames the ROUTERS themselves report as connected right now.
+   *
+   * Polls every NAS that has API credentials for its /ppp/active list and
+   * unions the usernames. Cached for 20s so a list that refreshes every few
+   * seconds does not open an API connection to every router each time. Any
+   * router that is unreachable simply contributes nothing — never an error.
+   *
+   * Returned lower-cased because RADIUS usernames are case-insensitive in
+   * practice and MikroTik may report a different case than we stored.
+   */
+  private async routerPresence(): Promise<Set<string>> {
+    try {
+      const arr = await this.cache.wrap<string[]>('subs:router-presence', 20, async () => {
+        const nases = await this.prisma.nas.findMany({
+          where: { apiUsername: { not: null } },
+          select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+        });
+        const online = new Set<string>();
+        await Promise.all(
+          nases.map(async (n) => {
+            if (!n.nasIp || !n.apiUsername) return;
+            try {
+              const users = await this.mikrotik.getActivePppoeUsers(
+                n.nasIp, n.apiPort || 8728, n.apiUsername, n.apiPassword || '',
+              );
+              for (const u of users) if (u?.username) online.add(String(u.username).toLowerCase());
+            } catch { /* unreachable router → contributes nothing */ }
+          }),
+        );
+        return [...online];
+      });
+      return new Set(arr || []);
+    } catch {
+      return new Set();
+    }
+  }
+
   async attachLiveStatus(rows: any[]): Promise<any[]> {
     if (!Array.isArray(rows) || rows.length === 0) return rows;
     const usernames = rows.map((r) => r?.username).filter(Boolean) as string[];
@@ -850,10 +888,30 @@ export class SubscribersService implements OnModuleInit {
 
     const byUser = new Map(live.map((l) => [l.username, l]));
 
+    /**
+     * ROUTER-API PRESENCE — the accounting-independent source of truth.
+     *
+     * RADIUS accounting (radacct) is only as reliable as the router's willing-
+     * ness to send Accounting-Start/Interim/Stop. In the field it frequently is
+     * NOT: a user authenticates, the PPPoE session comes up, but no accounting
+     * arrives — so radacct shows them offline while they are plainly connected
+     * on the MikroTik. To fix that we ALSO ask each router directly who is in
+     * its /ppp/active list, and treat that as authoritative for "online".
+     *
+     * Cached briefly so a frequently-reloaded list does not hammer the routers,
+     * and fully wrapped so an unreachable router degrades to the radacct result
+     * rather than failing the page.
+     */
+    const routerOnline = await this.routerPresence();
+
     return rows.map((r) => {
-      const l = r?.username ? byUser.get(r.username) : null;
-      const online = !!l && l.is_online === true;
-      const stale = !!l && l.is_stale === true;
+      const uname = r?.username ? String(r.username) : '';
+      const l = uname ? byUser.get(uname) : null;
+      const onAcct = !!l && l.is_online === true;
+      const onRouter = uname ? routerOnline.has(uname.toLowerCase()) : false;
+      const online = onAcct || onRouter;
+      // A session the router reports as live is never "stale".
+      const stale = !online && !!l && l.is_stale === true;
       const cause = l?.acctterminatecause || null;
 
       // A stale row means the NAS stopped reporting without closing the session,
@@ -924,10 +982,28 @@ export class SubscribersService implements OnModuleInit {
       `,
     ]);
 
-    const onlineSet = new Set(radiusOnlineRows.map((r) => r.username));
-    const onlineNow = await this.prisma.subscriber.count({
-      where: withScope({ username: { in: Array.from(onlineSet) } }),
-    });
+    // Merge accounting presence with what the routers report live, exactly as
+    // attachLiveStatus() does — otherwise the "Online Now" tile disagrees with
+    // the list beneath it. Router usernames are lower-cased there, so match on
+    // a lower-cased set here too.
+    const routerOnline = await this.routerPresence();
+    const onlineSet = new Set<string>(radiusOnlineRows.map((r) => r.username));
+    const acctLower = new Set(Array.from(onlineSet).map((u) => u.toLowerCase()));
+    let onlineNow: number;
+    if (routerOnline.size === 0) {
+      onlineNow = await this.prisma.subscriber.count({
+        where: withScope({ username: { in: Array.from(onlineSet) } }),
+      });
+    } else {
+      // Count subscribers whose username is online by EITHER source.
+      const scoped = await this.prisma.subscriber.findMany({
+        where: withScope({}), select: { username: true },
+      });
+      onlineNow = scoped.filter((s) => {
+        const u = (s.username || '').toLowerCase();
+        return u && (routerOnline.has(u) || acctLower.has(u));
+      }).length;
+    }
 
     // Count stale sessions: those that appear to radacct as still open but
     // haven't reported activity in 15+ minutes (same window as attachLiveStatus).
