@@ -2535,14 +2535,19 @@ if (!unpaid && data.username && data.password) {
                 ? 'FIXED'
                 : undefined,
           discountValue: payload.discount !== undefined ? Number(payload.discount) : undefined,
-          ontSerial: payload.boxPopNumber,
-          ontModel: payload.boxPopAddress,
-          technicalNotes: payload.mcSwitchOnuBoard,
-          notes: payload.electricTypeSocket,
+          // Physical-install fields now write to their OWN columns. Previously
+          // each was crammed into an unrelated field (Box number → ontSerial,
+          // Uplink port → uploadSpeed, Fiber colour → pptpUsername …), so the
+          // data landed in the wrong place and showed blank where it was typed.
+          boxNumber:      payload.boxPopNumber,
+          boxAddress:     payload.boxPopAddress,
+          switchBoard:    payload.mcSwitchOnuBoard,
+          electricSocket: payload.electricTypeSocket,
+          cableType:      payload.cableType,        // was dropped entirely
+          uplinkPort:     payload.uplinkPort,
+          fiberCode:      payload.fiberCodeId,
+          fiberColor:     payload.fiberColor,
           quotaResetDate: undefined,
-          uploadSpeed: payload.uplinkPort,
-          downloadSpeed: payload.fiberCodeId,
-          pptpUsername: payload.fiberColor,
           macAddress: payload.autoMacLock === true || payload.autoMacLock === 'true' ? 'LOCKED' : undefined,
           isBlocked: payload.profileStatus === 'SUSPENDED',
         };
