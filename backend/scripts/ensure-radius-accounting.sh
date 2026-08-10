@@ -26,7 +26,25 @@ CHANGED=0
 [ -d "$RAD" ] || { echo "   (FreeRADIUS not installed — skipping)"; exit 0; }
 [ -f "$SITE" ] || { echo "   ⚠ $SITE missing — run install.sh"; exit 0; }
 
-backup="$SITE.bak.$(date +%s)"
+# DEFENSIVE CLEANUP. FreeRADIUS loads EVERY file in sites-enabled/, so any
+# stray backup or temp file there is a second "default" server and crashes the
+# service. An earlier version of this script (and a hand-run backup) could have
+# left such files; sweep them out before doing anything else.
+STRAYS=$(find "$RAD/sites-enabled/" -maxdepth 1 -type f \
+           \( -name '*.bak' -o -name '*.bak.*' -o -name '*.tmp' -o -name '*.orig' -o -name '*~' \) 2>/dev/null)
+if [ -n "$STRAYS" ]; then
+  mkdir -p /var/backups/jointbox/freeradius
+  echo "$STRAYS" | while read -r f; do mv "$f" /var/backups/jointbox/freeradius/ 2>/dev/null || rm -f "$f"; done
+  echo "   • moved stray file(s) out of sites-enabled (they crash FreeRADIUS)"
+fi
+
+# CRITICAL: the backup must NOT live in sites-enabled/. FreeRADIUS loads EVERY
+# file in that directory, so a copy of `default` there is a second definition of
+# the "default" virtual server → "Duplicate virtual server" → the service
+# refuses to start. Keep backups in a directory FreeRADIUS never reads.
+BACKUP_DIR=/var/backups/jointbox/freeradius
+mkdir -p "$BACKUP_DIR"
+backup="$BACKUP_DIR/default.$(date +%s)"
 cp -a "$SITE" "$backup"
 
 # ── 1. The sql module must be enabled ────────────────────────────────────────
@@ -53,7 +71,7 @@ if ! awk '
       print; print "\tsql"; done=1; next
     }
     { print }
-  ' "$SITE" > "$SITE.tmp" && mv "$SITE.tmp" "$SITE"
+  ' "$SITE" > "/tmp/jb-site.$$" && cat "/tmp/jb-site.$$" > "$SITE" && rm -f "/tmp/jb-site.$$"
   echo "   • added sql to the accounting section (was missing — this is the fix)"
   CHANGED=1
 fi
@@ -71,7 +89,7 @@ if ! awk '
       print; print "\tsql"; done=1; next
     }
     { print }
-  ' "$SITE" > "$SITE.tmp" && mv "$SITE.tmp" "$SITE"
+  ' "$SITE" > "/tmp/jb-site.$$" && cat "/tmp/jb-site.$$" > "$SITE" && rm -f "/tmp/jb-site.$$"
   echo "   • added sql to the post-auth section"
   CHANGED=1
 fi
