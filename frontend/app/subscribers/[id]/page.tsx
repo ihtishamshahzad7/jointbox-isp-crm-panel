@@ -423,7 +423,7 @@ export default function SubscriberProfilePage() {
       {toast&&<div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:toast.type==="ok"?"#14532d":toast.type==="err"?"#450a0a":"#422006",color:toast.type==="ok"?"#4ade80":toast.type==="err"?"#f87171":"#fbbf24",border:`1px solid ${toast.type==="ok"?"#166534":toast.type==="err"?"#7f1d1d":"#713f12"}`,borderRadius:10,padding:"12px 18px",fontSize:12,fontWeight:600,boxShadow:"0 4px 24px rgba(0,0,0,.5)"}}>{toast.msg}</div>}
 
       {/* ── TOP BAR ── */}
-      <div style={{background:t.header,borderBottom:`1px solid ${d?"var(--border)":"#334155"}`,padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:50}}>
+      <div className="jb-detail-topbar" style={{background:t.header,borderBottom:`1px solid ${d?"var(--border)":"#334155"}`,padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:50}}>
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <button onClick={()=>router.push("/subscribers")} style={{display:"flex",alignItems:"center",gap:5,background:"transparent",border:"none",cursor:"pointer",color:t.textMuted,fontSize:12,padding:"5px 8px",borderRadius:6}}>
             <Ic.Back /> Subscribers
@@ -460,7 +460,7 @@ export default function SubscriberProfilePage() {
             </span>
           ) : null}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div className="jb-detail-actions" style={{display:"flex",alignItems:"center",gap:8}}>
           <button onClick={()=>setDarkMode(p=>!p)} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",background:d?"var(--border)":"var(--text)",border:"none",borderRadius:20,cursor:"pointer",color:d?"#fbbf24":"#475569",fontSize:11,fontWeight:600}}>
             {d?<Ic.Sun/>:<Ic.Moon/>}{d?"Light":"Dark"}
           </button>
@@ -635,11 +635,11 @@ export default function SubscriberProfilePage() {
           <RecordNotes entityType="SUBSCRIBER" entityId={sub.id} title="Notes — transmission, install, device" />
         </div>
 
-        {/* ── TABS ── */}
-        <div style={{display:"flex",gap:4,marginBottom:16,borderBottom:`1px solid ${t.cardBorder}`,paddingBottom:0}}>
+        {/* ── TABS ── one swipeable row on a phone (eleven labels never wrap). */}
+        <div className="jb-detail-tabs" style={{display:"flex",gap:4,marginBottom:16,borderBottom:`1px solid ${t.cardBorder}`,paddingBottom:0}}>
           {TABS.map(tab=>(
             <button key={tab} onClick={()=>setActiveTab(tab)} style={{
-              padding:"8px 16px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,
+              padding:"8px 16px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,whiteSpace:"nowrap",flex:"0 0 auto",
               background:activeTab===tab?(d?"var(--surface)":"#fff"):"transparent",
               color:activeTab===tab?t.accent:t.textMuted,
               borderBottom:activeTab===tab?`2px solid ${t.accent}`:"2px solid transparent",

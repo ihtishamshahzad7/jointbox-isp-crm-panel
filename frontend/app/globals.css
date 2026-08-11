@@ -5635,3 +5635,45 @@ html .main .recharts-responsive-container { width: 100% !important; }
   html .main .jb-kpi-row > .jb-stat { flex: 0 0 46%; min-width: 150px; }
   html .main .jb-kpi-row > .jb-stat .val { font-size: 22px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SUBSCRIBER DETAIL PAGE ON A PHONE
+   ══════════════════════════════════════════════════════════════════════════
+   The full-profile page has three horizontal strips that ran off-screen on a
+   phone: the action buttons (Refresh / Boost / Grace / Add Balance / Reset MAC
+   / Statement / Edit), and the two tab rows. Each now scrolls sideways as one
+   row so every control is reachable. */
+@media (max-width: 768px) {
+  /* The sticky top bar becomes auto-height and its two halves stack, so the
+     action buttons get a full-width row of their own to scroll in. */
+  html .jb-detail-topbar {
+    height: auto !important;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px !important;
+  }
+  html .jb-detail-actions {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    width: 100%;
+    padding-bottom: 2px;
+  }
+  html .jb-detail-actions::-webkit-scrollbar { display: none; }
+  html .jb-detail-actions > * { flex: 0 0 auto; white-space: nowrap; }
+
+  /* Both tab rows: one swipeable line, no wrapping pile-up. */
+  html .jb-detail-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  html .jb-detail-tabs::-webkit-scrollbar { display: none; }
+  html .jb-detail-tabs > button { flex: 0 0 auto; white-space: nowrap; }
+
+  /* Metric cards row (Uptime / Upload / …) scrolls too rather than wrapping to
+     five short rows. */
+  html .main .jb-stat { min-width: 130px; }
+}
