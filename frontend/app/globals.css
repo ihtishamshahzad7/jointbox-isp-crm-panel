@@ -5677,3 +5677,13 @@ html .main .recharts-responsive-container { width: 100% !important; }
      five short rows. */
   html .main .jb-stat { min-width: 130px; }
 }
+
+/* Dashboard section rail + NAS KPI row scroll sideways on a phone. */
+@media (max-width: 768px) {
+  html .main .jb-dash-rail {
+    flex-wrap: nowrap !important;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  html .main .jb-dash-rail::-webkit-scrollbar { display: none; }
+  html .main .jb-dash-rail > button { flex: 0 0 auto; }
+}

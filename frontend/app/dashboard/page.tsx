@@ -682,12 +682,11 @@ export default function DashboardPage() {
   const tabRailStyle: React.CSSProperties = {
     display: "flex",
     gap: 10,
-    flexWrap: "wrap",
-    padding: 10,
-    background: "rgba(11,14,24,0.88)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: 14,
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+    padding: 8,
+    background: "#FFFFFF",
+    border: "1px solid #E2E8F0",
+    borderRadius: 12,
+    boxShadow: "0 1px 3px rgba(0,0,0,.05)",
   };
 
   const tabButtonStyle = (active: boolean): React.CSSProperties => ({
@@ -698,9 +697,9 @@ export default function DashboardPage() {
     gap: 3,
     padding: "10px 14px",
     borderRadius: 10,
-    border: active ? "1px solid rgba(140,90,255,0.45)" : "1px solid var(--border)",
-    background: active ? "linear-gradient(180deg, rgba(108,60,225,0.18), rgba(233,64,139,0.08))" : "var(--surface-2)",
-    color: active ? "#f8fafc" : "#cbd5e1",
+    border: active ? "1px solid #3C50E0" : "1px solid #E2E8F0",
+    background: active ? "#EEF1FE" : "#F7F9FC",
+    color: active ? "#3C50E0" : "#64748B",
     cursor: "pointer",
     textAlign: "left",
     transition: "all 0.18s ease",
@@ -726,13 +725,13 @@ export default function DashboardPage() {
       )}
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
-        <div style={tabRailStyle}>
+        <div className="jb-dash-rail" style={tabRailStyle}>
           {sectionTabs.map((t) => {
             const active = tab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} style={tabButtonStyle(active)}>
                 <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em", fontStyle: "normal" }}>{t.label}</span>
-                <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: active ? "#93c5fd" : "#7c8aa0", fontStyle: "normal" }}>{t.caption}</span>
+                <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: active ? "#3C50E0" : "#64748B", fontStyle: "normal" }}>{t.caption}</span>
               </button>
             );
           })}

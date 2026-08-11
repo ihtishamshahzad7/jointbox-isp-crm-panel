@@ -807,7 +807,7 @@ export default function NasPage() {
           </div>
 
           {/* Stat Cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))', gap:10, marginBottom:16 }}>
+          <div className="jb-kpi-row" style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))', gap:10, marginBottom:16 }}>
             {[
               { label:'Total NAS',       value: overview?.totalNas ?? stats.total,    color: t.accent,  icon:<Icons.Router /> },
               { label:'Online NAS',      value: overview?.onlineNas ?? '—',   color: t.green,   icon:<Icons.Signal /> },
@@ -984,9 +984,9 @@ export default function NasPage() {
                   <Icons.NAS />
                 </div>
                 <div>
-                  <div style={{ fontWeight:800, fontSize:17, color:'#f1f5f9' }}>{viewDetail.nas.nasname}</div>
+                  <div style={{ fontWeight:800, fontSize:17, color:'#1C2434' }}>{viewDetail.nas.nasname}</div>
                   <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
-                    <code style={{ fontSize:12, color:'#38bdf8' }}>{viewDetail.nas.nasIp}</code>
+                    <code style={{ fontSize:12, color:'#0B76A8' }}>{viewDetail.nas.nasIp}</code>
                     <Badge color='#60a5fa' bg='rgba(96,165,250,0.1)'>{viewDetail.nas.type}</Badge>
                     {/* Show actual configured port */}
                     <Badge color='var(--muted)' bg='rgba(148,163,184,0.1)'>
@@ -1100,7 +1100,7 @@ export default function NasPage() {
                 if (!hasData && !viewDetail.loadingDetails) return null;
                 return (
                   <div style={{ background: d?'var(--surface)':'#eff6ff', border:`1px solid ${d?'#1e3a5f':'#bfdbfe'}`, borderRadius:10, padding:14, marginBottom:14 }}>
-                    <div style={{ fontSize:11, fontWeight:700, color:'#38bdf8', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'#0B76A8', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
                       <Icons.Router /> MikroTik Device Details
                       {viewDetail.loadingDetails && <span style={{ color:t.amber, fontWeight:400 }}>— syncing…</span>}
                     </div>
@@ -1217,7 +1217,7 @@ export default function NasPage() {
                     <tbody>
                       {viewDetail.details.interfaces.map((iface, i) => (
                         <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
-                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#38bdf8' }}>{iface.name}</code></td>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#0B76A8' }}>{iface.name}</code></td>
                           <td style={{ padding:'7px 10px', color:t.textSub }}>{iface.type || '—'}</td>
                           {/* FIX: use normalized field name macAddress not mac-address */}
                           <td style={{ padding:'7px 10px' }}><code style={{ fontSize:10, color:t.textMuted }}>{iface.macAddress || '—'}</code></td>
@@ -1324,7 +1324,7 @@ export default function NasPage() {
                       {viewDetail.details.radiusClients.map((rc, i) => (
                         <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
                           <td style={{ padding:'7px 10px' }}><Badge color='#60a5fa' bg='rgba(96,165,250,0.1)'>{rc.service}</Badge></td>
-                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#38bdf8', fontSize:10 }}>{rc.address}</code></td>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#0B76A8', fontSize:10 }}>{rc.address}</code></td>
                           <td style={{ padding:'7px 10px', color:t.textSub }}>{rc.authPort}</td>
                           <td style={{ padding:'7px 10px', color:t.textSub }}>{rc.acctPort}</td>
                           <td style={{ padding:'7px 10px', color:t.textSub }}>{rc.timeout}</td>
@@ -1360,7 +1360,7 @@ export default function NasPage() {
                     <tbody>
                       {viewDetail.details.ipAddresses.map((ip, i) => (
                         <tr key={i} style={{ background: i%2===0?(d?'var(--bg)':'#f8fafc'):t.card }}>
-                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#38bdf8' }}>{ip.address}</code></td>
+                          <td style={{ padding:'7px 10px' }}><code style={{ color:'#0B76A8' }}>{ip.address}</code></td>
                           <td style={{ padding:'7px 10px' }}><code style={{ color:t.textSub, fontSize:10 }}>{ip.network}</code></td>
                           <td style={{ padding:'7px 10px', color:t.textSub }}>{ip.interface}</td>
                           <td style={{ padding:'7px 10px' }}>
@@ -1451,7 +1451,7 @@ export default function NasPage() {
           onClick={() => setShareFor(null)}>
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:12, padding:24, width:'100%', maxWidth:520, maxHeight:'85vh', overflowY:'auto' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight:800, fontSize:16, color:'#f1f5f9' }}>Share “{shareFor.nasname}”</div>
+            <div style={{ fontWeight:800, fontSize:16, color:'#1C2434' }}>Share “{shareFor.nasname}”</div>
             <div style={{ fontSize:11.5, color:t.textMuted, marginTop:4, lineHeight:1.7 }}>
               Ticked accounts can put their subscribers on this router. You keep ownership —
               they cannot edit or delete it. Untick to withdraw access.
@@ -1492,7 +1492,7 @@ export default function NasPage() {
                     <input type="checkbox" checked={on} disabled={shareBusy}
                       onChange={(e) => toggleShare(u.id, e.target.checked)} />
                     <span style={{ flex:1 }}>
-                      <b style={{ fontSize:13, color:'#f1f5f9' }}>{u.name}</b>
+                      <b style={{ fontSize:13, color:'#1C2434' }}>{u.name}</b>
                       <span style={{ display:'block', fontSize:10.5, color:t.textMuted }}>{u.role} · {u.email}</span>
                     </span>
                   </label>
@@ -1519,7 +1519,7 @@ export default function NasPage() {
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
               <div>
-                <div style={{ fontWeight:800, fontSize:16, color:'#f1f5f9' }}>{editItem ? 'Edit NAS Device' : 'Add New NAS Device'}</div>
+                <div style={{ fontWeight:800, fontSize:16, color:'#1C2434' }}>{editItem ? 'Edit NAS Device' : 'Add New NAS Device'}</div>
                 <div style={{ fontSize:11, color:t.textMuted, marginTop:2 }}>Configure router, API access, and RADIUS authentication</div>
               </div>
               <button onClick={() => setShowForm(false)} style={{ background:'transparent', border:`1px solid ${t.cardBorder}`, borderRadius:6, padding:'5px 8px', cursor:'pointer', color:t.textSub }}>
