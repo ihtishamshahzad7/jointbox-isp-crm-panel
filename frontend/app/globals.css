@@ -5687,3 +5687,46 @@ html .main .recharts-responsive-container { width: 100% !important; }
   html .main .jb-dash-rail::-webkit-scrollbar { display: none; }
   html .main .jb-dash-rail > button { flex: 0 0 auto; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   EVERY PAGE — KPI grids and control strips on a phone
+   ══════════════════════════════════════════════════════════════════════════
+   Applied globally so all sidebar pages (Administration, Insights, Billing,
+   Plans & Stock, Support, Jobs, user profiles…) are covered without editing
+   each one. Any auto-fit card grid becomes a swipeable row on a phone; any
+   horizontal control strip scrolls rather than wrapping into a pile. The
+   earlier colour sweep already made the neon/near-white values readable on
+   white across every page, so this is the last shared piece. */
+@media (max-width: 768px) {
+  html .main [style*="repeat(auto-fit"][style*="minmax(120px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(130px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(140px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(150px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(160px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(170px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(180px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(190px"] {
+    display: flex !important;
+    overflow-x: auto;
+    gap: 10px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    grid-template-columns: none !important;
+  }
+  html .main [style*="repeat(auto-fit"][style*="minmax(1"]::-webkit-scrollbar { display: none; }
+  html .main [style*="repeat(auto-fit"][style*="minmax(1"] > * {
+    flex: 0 0 auto;
+    min-width: 44%;
+    max-width: 78vw;
+  }
+
+  /* Big content grids (two wide columns / 320px+ cards) stack to one column —
+     these are panels, not KPI tiles, so they should not scroll sideways. */
+  html .main [style*="repeat(auto-fit"][style*="minmax(280px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(320px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(340px"],
+  html .main [style*="grid-template-columns: 1fr 1fr"],
+  html .main [style*="gridTemplateColumns: \"1fr 1fr\""] {
+    grid-template-columns: 1fr !important;
+  }
+}
