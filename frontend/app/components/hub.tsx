@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { publishSection, clearSection } from "./section-nav";
 
 export type HubTab = {
   id: string;
@@ -63,6 +64,23 @@ function HubInner({
       setSeen((p) => new Set(p).add(urlTab));
     }
   }, [urlTab]);
+
+  /**
+   * Publish this hub's tabs so the mobile bottom bar becomes section-aware —
+   * on Network it shows NAS / Pools / Outages, on Billing it shows Invoices /
+   * Payments, and so on. Re-published whenever the tab set or active tab
+   * changes, and cleared when the hub unmounts so the bar falls back to the
+   * global menu on non-hub pages.
+   */
+  useEffect(() => {
+    const basePath = typeof window !== "undefined" ? window.location.pathname : "";
+    publishSection({
+      basePath,
+      activeId: active,
+      tabs: tabs.map((t) => ({ id: t.id, label: t.label })),
+    });
+    return () => clearSection(basePath);
+  }, [tabs, active]);
 
   const select = (id: string) => {
     setActive(id);

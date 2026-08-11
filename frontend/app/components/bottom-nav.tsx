@@ -1,19 +1,22 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Icons } from "./icons";
+import { subscribeSection, getSection, type Section } from "./section-nav";
 
 /**
- * BottomNav — the mobile navigation bar.
+ * BottomNav — the mobile navigation bar, section-aware.
  *
- * A phone can't show a sidebar, and a hamburger drawer alone means every
- * navigation is two taps and a hunt. This is the pattern every operator already
- * knows from their phone: a fixed bottom bar with the handful of destinations
- * used all day, plus a "More" button that opens the full menu (the existing
- * drawer). Hidden on desktop by CSS — the sidebar owns navigation there.
+ * Two modes:
+ *   • On a HUB page (Network, Billing, My Work…) it shows THAT section's tabs
+ *     — NAS / Pools / Outages on Network, Invoices / Payments on Billing — so
+ *     switching between related screens is one tap, and the bar always reflects
+ *     where you are.
+ *   • Everywhere else it shows the four top-level destinations plus More.
  *
- * Five slots only. More than five stops being a glance and starts being a menu,
- * and the sixth destination is exactly what "More" is for.
+ * The hub publishes its tabs through section-nav; this subscribes. Hidden on
+ * desktop by CSS, where the sidebar owns navigation.
  */
 
 const TABS = [
@@ -23,17 +26,65 @@ const TABS = [
   { id: "billing",     label: "Billing", href: "/billing-center", Icon: Icons.Payments },
 ];
 
+/** useSearchParams requires a Suspense boundary or the whole app fails to build. */
 export default function BottomNav({ onMore }: { onMore: () => void }) {
-  const pathname = usePathname() || "";
-  const router = useRouter();
+  return (
+    <Suspense fallback={null}>
+      <BottomNavInner onMore={onMore} />
+    </Suspense>
+  );
+}
 
-  const active = (href: string) =>
+function BottomNavInner({ onMore }: { onMore: () => void }) {
+  const pathname = usePathname() || "";
+  const params = useSearchParams();
+  const router = useRouter();
+  const [section, setSection] = useState<Section>(getSection());
+
+  useEffect(() => subscribeSection(setSection), []);
+
+  const globalActive = (href: string) =>
     pathname === href || pathname.startsWith(href + "/") || pathname.startsWith(href.replace("-center", ""));
 
+  // ── Section mode: the current hub's tabs fill the bar ──────────────────────
+  // Only when the published section actually belongs to the page we're on.
+  const onHub = section && pathname.startsWith(section.basePath);
+  if (onHub && section) {
+    const activeId = params.get("tab") || section.activeId;
+    const goTab = (id: string) => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", id);
+      router.replace(url.pathname + url.search, { scroll: false });
+    };
+    return (
+      <nav className="jb-bottomnav section" aria-label="Section">
+        {/* Section tabs scroll horizontally; More is pinned so the menu is
+            always reachable. */}
+        <div className="jb-bn-scroll">
+          {section.tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => goTab(t.id)}
+              aria-current={activeId === t.id ? "page" : undefined}
+              className={activeId === t.id ? "on" : ""}
+            >
+              <span className="lbl">{t.label}</span>
+            </button>
+          ))}
+        </div>
+        <button className="jb-bn-more" onClick={onMore} aria-label="More menu">
+          <span className="ico"><Icons.Menu width={20} height={20} /></span>
+          <span className="lbl">Menu</span>
+        </button>
+      </nav>
+    );
+  }
+
+  // ── Global mode: four destinations + More ──────────────────────────────────
   return (
     <nav className="jb-bottomnav" aria-label="Primary">
       {TABS.map((t) => {
-        const on = active(t.href);
+        const on = globalActive(t.href);
         return (
           <button
             key={t.id}
