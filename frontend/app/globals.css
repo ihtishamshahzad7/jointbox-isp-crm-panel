@@ -5621,3 +5621,17 @@ html .main .recharts-responsive-container { width: 100% !important; }
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
 }
+
+/* KPI stat row — swipeable on a phone, so seven cards never squash. */
+.jb-stat { transition: border-color .15s ease, box-shadow .15s ease; }
+.jb-stat:hover { border-color: #CBD5E1; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+@media (max-width: 768px) {
+  html .main .jb-kpi-row {
+    display: flex !important; overflow-x: auto; gap: 10px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    grid-template-columns: none !important;
+  }
+  html .main .jb-kpi-row::-webkit-scrollbar { display: none; }
+  html .main .jb-kpi-row > .jb-stat { flex: 0 0 46%; min-width: 150px; }
+  html .main .jb-kpi-row > .jb-stat .val { font-size: 22px; }
+}

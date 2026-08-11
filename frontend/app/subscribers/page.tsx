@@ -1434,19 +1434,23 @@ export default function SubscribersPage() {
           </div>
 
           {/* Stat Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 16 }}>
+          {/* KPI stat row — design-system stat cards. Colours are semantic and
+              contrast-safe on white (the old row had white "Offline" text and
+              neon numbers that were invisible or unreadable on a light page).
+              On a phone the row scrolls sideways instead of squashing. */}
+          <div className="jb-kpi-row" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 16 }}>
             {[
-              { label: "Total Subscribers", value: stats.total, color: t.accent },
-              { label: "Active Subscribers", value: stats.active, color: "#10B981" },
-              { label: "Online Now", value: stats.onlineNow || 0, color: "#00C9FF" },
-              { label: "Offline", value: stats.offline || 0, color: "rgba(255,255,255,0.7)" },
-              { label: "Stale Sessions", value: stats.stale ?? 0, color: "#f59e0b" },
-              { label: "Expired", value: stats.expired, color: "#ff7070" },
-              { label: "Today's Signups", value: stats.todaySignups || 0, color: "#f0a500" },
+              { label: "Total Subscribers", value: stats.total, color: "#3C50E0" },
+              { label: "Active Subscribers", value: stats.active, color: "#157F43" },
+              { label: "Online Now", value: stats.onlineNow || 0, color: "#0B76A8" },
+              { label: "Offline", value: stats.offline || 0, color: "#64748B" },
+              { label: "Stale Sessions", value: stats.stale ?? 0, color: "#8A6209" },
+              { label: "Expired", value: stats.expired, color: "#B02A37" },
+              { label: "Today's Signups", value: stats.todaySignups || 0, color: "#B06A0C" },
             ].map((c) => (
-              <div key={c.label} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 16px" }}>
-                <div style={{ fontSize: 26, fontWeight: 800, color: c.color, lineHeight: 1 }}>{c.value}</div>
-                <div style={{ fontSize: 10, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 4 }}>{c.label}</div>
+              <div key={c.label} className="jb-stat">
+                <div className="val" style={{ color: c.color }}>{c.value}</div>
+                <div className="lbl">{c.label}</div>
               </div>
             ))}
             {bulkResult && (
