@@ -5557,3 +5557,67 @@ html .main .recharts-responsive-container { width: 100% !important; }
   }
   .jb-bottomnav.section .jb-bn-more .lbl { font-size: 10.5px; font-weight: 600; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   JOINTBOX DESIGN SYSTEM — shared components (per the design spec)
+   ══════════════════════════════════════════════════════════════════════════
+   One vocabulary every screen can draw from: status pill, stat card, key-value
+   row, tab bar, action button. Colours are the spec's: violet primary, tinted
+   semantic pills, mono for IPs/ports/IDs. Available as classes so pages adopt
+   them incrementally without a rewrite; the global responsive rules below
+   apply everywhere regardless. */
+
+:root {
+  --jb-primary: #3C50E0;
+  --jb-online:  #157F43;  --jb-online-bg:  #E7F6EC;  --jb-online-bd:  #C6E9D3;
+  --jb-danger:  #B02A37;  --jb-danger-bg:  #FDE8EA;  --jb-danger-bd:  #F5C2C7;
+  --jb-warn:    #8A6209;  --jb-warn-bg:    #FDF3E3;  --jb-warn-bd:    #F5DFB4;
+  --jb-info:    #1C5FA8;  --jb-info-bg:    #E6F0FB;  --jb-info-bd:    #C4DDF5;
+  --jb-mono: ui-monospace, "SF Mono", "Roboto Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+/* Status pill — tinted background, darker text of the same hue. */
+.jb-pill { display:inline-flex; align-items:center; gap:5px; font-size:11px;
+  font-weight:600; padding:3px 10px; border-radius:999px; white-space:nowrap; line-height:1.4; }
+.jb-pill.on   { background:var(--jb-online-bg); color:var(--jb-online); border:1px solid var(--jb-online-bd); }
+.jb-pill.off  { background:var(--jb-danger-bg); color:var(--jb-danger); border:1px solid var(--jb-danger-bd); }
+.jb-pill.warn { background:var(--jb-warn-bg);   color:var(--jb-warn);   border:1px solid var(--jb-warn-bd); }
+.jb-pill.info { background:var(--jb-info-bg);   color:var(--jb-info);   border:1px solid var(--jb-info-bd); }
+.jb-pill .dot { width:6px; height:6px; border-radius:999px; background:currentColor; }
+
+/* Stat card — muted label above, big number below. */
+.jb-stat { background:#FFF; border:1px solid #E2E8F0; border-radius:10px; padding:12px 14px; min-width:0; }
+.jb-stat .lbl { font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:#64748B; }
+.jb-stat .val { font-size:24px; font-weight:700; color:#1C2434; margin-top:3px; line-height:1.1; }
+
+/* Key-value row — label left (muted), value right (mono for data). */
+.jb-kv { display:flex; justify-content:space-between; gap:14px; padding:8px 0;
+  border-bottom:1px solid #EEF2F7; font-size:13px; }
+.jb-kv .k { color:#64748B; }
+.jb-kv .v { color:#1C2434; text-align:right; overflow-wrap:anywhere; }
+.jb-kv .v.mono { font-family:var(--jb-mono); }
+
+/* Mono utility for IPs, ports, usernames, IDs. */
+.jb-mono { font-family:var(--jb-mono); }
+
+/* ── Global responsive polish that needs no page changes ─────────────────── */
+@media (max-width: 768px) {
+  /* KPI stat rows scroll as one row instead of squashing to 2px numbers. */
+  html .main [style*="repeat(auto-fit"][style*="minmax(130px"],
+  html .main [style*="repeat(auto-fit"][style*="minmax(120px"] {
+    display: flex !important; overflow-x: auto; gap: 10px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  html .main [style*="repeat(auto-fit"][style*="minmax(130px"] > *,
+  html .main [style*="repeat(auto-fit"][style*="minmax(120px"] > * {
+    flex: 0 0 44%; min-width: 140px;
+  }
+
+  /* Any page-level tab strip becomes one swipeable row (already true for hub
+     and detail tabs; this catches the rest). */
+  html .main [role="tablist"],
+  html .main [class*="tabs"]:not(.jb-status-filters) {
+    display: flex; flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+}
