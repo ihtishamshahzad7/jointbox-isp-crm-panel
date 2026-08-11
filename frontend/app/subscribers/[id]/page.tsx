@@ -356,15 +356,18 @@ export default function SubscriberProfilePage() {
         <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:700,color:badgeColor,background:badgeBg}}>{value}</span>
       ) : (
         <span style={{fontSize:12,color:t.text,fontWeight:600,textAlign:"right" as const,wordBreak:"break-all" as const,
-          ...(mono?{fontFamily:"monospace",color:"#34d399"}:{})}}>{value||"—"}</span>
+          ...(mono?{fontFamily:"var(--jb-mono, monospace)",color:"#1C2434"}:{})}}>{value||"—"}</span>
       )}
     </div>
   );
-  const StatBox = ({label, value, sub2="", color=t.text, icon}:any) => (
-    <div style={{background:d?"var(--surface)":"#f8fafc",border:`1px solid ${t.cardBorder}`,borderRadius:8,padding:"10px 12px",flex:1,minWidth:100}}>
-      <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:4,color:t.textMuted}}>{icon}<span style={{fontSize:10,fontWeight:600,textTransform:"uppercase" as const,letterSpacing:"0.05em"}}>{label}</span></div>
-      <div style={{fontSize:18,fontWeight:700,color,lineHeight:1}}>{value}</div>
-      {sub2 && <div style={{fontSize:10,color:t.textMuted,marginTop:2}}>{sub2}</div>}
+  // Design-system stat card. `color` is now the SEMANTIC accent for the number;
+  // it must be a readable-on-white value (the call sites were passing neon
+  // greens/blues that vanished on the light page).
+  const StatBox = ({label, value, sub2="", color, icon}:any) => (
+    <div className="jb-stat" style={{flex:1,minWidth:100}}>
+      <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:4,color:"#64748B"}}>{icon}<span style={{fontSize:10,fontWeight:600,textTransform:"uppercase" as const,letterSpacing:"0.05em"}}>{label}</span></div>
+      <div style={{fontSize:20,fontWeight:700,color:color||"#1C2434",lineHeight:1.05}}>{value}</div>
+      {sub2 && <div style={{fontSize:10,color:"#64748B",marginTop:2}}>{sub2}</div>}
     </div>
   );
   const Btn = ({onClick,children,variant="ghost",size="sm",disabled=false}:any) => {
@@ -537,11 +540,11 @@ export default function SubscriberProfilePage() {
           </div>
           {/* Quick stats */}
           <div style={{display:"flex",gap:10,flexWrap:"wrap" as const}}>
-            <StatBox label="Uptime" value={isOnline&&liveSession?fmtDuration(liveSession.duration_seconds):"—"} color={isOnline?"#4ade80":t.textMuted} icon={<Ic.Clock/>}/>
-            <StatBox label="Upload" value={fmtBytes(isOnline?liveSession?.upload_bytes:null)} color="#4ade80" icon={<Ic.Upload/>}/>
-            <StatBox label="Download" value={fmtBytes(isOnline?liveSession?.download_bytes:null)} color="#60a5fa" icon={<Ic.Download/>}/>
-            <StatBox label="Total Used" value={fmtBytes(totalDownload+totalUpload)} sub2="all sessions" color="#c4b5fd" icon={<Ic.Activity/>}/>
-            <StatBox label="Leased IP" value={liveSession?.framedipaddress||"—"} color="#34d399" icon={<Ic.IP/>}/>
+            <StatBox label="Uptime" value={isOnline&&liveSession?fmtDuration(liveSession.duration_seconds):"—"} color={isOnline?"#157F43":"#64748B"} icon={<Ic.Clock/>}/>
+            <StatBox label="Upload" value={fmtBytes(isOnline?liveSession?.upload_bytes:null)} color="#157F43" icon={<Ic.Upload/>}/>
+            <StatBox label="Download" value={fmtBytes(isOnline?liveSession?.download_bytes:null)} color="#0B76A8" icon={<Ic.Download/>}/>
+            <StatBox label="Total Used" value={fmtBytes(totalDownload+totalUpload)} sub2="all sessions" color="#5A46C8" icon={<Ic.Activity/>}/>
+            <StatBox label="Leased IP" value={liveSession?.framedipaddress||"—"} color="#0B76A8" icon={<Ic.IP/>}/>
           </div>
 
           {/* ── Data allowance ──
