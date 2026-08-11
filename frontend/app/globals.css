@@ -5447,3 +5447,88 @@ html .main .recharts-responsive-container { width: 100% !important; }
   html .main .wbtb .wbfind { order: -1; width: 100%; margin-bottom: 6px; }
   html .main .wbtb .wbspacer { display: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE — DETAIL DIALOGS: tabs, header buttons, badge rows
+   ══════════════════════════════════════════════════════════════════════════
+   On a phone the subscriber/NAS detail dialog was unusable: seven tab labels
+   wrapped and overlapped ("Router Log" on top of "Session Log"), the header
+   action buttons collided, and NAS badges ran into each other
+   ("MIKROTAPI:8728oA:3799"). Everything that is a horizontal strip of controls
+   now scrolls sideways as one row instead of wrapping into a pile. */
+@media (max-width: 768px) {
+  /* Detail tab bars → one swipeable row. */
+  html .jb-detail-tabs,
+  html .jb-portal [style*="display: flex"][style*="border-bottom"],
+  html .main .jb-detail-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  html .jb-detail-tabs::-webkit-scrollbar { display: none; }
+  html .jb-detail-tabs button { flex: 0 0 auto; white-space: nowrap; }
+
+  /* Dialog header: title, status pills and action buttons wrap onto their own
+     lines with real spacing instead of overlapping. */
+  html .jb-portal > div > div > div:first-child,
+  html .main div[style*="position: fixed"] > div > div:first-child {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    align-items: flex-start !important;
+  }
+
+  /* Badge/pill rows (NAS: MIKROTIK · API · CoA) get real gaps and can wrap. */
+  html .main [style*="display: flex"][style*="gap"] > [style*="border-radius: 999"],
+  html .main [style*="display:flex"] [class*="badge"],
+  html .main [class*="Badge"] {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* Footer action buttons of a dialog stay in one scrollable row, not stacked
+     on top of each other. */
+  html .jb-portal [style*="border-top"] [style*="display: flex"],
+  html .main div[style*="position: fixed"] [style*="border-top"] {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE BOTTOM NAVIGATION
+   ══════════════════════════════════════════════════════════════════════════
+   The primary way to move around on a phone: a fixed bottom bar of the four
+   daily destinations plus More. Hidden on desktop, where the sidebar rules. */
+.jb-bottomnav { display: none; }
+
+@media (max-width: 768px) {
+  .jb-bottomnav {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 1500;
+    background: #FFFFFF;
+    border-top: 1px solid #E2E8F0;
+    box-shadow: 0 -2px 10px rgba(0,0,0,.06);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .jb-bottomnav button {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; padding: 8px 2px 6px; border: none; background: transparent;
+    color: #64748B; cursor: pointer; font-family: inherit; min-height: 54px;
+  }
+  .jb-bottomnav button .ico { display: inline-flex; line-height: 1; }
+  .jb-bottomnav button .lbl { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
+  .jb-bottomnav button.on { color: #3C50E0; }
+  .jb-bottomnav button.on .ico svg { color: #3C50E0; }
+
+  /* Content must not hide behind the bar — reserve its height at the bottom of
+     the scroll area. */
+  html .app-shell-page-content { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)) !important; }
+
+  /* The floating assistant is gone, but if any fixed bottom-right control
+     remains, lift it above the bar. */
+  html .jb-assist-panel { bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important; }
+}

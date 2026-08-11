@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
-import AiAssistant from './ai-assistant';
 import CommandPalette from './command-palette';
 import { NovaStyles } from './ui';
 import { usePathname, useRouter } from 'next/navigation';
@@ -11,6 +10,7 @@ import { silent } from './silent';
 import { Icons } from './icons';
 import API_BASE from "./api";
 import NotificationBell from './notification-bell';
+import BottomNav from './bottom-nav';
 import Avatar from './avatar';
 
 const API = API_BASE;
@@ -89,7 +89,6 @@ const menuGroups = [
     { id: 'radius-admin', label: 'FreeRADIUS & Database', href: '/radius-admin', Icon: navIcons.NAS, ispOnly: true },
     // Ask (conversation) and Documentation (browse) answer from the same
     // knowledge base — some people ask, some prefer to read.
-    { id: 'assistant', label: 'AI Assistant', href: '/assistant', Icon: navIcons.Support },
     { id: 'docs', label: 'Documentation', href: '/docs', Icon: navIcons.Support },
   ]},
 ];
@@ -979,10 +978,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </main>
 
-        {/* Floating AI assistant — available on every screen. */}
-        <AiAssistant />
         {/* Global feature finder — Ctrl/⌘+K on any screen. */}
         <CommandPalette />
+
+        {/* Mobile bottom navigation. Hidden on desktop by CSS; "More" opens the
+            same drawer the hamburger does. */}
+        <BottomNav onMore={() => setMobileOpen(true)} />
 
         {/* Footer removed. It said nothing that changes, and it cost a strip
             of vertical space on every screen — the version number belongs in

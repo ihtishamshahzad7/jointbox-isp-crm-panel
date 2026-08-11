@@ -2305,8 +2305,8 @@ export default function SubscribersPage() {
               </div>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display: "flex", gap: 4, padding: "0 20px", borderBottom: `1px solid ${t.cardBorder}`, background: t.card }}>
+            {/* Tabs — one swipeable row on a phone (seven labels never wrap). */}
+            <div className="jb-detail-tabs" style={{ display: "flex", gap: 4, padding: "0 20px", borderBottom: `1px solid ${t.cardBorder}`, background: t.card }}>
               {["Profile", "Connection", "Router Log", "Session Log", "RADIUS", "Login Log", "Activities"].map((tab) => (
                 <button
                   key={tab}
@@ -2321,6 +2321,8 @@ export default function SubscribersPage() {
                     cursor: "pointer",
                     fontSize: 12,
                     fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    flex: "0 0 auto",
                     color: detailActiveTab === tab ? t.accent : t.textMuted,
                     borderBottom: detailActiveTab === tab ? `2px solid ${t.accent}` : "2px solid transparent",
                   }}
