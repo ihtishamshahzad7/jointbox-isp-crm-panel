@@ -33,6 +33,7 @@ interface RadiusSession {
   download_bytes: number|null; nasportid?: string|null;
   nasporttype?: string|null; framedprotocol?: string|null;
   servicetype?: string|null; acctterminatecause?: string|null;
+  terminateLabel?: string|null; terminateDescription?: string|null; terminateCode?: number|null;
   acctinterval?: number|null;
 }
 interface RadiusAuth {
@@ -1185,7 +1186,7 @@ export default function SubscriberProfilePage() {
                           <td style={{padding:"8px 12px",fontSize:11,color:t.text,fontWeight:600}}>{fmtDuration(sess.duration_seconds)}</td>
                           <td style={{padding:"8px 12px",fontSize:11,color:"#4ade80",fontWeight:600}}>{fmtBytes(sess.upload_bytes)}</td>
                           <td style={{padding:"8px 12px",fontSize:11,color:"#60a5fa",fontWeight:600}}>{fmtBytes(sess.download_bytes)}</td>
-                          <td style={{padding:"8px 12px",fontSize:10,color:t.textMuted}}>{sess.acctterminatecause||"—"}</td>
+                          <td style={{padding:"8px 12px",fontSize:11,color:t.text}} title={(sess as any).terminateDescription || undefined}>{(sess as any).terminateLabel || sess.acctterminatecause || "—"}</td>
                         </tr>
                       );
                     })}

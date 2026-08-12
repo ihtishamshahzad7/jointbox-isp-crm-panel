@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import { SubscriberTable } from "./subscriber-table";
+import { SubscriberMobileList } from "./subscriber-mobile";
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { SubscriberGroups } from "./subscriber-groups";
@@ -1624,6 +1625,21 @@ export default function SubscribersPage() {
                 No subscribers. Click <b>+ Add Subscriber</b> to register the first one.
               </div>
             ) : (
+              <>
+              <SubscriberMobileList
+                rows={paged.map((s: any) => {
+                  const expiryRaw = s.serviceSettings?.expiryDate || null;
+                  const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
+                  const daysLeft = expiryDate ? Math.ceil((expiryDate.getTime() - Date.now()) / 86400000) : null;
+                  return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
+                })}
+                onOpen={openDetail}
+                onEdit={openEdit}
+                onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
+                onDeactivate={deactivateSub}
+                onDelete={(r) => setDeleteConfirm(r)}
+              />
+
               <SubscriberTable
                 rows={paged.map((s: any) => {
                   const expiryRaw = s.serviceSettings?.expiryDate || null;
@@ -1647,6 +1663,7 @@ export default function SubscribersPage() {
                 money={money}
                 onRefresh={loadAll}
               />
+              </>
             )}
 
             {!loading && filtered.length > 0 && (

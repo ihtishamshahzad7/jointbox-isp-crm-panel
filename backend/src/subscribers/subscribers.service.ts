@@ -18,6 +18,7 @@ import {
   CONNECTION_TYPE, PROFILE_STATUS, DISCOUNT_TYPE, parsePanelDate, parseFlag,
 } from './panel-format';
 import { parseCursor, buildCursorPage } from '../common/pagination';
+import { terminateInfo } from '../common/radius-terminate';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -3340,9 +3341,18 @@ if (!unpaid && data.username && data.password) {
         LIMIT 50
       `, [username]);
 
+      // Attach the plain-language termination cause to every history row, so
+      // the session log reads "Lost carrier — the customer's cable/ONU dropped"
+      // instead of a bare "Lost-Carrier" or a numeric code.
+      const enrich = (r: any) => {
+        if (!r) return r;
+        const info = terminateInfo(r.acctterminatecause);
+        return { ...r, terminateLabel: info.label, terminateDescription: info.description, terminateCode: info.code };
+      };
+
       return {
-        session: activeRes.rows[0] || null,
-        history: histRes.rows,
+        session: enrich(activeRes.rows[0] || null),
+        history: histRes.rows.map(enrich),
       };
     } catch (error: any) {
       this.logger.error(`getRadiusSession error: ${error.message}`);

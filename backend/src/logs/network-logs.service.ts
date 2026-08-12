@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+import { terminateInfo } from '../common/radius-terminate';
 import { mapLimit, withTimeout } from '../common/concurrency';
 import { DatabaseSetupService } from '../common/database-setup.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -613,7 +614,7 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
             framedIp:     acct.framedipaddress ?? undefined,
             sessionId:    acct.acctsessionid,
             severity:     'INFO',
-            message:      `Session ended for ${acct.username ?? 'unknown'} — reason: ${acct.acctterminatecause ?? 'unknown'}, duration: ${acct.acctsessiontime ?? '?'}s`,
+            message:      `Session ended for ${acct.username ?? 'unknown'} — ${terminateInfo(acct.acctterminatecause).label}: ${terminateInfo(acct.acctterminatecause).description} (duration: ${acct.acctsessiontime ?? '?'}s)`,
           });
         } else {
           // New active session
