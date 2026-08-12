@@ -735,6 +735,15 @@ export default function SubscribersPage() {
         return;
       }
 
+      // One-time activation lock. A customer is activated ONCE; after that the
+      // record is locked ACTIVE and the only way to charge again is a renewal
+      // (period extension), which must be an explicit act. So we send `force`
+      // ONLY when the target is already ACTIVE — that is a renewal. A plain
+      // activation of an already-active customer stays blocked by the backend,
+      // which is what stops the double-charge you hit.
+      const target = subscribers.find((s) => String(s.id) === String(f.subscriberId));
+      const isRenewal = String(target?.status || "").toUpperCase() === "ACTIVE";
+
       const res = await fetch(`${API}/subscribers/activate-renewal`, {
         method: "POST",
         headers,
@@ -749,6 +758,7 @@ export default function SubscribersPage() {
           extraFeeAmount: extra,
           paymentMethod: f.paymentMethod,
           notes: f.notes,
+          force: isRenewal, // genuine renewal of an active customer
         }),
       });
       if (!res.ok) {
@@ -2837,6 +2847,13 @@ export default function SubscribersPage() {
         <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowActivationModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Activation / Renewal</div>
+            {String(subscribers.find((s) => String(s.id) === String(activationForm.subscriberId))?.status || "").toUpperCase() === "ACTIVE" && (
+              <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 9, background: "rgba(16,185,129,.10)", border: "1px solid rgba(16,185,129,.4)", fontSize: 11.5, color: t.textSub, lineHeight: 1.6 }}>
+                <b style={{ color: "#10B981" }}>Already activated — locked.</b>{" "}
+                This customer is active, so this will be a <b>renewal</b> (extends their period and charges again).
+                To activate from scratch, deactivate them first.
+              </div>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div>
                 <label style={labelSt}>Subscriber</label>
