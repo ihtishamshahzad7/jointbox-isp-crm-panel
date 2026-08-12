@@ -2712,7 +2712,10 @@ if (!unpaid && data.username && data.password) {
     // Charge what the quote says, not the sticker price — a 5-day renewal must
     // not bill a full month.
     const total = quote.total;
-    const invoiceNo = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    // Full timestamp + a short random tail, so two activations in the same
+    // minute cannot mint the same invoice number (the old `slice(-6)` repeated
+    // every ~16.7 minutes and caused collisions).
+    const invoiceNo = `INV-${new Date().getFullYear()}-${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
     const invoice = await this.prisma.invoice.create({
       data: {
         invoiceNo,
@@ -2822,21 +2825,37 @@ if (!unpaid && data.username && data.password) {
           data: { sellPrice: sell, costPrice: cost, profit: Math.round((sell - cost) * 100) / 100 },
         });
         /**
-         * A renewal is a SECOND, genuine charge — not a replay of the original
-         * activation — so it carries its own event key. Without one the new
-         * idempotency guard would see the existing `SUB#id` row and silently
-         * skip every renewal after the first, giving customers free months.
+         * A renewal/activation is a SECOND, genuine charge — not a replay of the
+         * original activation — so it carries its own event key.
          *
-         * The invoice number is unique per renewal cycle, so re-running the
-         * same renewal is still refused while next month's goes through.
+         * The key MUST be the invoice's primary-key id, which is globally unique.
+         * It used to be `invoice.invoiceNo`, which is `INV-<year>-<last 6 digits
+         * of Date.now()>` — and those last six digits repeat every ~16.7 minutes.
+         * Two activations in that window produced the SAME invoice number and
+         * therefore the SAME event key, so the idempotency guard mistook the
+         * second real charge for a duplicate and skipped it: the customer went
+         * online but the reseller wallet was never debited. `invoice.id` cannot
+         * collide, so every genuine activation is charged exactly once.
          */
-        await this.pricing.settleActivation(subscriberId, {
+        const settlement = await this.pricing.settleActivation(subscriberId, {
           byUserId: subscriber.userId,
-          event: `RENEW:${invoice.invoiceNo}`,
+          event: `RENEW:${invoice.id}`,
         });
-        this.logger.log(`🔁 Renewal accounted for subscriber #${subscriberId}`);
+        if (settlement?.settled) {
+          this.logger.log(`🔁 Activation accounted for subscriber #${subscriberId} (invoice ${invoice.id})`);
+        } else {
+          // NOT silent: the customer is active, but the reseller was not charged.
+          // Surface it as an error so it can be reconciled, never buried.
+          this.logger.error(
+            `⚠️ Subscriber #${subscriberId} activated but reseller wallet NOT charged — ` +
+            `${(settlement as any)?.alreadySettled ? 'idempotency guard saw this event as already settled' : ((settlement as any)?.reason || 'settlement returned unsettled')}. ` +
+            `Invoice ${invoice.id}. Check the reseller price ladder and wallet.`,
+          );
+        }
       } catch (e: any) {
-        this.logger.warn(`Renewal cascade skipped for #${subscriberId}: ${e?.message || e}`);
+        // A thrown settlement (e.g. insufficient prepaid balance) must be visible,
+        // not a warning: the customer is online and someone was not billed.
+        this.logger.error(`Activation cascade FAILED for #${subscriberId} (invoice ${invoice.id}): ${e?.message || e}`);
       }
     }
 
