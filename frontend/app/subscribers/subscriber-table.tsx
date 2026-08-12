@@ -248,7 +248,6 @@ export function SubscriberTable({
                   {r.package && (
                     <div className="sub mt">
                       {r.package.downloadSpeed}/{r.package.uploadSpeed} Mbps
-                      {r.sellPrice != null && <> · {money(r.sellPrice)}</>}
                     </div>
                   )}
                 </td>
