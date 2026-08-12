@@ -189,13 +189,14 @@ export class SubscribersController {
   @Post(':id/transfer')
   transfer(
     @Param('id') id: string,
-    @Body() body: { toUserId: number; reason?: string; settle?: boolean },
+    @Body() body: { toUserId: number; reason?: string; settle?: boolean; newPackageId?: number },
     @Req() req: any,
   ) {
     return this.subscribersService.transferOwnership(+id, Number(body.toUserId), {
       reason: body.reason,
       actor: req.user,
-      settle: body.settle, // default true — pass false to move without settling
+      settle: body.settle,
+      newPackageId: body.newPackageId ? Number(body.newPackageId) : undefined,
     });
   }
 
@@ -217,7 +218,7 @@ export class SubscribersController {
   /** Move many subscribers at once — e.g. re-assigning a dealer's whole book. */
   @Post('bulk-transfer')
   async bulkTransfer(
-    @Body() body: { ids: number[]; toUserId: number; reason?: string; settle?: boolean },
+    @Body() body: { ids: number[]; toUserId: number; reason?: string; settle?: boolean; newPackageId?: number },
     @Req() req: any,
   ) {
     const results: any[] = [];
@@ -225,10 +226,12 @@ export class SubscribersController {
       try {
         results.push(await this.subscribersService.transferOwnership(
           Number(id), Number(body.toUserId),
-          // settle:false hands the customer over without charging the receiver.
-          // Needed when the ISP is seeding an account that has no wallet yet —
-          // otherwise the very first hand-over is blocked by a balance check.
-          { reason: body.reason, actor: req.user, settle: body.settle },
+          {
+            reason: body.reason,
+            actor: req.user,
+            settle: body.settle,
+            newPackageId: body.newPackageId ? Number(body.newPackageId) : undefined,
+          },
         ));
       } catch (e: any) {
         results.push({ transferred: false, subscriberId: id, error: e?.message || String(e) });

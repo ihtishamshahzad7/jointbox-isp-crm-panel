@@ -245,6 +245,8 @@ export default function SubscribersPage() {
    * balance check and there is no way to get started.
    */
   const [transferSettle, setTransferSettle] = useState(true);
+  /** Optional package migration on move — "" means keep the current package. */
+  const [transferPackage, setTransferPackage] = useState<string>("");
   /** Guards the delete confirm button against double submission. */
   const [deleteBusy, setDeleteBusy] = useState(false);
   /** Allow deleting a subscriber who has recorded payments. Off by default. */
@@ -972,6 +974,7 @@ export default function SubscribersPage() {
     if (selectedIds.length === 0) return showToast("Select subscribers first", "warn");
     setTransferTo("");
     setTransferReason("");
+    setTransferPackage("");
     setShowTransferModal(true);
     try {
       const r = await fetch(`${API}/users`, { headers });
@@ -1017,6 +1020,7 @@ export default function SubscribersPage() {
           toUserId: Number(transferTo),
           reason: transferReason || undefined,
           settle: transferSettle,
+          newPackageId: transferPackage ? Number(transferPackage) : undefined,
         }),
       });
       const data = await res.json();
@@ -3176,12 +3180,24 @@ export default function SubscribersPage() {
               placeholder="e.g. area reassigned to Rwd"
               style={{ width: "100%", background: t.bg, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "9px 10px", color: t.text, fontSize: 13 }} />
 
+            <label style={{ fontSize: 12, color: t.textSub, display: "block", margin: "12px 0 5px" }}>
+              Migrate package <span style={{ color: t.textMuted }}>(optional — leave as “keep current” to not change the plan)</span>
+            </label>
+            <select value={transferPackage} onChange={(e) => setTransferPackage(e.target.value)}
+              style={{ width: "100%", background: t.bg, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "9px 10px", color: t.text, fontSize: 13 }}>
+              <option value="">Keep current package</option>
+              {packages.map((pk) => (
+                <option key={pk.id} value={pk.id}>{pk.name}</option>
+              ))}
+            </select>
+
             <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 9, background: "rgba(60,80,224,.08)", border: "1px solid rgba(60,80,224,.35)", fontSize: 11.5, color: t.textSub, lineHeight: 1.7 }}>
               <b style={{ color: t.text }}>The customer is suspended after the move.</b>{" "}
-              No money moves now. The new owner must <b>Activate</b> them — and only that step
-              charges the new owner's wallet at <b>their</b> cost and bills the customer at
-              <b> their</b> price, for the days that remain. Nobody is charged for days the
-              customer already paid for.
+              Their remaining paid days carry over (e.g. 27 of 30 left). No money moves now — the
+              new owner must <b>Activate</b> them, and only that step charges the new owner's wallet
+              at <b>their</b> cost and bills the customer at <b>their</b> price, for the days that
+              remain. If you migrate the package above, the cost, price and daily rate are all
+              recalculated on the new plan.
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>

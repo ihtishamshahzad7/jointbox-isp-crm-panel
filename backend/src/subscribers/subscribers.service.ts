@@ -285,7 +285,7 @@ export class SubscribersService implements OnModuleInit {
   async transferOwnership(
     subscriberId: number,
     toUserId: number,
-    opts: { reason?: string; actor?: Actor; settle?: boolean } = {},
+    opts: { reason?: string; actor?: Actor; settle?: boolean; newPackageId?: number } = {},
   ) {
     const actor = opts.actor;
     const sub = await this.prisma.subscriber.findUnique({
@@ -312,21 +312,39 @@ export class SubscribersService implements OnModuleInit {
     });
     if (!target) throw new NotFoundException('Destination account not found');
 
-    // Recalculate what the NEW owner pays and charges for this package.
+    /**
+     * MIGRATE PACKAGE (optional). The move may also change the plan — e.g. the
+     * new owner puts the customer on their own 20 Mbps package. When a target
+     * package is given, ALL of the accounting below (cost, sell, and the daily
+     * rate used to bill the remaining days at activation) is calculated on the
+     * MIGRATED package, not the old one. If none is given, the customer keeps
+     * their current package. The migrated package id is validated to exist.
+     */
+    let targetPackageId = sub.packageId;
+    if (opts.newPackageId && opts.newPackageId !== sub.packageId) {
+      const exists = await this.prisma.package.findUnique({
+        where: { id: Number(opts.newPackageId) }, select: { id: true },
+      });
+      if (!exists) throw new BadRequestException(`Package #${opts.newPackageId} not found for migration.`);
+      targetPackageId = Number(opts.newPackageId);
+    }
+    const migrated = targetPackageId !== sub.packageId;
+
+    // Recalculate what the NEW owner pays and charges for the (possibly migrated) package.
     let newCost: number | null = null;
     let newSell: number | null = null;
-    if (sub.packageId) {
+    if (targetPackageId) {
       try {
         const pkg = await this.prisma.package.findUnique({
-          where: { id: sub.packageId },
+          where: { id: targetPackageId },
           select: { price: true },
         });
         const base = pkg?.price ?? 0;
         // What the new owner pays its parent for this package…
-        newCost = await this.pricing.activationCost(toUserId, sub.packageId, base);
+        newCost = await this.pricing.activationCost(toUserId, targetPackageId, base);
         // …and what the new owner charges (its own price row, else base).
         const own = await this.prisma.resellerPackagePrice.findUnique({
-          where: { userId_packageId: { userId: toUserId, packageId: sub.packageId } },
+          where: { userId_packageId: { userId: toUserId, packageId: targetPackageId } },
           select: { price: true, retailPrice: true },
         });
         /**
@@ -354,7 +372,7 @@ export class SubscribersService implements OnModuleInit {
          */
         if (newCost !== null && newSell < newCost) {
           this.logger.warn(
-            `Transfer to user #${toUserId}: no retail price set for package ${sub.packageId}, ` +
+            `Transfer to user #${toUserId}: no retail price set for package ${targetPackageId}, ` +
             `falling back to cost ${newCost} instead of ${newSell} to avoid a loss-making customer.`,
           );
           newSell = newCost;
@@ -430,6 +448,9 @@ export class SubscribersService implements OnModuleInit {
            * alone rather than blanking a value we cannot replace.
            */
           ...(target.branchId != null ? { branchId: target.branchId } : {}),
+          // Migrate the plan if a new package was chosen. Activation then bills
+          // the remaining days at THIS package's daily rate.
+          ...(migrated ? { packageId: targetPackageId } : {}),
           ...(newCost !== null ? { costPrice: newCost } : {}),
           ...(newSell !== null ? { sellPrice: newSell } : {}),
           ...(newCost !== null && newSell !== null
@@ -551,6 +572,7 @@ export class SubscribersService implements OnModuleInit {
       from: sub.userId,
       to: { id: target.id, name: target.name, role: target.role },
       pricing: { oldCost: sub.costPrice, newCost, oldSell: sub.sellPrice, newSell },
+      package: { migrated, from: sub.packageId, to: targetPackageId },
       // Service period is preserved; the customer is suspended until activated.
       period: {
         expiryDate: expiry,
