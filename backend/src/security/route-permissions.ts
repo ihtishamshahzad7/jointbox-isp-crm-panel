@@ -55,6 +55,8 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
 
   // ── DOWNLINE USER ACCOUNTS ────────────────────────────────────────────────
   { method: 'DELETE', test: /^\/users\/\d+(\/)?$/,                      key: 'users.delete' },
+  { method: 'POST',   test: /^\/users\/\d+\/purge\b/,                   key: 'users.delete' },
+  { method: 'PATCH',  test: /^\/users\/\d+\/toggle\b/,                  key: 'users.write' },
   { method: 'POST',   test: /^\/users\/\d+\/.*balance/i,                 key: 'users.topup' },
   { method: 'PUT',    test: /^\/users\/\d+(\/)?$/,                      key: 'users.write' },
   { method: 'POST',   test: /^\/users(\/)?$/,                           key: 'users.write' },

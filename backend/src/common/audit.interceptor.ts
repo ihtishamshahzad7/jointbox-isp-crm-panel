@@ -2,6 +2,7 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { PrismaService } from '../prisma/prisma.service';
+import { permissionForRoute } from '../security/route-permissions';
 
 /**
  * Global audit trail (Phase 0 "unified audit" — now automatic).
@@ -31,8 +32,17 @@ export class AuditInterceptor implements NestInterceptor {
     // id = first numeric path segment, if any
     const idSeg = segments.find((s) => /^\d+$/.test(s));
     const entityId = idSeg ? Number(idSeg) : undefined;
-    const action = { POST: 'CREATE', PUT: 'UPDATE', PATCH: 'UPDATE', DELETE: 'DELETE' }[method] || method;
+    // Name the SPECIFIC critical action when we know it (subscribers.disconnect,
+    // users.topup, users.transferSubscribers…), so the audit trail reads as the
+    // exact click a permission controls — not just a generic CREATE/UPDATE.
+    const granular = permissionForRoute(method, '/' + path);
+    const action = granular
+      ? granular.toUpperCase()
+      : ({ POST: 'CREATE', PUT: 'UPDATE', PATCH: 'UPDATE', DELETE: 'DELETE' }[method] || method);
     const userId = req.user?.sub ?? req.user?.id;
+    // Record impersonation: when someone is "acting as" a child, the audit must
+    // show who really did it, not just the account it was done under.
+    const imp = req.user?.imp;
     const traceId = req.traceId || null;
     const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0] || null;
     const userAgent = req.headers['user-agent'] || null;
@@ -50,6 +60,13 @@ export class AuditInterceptor implements NestInterceptor {
     } catch {
       /* ignore */
     }
+    // Prefix the detail with who really acted (impersonation) and the exact
+    // permission the click needed, so the log line is self-explanatory.
+    const prefix =
+      (imp ? `[acting as, by ${imp.byName || imp.by} (${imp.byRole || '?'})] ` : '') +
+      (granular ? `perm=${granular} ` : '') +
+      `${method} /${path}`;
+    detail = detail ? `${prefix} · ${detail}` : prefix;
 
     return next.handle().pipe(
       tap({
