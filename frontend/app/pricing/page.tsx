@@ -319,7 +319,7 @@ export default function PricingPage() {
       {direct.length > 0 && packages.length > 0 && (
         <section className="rp-card" style={{ marginBottom: 16 }}>
           <header>
-            <h3>Set each account's price</h3>
+            <h3>Price your accounts <span className="hl">(one price each)</span></h3>
             <p>One package at a time. Type a name to find an account, set that account's price, Save. Every account can have its own — F1 pays 500, F2 pays 600.</p>
           </header>
           <PriceGrid
@@ -392,98 +392,6 @@ export default function PricingPage() {
         </div>
       )}
 
-      {/* ── 1 · pick the account ─────────────────────────────── */}
-      <section className="rp-card">
-        <header>
-          <h3>1 · Who are you pricing for?</h3>
-          <p>Pick one account for a special rate, or several to give them all the same price.
-             You can only price the accounts <b>directly below you</b> — they price theirs,
-             which is what keeps each tier's margin theirs to decide.</p>
-        </header>
-        <div className="body">
-          {direct.length === 0 ? (
-            <div className="rp-empty">
-              <b>You have no accounts below you — that is normal.</b><br />
-              You are the tier that sells to customers, so there is no wholesale price to set here.
-              Set <b>what your own subscribers pay</b> in the section below instead; your profit is
-              that price minus what you pay your parent.<br />
-              If you do intend to resell onward, create an account under
-              <b> Administration → Organization</b> first.
-            </div>
-          ) : (
-            <>
-              <div className="rp-bulk">
-                <button onClick={() => setTargets(direct.map((a) => a.id))}
-                  disabled={targets.length === direct.length}>
-                  Select all {direct.length}
-                </button>
-                <button onClick={() => setTargets([])} disabled={!targets.length}>
-                  Clear
-                </button>
-                <span className="count">
-                  {targets.length === 0
-                    ? "none selected"
-                    : targets.length === 1
-                      ? `pricing ${one?.name}`
-                      : `pricing ${targets.length} accounts together`}
-                </span>
-              </div>
-
-              <div className="rp-accts">
-                {direct.map((a) => {
-                  const on = targets.includes(a.id);
-                  return (
-                    <button key={a.id}
-                      className={`rp-acct ${on ? "on" : ""}`}
-                      onClick={() => toggleTarget(a.id)}>
-                      <span className={`tick ${on ? "on" : ""}`}>{on ? "✓" : ""}</span>
-                      <span className="txt">
-                        <b>{a.name}</b>
-                        <em>{a.role} · directly under you</em>
-                        {/* Whether this child can price ITS own downline. The
-                            permission defaults off on older accounts and the
-                            only symptom was a save that got refused — from a
-                            screen with no way to grant it. Now it is here. */}
-                        <span
-                          role="button"
-                          className={`rp-grant ${a.canSetPackagePrice ? "on" : ""}`}
-                          onClick={(e) => { e.stopPropagation(); grantPricing(a); }}
-                          title={a.canSetPackagePrice
-                            ? `${a.name} can set prices for their own downline. Click to revoke.`
-                            : `${a.name} CANNOT set prices — their saves will be refused. Click to allow.`}
-                        >
-                          {a.canSetPackagePrice ? "✓ can set prices" : "✕ cannot set prices"}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Deeper accounts are shown but NOT selectable, so it is obvious
-                  they exist and equally obvious whose job it is to price them. */}
-              {accounts.length > direct.length && (
-                <div className="rp-locked">
-                  <b>Not yours to price</b>
-                  {accounts.filter((a) => a.depth > 0).map((a) => {
-                    const parent = accounts.find((p) => p.id === a.parentId);
-                    return (
-                      <div key={a.id} className="row">
-                        <span className="nm">{"— ".repeat(a.depth)}{a.name}</span>
-                        <span className="by">{parent?.name} sets this price</span>
-                      </div>
-                    );
-                  })}
-                  <p>
-                    To change what they pay, use <b>Act as</b> in the top bar to sign in as their
-                    parent, or ask that account to set it.
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </section>
 
       {/* ── 1b · what MY OWN customers pay ───────────────────────
           Shown to every account, with or without a downline. A dealer at the
@@ -493,7 +401,7 @@ export default function PricingPage() {
       {me && packages.length > 0 && (
         <section className="rp-card">
           <header>
-            <h3>{direct.length ? "1b" : "2"} · What <span className="hl">your own subscribers</span> pay</h3>
+            <h3>What <span className="hl">your own subscribers</span> pay</h3>
             <p>
               Your retail price — charged to customers you activate yourself. Every account
               can hold its own subscribers, not just the bottom tier. Your profit on each one
@@ -560,105 +468,11 @@ export default function PricingPage() {
         </section>
       )}
 
-      {/* ── 2 · set the prices ───────────────────────────────── */}
-      {selected.length > 0 && (
-        <section className="rp-card">
-          <header>
-            <h3>
-              2 · What <span className="hl">
-                {one ? one.name : `${selected.length} selected accounts`}
-              </span> pay{one ? "s" : ""}
-            </h3>
-            <p>
-              This is their cost per activation, not what they charge.
-              {one && children.length > 0 &&
-                ` They have ${children.length} account(s) below them — ${one.name} sets those prices, not you.`}
-              {!one && ` Saving applies the same price to all ${selected.length}: ${selected.map((a) => a.name).join(", ")}.`}
-            </p>
-          </header>
-          <div className="rp-tablewrap">
-            <table className="rp-table">
-              <thead>
-                <tr>
-                  <th>Package</th><th>Speed</th>
-                  <th className="r">Retail</th>
-                  <th className="r">Your cost</th>
-                  <th className="r">They pay</th>
-                  <th className="r">Your margin</th>
-                  <th>Set price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {packages.map((p) => {
-                  const state = payState(p.id);
-                  const cost = myCost(p.id);
-                  const typed = Number(draft[p.id]);
-                  const preview = !Number.isNaN(typed) && draft[p.id] !== "" ? typed - cost : null;
-                  const margin = state.kind === "same" ? state.value - cost : null;
-                  return (
-                    <tr key={p.id}>
-                      <td><b>{p.name}</b></td>
-                      <td className="muted">{p.downloadSpeed}/{p.uploadSpeed} Mbps</td>
-                      <td className="r muted">{money(p.price)}</td>
-                      <td className="r muted">{cost > 0 ? money(cost) : "—"}</td>
-                      <td className="r">
-                        {state.kind === "same" && <b className="set">{money(state.value)}</b>}
-                        {state.kind === "none" && <span className="unset">not assigned</span>}
-                        {state.kind === "partial" && (
-                          <span className="unset">{state.count} of {state.of} set</span>
-                        )}
-                        {state.kind === "mixed" && (
-                          <b className="mixed" title="These accounts pay different amounts">
-                            {money(state.min)}–{money(state.max)}
-                          </b>
-                        )}
-                      </td>
-                      <td className="r">
-                        {preview !== null
-                          ? <b className={preview < 0 ? "bad" : "ok"}>{preview >= 0 ? "+" : ""}{money(preview)}</b>
-                          : margin !== null
-                            ? <b className={margin < 0 ? "bad" : "ok"}>+{money(margin)}</b>
-                            : <span className="unset">—</span>}
-                      </td>
-                      <td>
-                        <div className="rp-set">
-                          <input
-                            type="number"
-                            // Placeholder shows the current price only when the
-                            // selected accounts agree — with a mixed set there
-                            // is no single "current" value to suggest.
-                            placeholder={state.kind === "same" ? String(state.value) : "price"}
-                            value={draft[p.id] ?? ""}
-                            onChange={(e) => setDraft({ ...draft, [p.id]: e.target.value })}
-                            onKeyDown={(e) => { if (e.key === "Enter") savePrice(p.id); }}
-                          />
-                          <button disabled={busy === p.id} onClick={() => savePrice(p.id)}>
-                            {busy === p.id ? "…" : "Save"}
-                          </button>
-                          {/* A refusal stays put until the next attempt. */}
-                          {rowError[p.id] && (
-                            <div className="rp-rowerr">{rowError[p.id]}</div>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {packages.length === 0 && (
-                  <tr><td colSpan={7} className="rp-empty-cell">
-                    No packages yet — create one under Plans &amp; Stock → Packages.
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
 
       {/* ── 3 · the ladder ───────────────────────────────────── */}
       <section className="rp-card">
         <header>
-          <h3>3 · The full ladder</h3>
+          <h3>The full ladder</h3>
           <p>Every tier for one package, and what each earns per activation.</p>
         </header>
         <div className="body">
@@ -705,7 +519,7 @@ export default function PricingPage() {
       {/* ── 4 · earnings ─────────────────────────────────────── */}
       <section className="rp-card">
         <header>
-          <h3>4 · Earnings by account</h3>
+          <h3>Earnings by account</h3>
           <p>Balance = wallet now · Earned = margins from sales · Spent = cost of activations.</p>
         </header>
         <div className="rp-tablewrap">
