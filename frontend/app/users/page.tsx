@@ -538,6 +538,15 @@ export default function UsersPage() {
                           <td style={{ padding: "10px 14px", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                             <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                               <Btn onClick={() => openEdit(u)} variant="warning" size="xs"><Icons.Edit /> Edit</Btn>
+                              {/* Reseller pricing for this account — same tool as
+                                  the Pricing page, opened focused on this user.
+                                  Only when the current operator may set prices;
+                                  each parent thus prices its OWN downline. */}
+                              {(user?.canSetPackagePrice || isAdmin) && (
+                                <Btn onClick={() => router.push(`/pricing?account=${u.id}`)} variant="primary" size="xs" title="Set this account's pricing">
+                                  <Icons.Payments /> Pricing
+                                </Btn>
+                              )}
                               <Btn onClick={() => handleDelete(u.id, u.name)} variant="danger" size="xs"><Icons.Trash /></Btn>
                             </div>
                           </td>

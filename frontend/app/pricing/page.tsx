@@ -115,7 +115,15 @@ export default function PricingPage() {
       // whatever was left over.
       const accts = flat.filter((a) => a.depth === 0);
       setDirect(accts);
-      setTargets((t) => (t.length ? t : accts[0] ? [accts[0].id] : []));
+      // If we arrived from a user's "Set pricing" button (/pricing?account=ID),
+      // preselect that account so the operator lands straight on pricing them.
+      // Falls back to the first account otherwise.
+      let wanted: number | null = null;
+      if (typeof window !== "undefined") {
+        const q = new URLSearchParams(window.location.search).get("account");
+        if (q && accts.some((a) => a.id === Number(q))) wanted = Number(q);
+      }
+      setTargets((t) => (t.length ? t : wanted ? [wanted] : accts[0] ? [accts[0].id] : []));
       if (list.length) setLadderPkg((p) => p ?? list[0].id);
     } catch { /* keep the last good view */ }
   }, [get]);
