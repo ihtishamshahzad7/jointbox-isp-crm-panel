@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
 
@@ -92,6 +93,125 @@ export class CoaService {
       this.logger.error(`MikroTik API disconnect failed for ${sub.username}: ${e.message}`);
     }
     return { success: false, message: 'Could not disconnect — no CoA acknowledgement and no working router API. Check the NAS shared secret and that the CoA port (3799) is reachable.' };
+  }
+
+  /**
+   * SIMULTANEOUS-USE GUARD.
+   *
+   * The same username dialled from two devices produces two open radacct
+   * sessions on the NAS — both online at once, which must never happen on a
+   * one-account-one-connection ISP (it is either credential sharing or a stuck
+   * ghost session). This finds every username with more than one open session,
+   * logs it, and drops EVERY one of that user's sessions (as requested: both
+   * down), so the customer reconnects exactly once. Their radacct rows are also
+   * closed so a ghost session does not keep them "online" forever.
+   *
+   * Returns a summary for the caller/cron to surface.
+   */
+  /** Sweep for duplicate logins every 2 minutes and cut them automatically. */
+  @Cron(CronExpression.EVERY_2_MINUTES)
+  async duplicateSessionSweep() {
+    try {
+      await this.disconnectDuplicateSessions();
+    } catch (e: any) {
+      this.logger.warn(`Duplicate-session sweep failed: ${e?.message || e}`);
+    }
+  }
+
+  async disconnectDuplicateSessions(): Promise<{ offenders: number; sessionsCut: number; users: string[] }> {
+    // Usernames with >1 OPEN session right now.
+    const dupes = await this.prisma.$queryRaw<Array<{ username: string; sessions: bigint }>>`
+      SELECT username, COUNT(*) AS sessions
+      FROM radacct
+      WHERE acctstoptime IS NULL AND username IS NOT NULL
+      GROUP BY username
+      HAVING COUNT(*) > 1`;
+
+    let sessionsCut = 0;
+    const users: string[] = [];
+
+    for (const d of dupes) {
+      const username = d.username;
+      const count = Number(d.sessions);
+      users.push(username);
+
+      // Every open session for this user, each with the attributes CoA needs.
+      const sessions = await this.prisma.$queryRaw<Array<any>>`
+        SELECT acctsessionid, nasipaddress, framedipaddress, callingstationid
+        FROM radacct WHERE username = ${username} AND acctstoptime IS NULL`;
+
+      // Log it loudly and durably so the operator can see the sharing/ghost.
+      await this.prisma.systemLog.create({
+        data: {
+          level: 'ERROR',
+          source: 'simultaneous-use',
+          message: `Duplicate login: "${username}" had ${count} sessions online at once — cutting all of them.`,
+          metadata: JSON.stringify({
+            username, sessions: count,
+            nasIps: [...new Set(sessions.map((s) => s.nasipaddress))],
+            callingStations: sessions.map((s) => s.callingstationid),
+            framedIps: sessions.map((s) => s.framedipaddress),
+          }),
+        },
+      }).catch(() => null);
+      this.logger.error(`⛔ Simultaneous-Use: "${username}" online ${count}× — disconnecting all sessions.`);
+
+      const nasCreds = new Map<string, any>();
+      for (const s of sessions) {
+        // Per-session RADIUS CoA Disconnect (vendor-agnostic).
+        let nas = nasCreds.get(s.nasipaddress);
+        if (nas === undefined) {
+          nas = await this.prisma.nas.findFirst({
+            where: { nasIp: s.nasipaddress as string },
+            select: { secret: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
+          });
+          nasCreds.set(s.nasipaddress, nas);
+        }
+        const session: any = {
+          username,
+          acctSessionId: s.acctsessionid,
+          nasIp: s.nasipaddress,
+          framedIp: s.framedipaddress,
+          callingStationId: s.callingstationid,
+          nasIdentifier: nas?.nasIdentifier,
+        };
+        if (nas?.secret) {
+          const res = await sendCoa({
+            host: s.nasipaddress,
+            port: coaPort(nas.incomingPort),
+            secret: nas.secret,
+            code: RadiusCode.DisconnectRequest,
+            attributes: sessionAttributes(session),
+          }).catch(() => ({ ok: false } as any));
+          if (res.ok) sessionsCut++;
+        }
+      }
+
+      // MikroTik API fallback: removes ALL active PPP sessions matching the name
+      // in one call, covering any the CoA did not acknowledge.
+      const anyNas = [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword);
+      if (anyNas) {
+        try {
+          const { MikrotikService } = await import('../mikrotik/mikrotik.service');
+          const mikrotik = new MikrotikService();
+          await mikrotik.disconnectPppoeUser(
+            anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username,
+          );
+        } catch (e: any) {
+          this.logger.warn(`Simultaneous-Use: MikroTik API kick for "${username}" failed: ${e?.message || e}`);
+        }
+      }
+
+      // Close the ghost rows so nothing keeps showing them online.
+      await this.prisma.$executeRaw`
+        UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
+        WHERE username = ${username} AND acctstoptime IS NULL`;
+    }
+
+    if (dupes.length) {
+      this.logger.warn(`Simultaneous-Use sweep: ${dupes.length} user(s), ${sessionsCut} session(s) cut.`);
+    }
+    return { offenders: dupes.length, sessionsCut, users };
   }
 
   /**

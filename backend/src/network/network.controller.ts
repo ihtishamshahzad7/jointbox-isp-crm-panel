@@ -49,6 +49,16 @@ export class NetworkController {
     return this.network.disconnect(username);
   }
 
+  /**
+   * Find any username online from more than one device right now, log it, and
+   * disconnect ALL of that user's sessions. Runs automatically every 2 minutes;
+   * this endpoint lets an operator force it on demand.
+   */
+  @Post('duplicate-sessions/sweep')
+  async sweepDuplicates() {
+    return this.coa.disconnectDuplicateSessions();
+  }
+
   /** Live bandwidth change via RADIUS CoA (vendor-agnostic). */
   @Post('bandwidth/:subscriberId')
   async changeBandwidth(

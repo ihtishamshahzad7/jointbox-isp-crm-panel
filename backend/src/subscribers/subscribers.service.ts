@@ -2591,6 +2591,34 @@ if (!unpaid && data.username && data.password) {
     return { total: ids.length, success, failed, errors };
   }
 
+  /**
+   * Roll an activation back to a clean, unpaid, non-active state when the
+   * reseller charge could not be applied. Keeps the record and the wallet in
+   * sync: no charge → no ACTIVE lock, no RADIUS, and the invoice is voided so it
+   * does not sit as a phantom "paid" bill.
+   */
+  private async abortActivationUnpaid(subscriberId: number, invoiceId: number, reason: string, deactivate: boolean) {
+    this.logger.error(`⛔ Activation aborted for subscriber #${subscriberId} — ${reason}. Not charged.`);
+    // Always void the phantom invoice.
+    await this.prisma.invoice.update({
+      where: { id: invoiceId }, data: { status: 'CANCELLED', dueAmount: 0 },
+    }).catch(() => null);
+
+    // Only cut the customer off on a FIRST activation. A failed RENEWAL of a
+    // customer who still has valid paid days must not knock them offline mid-
+    // period — we simply do not extend them and do not charge.
+    if (deactivate) {
+      await this.prisma.subscriber.update({
+        where: { id: subscriberId }, data: { status: 'INACTIVE' },
+      }).catch(() => null);
+      await this.prisma.serviceSettings.update({
+        where: { subscriberId }, data: { isBlocked: true },
+      }).catch(() => null);
+      const sub = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { username: true } });
+      if (sub?.username) await this.radiusSync.removeSubscriberFromRadius(sub.username).catch(() => null);
+    }
+  }
+
   async activateRenewal(payload: any) {
     const subscriberId = Number(payload.subscriberId);
     const packageId = Number(payload.packageId);
@@ -2679,22 +2707,21 @@ if (!unpaid && data.username && data.password) {
     });
     const expiryDate = quote.newExpiry;
 
+    // NOTE: the record is NOT marked ACTIVE yet, and the service is NOT
+    // unblocked yet. Activation (the "lock") and the RADIUS sync are held back
+    // until the reseller wallet charge below actually succeeds — so a customer
+    // can never be locked-active or online without the money having moved. Set
+    // only the package and the new expiry here.
     await this.prisma.subscriber.update({
       where: { id: subscriberId },
-      data: {
-        packageId,
-        status: 'ACTIVE',
-      },
+      data: { packageId },
     });
 
     const currentSettings = await this.prisma.serviceSettings.findUnique({ where: { subscriberId } });
     if (currentSettings) {
       await this.prisma.serviceSettings.update({
         where: { subscriberId },
-        // isBlocked must be cleared here. Suspension sets it, and a renewal
-        // that leaves it set marks the customer ACTIVE while the service is
-        // still switched off.
-        data: { expiryDate, isBlocked: false },
+        data: { expiryDate },
       });
     } else {
       await this.prisma.serviceSettings.create({
@@ -2773,91 +2800,89 @@ if (!unpaid && data.username && data.password) {
       },
     });
 
-    // Put the customer back into RADIUS.
-    //
-    // CRITICAL: suspension calls removeSubscriberFromRadius, which DELETES the
-    // radcheck and radreply rows. Marking the record ACTIVE here does nothing
-    // on its own — without this re-sync the customer has no credentials, so
-    // they are billed and shown as active while still unable to connect.
-    // Deliberately placed before the accounting so a RADIUS failure surfaces
-    // rather than being buried after a successful payment.
+    /**
+     * CHARGE FIRST, THEN ACTIVATE — activation and the wallet must stay in sync.
+     *
+     * The reseller wallet is debited BEFORE the customer is marked ACTIVE or put
+     * into RADIUS. If the charge cannot happen (empty wallet, no price ladder,
+     * an error), we abort: the record is left INACTIVE and blocked, the invoice
+     * is voided, and nobody gets online. This is what "sync activation with the
+     * deduction" means — you can never be locked-active without having paid, and
+     * you can never be charged without being activated.
+     *
+     * Direct-ISP customers have no upstream reseller to pay; settleActivation
+     * still returns settled:true for them, so they activate normally.
+     */
+    if (subscriber.userId) {
+      const sell = payload.sellPrice != null && payload.sellPrice !== ''
+        ? Number(payload.sellPrice)
+        : (subscriber.sellPrice ?? Number(pkg.price || 0));
+      const cost = await this.pricing.activationCost(subscriber.userId, packageId, Number(pkg.price || 0));
+      await this.prisma.subscriber.update({
+        where: { id: subscriberId },
+        data: { sellPrice: sell, costPrice: cost, profit: Math.round((sell - cost) * 100) / 100 },
+      });
+
+      let settlement: any;
+      try {
+        // event = invoice.id (globally unique) so a genuine repeat charge is
+        // never mistaken for a duplicate, and a duplicate is never charged twice.
+        settlement = await this.pricing.settleActivation(subscriberId, {
+          byUserId: subscriber.userId,
+          event: `RENEW:${invoice.id}`,
+        });
+      } catch (e: any) {
+        // Insufficient prepaid balance (or any charge failure). ABORT activation.
+        await this.abortActivationUnpaid(subscriberId, invoice.id, `charge failed: ${e?.message || e}`, subscriber.status !== 'ACTIVE');
+        throw new ForbiddenException(
+          `Activation blocked — the account was not charged: ${e?.message || e}. ` +
+          `The customer was NOT activated. Top up the wallet and try again.`,
+        );
+      }
+
+      if (!settlement?.settled && !settlement?.alreadySettled) {
+        // No owner/package or price ladder returned nothing to charge — do not
+        // silently activate for free.
+        await this.abortActivationUnpaid(subscriberId, invoice.id, (settlement as any)?.reason || 'settlement returned unsettled', subscriber.status !== 'ACTIVE');
+        throw new ForbiddenException(
+          `Activation blocked — could not settle the reseller charge (${(settlement as any)?.reason || 'no price configured'}). ` +
+          `The customer was NOT activated.`,
+        );
+      }
+      this.logger.log(`🔁 Activation charged for subscriber #${subscriberId} (invoice ${invoice.id})`);
+    }
+
+    // Money has moved — NOW lock the record ACTIVE, unblock and put into RADIUS.
+    await this.prisma.subscriber.update({
+      where: { id: subscriberId },
+      data: { status: 'ACTIVE' },
+    });
+    await this.prisma.serviceSettings.update({
+      where: { subscriberId }, data: { isBlocked: false },
+    }).catch(() => null);
+
     try {
       await this.syncToRadius(subscriberId);
       this.logger.log(`✅ RADIUS access restored for subscriber #${subscriberId}`);
     } catch (e: any) {
       this.logger.error(
-        `Renewal saved for #${subscriberId} but RADIUS sync FAILED: ${e?.message || e}. ` +
-          `The customer cannot connect until this is resolved — use Sync to RADIUS on their profile.`,
+        `Activation charged for #${subscriberId} but RADIUS sync FAILED: ${e?.message || e}. ` +
+          `Use Sync to RADIUS on their profile.`,
       );
     }
 
-    // Phase 1: ledger postings for renewal invoice + payment
+    // Ledger postings + mark the invoice paid.
     await this.accounting.postInvoiceCreated(invoice);
     await this.accounting.postPaymentReceived(payment);
-
-    // Phase 2: renewal notification
     void this.notifications.fireEvent('RENEWAL', { ...subscriber, package: pkg }, {
       amount: total,
       invoiceNo: invoice.invoiceNo,
       expiry: expiryDate,
     });
-
     await this.prisma.invoice.update({
       where: { id: invoice.id },
-      data: {
-        paidAmount: total,
-        dueAmount: 0,
-        status: 'PAID',
-        paidDate: new Date(),
-      },
+      data: { paidAmount: total, dueAmount: 0, status: 'PAID', paidDate: new Date() },
     });
-
-    // Prepaid accounting on renewal: re-stamp profit + run the wallet cascade
-    // so every renewal cycle is charged and traceable, just like a new activation.
-    if (subscriber.userId) {
-      try {
-        const sell = payload.sellPrice != null && payload.sellPrice !== ''
-          ? Number(payload.sellPrice)
-          : (subscriber.sellPrice ?? Number(pkg.price || 0));
-        const cost = await this.pricing.activationCost(subscriber.userId, packageId, Number(pkg.price || 0));
-        await this.prisma.subscriber.update({
-          where: { id: subscriberId },
-          data: { sellPrice: sell, costPrice: cost, profit: Math.round((sell - cost) * 100) / 100 },
-        });
-        /**
-         * A renewal/activation is a SECOND, genuine charge — not a replay of the
-         * original activation — so it carries its own event key.
-         *
-         * The key MUST be the invoice's primary-key id, which is globally unique.
-         * It used to be `invoice.invoiceNo`, which is `INV-<year>-<last 6 digits
-         * of Date.now()>` — and those last six digits repeat every ~16.7 minutes.
-         * Two activations in that window produced the SAME invoice number and
-         * therefore the SAME event key, so the idempotency guard mistook the
-         * second real charge for a duplicate and skipped it: the customer went
-         * online but the reseller wallet was never debited. `invoice.id` cannot
-         * collide, so every genuine activation is charged exactly once.
-         */
-        const settlement = await this.pricing.settleActivation(subscriberId, {
-          byUserId: subscriber.userId,
-          event: `RENEW:${invoice.id}`,
-        });
-        if (settlement?.settled) {
-          this.logger.log(`🔁 Activation accounted for subscriber #${subscriberId} (invoice ${invoice.id})`);
-        } else {
-          // NOT silent: the customer is active, but the reseller was not charged.
-          // Surface it as an error so it can be reconciled, never buried.
-          this.logger.error(
-            `⚠️ Subscriber #${subscriberId} activated but reseller wallet NOT charged — ` +
-            `${(settlement as any)?.alreadySettled ? 'idempotency guard saw this event as already settled' : ((settlement as any)?.reason || 'settlement returned unsettled')}. ` +
-            `Invoice ${invoice.id}. Check the reseller price ladder and wallet.`,
-          );
-        }
-      } catch (e: any) {
-        // A thrown settlement (e.g. insufficient prepaid balance) must be visible,
-        // not a warning: the customer is online and someone was not billed.
-        this.logger.error(`Activation cascade FAILED for #${subscriberId} (invoice ${invoice.id}): ${e?.message || e}`);
-      }
-    }
 
     return {
       subscriberId,
