@@ -21,6 +21,7 @@ const fdt = (d: string) => new Date(d).toLocaleString([], { dateStyle: "short", 
 export default function SecurityPage() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("Permissions");
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -214,22 +215,52 @@ export default function SecurityPage() {
             <span style={{ fontSize: 12, color: T.muted }}>Untick an action to block this account from doing it. Ticked = allowed.</span>
           </div>
           {!selChild && <div style={{ fontSize: 13, color: T.muted }}>Choose one of your downline accounts to control what it can do.</div>}
-          {selChild && catalog.map((group: any) => (
-            <div key={group.resource} style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: T.sub, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>{group.label}</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {group.actions.map((a: any) => {
-                  const allowed = !denied.has(a.key);
-                  return (
-                    <label key={a.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "6px 10px", borderRadius: 8, border: `1px solid ${T.border}`, background: allowed ? "#14311f" : T.row, color: allowed ? "#86efac" : T.muted, cursor: "pointer" }}>
-                      <input type="checkbox" checked={allowed} onChange={() => togglePerm(a.key)} />
-                      {a.label}
-                    </label>
-                  );
-                })}
+          {selChild && catalog.map((group: any) => {
+            const total = group.actions.length;
+            const allowedCount = group.actions.filter((a: any) => !denied.has(a.key)).length;
+            const open = openGroups[group.resource] ?? false;
+            const allOn = allowedCount === total;
+            return (
+              <div key={group.resource} style={{ marginBottom: 10, border: "1px solid #E2E8F0", borderRadius: 10, overflow: "hidden" }}>
+                {/* Collapsible header — click to expand; shows how many of this
+                    group's actions are currently allowed. */}
+                <button
+                  onClick={() => setOpenGroups((m) => ({ ...m, [group.resource]: !open }))}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "#F7F9FC", border: "none", padding: "11px 14px", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                    <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "#64748B", fontSize: 12 }}>▶</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 600, color: "#1C2434" }}>{group.label}</span>
+                  </span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: allOn ? "#157F43" : allowedCount === 0 ? "#B02A37" : "#8A6209",
+                    background: allOn ? "#E7F6EC" : allowedCount === 0 ? "#FDE8EA" : "#FDF3E3", padding: "3px 10px", borderRadius: 999 }}>
+                    {allowedCount}/{total} allowed
+                  </span>
+                </button>
+                {open && (
+                  <div style={{ padding: "12px 14px 14px" }}>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                      <button onClick={() => group.actions.forEach((a: any) => denied.has(a.key) && togglePerm(a.key))}
+                        style={{ fontSize: 11.5, fontWeight: 600, color: "#157F43", background: "#E7F6EC", border: "1px solid #C6E9D3", borderRadius: 7, padding: "4px 10px", cursor: "pointer" }}>Allow all</button>
+                      <button onClick={() => group.actions.forEach((a: any) => !denied.has(a.key) && togglePerm(a.key))}
+                        style={{ fontSize: 11.5, fontWeight: 600, color: "#B02A37", background: "#FDE8EA", border: "1px solid #F5C2C7", borderRadius: 7, padding: "4px 10px", cursor: "pointer" }}>Block all</button>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {group.actions.map((a: any) => {
+                        const allowed = !denied.has(a.key);
+                        return (
+                          <label key={a.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "6px 10px", borderRadius: 8, border: `1px solid ${allowed ? "#C6E9D3" : "#E2E8F0"}`, background: allowed ? "#E7F6EC" : "#F7F9FC", color: allowed ? "#157F43" : "#64748B", cursor: "pointer" }}>
+                            <input type="checkbox" checked={allowed} onChange={() => togglePerm(a.key)} />
+                            {a.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

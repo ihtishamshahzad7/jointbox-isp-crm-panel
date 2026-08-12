@@ -2244,6 +2244,7 @@ if (!unpaid && data.username && data.password) {
 
   async deactivateAndRelease(id: number, actor?: Actor, reason?: string) {
     if (actor) await this.scope.assertSubscriber(actor, id);
+    if (actor) await this.security.assertCan(actor, 'subscribers.disconnect');
     const sub = await this.prisma.subscriber.findUnique({
       where: { id },
       select: { id: true, username: true, fullName: true, nasId: true },
@@ -2482,6 +2483,9 @@ if (!unpaid && data.username && data.password) {
   }
 
   async bulkDelete(ids: number[], actor?: Actor, force = false) {
+    // Mass delete is the single most destructive action a downline account can
+    // take — gate it on the delegated permission, not just scope.
+    if (actor) await this.security.assertCan(actor, 'subscribers.massDelete');
     let success = 0;
     let failed = 0;
     const errors: Array<{ id: number; error: string }> = [];
