@@ -84,20 +84,28 @@ export class PermissionsGuard implements CanActivate {
     // Delegated per-child deny FIRST (always applies, even if the role is
     // unconfigured): a parent may have blocked this capability for this user.
     const userId: number | undefined = req.user?.sub;
-    if (userId && action === 'write') {
-      const denied = await this.cache.wrap<string[]>(`uperm:${userId}`, 30, async () => {
+    if (userId) {
+      // Short TTL so a permission change a parent just saved takes effect
+      // quickly; setChildPermissions also busts this key on save.
+      const denied = await this.cache.wrap<string[]>(`uperm:${userId}`, 15, async () => {
         const rows = await this.prisma.userPermission.findMany({
           where: { userId, allowed: false }, select: { permission: true },
         });
         return rows.map((r) => r.permission);
       });
-      // Check BOTH the coarse key (subscribers.write) AND the specific action
-      // this exact endpoint maps to (subscribers.massDelete, users.delete…).
-      // Mapping the route is what makes the granular checkboxes actually bite —
-      // before, only the coarse key was ever consulted.
-      const granular = permissionForRoute(req.method, requestPath);
       const denySet = new Set(denied);
-      if (denySet.has(needed) || (granular && denySet.has(granular))) {
+      // Check three things, so a denial bites no matter how it was keyed:
+      //   • the coarse key            (subscribers.read / subscribers.write)
+      //   • the exact action's key    (subscribers.massDelete, users.delete…)
+      //   • for writes, the resource's own read gate — if you can't even VIEW
+      //     subscribers you certainly can't write them.
+      const granular = permissionForRoute(req.method, requestPath);
+      const readKey = `${resource}.read`;
+      if (
+        denySet.has(needed) ||
+        (granular && denySet.has(granular)) ||
+        (action === 'write' && denySet.has(readKey))
+      ) {
         const what = granular || needed;
         throw new ForbiddenException(`Your account is not allowed to: ${what.replace('.', ' → ')}.`);
       }
