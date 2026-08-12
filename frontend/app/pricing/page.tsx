@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import API_BASE from "../components/api";
+import { PriceGrid } from "./price-grid";
 
 const API = API_BASE;
 
@@ -309,6 +310,29 @@ export default function PricingPage() {
 
       {toast && (
         <div className={`rp-toast ${toast.ok ? "ok" : "bad"}`}>{toast.msg}</div>
+      )}
+
+      {/* ── PER-ACCOUNT PRICE GRID — the primary tool ──────────────────────
+          Set a different price for each franchise (F1 → 500, F2 → 600),
+          searchable so a 1000-account downline is workable. The multi-select
+          sections below remain for the "same price to a batch" case. */}
+      {direct.length > 0 && packages.length > 0 && (
+        <section className="rp-card" style={{ marginBottom: 16 }}>
+          <header>
+            <h3>Set each account's price</h3>
+            <p>One package at a time. Type a name to find an account, set that account's price, Save. Every account can have its own — F1 pays 500, F2 pays 600.</p>
+          </header>
+          <PriceGrid
+            packages={packages}
+            direct={direct}
+            prices={prices}
+            myCost={myCost}
+            headers={headers}
+            api={API}
+            money={money}
+            onSaved={load}
+          />
+        </section>
       )}
 
       <header className="rp-head">
