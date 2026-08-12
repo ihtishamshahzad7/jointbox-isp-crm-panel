@@ -288,7 +288,6 @@ export class SubscribersService implements OnModuleInit {
     opts: { reason?: string; actor?: Actor; settle?: boolean } = {},
   ) {
     const actor = opts.actor;
-    const settle = opts.settle !== false; // pro-rata settlement on by default
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
       select: { id: true, fullName: true, username: true, userId: true, packageId: true,
@@ -365,12 +364,15 @@ export class SubscribersService implements OnModuleInit {
       }
     }
 
-    // ── Mid-period settlement ────────────────────────────────────
-    // The customer's expiry is NEVER changed by a transfer — they paid for a
-    // period and keep it. What moves is the money for the UNSERVED days:
-    //   • the outgoing owner is refunded the unused share of what they paid
-    //   • the incoming owner is charged only for the days they will serve
-    // Both are pro-rata on remaining/total days.
+    // ── Move = hand over ownership, then SUSPEND until the new owner activates ──
+    // A move never silently charges anyone and never leaves the customer running
+    // on the new owner's books unpaid. The customer's remaining paid days are
+    // PRESERVED (expiry is not touched), the record is suspended, and internet is
+    // cut. The new owner then activates — and only THAT step charges their wallet
+    // (at their own cost) and bills the customer (at their own sell price) for the
+    // days that remain. This is why there is no wallet movement or balance check
+    // here anymore: the accounting happens once, at activation, keyed to the new
+    // owner, exactly like a fresh activation.
     const DAY = 24 * 60 * 60 * 1000;
     const expiry = sub.serviceSettings?.expiryDate ?? null;
     const totalDays = sub.serviceSettings?.duration ?? 30;
@@ -382,34 +384,6 @@ export class SubscribersService implements OnModuleInit {
       remainingDays = Math.min(remainingDays, totalDays); // guard against stale data
     }
     const usedDays = Math.max(0, totalDays - remainingDays);
-    const ratio = totalDays > 0 ? remainingDays / totalDays : 0;
-
-    const round2 = (n: number) => Math.round(n * 100) / 100;
-    const refundToFrom = settle && sub.costPrice ? round2(sub.costPrice * ratio) : 0;
-    const chargeToNew  = settle && newCost      ? round2(newCost * ratio)       : 0;
-
-    /**
-     * The receiving account must be able to PAY for the days it is taking on.
-     *
-     * `chargeToNew` was applied unconditionally, so transferring a customer to
-     * an account with an empty wallet pushed it negative — the one thing the
-     * prepaid model exists to prevent. A franchise could hand twenty customers
-     * to a dealer who had not paid for any of them, and the debt only surfaced
-     * later as a balance nobody could explain.
-     */
-    if (chargeToNew > 0) {
-      const receiver = await this.prisma.user.findUnique({
-        where: { id: toUserId }, select: { balance: true, name: true },
-      });
-      const have = receiver?.balance ?? 0;
-      if (have < chargeToNew) {
-        throw new BadRequestException(
-          `${target.name} cannot take this customer yet. The ${remainingDays} unserved day(s) ` +
-          `cost ${chargeToNew.toFixed(0)} but their wallet holds ${have.toFixed(0)} — ` +
-          `short by ${(chargeToNew - have).toFixed(0)}. Top up ${target.name} first.`,
-        );
-      }
-    }
 
     const ops: any[] = [
       this.prisma.subscriber.update({
@@ -434,6 +408,13 @@ export class SubscribersService implements OnModuleInit {
            * leaves a stale claim behind.
            */
           salespersonId: toUserId,
+          /**
+           * SUSPEND ON MOVE. The customer must not keep working on the new
+           * owner's books until that owner activates them — activation is what
+           * charges the new owner and re-bills the customer at the new owner's
+           * price. Internet is cut just below (RADIUS rows removed).
+           */
+          status: 'INACTIVE',
           /**
            * THE BRANCH MOVES TOO.
            *
@@ -471,59 +452,37 @@ export class SubscribersService implements OnModuleInit {
           totalDays,
           usedDays,
           remainingDays,
-          refundToFrom,
-          chargeToNew,
+          // No money moves at the moment of the move — it is settled at
+          // activation by the new owner. Recorded as zero so the transfer row
+          // is an honest statement of what happened here.
+          refundToFrom: 0,
+          chargeToNew: 0,
         },
       }),
     ];
-
-    // Wallet movements for the unserved portion, each with an audit row.
-    if (settle && refundToFrom > 0 && sub.userId) {
+    // Suspend the service too (isBlocked), keeping the expiry so the remaining
+    // paid days survive the move for the new owner to activate against.
+    if (sub.serviceSettings) {
       ops.push(
-        this.prisma.user.update({
-          where: { id: sub.userId },
-          data: { balance: { increment: refundToFrom } },
-        }),
-        this.prisma.userBalanceTransaction.create({
-          data: {
-            userId: sub.userId,
-            type: 'COMMISSION',
-            amount: refundToFrom,
-            // Own namespace. Transfers used the bare `SUB#id` reference, which
-            // is the key the activation-settlement idempotency guard looks for
-            // — a transfer would have made a later genuine settlement look
-            // like an already-applied duplicate and silently skip the charge.
-            reference: `SUB#${subscriberId}:XFER:${Date.now()}`,
-            notes: `Transfer out — refund for ${remainingDays}/${totalDays} unserved days`,
-            createdBy: actor ? this.scope.actorId(actor) : null,
-          } as any,
-        }),
-      );
-    }
-    if (settle && chargeToNew > 0) {
-      ops.push(
-        this.prisma.user.update({
-          where: { id: toUserId },
-          data: { balance: { decrement: chargeToNew } },
-        }),
-        this.prisma.userBalanceTransaction.create({
-          data: {
-            userId: toUserId,
-            type: 'DEDUCT',
-            amount: -chargeToNew,
-            // Own namespace. Transfers used the bare `SUB#id` reference, which
-            // is the key the activation-settlement idempotency guard looks for
-            // — a transfer would have made a later genuine settlement look
-            // like an already-applied duplicate and silently skip the charge.
-            reference: `SUB#${subscriberId}:XFER:${Date.now()}`,
-            notes: `Transfer in — charge for ${remainingDays}/${totalDays} remaining days`,
-            createdBy: actor ? this.scope.actorId(actor) : null,
-          } as any,
+        this.prisma.serviceSettings.update({
+          where: { subscriberId },
+          data: { isBlocked: true },
         }),
       );
     }
 
     const [updated] = await this.prisma.$transaction(ops);
+
+    // Cut internet: remove the RADIUS credentials so the customer cannot connect
+    // on the new owner's account until that owner activates them. Non-fatal — the
+    // move itself is committed; a RADIUS hiccup only delays the cut, which the
+    // nightly integrity sweep would catch anyway.
+    try {
+      await this.radiusSync.removeSubscriberFromRadius(sub.username);
+      this.logger.log(`Subscriber "${sub.username}" suspended in RADIUS after transfer — awaiting activation by new owner`);
+    } catch (e: any) {
+      this.logger.warn(`Transfer of #${subscriberId}: RADIUS suspend failed (${e?.message || e}); will be reconciled by the integrity sweep`);
+    }
 
     /**
      * VERIFY THE MOVE WAS TOTAL.
@@ -565,7 +524,7 @@ export class SubscribersService implements OnModuleInit {
       from: sub.userId,
       to: { id: target.id, name: target.name, role: target.role },
       pricing: { oldCost: sub.costPrice, newCost, oldSell: sub.sellPrice, newSell },
-      // Service period is preserved — only the unserved days are settled.
+      // Service period is preserved; the customer is suspended until activated.
       period: {
         expiryDate: expiry,
         totalDays,
@@ -573,13 +532,15 @@ export class SubscribersService implements OnModuleInit {
         remainingDays,
         expiryUnchanged: true,
       },
-      settlement: settle
-        ? {
-            refundedToPreviousOwner: refundToFrom,
-            chargedToNewOwner: chargeToNew,
-            basis: `${remainingDays}/${totalDays} days remaining`,
-          }
-        : { skipped: true },
+      // Suspended, no money moved yet. The new owner activates to charge their
+      // wallet (their cost) and re-bill the customer (their sell) for the days
+      // that remain.
+      suspended: true,
+      awaitingActivation: true,
+      settlement: {
+        deferredToActivation: true,
+        basis: `${remainingDays}/${totalDays} days remaining, billed at activation by ${target.name}`,
+      },
     };
   }
 
@@ -2628,7 +2589,33 @@ if (!unpaid && data.username && data.password) {
     // Duration comes from RenewalService so every path — full period, partial
     // days, an exact date, or whatever the balance buys — is priced and dated
     // by the same rules. The legacy customExpiryDate flag still works.
-    const mode = payload.mode || (payload.customExpiryDate && payload.expiryDateTime ? 'DATE' : 'FULL');
+    let mode = payload.mode || (payload.customExpiryDate && payload.expiryDateTime ? 'DATE' : 'FULL');
+    let effectiveExpiryDate = payload.expiryDateTime || payload.expiryDate;
+    let effectiveDays = payload.days;
+
+    /**
+     * ACTIVATING A JUST-TRANSFERRED CUSTOMER — charge only for the days that
+     * remain. A move suspends the customer but preserves their expiry (their
+     * already-paid days). When the new owner activates and hasn't asked for a
+     * specific period, bill them and the customer for the REMAINING days at the
+     * new owner's price — not a fresh full month that would double-charge the
+     * days the customer already paid the previous owner for. Billed as DAYS so
+     * the period runs from today for the number of days left. Only kicks in when
+     * the operator gave no explicit mode/days/date and there is a real future
+     * expiry to honour (more than a day out).
+     */
+    if (!payload.mode && !payload.days && !effectiveExpiryDate && subscriber.status !== 'ACTIVE') {
+      const ss = await this.prisma.serviceSettings.findUnique({
+        where: { subscriberId }, select: { expiryDate: true },
+      });
+      const exp = ss?.expiryDate ? new Date(ss.expiryDate) : null;
+      const msLeft = exp ? exp.getTime() - Date.now() : 0;
+      if (msLeft > 24 * 60 * 60 * 1000) {
+        mode = 'DAYS';
+        effectiveDays = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+      }
+    }
+
     // First activation (subscriber not currently ACTIVE) → bill from today, so
     // the 30-day period runs from the activation date, not the creation date.
     // A custom expiry date always wins if the operator picked one.
@@ -2636,8 +2623,8 @@ if (!unpaid && data.username && data.password) {
     const quote = await this.renewal.quote(subscriberId, {
       mode,
       packageId,
-      days: payload.days,
-      expiryDate: payload.expiryDateTime || payload.expiryDate,
+      days: effectiveDays,
+      expiryDate: effectiveExpiryDate,
       extraFee: extraFee,
       fromActivation: firstActivation,
     });

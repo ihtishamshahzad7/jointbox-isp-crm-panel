@@ -3176,24 +3176,13 @@ export default function SubscribersPage() {
               placeholder="e.g. area reassigned to Rwd"
               style={{ width: "100%", background: t.bg, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "9px 10px", color: t.text, fontSize: 13 }} />
 
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 9, marginTop: 14, cursor: "pointer" }}>
-              <input type="checkbox" checked={transferSettle} style={{ marginTop: 3 }}
-                onChange={(e) => setTransferSettle(e.target.checked)} />
-              <span style={{ fontSize: 11.5, color: t.textSub, lineHeight: 1.7 }}>
-                <b style={{ color: t.text }}>Settle the money for unserved days</b><br />
-                The old owner is refunded pro-rata; the new owner is charged pro-rata at
-                <b> their</b> buy price. Untick to hand the customer over without charging —
-                use that when the receiving account has no wallet balance yet, or when you are
-                just re-assigning your own records.
-              </span>
-            </label>
-
-            {transferSettle && (
-              <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 9, background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.4)", fontSize: 11.5, color: t.textSub, lineHeight: 1.7 }}>
-                <b style={{ color: "#FCD34D" }}>If the receiving wallet cannot cover it, that subscriber is not moved.</b>{" "}
-                The others still go through — the result will name any that were refused.
-              </div>
-            )}
+            <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 9, background: "rgba(60,80,224,.08)", border: "1px solid rgba(60,80,224,.35)", fontSize: 11.5, color: t.textSub, lineHeight: 1.7 }}>
+              <b style={{ color: t.text }}>The customer is suspended after the move.</b>{" "}
+              No money moves now. The new owner must <b>Activate</b> them — and only that step
+              charges the new owner's wallet at <b>their</b> cost and bills the customer at
+              <b> their</b> price, for the days that remain. Nobody is charged for days the
+              customer already paid for.
+            </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
               <Btn variant="ghost" onClick={() => setShowTransferModal(false)}>Cancel</Btn>
