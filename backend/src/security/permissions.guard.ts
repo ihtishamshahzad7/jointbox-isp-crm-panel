@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
+import { permissionForRoute } from './route-permissions';
 
 /**
  * Phase 4A auto-keyed permission guard. Use AFTER JwtAuthGuard:
@@ -83,15 +84,22 @@ export class PermissionsGuard implements CanActivate {
     // Delegated per-child deny FIRST (always applies, even if the role is
     // unconfigured): a parent may have blocked this capability for this user.
     const userId: number | undefined = req.user?.sub;
-    if (userId) {
+    if (userId && action === 'write') {
       const denied = await this.cache.wrap<string[]>(`uperm:${userId}`, 30, async () => {
         const rows = await this.prisma.userPermission.findMany({
           where: { userId, allowed: false }, select: { permission: true },
         });
         return rows.map((r) => r.permission);
       });
-      if (denied.includes(needed)) {
-        throw new ForbiddenException(`Your account is not allowed to ${action} ${resource}.`);
+      // Check BOTH the coarse key (subscribers.write) AND the specific action
+      // this exact endpoint maps to (subscribers.massDelete, users.delete…).
+      // Mapping the route is what makes the granular checkboxes actually bite —
+      // before, only the coarse key was ever consulted.
+      const granular = permissionForRoute(req.method, requestPath);
+      const denySet = new Set(denied);
+      if (denySet.has(needed) || (granular && denySet.has(granular))) {
+        const what = granular || needed;
+        throw new ForbiddenException(`Your account is not allowed to: ${what.replace('.', ' → ')}.`);
       }
     }
 
