@@ -291,7 +291,7 @@ export class SubscribersService implements OnModuleInit {
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
       select: { id: true, fullName: true, username: true, userId: true, packageId: true,
-                sellPrice: true, costPrice: true,
+                nasId: true, sellPrice: true, costPrice: true,
                 serviceSettings: { select: { expiryDate: true, duration: true } } },
     });
     if (!sub) throw new NotFoundException(`Subscriber ${subscriberId} not found`);
@@ -473,16 +473,43 @@ export class SubscribersService implements OnModuleInit {
 
     const [updated] = await this.prisma.$transaction(ops);
 
-    // Cut internet: remove the RADIUS credentials so the customer cannot connect
-    // on the new owner's account until that owner activates them. Non-fatal — the
-    // move itself is committed; a RADIUS hiccup only delays the cut, which the
-    // nightly integrity sweep would catch anyway.
+    // Cut internet NOW — the customer must go offline the instant ownership
+    // changes and stay off until the new owner reactivates. Removing the RADIUS
+    // rows alone does NOT do this: MikroTik checks its own /ppp/secret before it
+    // ever asks RADIUS, and an already-connected session keeps running until it
+    // is actively killed (which is why a moved user stayed online with hours of
+    // uptime). So, in the same order the deactivate flow uses:
+    //   1) remove the router's LOCAL PPP secret  → no local re-auth path
+    //   2) disconnect the live PPPoE session      → they drop immediately
+    //   3) remove the RADIUS credentials          → no RADIUS re-auth path
+    let sessionCut = false;
+    try {
+      const nas = sub.nasId
+        ? await this.prisma.nas.findUnique({
+            where: { id: sub.nasId },
+            select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+          })
+        : null;
+      if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+        await this.mikrotik.removePppSecret(
+          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
+        ).catch((e: any) => this.logger.warn(`Transfer: PPP secret removal for ${sub.username} failed: ${e?.message || e}`));
+        sessionCut = await this.mikrotik.disconnectPppoeUser(
+          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
+        ).catch(() => false);
+      }
+    } catch (e: any) {
+      this.logger.warn(`Transfer of #${subscriberId}: could not cut live session (${e?.message || e})`);
+    }
     try {
       await this.radiusSync.removeSubscriberFromRadius(sub.username);
-      this.logger.log(`Subscriber "${sub.username}" suspended in RADIUS after transfer — awaiting activation by new owner`);
     } catch (e: any) {
       this.logger.warn(`Transfer of #${subscriberId}: RADIUS suspend failed (${e?.message || e}); will be reconciled by the integrity sweep`);
     }
+    this.logger.log(
+      `Subscriber "${sub.username}" suspended after transfer — awaiting activation by new owner` +
+      (sessionCut ? ', live session cut' : ' (no live session found to cut)'),
+    );
 
     /**
      * VERIFY THE MOVE WAS TOTAL.
