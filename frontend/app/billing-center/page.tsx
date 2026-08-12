@@ -9,6 +9,7 @@ import Pricing from "../pricing/page";
 import Gateways from "../gateways/page";
 import Earnings from "../earnings/page";
 import Reversals from "../reversals/page";
+import WalletManager from "../accounting/wallets";
 
 /**
  * Money in one place — the ledger, what was billed, what was collected, and
@@ -20,6 +21,7 @@ export default function BillingCenter() {
       storageKey="billing"
       tabs={[
         { id: "accounting", label: "Accounting",         hint: "Wallets, ledger and reseller settlement.", render: () => <Accounting /> },
+        { id: "wallets",    label: "Wallets",            hint: "Add or reclaim balance for a downline account — with the full transaction record of who moved what.", render: () => <WalletManager /> },
         { id: "earnings",   label: "Collections",        hint: "What you collected, by day, package and method.", render: () => <Earnings /> },
         { id: "invoices",   label: "Invoices",           hint: "What has been billed, paid and outstanding.", render: () => <Invoices /> },
         { id: "payments",   label: "Payments",           hint: "Money received against those invoices.", render: () => <Payments /> },

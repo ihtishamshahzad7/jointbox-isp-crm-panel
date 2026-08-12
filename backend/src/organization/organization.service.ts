@@ -253,7 +253,18 @@ export class OrganizationService {
    */
   async walletHistory(userId: number, actor?: Actor) {
     if (actor) await this.scope.assertUser(actor, Number(userId));
-    return this.prisma.userBalanceTransaction.findMany({ where: { userId }, orderBy: { id: 'desc' }, take: 200 });
+    const rows = await this.prisma.userBalanceTransaction.findMany({
+      where: { userId }, orderBy: { id: 'desc' }, take: 200,
+    });
+    // Attach the name of whoever performed each transaction, so the ledger
+    // reads "Franchise-1 added Rs 5,000" rather than a bare id. This is the
+    // "who added the balance" record the operator needs.
+    const byIds = [...new Set(rows.map((r) => r.createdBy).filter(Boolean))] as number[];
+    const people = byIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: byIds } }, select: { id: true, name: true } })
+      : [];
+    const nameOf = new Map(people.map((p) => [p.id, p.name]));
+    return rows.map((r) => ({ ...r, byName: r.createdBy ? nameOf.get(r.createdBy) ?? null : null }));
   }
 
   /**
