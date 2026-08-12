@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
 
@@ -109,7 +109,7 @@ export class CoaService {
    * Returns a summary for the caller/cron to surface.
    */
   /** Sweep for duplicate logins every 2 minutes and cut them automatically. */
-  @Cron(CronExpression.EVERY_2_MINUTES)
+  @Cron('*/2 * * * *')
   async duplicateSessionSweep() {
     try {
       await this.disconnectDuplicateSessions();
