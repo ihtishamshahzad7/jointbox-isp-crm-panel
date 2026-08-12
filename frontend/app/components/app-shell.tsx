@@ -640,28 +640,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          {/* Global search. Routes into Trace, which already searches across
-              subscribers, sessions and invoices — so this is a shortcut to an
-              existing capability rather than a new half-built one. */}
-          <form
-            className="nv-search"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const q = search.trim();
-              if (q) router.push(`/trace?q=${encodeURIComponent(q)}`);
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search subscribers, sessions, invoices…"
-              aria-label="Search"
-            />
-            <kbd>↵</kbd>
-          </form>
+          {/* Header search removed — "Find features" (Ctrl K) and Trace Search
+              cover finding things; the wide bar was redundant chrome. */}
 
           <div className="topbar-right">
             {latestNotice && (
@@ -739,7 +719,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             )}
 
-            {switchList.length > 0 && (
+            {/* "Act as" lives in Administration now, not the global header —
+                switching accounts is an admin task, so it appears only on the
+                Users / Administration screens. */}
+            {switchList.length > 0 && (/^\/(users|admin-center|organization|hierarchy)/.test(pathname || '')) && (
               <div className="nv-menu-wrap">
                 <button
                   type="button"
