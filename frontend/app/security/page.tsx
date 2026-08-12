@@ -22,6 +22,7 @@ export default function SecurityPage() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("Permissions");
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [childSearch, setChildSearch] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -206,15 +207,79 @@ export default function SecurityPage() {
       {/* ── CHILD PERMISSIONS ── */}
       {tab === "Child Permissions" && (
         <div style={card}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-            <select style={input} value={selChild} onChange={(e) => loadChildPerms(e.target.value)}>
-              <option value="">— pick a downline account —</option>
-              {childList.map((u: any) => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
-            </select>
-            <button style={btn(T.green)} disabled={busy || !selChild} onClick={saveChildPerms}>Save permissions</button>
-            <span style={{ fontSize: 12, color: T.muted }}>Untick an action to block this account from doing it. Ticked = allowed.</span>
+          {/* Searchable account picker — scales to thousands of downline
+              accounts, where a dropdown is unusable. Type to filter; the
+              chosen account shows above with a "change" affordance. */}
+          <div style={{ marginBottom: 14 }}>
+            {(() => {
+              const chosen = childList.find((u: any) => String(u.id) === String(selChild));
+              const q = childSearch.trim().toLowerCase();
+              const matches = q
+                ? childList.filter((u: any) =>
+                    (u.name || "").toLowerCase().includes(q) ||
+                    (u.email || "").toLowerCase().includes(q) ||
+                    (u.role || "").toLowerCase().includes(q))
+                : childList;
+              return (
+                <>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                    <div style={{ flex: 1, minWidth: 220, position: "relative" }}>
+                      <input
+                        style={{ ...input, width: "100%", paddingLeft: 32 }}
+                        placeholder="Search account by name, email or role…"
+                        value={childSearch}
+                        onChange={(e) => setChildSearch(e.target.value)}
+                      />
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"
+                        style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}>
+                        <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      </svg>
+                    </div>
+                    <button style={btn(T.green)} disabled={busy || !selChild} onClick={saveChildPerms}>Save permissions</button>
+                  </div>
+
+                  {chosen && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "9px 12px", background: "#EEF1FE", border: "1px solid #C7CEF9", borderRadius: 10, marginBottom: 8 }}>
+                      <span style={{ fontSize: 13.5, color: "#1C2434" }}>
+                        Editing <b>{chosen.name}</b> <span style={{ color: "#64748B" }}>· {chosen.role}</span>
+                      </span>
+                      <button onClick={() => { setSelChild(""); setChildSearch(""); }}
+                        style={{ background: "transparent", border: "1px solid #C7CEF9", color: "#3C50E0", borderRadius: 7, padding: "4px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Change</button>
+                    </div>
+                  )}
+
+                  {/* The results list only shows while picking (no account chosen,
+                      or actively searching). Capped so a huge downline stays fast. */}
+                  {(!selChild || q) && (
+                    <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid #E2E8F0", borderRadius: 10 }}>
+                      {matches.length === 0 ? (
+                        <div style={{ padding: 16, fontSize: 13, color: "#94A3B8", textAlign: "center" }}>No account matches “{childSearch}”.</div>
+                      ) : (
+                        matches.slice(0, 100).map((u: any) => (
+                          <button key={u.id}
+                            onClick={() => { loadChildPerms(String(u.id)); setChildSearch(""); }}
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left",
+                              background: String(u.id) === String(selChild) ? "#EEF1FE" : "#fff", border: "none", borderBottom: "1px solid #EEF2F7",
+                              padding: "10px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                            <span style={{ minWidth: 0 }}>
+                              <span style={{ display: "block", fontSize: 13.5, fontWeight: 600, color: "#1C2434" }}>{u.name}</span>
+                              {u.email && <span style={{ display: "block", fontSize: 11.5, color: "#94A3B8" }}>{u.email}</span>}
+                            </span>
+                            <span style={{ flex: "none", fontSize: 11, fontWeight: 600, color: "#64748B", background: "#F1F5F9", padding: "3px 9px", borderRadius: 999 }}>{u.role}</span>
+                          </button>
+                        ))
+                      )}
+                      {matches.length > 100 && (
+                        <div style={{ padding: "8px 14px", fontSize: 12, color: "#94A3B8" }}>Showing first 100 of {matches.length}. Keep typing to narrow.</div>
+                      )}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>Untick an action below to block this account from doing it. Ticked = allowed.</div>
+                </>
+              );
+            })()}
           </div>
-          {!selChild && <div style={{ fontSize: 13, color: T.muted }}>Choose one of your downline accounts to control what it can do.</div>}
+          {!selChild && !childSearch && <div style={{ fontSize: 13, color: T.muted }}>Search and pick a downline account to control what it can do.</div>}
           {selChild && catalog.map((group: any) => {
             const total = group.actions.length;
             const allowedCount = group.actions.filter((a: any) => !denied.has(a.key)).length;
