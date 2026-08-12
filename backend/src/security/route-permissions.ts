@@ -26,8 +26,8 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'PATCH',  test: /^\/subscribers\/bulk-service-settings\b/,   key: 'subscribers.massSettings' },
   { method: 'POST',   test: /^\/subscribers\/import(\/|$)/,              key: 'subscribers.import' },
   { method: 'POST',   test: /^\/subscribers\/export(\/|$)/,              key: 'subscribers.export' },
-  { method: 'POST',   test: /^\/subscribers\/bulk-transfer\b/,          key: 'users.transfer' },
-  { method: 'POST',   test: /^\/subscribers\/\d+\/transfer\b/,           key: 'users.transfer' },
+  { method: 'POST',   test: /^\/subscribers\/bulk-transfer\b/,          key: 'users.transferSubscribers'},
+  { method: 'POST',   test: /^\/subscribers\/\d+\/transfer\b/,           key: 'users.transferSubscribers'},
   { method: 'POST',   test: /^\/subscribers\/activate-renewal\b/,        key: 'subscribers.activation' },
   { method: 'POST',   test: /^\/subscribers\/renew\/credit(s)?\b/,       key: 'subscribers.activation' },
   { method: 'POST',   test: /^\/subscribers\/renew\/quote\b/,            key: 'subscribers.activation' },
@@ -55,7 +55,7 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
 
   // ── DOWNLINE USER ACCOUNTS ────────────────────────────────────────────────
   { method: 'DELETE', test: /^\/users\/\d+(\/)?$/,                      key: 'users.delete' },
-  { method: 'POST',   test: /^\/users\/\d+\/.*balance/i,                 key: 'users.manageBalance' },
+  { method: 'POST',   test: /^\/users\/\d+\/.*balance/i,                 key: 'users.topup' },
   { method: 'PUT',    test: /^\/users\/\d+(\/)?$/,                      key: 'users.write' },
   { method: 'POST',   test: /^\/users(\/)?$/,                           key: 'users.write' },
   { method: 'POST',   test: /^\/auth\/impersonate/,                     key: 'users.switchProfile' },
@@ -69,23 +69,28 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'DELETE', test: /^\/organization\/pricing\//,               key: 'packages.manageProfit' },
   { method: 'PUT',    test: /^\/organization\/franchise-pricing\b/,     key: 'packages.manageProfit' },
   { method: 'POST',   test: /^\/organization\/pricing\/reverse\b/,      key: 'subscribers.revertInvoice' },
-  { method: 'POST',   test: /^\/organization\/resellers\/\d+\/wallet\b/,key: 'users.manageBalance' },
-  { method: 'POST',   test: /^\/organization\/wallet\/reverse-topup\b/, key: 'users.manageBalance' },
+  { method: 'POST',   test: /^\/organization\/resellers\/\d+\/wallet\b/,key: 'users.topup' },
+  { method: 'POST',   test: /^\/organization\/wallet\/reverse-topup\b/, key: 'users.topup' },
 
   // ── INVOICES & PAYMENTS ───────────────────────────────────────────────────
-  { method: 'POST',   test: /^\/invoices\/\d+\/payment\b/,             key: 'payments.record' },
-  { method: 'POST',   test: /^\/invoices(\/)?$/,                        key: 'invoices.add' },
+  { method: 'POST',   test: /^\/invoices\/\d+\/payment\b/,             key: 'payments.write' },
+  { method: 'POST',   test: /^\/invoices(\/)?$/,                        key: 'invoices.write' },
   { method: 'DELETE', test: /^\/invoices\//,                            key: 'invoices.massDelete' },
-  { method: 'POST',   test: /^\/payments(\/)?$/,                        key: 'payments.record' },
+  { method: 'POST',   test: /^\/payments(\/)?$/,                        key: 'payments.write' },
   { method: 'DELETE', test: /^\/payments\//,                            key: 'invoices.massDelete' },
+
+  // ── NAS / ROUTERS ─────────────────────────────────────────────────────────
+  { method: 'DELETE', test: /^\/nas\/\d+(\/)?$/,                        key: 'nas.delete' },
+  { method: 'GET',    test: /^\/nas\/\d+\/(sync|reachability|ping|quick-check)\b/, key: 'nas.sync' },
+  // create / edit / import / toggle fall back to the coarse nas.write.
 
   // ── NETWORK ───────────────────────────────────────────────────────────────
   { method: 'POST',   test: /^\/network\/.*disconnect\b/,              key: 'network.disconnect' },
 
   // ── AREAS ─────────────────────────────────────────────────────────────────
-  { method: 'POST',   test: /^\/areas(\/)?$/,                          key: 'areas.manage' },
-  { method: 'PUT',    test: /^\/areas\//,                              key: 'areas.manage' },
-  { method: 'DELETE', test: /^\/areas\//,                              key: 'areas.manage' },
+  { method: 'POST',   test: /^\/areas(\/)?$/,                          key: 'areas.write' },
+  { method: 'PUT',    test: /^\/areas\//,                              key: 'areas.write' },
+  { method: 'DELETE', test: /^\/areas\//,                              key: 'areas.write' },
 ];
 
 /** The granular permission key an endpoint needs, or null to use the coarse one. */

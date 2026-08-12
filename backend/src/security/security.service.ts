@@ -102,6 +102,12 @@ const PERMISSION_CATALOG = [
     { key: 'areas.read', label: 'View' },
     { key: 'areas.write', label: 'Manage' },
   ]},
+  { resource: 'nas', label: 'NAS / Routers', actions: [
+    { key: 'nas.read', label: 'View NAS devices' },
+    { key: 'nas.write', label: 'Add / edit NAS' },
+    { key: 'nas.delete', label: 'Delete NAS' },
+    { key: 'nas.sync', label: 'Sync / test NAS connection' },
+  ]},
   { resource: 'network', label: 'Network', actions: [
     { key: 'network.read', label: 'View live network' },
     { key: 'network.disconnect', label: 'Disconnect users' },
