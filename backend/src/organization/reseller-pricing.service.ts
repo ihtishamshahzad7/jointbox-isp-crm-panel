@@ -461,8 +461,12 @@ export class ResellerPricingService {
    * Compute the per-tier money movement for activating `subscriberId`.
    * Returns null if the subscriber has no owner or no package.
    */
-  async quote(subscriberId: number) {
-    const sub = await this.prisma.subscriber.findUnique({
+  async quote(subscriberId: number, db: Prisma.TransactionClient = this.prisma as any) {
+    // Read through the passed transaction client when there is one, so a package
+    // that was just set inside an uncommitted activation transaction is visible.
+    // Reading via this.prisma there saw the OLD (null) package and made the
+    // settlement a no-op — the subscriber activated but no wallet was charged.
+    const sub = await db.subscriber.findUnique({
       where: { id: subscriberId },
       select: { id: true, userId: true, packageId: true, package: { select: { price: true, name: true } } },
     });
@@ -858,7 +862,9 @@ export class ResellerPricingService {
     opts: { enforce?: boolean; byUserId?: number; event?: string } = {},
     tx?: Prisma.TransactionClient,
   ) {
-    const q = await this.quote(subscriberId);
+    // Use the caller's transaction (if any) so the package/owner set moments ago
+    // in the same uncommitted activation transaction are visible here.
+    const q = await this.quote(subscriberId, tx ?? (this.prisma as any));
     if (!q) return { settled: false, reason: 'No reseller owner or package on this subscriber.' };
 
     /**

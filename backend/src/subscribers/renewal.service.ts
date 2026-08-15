@@ -97,7 +97,7 @@ export class RenewalService {
      * activation at a stale figure (e.g. 250) instead of the owner's real retail
      * (1000). So a package change forces a fresh resolve from the owner's retail.
      */
-    const pricingSamePackage = pkg.id === (sub.packageId ?? pkg.id);
+    const pricingSamePackage = sub.packageId != null && pkg.id === sub.packageId;
     let resolved = (pricingSamePackage && sub.sellPrice != null) ? Number(sub.sellPrice) : null;
     if (resolved == null && sub.userId) {
       const own = await this.prisma.resellerPackagePrice.findUnique({
