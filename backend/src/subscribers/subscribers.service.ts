@@ -2787,9 +2787,25 @@ if (!unpaid && data.username && data.password) {
       ? ('BALANCE' as any)
       : methodMap[(payload.paymentMethod || 'CASH').toUpperCase()] || 'CASH';
 
-    const sell = payload.sellPrice != null && payload.sellPrice !== ''
-      ? Number(payload.sellPrice)
-      : (subscriber.sellPrice ?? Number(pkg.price || 0));
+    // Retail price to STAMP on the subscriber. Only reuse the stored sellPrice
+    // when we are activating the SAME package it was set for; a package change
+    // (or a first activation) must resolve fresh from the owner's retail so we
+    // never re-stamp a stale figure from the old plan. Falls back to the owner's
+    // retail for this package, then the package base.
+    let sell: number;
+    if (payload.sellPrice != null && payload.sellPrice !== '') {
+      sell = Number(payload.sellPrice);
+    } else if (subscriber.packageId === pkg.id && subscriber.sellPrice != null) {
+      sell = Number(subscriber.sellPrice);
+    } else {
+      const ownRetail = subscriber.userId
+        ? (await this.prisma.resellerPackagePrice.findUnique({
+            where: { userId_packageId: { userId: subscriber.userId, packageId: pkg.id } },
+            select: { retailPrice: true },
+          }))?.retailPrice ?? null
+        : null;
+      sell = ownRetail != null && ownRetail > 0 ? Number(ownRetail) : Number(pkg.price || 0);
+    }
 
     const total = quote.total;
     // Full timestamp + a short random tail, so two activations in the same

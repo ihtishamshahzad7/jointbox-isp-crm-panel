@@ -2902,7 +2902,10 @@ export default function SubscribersPage() {
                 <label style={labelSt}>Package</label>
                 <select style={{ ...inputSt, cursor: "pointer" }} value={activationForm.packageId} onChange={(e) => setActivationForm((p) => ({ ...p, packageId: e.target.value }))}>
                   <option value="">Select package</option>
-                  {packages.map((pk) => <option key={pk.id} value={pk.id}>{pk.name} - {pk.price}</option>)}
+                  {/* Name only — the exact amount the customer is billed is shown
+                      in the live quote line below (the list price here is the
+                      reseller's own cost and was misleading in this context). */}
+                  {packages.map((pk) => <option key={pk.id} value={pk.id}>{pk.name}</option>)}
                 </select>
               </div>
             </div>

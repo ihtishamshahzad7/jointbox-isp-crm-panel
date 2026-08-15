@@ -87,11 +87,18 @@ export class RenewalService {
     if (!pkg) throw new BadRequestException('No package selected for this renewal.');
 
     /**
-     * Same three-step fallback as the first invoice, so a renewal never quietly
-     * charges a different amount than the activation did: this subscriber's
-     * own price, then the owning account's retail price, then the base price.
+     * Three-step fallback: this subscriber's own stored price, then the owning
+     * account's retail price for THIS package, then the package base price.
+     *
+     * CRITICAL: the stored `sellPrice` is only trusted when we are pricing the
+     * package it was actually set for. When the operator picks a DIFFERENT
+     * package in the activation dialog (or the subscriber has no package yet),
+     * the old sellPrice belongs to the old plan — reusing it billed the new 4mb
+     * activation at a stale figure (e.g. 250) instead of the owner's real retail
+     * (1000). So a package change forces a fresh resolve from the owner's retail.
      */
-    let resolved = sub.sellPrice != null ? Number(sub.sellPrice) : null;
+    const pricingSamePackage = pkg.id === (sub.packageId ?? pkg.id);
+    let resolved = (pricingSamePackage && sub.sellPrice != null) ? Number(sub.sellPrice) : null;
     if (resolved == null && sub.userId) {
       const own = await this.prisma.resellerPackagePrice.findUnique({
         where: { userId_packageId: { userId: sub.userId, packageId: pkg.id } },
