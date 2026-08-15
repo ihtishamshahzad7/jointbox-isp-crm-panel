@@ -251,34 +251,80 @@ export class PaymentsService {
   }
 
   async update(id: number, data: any) {
+    const existing = await this.prisma.payment.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException(`Payment with ID ${id} not found`);
+
     const updateData: any = {};
-    
     if (data.amount !== undefined) updateData.amount = data.amount;
     if (data.method !== undefined) updateData.method = data.method;
     if (data.referenceNo !== undefined) updateData.referenceNo = data.referenceNo;
     if (data.notes !== undefined) updateData.notes = data.notes;
     if (data.paymentDate !== undefined) updateData.paymentDate = new Date(data.paymentDate);
-    
-    try {
-      return await this.prisma.payment.update({
-        where: { id },
-        data: updateData,
-        include: {
-          invoice: { select: { invoiceNo: true } },
-          subscriber: { select: { fullName: true, phone: true } },
-          receivedByUser: { select: { name: true } },
-        },
-      });
-    } catch (error) {
-      throw new NotFoundException(`Payment with ID ${id} not found`);
+
+    const updated = await this.prisma.payment.update({
+      where: { id }, data: updateData,
+      include: {
+        invoice: { select: { invoiceNo: true } },
+        subscriber: { select: { fullName: true, phone: true } },
+        receivedByUser: { select: { name: true } },
+      },
+    });
+
+    // If the AMOUNT changed, the invoice paid/due/status AND the ledger must be
+    // brought back in step — otherwise editing a payment silently desynced the
+    // books from the money. Apply the delta on both.
+    const delta = data.amount !== undefined ? Number(data.amount) - existing.amount : 0;
+    if (delta !== 0) {
+      if (existing.invoiceId) {
+        const inv = await this.prisma.invoice.findUnique({ where: { id: existing.invoiceId } });
+        if (inv) {
+          const newPaid = Math.max(0, inv.paidAmount + delta);
+          const newDue = Math.max(inv.total - newPaid, 0);
+          const status = newPaid >= inv.total ? 'PAID' : newPaid > 0 ? 'PARTIAL' : 'UNPAID';
+          await this.prisma.invoice.update({
+            where: { id: inv.id },
+            data: { paidAmount: newPaid, dueAmount: newDue, status, paidDate: status === 'PAID' ? (inv.paidDate ?? new Date()) : null },
+          });
+        }
+      }
+      // Ledger adjustment for the delta (same sides as a receipt; a negative
+      // delta naturally reverses them).
+      const amt = Math.abs(delta);
+      const inc = delta > 0;
+      await this.accounting.post([
+        { account: 'CASH', [inc ? 'debit' : 'credit']: amt, refType: 'PAYMENT_ADJUSTMENT', refId: id, subscriberId: existing.subscriberId, description: `Adjust ${existing.paymentNo}` },
+        { account: 'ACCOUNTS_RECEIVABLE', [inc ? 'credit' : 'debit']: amt, refType: 'PAYMENT_ADJUSTMENT', refId: id, subscriberId: existing.subscriberId, description: `Adjust ${existing.paymentNo}` },
+      ] as any).catch((e: any) => this.logger?.warn?.(`Payment adjust ledger post failed: ${e?.message || e}`));
     }
+    return updated;
   }
 
   async remove(id: number) {
-    try {
-      return await this.prisma.payment.delete({ where: { id } });
-    } catch (error) {
-      throw new NotFoundException(`Payment with ID ${id} not found`);
+    const payment = await this.prisma.payment.findUnique({ where: { id } });
+    if (!payment) throw new NotFoundException(`Payment with ID ${id} not found`);
+
+    // Removing a payment must UNDO its effects, not just drop the row:
+    //   1) the invoice it paid must go back to PARTIAL/UNPAID,
+    //   2) the double-entry ledger must be reversed (Cash ↓, AR ↑),
+    // otherwise the invoice stays falsely PAID and the books stay overstated.
+    if (payment.invoiceId) {
+      const inv = await this.prisma.invoice.findUnique({ where: { id: payment.invoiceId } });
+      if (inv) {
+        const newPaid = Math.max(0, inv.paidAmount - payment.amount);
+        const newDue = Math.max(inv.total - newPaid, 0);
+        const status = newPaid >= inv.total ? 'PAID' : newPaid > 0 ? 'PARTIAL' : 'UNPAID';
+        await this.prisma.invoice.update({
+          where: { id: inv.id },
+          data: { paidAmount: newPaid, dueAmount: newDue, status, paidDate: status === 'PAID' ? inv.paidDate : null },
+        });
+      }
     }
+    // Inverse of postPaymentReceived (CASH debit / AR credit).
+    await this.accounting.post([
+      { account: 'CASH', credit: payment.amount, refType: 'PAYMENT_REVERSAL', refId: payment.id, subscriberId: payment.subscriberId, description: `Reversal of ${payment.paymentNo}` },
+      { account: 'ACCOUNTS_RECEIVABLE', debit: payment.amount, refType: 'PAYMENT_REVERSAL', refId: payment.id, subscriberId: payment.subscriberId, description: `Reversal of ${payment.paymentNo}` },
+    ] as any).catch((e: any) => this.logger?.warn?.(`Payment reversal ledger post failed: ${e?.message || e}`));
+
+    return this.prisma.payment.delete({ where: { id } });
   }
 }
