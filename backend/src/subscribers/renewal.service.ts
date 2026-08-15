@@ -178,6 +178,26 @@ export class RenewalService {
     const extra = Number(opts.extraFee || 0);
     const total = Math.round(amount + extra);
 
+    /**
+     * What the ACTIVATING account pays its own parent (its cost) for this
+     * package, prorated over the same days — so the modal can show the customer
+     * price, the operator's cost, and the profit between them. The top of the
+     * tree (ISP) buys from no one, so its cost is 0.
+     */
+    let ownerCost = 0;
+    if (sub.userId) {
+      const me = await this.prisma.user.findUnique({ where: { id: sub.userId }, select: { parentId: true } });
+      if (me?.parentId) {
+        const buy = await this.prisma.resellerPackagePrice.findUnique({
+          where: { userId_packageId: { userId: sub.userId, packageId: pkg.id } },
+          select: { price: true },
+        });
+        ownerCost = buy?.price != null ? Number(buy.price) : Number(base);
+      }
+    }
+    const costForPeriod = Math.round((ownerCost / duration) * days);
+    const profit = Math.round(amount) - costForPeriod;
+
     return {
       subscriberId,
       packageId: pkg.id,
@@ -188,6 +208,9 @@ export class RenewalService {
       amount: Math.round(amount),
       extraFee: extra,
       total,
+      // Operator economics for this activation.
+      cost: costForPeriod,
+      profit,
       currentExpiry: sub.serviceSettings?.expiryDate ?? null,
       newExpiry: expiry,
       balance,

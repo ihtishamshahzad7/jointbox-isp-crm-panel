@@ -3002,6 +3002,13 @@ export default function SubscribersPage() {
                         {money(quote.total)}
                       </b>
                     </div>
+                    {typeof quote.cost === "number" && (
+                      <div style={{ display: "flex", gap: 14, marginTop: 6, flexWrap: "wrap", fontSize: 12 }}>
+                        <span style={{ color: t.textMuted }}>Customer pays <b style={{ color: t.text }}>{money(quote.total)}</b></span>
+                        <span style={{ color: t.textMuted }}>Costs you <b style={{ color: "#f59e0b" }}>{money(quote.cost)}</b></span>
+                        <span style={{ color: t.textMuted }}>Your profit <b style={{ color: "#4ade80" }}>{money(quote.profit)}</b></span>
+                      </div>
+                    )}
                     <div style={{ color: t.textMuted, marginTop: 4 }}>
                       Expires {new Date(quote.newExpiry).toLocaleString()}
                       {activationForm.mode === "BALANCE" && ` · wallet left ${money(quote.balanceAfter)}`}
