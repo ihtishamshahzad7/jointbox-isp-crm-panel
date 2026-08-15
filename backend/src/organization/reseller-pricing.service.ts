@@ -856,6 +856,7 @@ export class ResellerPricingService {
   async settleActivation(
     subscriberId: number,
     opts: { enforce?: boolean; byUserId?: number; event?: string } = {},
+    tx?: Prisma.TransactionClient,
   ) {
     const q = await this.quote(subscriberId);
     if (!q) return { settled: false, reason: 'No reseller owner or package on this subscriber.' };
@@ -871,9 +872,27 @@ export class ResellerPricingService {
      * again, and the only trace was two identical ledger lines nobody compares.
      *
      * `event` distinguishes legitimate repeat charges (a monthly renewal IS a
-     * second, real charge) from an accidental replay of the same one.
+     * second, real charge) from an accidental replay of the same one. Callers
+     * must pass a DETERMINISTIC event (e.g. package + resulting expiry day), so
+     * a replayed request produces the same reference and is refused.
      */
     const reference = opts.event ? `SUB#${subscriberId}:${opts.event}` : `SUB#${subscriberId}`;
+
+    /**
+     * CONCURRENCY.
+     *
+     * The old code checked for a duplicate ONCE, before the transaction opened.
+     * Two simultaneous activations of the same subscriber both read "nothing
+     * here", both opened their transaction, both debited — the double-click that
+     * the reference check was meant to stop, stopped by nothing. The check is
+     * therefore re-run INSIDE the transaction, after taking a `FOR UPDATE` row
+     * lock on the subscriber. The second concurrent request blocks on that lock
+     * until the first commits, then re-checks and sees the winner's settlement
+     * row → alreadySettled, with not a single balance moved.
+     *
+     * The pre-transaction check stays only as a cheap fast-path for sequential
+     * replays (no lock, no writes); it is NOT the guard.
+     */
     const already = await this.prisma.userBalanceTransaction.findFirst({
       where: { reference },
       select: { id: true, createdAt: true },
@@ -883,23 +902,37 @@ export class ResellerPricingService {
         `Settlement for subscriber ${subscriberId} (${reference}) was already applied ` +
         `on ${already.createdAt.toISOString()} — refusing to charge twice.`,
       );
-      return { settled: false, alreadySettled: true, reference, ...q };
+      return { settled: false, alreadySettled: true, reference, settledAt: already.createdAt, ...q };
     }
 
-    /**
-     * Prepaid enforcement, ON BY DEFAULT.
-     *
-     * This used to require `enforce: true`, and the activation path never
-     * passed it — so a dealer with an empty wallet could activate customers
-     * indefinitely and simply go negative. That is not prepaid, it is
-     * unsecured credit issued silently by the system.
-     *
-     * Opting OUT is now the explicit act (`enforce: false`), for the rare case
-     * where an operator deliberately allows an overdraft.
-     */
-    const enforce = opts.enforce !== false;
+    const settle = async (db: Prisma.TransactionClient) => {
+      if ((db as any).$queryRaw) {
+        await (db as any).$queryRaw`SELECT id FROM "Subscriber" WHERE id = ${subscriberId} FOR UPDATE`;
+      }
+      const dup = await db.userBalanceTransaction.findFirst({
+        where: { reference },
+        select: { id: true, createdAt: true },
+      });
+      if (dup) {
+        this.logger.warn(
+          `Concurrent settlement for subscriber ${subscriberId} (${reference}) lost the race — refusing to charge twice.`,
+        );
+        return { settled: false, alreadySettled: true, reference, settledAt: dup.createdAt, ...q };
+      }
 
-    await this.prisma.$transaction(async (tx) => {
+      /**
+       * Prepaid enforcement, ON BY DEFAULT.
+       *
+       * This used to require `enforce: true`, and the activation path never
+       * passed it — so a dealer with an empty wallet could activate customers
+       * indefinitely and simply go negative. That is not prepaid, it is
+       * unsecured credit issued silently by the system.
+       *
+       * Opting OUT is now the explicit act (`enforce: false`), for the rare case
+       * where an operator deliberately allows an overdraft.
+       */
+      const enforce = opts.enforce !== false;
+
       /**
        * The balance check runs INSIDE the transaction, as a conditional update.
        *
@@ -918,16 +951,16 @@ export class ResellerPricingService {
           const need = -activator.delta;
           // Credit limit = permitted overdraft. The account may spend down to
           // −creditLimit, so the minimum balance it needs is (need − creditLimit).
-          const actUser = await tx.user.findUnique({
+          const actUser = await db.user.findUnique({
             where: { id: activator.userId }, select: { creditLimit: true },
           });
           const threshold = need - (actUser?.creditLimit ?? 0);
-          const hit = await tx.user.updateMany({
+          const hit = await db.user.updateMany({
             where: { id: activator.userId, balance: { gte: threshold } },
             data: { balance: { decrement: need } },
           });
           if (hit.count === 0) {
-            const u = await tx.user.findUnique({
+            const u = await db.user.findUnique({
               where: { id: activator.userId },
               select: { balance: true, name: true, creditLimit: true },
             });
@@ -940,10 +973,10 @@ export class ResellerPricingService {
               `Ask your parent account to top up or raise the credit limit.`,
             );
           }
-          const after = await tx.user.findUnique({
+          const after = await db.user.findUnique({
             where: { id: activator.userId }, select: { balance: true },
           });
-          await tx.userBalanceTransaction.create({
+          await db.userBalanceTransaction.create({
             data: {
               userId: activator.userId, type: 'DEDUCT', amount: activator.delta,
               balanceAfter: after?.balance ?? 0, reference,
@@ -959,12 +992,12 @@ export class ResellerPricingService {
         // The activator was already debited atomically above; skip it here so
         // the deduction is not applied a second time.
         if (enforce && m === q.movements[0] && m.delta < 0) continue;
-        const after = await tx.user.update({
+        const after = await db.user.update({
           where: { id: m.userId },
           data: { balance: { increment: m.delta } },
           select: { balance: true },
         });
-        await tx.userBalanceTransaction.create({
+        await db.userBalanceTransaction.create({
           data: {
             userId: m.userId,
             type: m.delta >= 0 ? 'COMMISSION' : 'DEDUCT',
@@ -976,7 +1009,16 @@ export class ResellerPricingService {
           } as any,
         });
       }
-    });
+      return null; // no duplicate → proceed
+    };
+
+    if (tx) {
+      const dup = await settle(tx);
+      if (dup) return dup;
+    } else {
+      const dup = await this.prisma.$transaction((t) => settle(t));
+      if (dup) return dup;
+    }
 
     this.logger.log(`💰 Settled activation for subscriber ${subscriberId}: ${q.movements.length} tiers`);
     return { settled: true, ...q };

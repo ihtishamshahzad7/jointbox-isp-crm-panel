@@ -4,9 +4,9 @@
   "counts": {
     "screens": 57,
     "actions": 49,
-    "tabs": 50,
+    "tabs": 51,
     "buttons": 72,
-    "total": 228
+    "total": 229
   },
   "tabs": {
     "admin-center": [
@@ -47,6 +47,11 @@
         "label": "Accounting",
         "hint": "Wallets, ledger and reseller settlement.",
         "route": "accounting"
+      },
+      {
+        "id": "wallets",
+        "label": "Wallets",
+        "hint": "Add or reclaim balance for a downline account — with the full transaction record of who moved what."
       },
       {
         "id": "earnings",
@@ -427,6 +432,12 @@
     "billing-center": [
       {
         "label": "Accounting",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Wallets",
         "does": "",
         "careful": "",
         "risk": "low"
@@ -2061,7 +2072,7 @@
     {
       "t": "Screen: My Profile",
       "k": "my-profile my profile page screen where find open go to my profile",
-      "a": "/my-profile.",
+      "a": "/my-profile. Save the new photo, then refresh both this page AND the header avatar. The header reads its own /auth/profile, so we fire a window event it listens for rather than reloading the whole app.",
       "src": "screens"
     },
     {
@@ -2313,7 +2324,7 @@
     {
       "t": "What the panel can do: demo",
       "k": "demo demo api action endpoint capability can i",
-      "a": "Public demo-account creation. No auth required — anyone can spin up a sandbox franchise account to try the panel; it self-destructs in 7 days. Available actions: create/run /demo/create.",
+      "a": "Public demo-account creation. No auth required — anyone can spin up a sandbox franchise account to try the panel; it self-destructs in 7 days. Available actions: create/run /demo/create; view /demo/public.",
       "src": "actions"
     },
     {
@@ -2415,7 +2426,7 @@
     {
       "t": "What the panel can do: notifications",
       "k": "notifications notifications api action endpoint capability can i",
-      "a": "Which alert channels are configured (Discord / WhatsApp), masked. Available actions: create/run /communication/alerts/config; create/run /communication/alerts/my-channels; create/run /communication/alerts/my-channels/test; create/run /communication/alerts/test; create/run /communication/messages/:id/retry; create/run /communication/send; create/run /communication/templates; create/run /communication/test; remove /communication/templates/:id; replace /communication/templates/:id; view /communication/alerts/my-channels; view /communication/alerts/status; view /communication/latest; view /communication/messages.",
+      "a": "The header bell. Scoped to the caller's own subtree by the service — a dealer must never learn that another dealer signed up a customer. Available actions: create/run /communication/alerts/config; create/run /communication/alerts/my-channels; create/run /communication/alerts/my-channels/test; create/run /communication/alerts/test; create/run /communication/messages/:id/retry; create/run /communication/send; create/run /communication/templates; create/run /communication/test; remove /communication/templates/:id; replace /communication/templates/:id; view /communication/alerts/my-channels; view /communication/alerts/status; view /communication/feed; view /communication/latest.",
       "src": "actions"
     },
     {
@@ -2535,7 +2546,7 @@
     {
       "t": "What the panel can do: users",
       "k": "users users api action endpoint capability can i",
-      "a": "Reseller/franchise operations snapshot: wallet, customers, revenue, dues. Available actions: create/run /users; create/run /users/:id/purge; remove /users/:id; replace /users/:id; replace /users/:id/packages/:packageId; update /users/:id/toggle; view /users; view /users/:id; view /users/:id/packages; view /users/grouped; view /users/me/business; view /users/me/earnings; view /users/me/profile; view /users/stats.",
+      "a": "Update the fields a person is allowed to change on their OWN account. Deliberately narrow: name, phone and photo only. Available actions: create/run /users; create/run /users/:id/purge; remove /users/:id; replace /users/:id; replace /users/:id/packages/:packageId; update /users/:id/toggle; update /users/me/profile; view /users; view /users/:id; view /users/:id/packages; view /users/grouped; view /users/me/business; view /users/me/earnings; view /users/me/profile.",
       "src": "actions"
     },
     {
@@ -2578,6 +2589,12 @@
       "t": "Accounting tab",
       "k": "accounting accounting tab billing-center billing center what is this screen",
       "a": "Business → Billing & Accounting → Accounting tab. Wallets, ledger and reseller settlement.",
+      "src": "tabs"
+    },
+    {
+      "t": "Wallets tab",
+      "k": "wallets wallets tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Wallets tab. Add or reclaim balance for a downline account — with the full transaction record of who moved what.",
       "src": "tabs"
     },
     {
@@ -2871,7 +2888,7 @@
     {
       "t": "Buttons on Billing Center",
       "k": "billing-center buttons button options controls what can i click press tap here billing center",
-      "a": "Business → Billing & Accounting. The controls on this screen are: Accounting, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
+      "a": "Business → Billing & Accounting. The controls on this screen are: Accounting, Wallets, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
       "src": "buttons"
     },
     {

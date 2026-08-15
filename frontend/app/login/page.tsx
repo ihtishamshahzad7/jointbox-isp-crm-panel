@@ -4,9 +4,11 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Logo } from "../components/logo";
 import API_BASE from "../components/api";
+import { BRAND } from "../../lib/brand";
+import { LANGS, useI18n } from "../../lib/i18n";
 
 const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
-const SUPPORT = "ehtisham@jointbox.net";
+const SUPPORT = BRAND.supportEmail;
 
 /**
  * Backend URL for the login screen.
@@ -27,6 +29,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [code, setCode] = useState("");
   const [needs2fa, setNeeds2fa] = useState(false);
+  const [langOpen, setLangOpen] = useState(false);
+  const { t, setLang, lang } = useI18n();
 
   const router = useRouter();
 
@@ -255,7 +259,7 @@ export default function LoginPage() {
 
           <div style={{ position: "relative", zIndex: 2 }}>
             <div style={{ marginBottom: "40px" }}>
-              <Logo size={44} withText subtitle="ISP Management" />
+              <Logo size={44} withText subtitle={BRAND.subtitle} />
             </div>
 
             <h1
@@ -268,11 +272,11 @@ export default function LoginPage() {
                 letterSpacing: "-0.02em",
               }}
             >
-              Command Center
+              {t("Command Center")}
               <br />
-              for{" "}
+              {t("for")}{" "}
               <span style={{ background: NOVA, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-                ISP Management
+                {BRAND.subtitle}
               </span>
             </h1>
 
@@ -284,11 +288,11 @@ export default function LoginPage() {
                 marginBottom: "32px",
               }}
             >
-              Secure. Fast. Always on.
+              {t("Secure. Fast. Always on.")}
               <br />
-              Enterprise-grade infrastructure
+              {t("Enterprise-grade infrastructure")}
               <br />
-              built for modern ISPs.
+              {t("built for modern ISPs.")}
             </p>
           </div>
 
@@ -347,15 +351,62 @@ export default function LoginPage() {
         >
           <div
             style={{
-              fontSize: "11px",
-              letterSpacing: "0.15em",
-              color: "#E9408B",
-              textTransform: "uppercase",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
               marginBottom: "12px",
-              fontWeight: 600,
             }}
           >
-            Secure Access
+            <div
+              style={{
+                fontSize: "11px",
+                letterSpacing: "0.15em",
+                color: "#E9408B",
+                textTransform: "uppercase",
+                fontWeight: 600,
+              }}
+            >
+              {t("Secure Access")}
+            </div>
+            {/* Language picker — people walk up to this screen in any language. */}
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setLangOpen((o) => !o)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  background: "transparent", border: "1px solid rgba(255,255,255,0.12)",
+                  color: "#94a3b8", borderRadius: 8, padding: "5px 10px",
+                  fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                }}
+              >
+                🌐 {LANGS.find((l) => l.code === lang)?.native ?? "English"}
+              </button>
+              {langOpen && (
+                <div style={{
+                  position: "absolute", right: 0, top: 34, zIndex: 50, width: 180,
+                  background: "#0f1625", border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 12, padding: 6, boxShadow: "0 20px 50px rgba(0,0,0,.5)",
+                }}>
+                  {LANGS.map((l) => (
+                    <button
+                      key={l.code}
+                      type="button"
+                      onClick={() => { setLang(l.code); setLangOpen(false); }}
+                      style={{
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                        width: "100%", background: lang === l.code ? "rgba(233,64,139,.14)" : "transparent",
+                        border: "none", color: "#fff", borderRadius: 8, padding: "8px 10px",
+                        fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                      }}
+                    >
+                      <span>{l.native}</span>
+                      {lang === l.code && <span style={{ color: "#F9A8D4" }}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div
@@ -367,7 +418,7 @@ export default function LoginPage() {
               letterSpacing: "-0.02em",
             }}
           >
-            Sign in
+            {t("Sign in")}
           </div>
 
           <div
@@ -377,7 +428,7 @@ export default function LoginPage() {
               marginBottom: "32px",
             }}
           >
-            Enter your credentials to continue
+            {t("Enter your credentials to continue")}
           </div>
 
           <div style={{ marginBottom: "20px" }}>
@@ -391,12 +442,12 @@ export default function LoginPage() {
                 letterSpacing: "0.5px",
               }}
             >
-              Email Address
+              {t("Email Address")}
             </label>
 
             <input
               type="email"
-              placeholder="admin@jointbox.com"
+              placeholder="admin@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               onKeyDown={handleKeyPress}
@@ -433,7 +484,7 @@ export default function LoginPage() {
                 letterSpacing: "0.5px",
               }}
             >
-              Password
+              {t("Password")}
             </label>
 
             <input
@@ -524,7 +575,7 @@ export default function LoginPage() {
               }
             }}
           >
-            {loading ? "Signing In..." : "Sign In →"}
+            {loading ? t("Signing In...") : `${t("Sign In →")}`}
           </button>
 
           <button
@@ -538,7 +589,7 @@ export default function LoginPage() {
             }}
             title="Create a sandbox franchise account — everything auto-deletes in 7 days"
           >
-            ✦ Try a demo account
+            ✦ {t("Try a demo account")}
           </button>
 
           {message && (
@@ -573,7 +624,7 @@ export default function LoginPage() {
             }}
           >
             <p style={{ fontSize: "10.5px", color: "#64748b", margin: 0 }}>
-              Need help? <a href={`mailto:${SUPPORT}`} style={{ color: "#F9A8D4", textDecoration: "none", fontWeight: 600 }}>{SUPPORT}</a>
+              {t("Need help?")} <a href={`mailto:${SUPPORT}`} style={{ color: "#F9A8D4", textDecoration: "none", fontWeight: 600 }}>{SUPPORT}</a>
             </p>
           </div>
         </div>

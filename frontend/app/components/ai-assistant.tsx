@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { AssistantChat } from "./assistant-chat";
 import API_BASE from "./api";
+import { BRAND } from "../../lib/brand";
 
 const API = API_BASE;
 
@@ -40,7 +41,7 @@ export default function AiAssistant() {
     <>
       <button
         onClick={() => setOpen((o) => !o)}
-        title="Jointbox assistant"
+        title={`${BRAND.name} assistant`}
         aria-label="Open assistant"
         style={{
           position: "fixed", right: 22, bottom: 22, zIndex: 2000, width: 54, height: 54, borderRadius: "50%",
@@ -76,7 +77,7 @@ export default function AiAssistant() {
           <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,#6C3CE1,#8B5CF6)", color: "#fff",
             display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 14 }}>✦ Jointbox Assistant</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>✦ {BRAND.name} Assistant</div>
               <div style={{ fontSize: 11, opacity: 0.85 }}>Guidance for anything in the panel · build v7</div>
             </div>
             {/* Expand — a long answer is far easier to read on a full page than

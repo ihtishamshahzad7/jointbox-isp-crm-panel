@@ -1,19 +1,23 @@
 "use client";
 
 import React from "react";
+import { BRAND } from "../../lib/brand";
 
 /**
- * Jointbox brand mark — two interlocking rounded boxes ("joint" of "boxes"),
+ * Brand mark — two interlocking rounded boxes ("joint" of "boxes"),
  * one woven over the other, on a Nova-gradient tile. Rendered inline as SVG so
  * it stays crisp at any size and needs no image request.
  *
  * <Logo />           → mark only
- * <Logo withText />  → mark + "Jointbox / ISP Management" wordmark
+ * <Logo withText />  → mark + brand name / subtitle wordmark
+ *
+ * The name and subtitle come from lib/brand.ts (env-driven), so a white-label
+ * deployment shows its own identity here.
  */
 export function Logo({
   size = 40,
   withText = false,
-  subtitle = "ISP Management",
+  subtitle = BRAND.subtitle,
 }: {
   size?: number;
   withText?: boolean;
@@ -44,7 +48,7 @@ export function Logo({
       {mark}
       <div style={{ lineHeight: 1.15 }}>
         <div style={{ fontSize: size * 0.5, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text, #fff)" }}>
-          Jointbox
+          {BRAND.name}
         </div>
         {subtitle && (
           <div

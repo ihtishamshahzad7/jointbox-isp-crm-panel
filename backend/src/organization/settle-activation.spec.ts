@@ -23,12 +23,13 @@ describe('ResellerPricingService.settleActivation (money path)', () => {
   /** Build a Prisma test double whose $transaction runs the callback inline. */
   function makePrisma(overrides: any = {}) {
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 101 }]), // FOR UPDATE lock
       user: {
         findUnique: jest.fn().mockResolvedValue({ balance: 5000, creditLimit: 0, name: 'Dealer A' }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }), // balance condition passed
         update: jest.fn().mockResolvedValue({ balance: 4600 }),
       },
-      userBalanceTransaction: { create: jest.fn().mockResolvedValue({ id: 1 }) },
+      userBalanceTransaction: { create: jest.fn().mockResolvedValue({ id: 1 }), findFirst: jest.fn().mockResolvedValue(null) },
       ...overrides.tx,
     };
     const prisma: any = {
@@ -106,7 +107,7 @@ describe('ResellerPricingService.settleActivation (money path)', () => {
           updateMany: jest.fn().mockResolvedValue({ count: 0 }), // condition failed
           update: jest.fn(),
         },
-        userBalanceTransaction: { create: jest.fn() },
+        userBalanceTransaction: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
       },
     });
     const svc = makeService(prisma);
@@ -126,7 +127,7 @@ describe('ResellerPricingService.settleActivation (money path)', () => {
           updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           update: jest.fn().mockResolvedValue({ balance: -300 }),
         },
-        userBalanceTransaction: { create: jest.fn().mockResolvedValue({ id: 2 }) },
+        userBalanceTransaction: { create: jest.fn().mockResolvedValue({ id: 2 }), findFirst: jest.fn().mockResolvedValue(null) },
       },
     });
     const svc = makeService(prisma);
@@ -148,6 +149,45 @@ describe('ResellerPricingService.settleActivation (money path)', () => {
     // never on the root prisma client — that is what makes it race-safe.
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma._tx.user.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('loses the race for two CONCURRENT settlements: locks the row, re-checks inside the tx, refuses the second charge', async () => {
+    // Outer (fast-path) check sees nothing — the winner has NOT committed yet.
+    const prisma = makePrisma({
+      tx: {
+        // But by the time this transaction acquires the FOR UPDATE lock, the
+        // winner HAS committed — the in-tx re-check finds the settlement row.
+        userBalanceTransaction: {
+          create: jest.fn().mockResolvedValue({ id: 1 }),
+          findFirst: jest.fn().mockResolvedValue({ id: 55, createdAt: new Date() }),
+        },
+      },
+    });
+    const svc = makeService(prisma);
+
+    const res: any = await svc.settleActivation(101, {});
+
+    expect(res.alreadySettled).toBe(true);
+    expect(res.settled).toBe(false);
+    // The row lock was taken (that is what serializes the two requests)…
+    expect(prisma._tx.$queryRaw).toHaveBeenCalled();
+    // …and the second charge never moved money.
+    expect(prisma._tx.user.updateMany).not.toHaveBeenCalled();
+    expect(prisma._tx.userBalanceTransaction.create).not.toHaveBeenCalled();
+  });
+
+  it('reports WHEN the duplicate settlement happened, so the caller can tell a double-click from a crash-recovery', async () => {
+    const prisma = makePrisma({
+      userBalanceTransaction: {
+        findFirst: jest.fn().mockResolvedValue({ id: 55, createdAt: new Date('2026-08-14T10:00:00Z') }),
+      },
+    });
+    const svc = makeService(prisma);
+
+    const res: any = await svc.settleActivation(101, {});
+
+    expect(res.alreadySettled).toBe(true);
+    expect(new Date(res.settledAt).toISOString()).toBe('2026-08-14T10:00:00.000Z');
   });
 
   it('does nothing when there is no reseller owner or package to bill', async () => {

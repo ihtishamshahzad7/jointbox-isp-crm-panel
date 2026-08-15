@@ -113,6 +113,15 @@ export class NetworkService {
     return { disconnected: true, method };
   }
 
+  /** Cut EVERY open session for a username (duplicate-login takedown). */
+  async cutAllSessions(username: string) {
+    const result = await this.coa.cutAllSessions(username);
+    await this.prisma.activityLog.create({
+      data: { action: 'DISCONNECT_ALL', entity: 'Session', details: `${username}: ${result.sessionsCut} session(s) cut, ${result.closed} row(s) closed` },
+    });
+    return { disconnected: true, ...result };
+  }
+
   // ── MAC binding (radcheck Calling-Station-Id) ─────────────────
   async getMacBinding(username: string) {
     const rows = await this.prisma.radCheck.findMany({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API_BASE from "../components/api";
@@ -31,6 +31,8 @@ export default function SecurityPage() {
   const [matrix, setMatrix] = useState<Record<string, string[]>>({});
   const [selectedRole, setSelectedRole] = useState("SALES");
   const [dirty, setDirty] = useState(false);
+  // presets (role tiers: one-click recommended sets)
+  const [presets, setPresets] = useState<any>({ roles: {}, labels: {} });
   // 2fa
   const [tfa, setTfa] = useState<any>({ enabled: false });
   const [enrollment, setEnrollment] = useState<any>(null);
@@ -42,6 +44,10 @@ export default function SecurityPage() {
   const [childList, setChildList] = useState<any[]>([]);
   const [selChild, setSelChild] = useState<string>("");
   const [denied, setDenied] = useState<Set<string>>(new Set());
+  const [permSearch, setPermSearch] = useState("");
+  // expanded "more actions" rows in the role matrix
+  const [expandedRes, setExpandedRes] = useState<Record<string, boolean>>({});
+  const [resourceActions, setResourceActions] = useState<Record<string, any[]>>({});
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -57,6 +63,12 @@ export default function SecurityPage() {
     get("/security/meta").then(setMeta).catch(silent("loadSecurityMeta"));
     get("/security/permissions").then(setMatrix).catch(silent("loadPermissions"));
     get("/security/2fa").then(setTfa).catch(silent("loadTwoFactorStatus"));
+    get("/security/presets").then((d) => setPresets(d || { roles: {}, labels: {} })).catch(silent("loadSecurityPresets"));
+    // Same granular catalog the Child Permissions tab uses — also drives the
+    // role matrix's expandable "more actions" rows below.
+    get("/security/child-permissions/catalog").then((d) => {
+      if (Array.isArray(d)) { setCatalog(d); setResourceActions(groupByResource(d)); }
+    }).catch(silent("loadPermCatalogForMatrix"));
   }, []);
 
   useEffect(() => {
@@ -109,6 +121,29 @@ export default function SecurityPage() {
       setDirty(false);
       setMsg(rolePerms.length ? `${selectedRole} permissions saved` : `${selectedRole} is now unrestricted (no rows)`);
     } finally { setBusy(false); }
+  }
+
+  /** Fill the matrix with a tier's recommended set (not yet saved). */
+  function loadPreset(role: string) {
+    const list = (presets.roles || {})[role] || [];
+    setMatrix((m) => ({ ...m, [role]: list }));
+    setDirty(true);
+    setMsg(`${role} preset loaded (${list.length} permissions) — review and click Save.`);
+  }
+
+  // Catalog groups → map of resource → granular actions (for the matrix rows).
+  function groupByResource(groups: any[]): Record<string, any[]> {
+    const map: Record<string, any[]> = {};
+    for (const g of groups || []) {
+      const actions = (g.actions || []).filter((a: any) => !a.key.endsWith(".read") && !a.key.endsWith(".write"));
+      if (actions.length) map[g.resource] = actions;
+    }
+    return map;
+  }
+  function toggleGranular(perm: string) {
+    const next = has(perm) ? rolePerms.filter((p) => p !== perm) : [...rolePerms, perm];
+    setMatrix({ ...matrix, [selectedRole]: next });
+    setDirty(true);
   }
 
   // ── 2fa actions ──────────────────────────────────────────────
@@ -176,29 +211,75 @@ export default function SecurityPage() {
               {meta.roles.map((r: string) => <option key={r} value={r}>{r}</option>)}
             </select>
             <button style={btn(T.green)} disabled={busy || !dirty} onClick={saveRole}>Save {selectedRole}</button>
+            {presets?.roles?.[selectedRole] && (
+              <button
+                style={{ ...btn("#6C3CE1"), padding: "8px 12px", fontSize: 12.5 }}
+                disabled={busy}
+                onClick={() => loadPreset(selectedRole)}
+                title="Load the recommended permission set for this tier, then review and save."
+              >
+                Load {presets.labels?.[selectedRole] || selectedRole} preset
+              </button>
+            )}
             <span style={{ fontSize: 12, color: T.muted }}>
               {rolePerms.length === 0
-                ? "⚠ No permissions configured — this role is currently UNRESTRICTED. Tick anything to start enforcing."
+                ? "⚠ No permissions configured — this role is currently UNRESTRICTED. Tick anything to start enforcing, or load a preset."
                 : `${rolePerms.length} permissions granted. Write implies read. SUPER_ADMIN always bypasses.`}
             </span>
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                <th style={th}>Resource</th><th style={{ ...th, textAlign: "center" }}>Read</th><th style={{ ...th, textAlign: "center" }}>Write</th>
+                <th style={th}>Resource</th><th style={{ ...th, textAlign: "center" }}>Read</th><th style={{ ...th, textAlign: "center" }}>Write</th><th style={{ ...th, width: 130 }} />
               </tr>
             </thead>
             <tbody>
-              {meta.resources.map((res: string, i: number) => (
-                <tr key={res} style={{ background: i % 2 ? "transparent" : T.row }}>
-                  <td style={td}>{res}</td>
-                  {["read", "write"].map((action) => (
-                    <td key={action} style={{ ...td, textAlign: "center" }}>
-                      <input type="checkbox" checked={has(`${res}.${action}`)} onChange={() => toggle(`${res}.${action}`)} style={{ width: 16, height: 16, cursor: "pointer" }} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {meta.resources.map((res: string, i: number) => {
+                const granular = resourceActions[res] || [];
+                const expanded = expandedRes[res];
+                const granted = granular.filter((a: any) => has(a.key)).length;
+                return (
+                  <Fragment key={res}>
+                    <tr style={{ background: i % 2 ? "transparent" : T.row }}>
+                      <td style={td}>{res}</td>
+                      {["read", "write"].map((action) => (
+                        <td key={action} style={{ ...td, textAlign: "center" }}>
+                          <input type="checkbox" checked={has(`${res}.${action}`)} onChange={() => toggle(`${res}.${action}`)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                        </td>
+                      ))}
+                      <td style={{ ...td, textAlign: "right" }}>
+                        {granular.length > 0 && (
+                          <button onClick={() => setExpandedRes((m) => ({ ...m, [res]: !expanded }))}
+                            style={{ background: "transparent", border: "none", color: T.accent, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                            {expanded ? "Hide" : `+ ${granted}/${granular.length} actions`}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr style={{ background: "transparent" }}>
+                        <td colSpan={4} style={{ padding: "4px 10px 12px" }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {granular.map((a: any) => {
+                              const on = has(a.key);
+                              return (
+                                <label key={a.key} title={a.key}
+                                  style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, padding: "4px 9px", borderRadius: 7,
+                                    border: `1px solid ${on ? "#C6E9D3" : "#E2E8F0"}`, background: on ? "#E7F6EC" : "#F7F9FC",
+                                    color: on ? "#157F43" : "#64748B", cursor: "pointer" }}>
+                                  <input type="checkbox" checked={on} onChange={() => toggleGranular(a.key)} />
+                                  {a.label}
+                                </label>
+                              );
+                            })}
+                            {granular.length === 0 && <span style={{ fontSize: 12, color: T.muted }}>No extra actions.</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -280,7 +361,27 @@ export default function SecurityPage() {
             })()}
           </div>
           {!selChild && !childSearch && <div style={{ fontSize: 13, color: T.muted }}>Search and pick a downline account to control what it can do.</div>}
+          {selChild && (
+            <div style={{ marginBottom: 10, display: "flex", gap: 8, alignItems: "center" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+              <input
+                style={{ ...input, flex: 1, maxWidth: 340 }}
+                placeholder="Filter permissions… (e.g. bandwidth, balance, export)"
+                value={permSearch}
+                onChange={(e) => setPermSearch(e.target.value)}
+              />
+              {permSearch && (
+                <button onClick={() => setPermSearch("")} style={{ ...btn(T.card), color: T.sub, border: `1px solid ${T.border}` }}>Clear</button>
+              )}
+            </div>
+          )}
           {selChild && catalog.map((group: any) => {
+            const q = permSearch.trim().toLowerCase();
+            const visibleActions = q
+              ? group.actions.filter((a: any) =>
+                  (a.label || "").toLowerCase().includes(q) || (a.key || "").toLowerCase().includes(q))
+              : group.actions;
+            if (q && visibleActions.length === 0) return null;
             const total = group.actions.length;
             const allowedCount = group.actions.filter((a: any) => !denied.has(a.key)).length;
             const open = openGroups[group.resource] ?? false;
@@ -296,6 +397,7 @@ export default function SecurityPage() {
                   <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
                     <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "#64748B", fontSize: 12 }}>▶</span>
                     <span style={{ fontSize: 13.5, fontWeight: 600, color: "#1C2434" }}>{group.label}</span>
+                    {q && <span style={{ fontSize: 11, color: "#94A3B8" }}>({visibleActions.length} match)</span>}
                   </span>
                   <span style={{ fontSize: 11.5, fontWeight: 600, color: allOn ? "#157F43" : allowedCount === 0 ? "#B02A37" : "#8A6209",
                     background: allOn ? "#E7F6EC" : allowedCount === 0 ? "#FDE8EA" : "#FDF3E3", padding: "3px 10px", borderRadius: 999 }}>
@@ -305,13 +407,13 @@ export default function SecurityPage() {
                 {open && (
                   <div style={{ padding: "12px 14px 14px" }}>
                     <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                      <button onClick={() => group.actions.forEach((a: any) => denied.has(a.key) && togglePerm(a.key))}
+                      <button onClick={() => visibleActions.forEach((a: any) => denied.has(a.key) && togglePerm(a.key))}
                         style={{ fontSize: 11.5, fontWeight: 600, color: "#157F43", background: "#E7F6EC", border: "1px solid #C6E9D3", borderRadius: 7, padding: "4px 10px", cursor: "pointer" }}>Allow all</button>
-                      <button onClick={() => group.actions.forEach((a: any) => !denied.has(a.key) && togglePerm(a.key))}
+                      <button onClick={() => visibleActions.forEach((a: any) => !denied.has(a.key) && togglePerm(a.key))}
                         style={{ fontSize: 11.5, fontWeight: 600, color: "#B02A37", background: "#FDE8EA", border: "1px solid #F5C2C7", borderRadius: 7, padding: "4px 10px", cursor: "pointer" }}>Block all</button>
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      {group.actions.map((a: any) => {
+                      {visibleActions.map((a: any) => {
                         const allowed = !denied.has(a.key);
                         return (
                           <label key={a.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "6px 10px", borderRadius: 8, border: `1px solid ${allowed ? "#C6E9D3" : "#E2E8F0"}`, background: allowed ? "#E7F6EC" : "#F7F9FC", color: allowed ? "#157F43" : "#64748B", cursor: "pointer" }}>

@@ -5740,3 +5740,371 @@ html .main .recharts-responsive-container { width: 100% !important; }
 @media (min-width: 769px) {
   .sm-wrap { display: none !important; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SMART SIDEBAR
+   ══════════════════════════════════════════════════════════════════════════
+   The rail expands on hover (peek), auto-closes when the mouse leaves, and
+   can be drag-slid open/closed/resized from its right edge. All the motion
+   below is kept short — the sidebar is an everyday control, so it must feel
+   instant, not floaty. The `.collapsed` class semantics are unchanged; the
+   React shell removes it while peeking/dragging, so the base rules above
+   keep working without being rewritten. */
+.sidebar {
+  transition: width .22s cubic-bezier(.2, .8, .2, 1);
+  will-change: width;
+}
+.sidebar.dragging { transition: none; }
+
+/* While peeking over content the rail casts a soft shadow so the expansion
+   reads as a layer rather than a layout shove. */
+.sidebar.peeking { box-shadow: 18px 0 40px -22px rgba(15, 23, 42, .35); }
+
+/* Centred icons in rail mode — the old rail left-clung its icons under the
+   padding, so the column looked lopsided. */
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px 0;
+}
+.sidebar.collapsed .nav-item span.nav-icon { margin: 0; }
+
+/* ── Drag-to-slide handle ────────────────────────────────────────────────
+   A 10px invisible strip pinned to the sidebar's right edge. Fixed, so the
+   nav scrolling beneath never carries it away. The gradient grip pill only
+   appears on hover, so a clean product edge stays clean until needed. */
+.sb-handle {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  z-index: 90;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.sb-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 42px;
+  border-radius: 99px;
+  background: transparent;
+  transition: background .18s ease, box-shadow .18s ease, height .18s ease;
+}
+.sidebar:hover ~ .sb-handle::after,
+.sb-handle:hover::after,
+.sb-handle:active::after {
+  background: linear-gradient(180deg, #6C3CE1, #E9408B);
+  box-shadow: 0 0 14px rgba(233, 64, 139, .55);
+  height: 54px;
+}
+
+/* ── Pin footer ──────────────────────────────────────────────────────────
+   Lives at the bottom of the rail. In rail mode it is a centred pin glyph;
+   in peek/expanded mode it gains a label. Pinning keeps the hover-expanded
+   sidebar open for good; un-pinning sends it back to the rail. */
+.sidebar-actions {
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255, 255, 255, .06);
+  flex-shrink: 0;
+}
+.sb-pin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #8A99AF;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.sb-pin:hover {
+  background: rgba(255, 255, 255, .06);
+  color: #fff;
+  border-color: rgba(140, 90, 255, .4);
+  box-shadow: 0 0 18px rgba(140, 90, 255, .16);
+}
+.sb-pin.pinned {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(108, 60, 225, .5), rgba(233, 64, 139, .35));
+  border-color: rgba(140, 90, 255, .45);
+  box-shadow: 0 4px 16px rgba(233, 64, 139, .22);
+}
+.sidebar.collapsed .sidebar-actions { padding: 8px 6px; }
+.sidebar.collapsed .sb-pin { justify-content: center; padding: 9px 0; }
+.sidebar.collapsed .sb-pin.pinned { border-radius: 999px; }
+
+/* Hidden on phones — the drawer has its own dismiss affordances. */
+@media (max-width: 768px) {
+  .sb-handle { display: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MODERN CARD LAYER — panel cards, task tiles, activity timeline
+   ══════════════════════════════════════════════════════════════════════════
+   Shared surfaces for the flagship screens. Everything is a class, so pages
+   opt in with className and the motion is consistent everywhere: fast (≤180ms)
+   so it never feels like waiting, and respectful of reduced-motion. */
+
+/* ── Panel card: gradient hairline top edge, instant lift on hover ── */
+.panel-card {
+  position: relative;
+  border-radius: 16px;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.panel-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(90deg, transparent, rgba(108, 60, 225, .4), transparent);
+  pointer-events: none;
+}
+.panel-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(108, 60, 225, .35);
+  box-shadow: 0 14px 34px -18px rgba(108, 60, 225, .45);
+}
+
+/* ── KPI cards: staggered entrance so the row pours in, not pops ── */
+.kpi-card {
+  animation: jbFadeUp .32s cubic-bezier(.22, .61, .36, 1) both;
+}
+.kpi-card:nth-child(2) { animation-delay: .05s; }
+.kpi-card:nth-child(3) { animation-delay: .1s; }
+.kpi-card:nth-child(4) { animation-delay: .15s; }
+
+/* ── Task tiles: the Quick Actions grid. Icon chip + label + hint; the
+   arrow slides in on hover to say "this goes somewhere". ── */
+.task-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+  transition: transform .18s cubic-bezier(.34, 1.56, .64, 1), box-shadow .18s ease, border-color .18s ease;
+}
+.task-tile:hover {
+  transform: translateY(-2px);
+  border-color: rgba(108, 60, 225, .45);
+  box-shadow: 0 12px 30px -14px rgba(108, 60, 225, .5);
+}
+.task-tile .tt-ico {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, .18);
+}
+.task-tile .tt-body { min-width: 0; }
+.task-tile .tt-body b { display: block; font-size: 12.5px; font-weight: 700; color: var(--text); }
+.task-tile .tt-body em { display: block; font-style: normal; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.task-tile .tt-arrow {
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateX(-5px);
+  transition: opacity .18s ease, transform .18s ease;
+  flex-shrink: 0;
+}
+.task-tile:hover .tt-arrow { opacity: 1; transform: none; }
+
+/* ── Activity timeline: each feed row threads a coloured dot onto a hairline
+   spine, so "what happened when" scans as one flowing story. ── */
+.feed-row {
+  display: flex;
+  gap: 11px;
+  padding: 9px 2px;
+  position: relative;
+}
+.feed-row:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 22px;
+  bottom: -6px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(108, 60, 225, .25), transparent);
+}
+.feed-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+  box-shadow: 0 0 0 3px transparent;
+  transition: box-shadow .18s ease;
+}
+.feed-row:hover .feed-dot { box-shadow: 0 0 0 4px rgba(108, 60, 225, .12); }
+.feed-dot.subscriber { background: linear-gradient(135deg, #6C3CE1, #E9408B); }
+.feed-dot.payment    { background: linear-gradient(135deg, #00C9FF, #22c55e); }
+.feed-dot.invoice    { background: linear-gradient(135deg, #F7971E, #FFD200); }
+.feed-body { min-width: 0; flex: 1; }
+.feed-body .feed-text { font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.feed-body .feed-time { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── System status rows: emerald/red dots with a slow pulse so "is it up?"
+   answers itself at a glance without reading the label. ── */
+.sys-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.sys-row:last-child { border-bottom: none; }
+.sys-row .sys-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+.sys-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sys-dot.ok { background: #22c55e; box-shadow: 0 0 0 0 rgba(34, 197, 94, .5); animation: nova-ping 2s infinite; }
+.sys-dot.bad { background: #ef4444; }
+.sys-status { font-size: 11px; font-weight: 800; letter-spacing: .05em; }
+.sys-status.ok { color: #22c55e; }
+.sys-status.bad { color: #ef4444; }
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-card, .task-tile, .kpi-card, .feed-row, .sys-row { animation: none !important; transition: none !important; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RTL LAYER — Arabic (عربي) and Urdu (اردو)
+   ══════════════════════════════════════════════════════════════════════════
+   The shell is a flex row, so most of it mirrors automatically when
+   `dir="rtl"` lands on <html> (the sidebar becomes the first box from the
+   right). What does NOT flip by itself is anything positioned with physical
+   left/right, border sides, translateX and text-align. Those are corrected
+   here, scoped to [dir="rtl"] so the LTR layout is byte-for-byte untouched.
+
+   Rules are grouped by what they fix, and kept small on purpose — a full RTL
+   mirror of 6,000 lines of CSS would be unmaintainable, so this layer only
+   corrects the shell chrome + the most visible page surfaces. Inline
+   style-attribute positioning on older pages may keep some left-ish bias;
+   that is a page-by-page polish, not a shell defect.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Script-aware font fallbacks ──
+   Arabic and Urdu glyphs do not exist in Inter/Satoshi, so the browser falls
+   back to whatever it finds. Pull Noto (free, offline) to the front for those
+   scripts so RTL text renders with proper shaping instead of a mixed bag. */
+[dir="rtl"] body,
+[dir="rtl"] .app-font,
+[dir="rtl"] .db-root,
+[dir="rtl"] .db-root input,
+[dir="rtl"] .db-root select,
+[dir="rtl"] .db-root textarea,
+[dir="rtl"] .db-root button {
+  font-family: "Noto Sans Arabic", "Noto Nastaliq Urdu", "Segoe UI", Tahoma,
+    -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+[dir="rtl"] .db-root input,
+[dir="rtl"] .db-root textarea {
+  letter-spacing: 0 !important;
+}
+
+/* ── 2. Table headers and money alignment ──
+   `text-align: left` is hardcoded for LTR in several places; in RTL the first
+   column reads from the right. */
+[dir="rtl"] thead th,
+[dir="rtl"] .nv-table th {
+  text-align: right !important;
+}
+[dir="rtl"] thead th:first-child { border-top-left-radius: 0; border-top-right-radius: 12px; }
+[dir="rtl"] thead th:last-child  { border-top-right-radius: 0; border-top-left-radius: 12px; }
+
+/* The row accent bar and hover rule paint on the physical left; move them to
+   the visual leading edge (right) in RTL. */
+[dir="rtl"] tbody tr:hover td:first-child { box-shadow: inset -3px 0 0 #6C3CE1; }
+[dir="rtl"] .nav-item.active::before {
+  left: auto;
+  right: 0;
+  border-radius: 3px 0 0 3px;
+}
+
+/* ── 3. Stat strip divider ──
+   `.nv-stat + .nv-stat` uses border-left; in RTL the divider belongs on the
+   right of each stat. */
+[dir="rtl"] .nv-stat + .nv-stat {
+  border-left: none;
+  border-right: 1px solid var(--border);
+}
+
+/* ── 4. Drawer and slide-in overlays ──
+   The Nova drawer slides in from the physical right; in RTL it should come
+   from the left, with its border on the mirror side. */
+[dir="rtl"] .nv-drawer {
+  border-left: none;
+  border-right: 1px solid var(--border);
+  box-shadow: 24px 0 70px rgba(0, 0, 0, .45);
+  animation: nvSlideRtl .26s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes nvSlideRtl {
+  from { transform: translateX(-34px); opacity: .4; }
+  to   { transform: none; opacity: 1; }
+}
+
+/* ── 5. Mobile drawer ──
+   The sidebar slides off-screen with translateX(-100%). In RTL the drawer
+   lives on the right, so hiding it means +100% and opening means 0. */
+[dir="rtl"] .sidebar {
+  transform: translateX(100%) !important;
+}
+[dir="rtl"] .sidebar.mobile-open { transform: translateX(0) !important; }
+
+/* ── 6. Topbar dropdowns ──
+   `.nv-menu` anchors `right: 0`; in RTL its wrapper sits near the screen's
+   left edge, so a 300px menu opening right-anchored would hang off-screen.
+   Anchor to the left instead. */
+[dir="rtl"] .nv-menu { right: auto !important; left: 0; }
+
+/* ── 7. Assistant panel margin ──
+   The floating assistant uses marginLeft:auto to right-align; mirror it. */
+[dir="rtl"] .jb-assist-panel { margin-left: 0 !important; margin-right: auto !important; }
+
+/* ── 8. Ripple + pill rows ──
+   Ripple spans are positioned from the click point, so they need no mirror.
+   Pill/status rows using left padding rules get the mirrored gap. */
+[dir="rtl"] [class*="badge"], [dir="rtl"] [class*="pill"] { flex-direction: row-reverse; }
+
+/* ── 9. Drag handle — hidden in RTL ──
+   It is positioned with an inline `left`, computed in JS against the LTR
+   layout; mirroring it reliably would need the component to know the
+   direction. The sidebar still collapses/expands via the pin and hamburger,
+   so the handle's only cost is a small polish feature. */
+[dir="rtl"] .sb-handle { display: none; }
+
+/* ── 10. Toast position ──
+   In LTR the toast sits bottom-right; RTL should be bottom-left. */
+[dir="rtl"] .nv-toast { right: auto !important; left: 24px; }
+
+/* ── 11. Mobile "More" rail divider ── */
+[dir="rtl"] .jb-bottomnav.section .jb-bn-more { border-left: none; border-right: 1px solid #E2E8F0; }

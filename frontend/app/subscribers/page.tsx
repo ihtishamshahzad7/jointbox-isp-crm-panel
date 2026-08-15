@@ -660,6 +660,14 @@ export default function SubscribersPage() {
     }
   };
 
+  // One idempotency key per activation dialog. Every attempt of the SAME click
+  // carries the same key, so a double-clicked Activate/Renew is refused by the
+  // backend as the same transaction — never a second charge.
+  const activationKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (showActivationModal) activationKeyRef.current = crypto.randomUUID();
+  }, [showActivationModal]);
+
   // Price the renewal on the server as the operator changes the form. Doing
   // this client-side would duplicate the pro-rata rules and eventually
   // disagree with what actually gets charged.
@@ -726,6 +734,7 @@ export default function SubscribersPage() {
             paymentMethod: "CASH",
             notes: `On credit — ${f.notes || "no reason given"}`,
             skipPayment: true,
+            idempotencyKey: activationKeyRef.current,
           }),
         });
 
@@ -759,6 +768,7 @@ export default function SubscribersPage() {
           paymentMethod: f.paymentMethod,
           notes: f.notes,
           force: isRenewal, // genuine renewal of an active customer
+          idempotencyKey: activationKeyRef.current,
         }),
       });
       if (!res.ok) {

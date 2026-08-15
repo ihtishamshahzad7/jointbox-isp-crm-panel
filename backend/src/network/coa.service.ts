@@ -308,6 +308,70 @@ export class CoaService {
     });
     return { ok: res.ok, method: 'radius-coa', message: res.message };
   }
+
+  /**
+   * Cut EVERY open session for one username (not just the newest). Used when a
+   * subscriber profile flags a duplicate login — the customer must go fully
+   * offline so they re-dial exactly once. Mirrors the global duplicate sweep
+   * but scoped to a single account.
+   */
+  async cutAllSessions(username: string): Promise<{ sessionsCut: number; closed: number; users: string[] }> {
+    const sessions = await this.prisma.$queryRaw<Array<any>>`
+      SELECT acctsessionid, nasipaddress, framedipaddress, callingstationid
+      FROM radacct WHERE username = ${username} AND acctstoptime IS NULL`;
+
+    let sessionsCut = 0;
+    const nasCreds = new Map<string, any>();
+    for (const s of sessions) {
+      let nas = nasCreds.get(s.nasipaddress);
+      if (nas === undefined) {
+        nas = await this.prisma.nas.findFirst({
+          where: { nasIp: s.nasipaddress as string },
+          select: { secret: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
+        });
+        nasCreds.set(s.nasipaddress, nas);
+      }
+      const session: any = {
+        username,
+        acctSessionId: s.acctsessionid,
+        nasIp: s.nasipaddress,
+        framedIp: s.framedipaddress,
+        callingStationId: s.callingstationid,
+        nasIdentifier: nas?.nasIdentifier,
+      };
+      if (nas?.secret) {
+        const res = await sendCoa({
+          host: s.nasipaddress,
+          port: coaPort(nas.incomingPort),
+          secret: nas.secret,
+          code: RadiusCode.DisconnectRequest,
+          attributes: sessionAttributes(session),
+        }).catch(() => ({ ok: false } as any));
+        if (res.ok) sessionsCut++;
+      }
+    }
+
+    // MikroTik API fallback: one call removes ALL active PPP sessions for the name.
+    const anyNas = [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword);
+    if (anyNas) {
+      try {
+        const { MikrotikService } = await import('../mikrotik/mikrotik.service');
+        const mikrotik = new MikrotikService();
+        await mikrotik.disconnectPppoeUser(
+          anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username,
+        );
+      } catch (e: any) {
+        this.logger.warn(`Cut-all for "${username}": MikroTik API kick failed: ${e?.message || e}`);
+      }
+    }
+
+    // Close the ghost rows so nothing keeps showing them online.
+    const closed = await this.prisma.$executeRaw`
+      UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
+      WHERE username = ${username} AND acctstoptime IS NULL`;
+
+    return { sessionsCut, closed: Number(closed), users: [username] };
+  }
 }
 
 /** Pick the CoA port — never the auth/acct ports; default 3799. */

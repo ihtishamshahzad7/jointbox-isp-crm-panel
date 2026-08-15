@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import API from "./api";
+import { BRAND } from "../../lib/brand";
 
 /**
  * AssistantChat — the conversation itself, with no chrome around it.
@@ -18,7 +19,7 @@ export type Msg = { role: "user" | "assistant"; content: string };
 export const GREETING: Msg = {
   role: "assistant",
   content:
-    "Hi! I'm your Jointbox guide. I'll show you where things are, how to use each feature, and what happens before you do it.\n\n" +
+    `Hi! I'm your ${BRAND.name} guide. I'll show you where things are, how to use each feature, and what happens before you do it.\n\n` +
     'Try: "how do I add a subscriber", "where do I take a payment", "what happens if I delete a customer", "what do I need before activating".',
 };
 

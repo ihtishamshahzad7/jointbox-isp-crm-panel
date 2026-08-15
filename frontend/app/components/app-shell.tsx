@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
 import CommandPalette from './command-palette';
@@ -12,6 +12,8 @@ import API_BASE from "./api";
 import NotificationBell from './notification-bell';
 import BottomNav from './bottom-nav';
 import Avatar from './avatar';
+import { BRAND } from '../../lib/brand';
+import { LANGS, useI18n } from '../../lib/i18n';
 
 const API = API_BASE;
 
@@ -191,20 +193,111 @@ function getActiveMenu(pathname: string): string {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { t, setLang, lang, locale } = useI18n();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  /**
+   * Smart-sidebar state:
+   *  - `peeking`  — while collapsed, hovering the rail temporarily expands it
+   *                 (auto-open on hover, auto-close when the mouse leaves).
+   *  - `width`    — the expanded width, adjustable by dragging the edge handle
+   *                 and remembered between sessions.
+   *  - `dragW`    — live width while a drag is in progress (null when idle).
+   *  - `dragging` — true during a drag, so transitions are disabled and the
+   *                 release position decides the final state.
+   */
+  const [peeking, setPeeking] = useState(false);
+  const [width, setWidth] = useState(224);
+  const [dragW, setDragW] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  /** Short grace period so the cursor can travel between the rail and the
+      drag handle without the sidebar flickering shut mid-move. */
+  const peekTimer = useRef<number>(0);
+
+  const RAIL_W = 60;    // collapsed rail width — matches .sidebar.collapsed
+  const MIN_W = 200;    // narrowest the expanded sidebar may be dragged to
+  const MAX_W = 320;    // widest
+  const EXPAND_AT = 150; // drag release above this = keep open, below = close
+
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+  const isMobileView = () => typeof window !== 'undefined' && window.innerWidth <= 768;
+
+  const startPeek = () => {
+    window.clearTimeout(peekTimer.current);
+    if (!collapsed || dragging || isMobileView()) return;
+    setPeeking(true);
+  };
+  const deferUnpeek = () => {
+    window.clearTimeout(peekTimer.current);
+    peekTimer.current = window.setTimeout(() => setPeeking(false), 220);
+  };
+
+  /** True when the sidebar is showing icons only (labels hidden). Never on
+      phones — the drawer always shows labels even if `collapsed` was saved
+      on desktop. */
+  const rail = !isMobileView() && collapsed && !peeking && (dragW === null || dragW < EXPAND_AT);
+  /** Width the sidebar should render at right now (mobile CSS wins via !important). */
+  const sidebarW = isMobileView() ? undefined : (dragW ?? (collapsed && !peeking ? RAIL_W : width));
+
+  /**
+   * Drag-to-slide the sidebar. Starting from the rail, dragging right expands
+   * it live; from the expanded state, dragging left shrinks it. On release the
+   * pointer decides the outcome — past the threshold it stays open at that
+   * width (or collapses below it), so letting go of the mouse is the control.
+   */
+  const beginDrag = (e: React.PointerEvent) => {
+    if (isMobileView()) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = collapsed && !peeking ? RAIL_W : width;
+    setDragging(true);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ew-resize';
+    const onMove = (ev: PointerEvent) => setDragW(clamp(startW + (ev.clientX - startX), RAIL_W, MAX_W));
+    const finish = (finalW: number) => {
+      if (finalW <= EXPAND_AT) setCollapsed(true);
+      else { setCollapsed(false); setWidth(clamp(finalW, MIN_W, MAX_W)); }
+      setPeeking(false);
+      setDragW(null);
+      setDragging(false);
+    };
+    const onUp = (ev: PointerEvent) => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onCancel);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      finish(clamp(startW + (ev.clientX - startX), RAIL_W, MAX_W));
+    };
+    const onCancel = () => {
+      // Pointer lost mid-drag (edge gesture, palm, etc.) — settle back to the
+      // state we started from rather than leave a half-dragged sidebar.
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onCancel);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      finish(startW);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onCancel);
+  };
+
   // One button, two behaviours: on phones it opens/closes the off-canvas drawer;
   // on desktop it collapses/expands the sidebar.
   const toggleSidebar = () => {
-    if (typeof window !== 'undefined' && window.innerWidth <= 768) setMobileOpen((o) => !o);
-    else setCollapsed((p) => !p);
+    if (isMobileView()) setMobileOpen((o) => !o);
+    else { setCollapsed((p) => !p); setPeeking(false); }
   };
   const [switchList, setSwitchList] = useState<any[]>([]);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [langOpen, setLangOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [imp, setImp] = useState<any>(null); // { by, byName, byRole } when acting as someone
   const [myRole, setMyRole] = useState<string | null>(null);
@@ -365,12 +458,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined') return;
     const saved = window.localStorage.getItem('app_shell_collapsed');
     if (saved === '1') setCollapsed(true);
+    const savedW = window.localStorage.getItem('app_shell_width');
+    if (savedW) {
+      const n = parseInt(savedW, 10);
+      if (!Number.isNaN(n) && n >= MIN_W && n <= MAX_W) setWidth(n);
+    }
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem('app_shell_collapsed', collapsed ? '1' : '0');
   }, [collapsed]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('app_shell_width', String(width));
+  }, [width]);
 
   // Nova design layer: ripple on every button in the shell.
   //
@@ -441,15 +544,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const fmt = new Intl.DateTimeFormat(locale === "en" ? "en-US" : locale, {
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    });
+    const fmtD = new Intl.DateTimeFormat(locale === "en" ? "en-US" : locale, {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
     const tick = () => {
       const now = new Date();
-      setTime(now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
-      setDate(now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+      setTime(fmt.format(now));
+      setDate(fmtD.format(now));
     };
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [locale]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -534,7 +643,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [myRole]);
 
-  const title = menuItems.find((item) => item.id === activeMenu)?.label || 'Dashboard';
+  const title = t(menuItems.find((item) => item.id === activeMenu)?.label || 'Dashboard');
 
   const acctItem: React.CSSProperties = {
     display: 'block', width: '100%', textAlign: 'left', background: 'transparent',
@@ -550,7 +659,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <NovaStyles />
       {/* Backdrop behind the mobile drawer — tap to close (shown on phones only). */}
       {mobileOpen && <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />}
-      <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
+      <aside
+        className={`sidebar ${rail ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''} ${peeking ? 'peeking' : ''} ${dragging ? 'dragging' : ''}`}
+        style={{ width: sidebarW }}
+        onPointerEnter={startPeek}
+        onPointerLeave={deferUnpeek}
+        onPointerDown={(e) => {
+          // Drag anywhere on the rail opens it; text selection would otherwise
+          // fight the gesture. Only on desktop, and only when collapsed.
+          if (collapsed && !peeking && !dragging && !isMobileView() && (e.target as HTMLElement).closest('button') === null) {
+            beginDrag(e);
+          }
+        }}
+      >
         <div className="sidebar-brand">
           <div className="brand-mark" aria-hidden="true">
             {/* Linked-boxes glyph, matching the favicon/logo mark. */}
@@ -559,10 +680,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <rect x="9" y="8" width="12" height="12" rx="3.6" fill="none" stroke="#fff" strokeWidth="2.2" />
             </svg>
           </div>
-          {!collapsed && (
+          {!rail && (
             <div className="brand-meta">
-              <div className="brand-title">Jointbox</div>
-              <div className="brand-subtitle">ISP Management</div>
+              <div className="brand-title">{BRAND.name}</div>
+              <div className="brand-subtitle">{BRAND.subtitle}</div>
             </div>
           )}
         </div>
@@ -574,7 +695,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             if (items.length === 0) return null;
             return (
             <div key={group.label}>
-              {!collapsed && <div className="nav-label">{group.label}</div>}
+              {!rail && <div className="nav-label">{t(group.label)}</div>}
               {items.map((item) => {
                 const isActive = item.id === activeMenu;
                 const Icon = item.Icon;
@@ -588,10 +709,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       if (item.href === '#assistant') window.dispatchEvent(new Event('open-assistant'));
                       else router.push(item.href);
                     }}
-                    title={collapsed ? item.label : ''}
+                    title={rail ? item.label : ''}
                   >
                     <span className="nav-icon"><Icon /></span>
-                    {!collapsed && <span>{item.label}</span>}
+                    {!rail && <span>{t(item.label)}</span>}
                     {item.id === 'billing' && pendingApprovals > 0 && (
                       <span title={`${pendingApprovals} awaiting your approval`}
                         style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
@@ -606,10 +727,40 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
+        {/* Smart-sidebar footer: pin keeps the hover-expanded rail open, or
+            collapses the expanded sidebar back to the rail. */}
+        <div className="sidebar-actions">
+          <button
+            type="button"
+            className={`sb-pin ${collapsed ? '' : 'pinned'}`}
+            onClick={() => { setCollapsed((c) => !c); setPeeking(false); }}
+            title={collapsed ? 'Pin sidebar open' : 'Collapse to rail'}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+            </svg>
+            {!rail && <span>{collapsed ? 'Pin open' : 'Collapse'}</span>}
+          </button>
+        </div>
+
         {/* The account card and log-out button used to live here. They moved to
             the avatar menu in the top-right — occasional actions shouldn't hold
             permanent space in the navigation. */}
       </aside>
+
+      {/* Drag-to-slide handle on the sidebar's right edge. Fixed so it never
+          scrolls with the nav; left is kept in step with the live width.
+          Double-click toggles rail/expanded. */}
+      <div
+        className="sb-handle"
+        style={{ left: Math.max(dragW ?? (collapsed && !peeking ? RAIL_W : width) - 6, 0) }}
+        onPointerDown={beginDrag}
+        onPointerEnter={startPeek}
+        onPointerLeave={deferUnpeek}
+        onDoubleClick={toggleSidebar}
+        title="Drag to resize · double-click to collapse"
+      />
 
       <div className="main">
         <header className="topbar">
@@ -621,13 +772,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               aria-label="Menu"
               title="Menu"
             >
-              {/* Hamburger on mobile (clearly a menu); chevron reflects collapse on desktop. */}
+              {/* Hamburger on mobile (clearly a menu); chevron reflects the visible state on desktop: hamburger while railed, chevron once open (incl. peek). */}
               <span className="hamburger-mobile"><Icons.Menu /></span>
-              <span className="chevron-desktop">{collapsed ? <Icons.Menu /> : <Icons.ChevronLeft />}</span>
+              <span className="chevron-desktop">{rail ? <Icons.Menu /> : <Icons.ChevronLeft />}</span>
             </button>
             <div>
             <div className="topbar-title">{title}</div>
-            <div className="topbar-sub">{date || 'Unified control panel'}</div>
+            <div className="topbar-sub">{date || t('Unified control panel')}</div>
             </div>
             <button
               type="button"
@@ -635,7 +786,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               title="Find any feature or action"
               style={{ marginLeft: 14, display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, cursor: 'pointer' }}
             >
-              <span>🔎 Find features</span>
+              <span>🔎 {t('Find features')}</span>
               <kbd style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, padding: '1px 6px', fontSize: 11 }}>Ctrl K</kbd>
             </button>
           </div>
@@ -644,6 +795,58 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               cover finding things; the wide bar was redundant chrome. */}
 
           <div className="topbar-right">
+            {/* Language switcher — international deployments pick their UI
+                language here; choice persists and RTL (عربي / اردو) flips the
+                whole shell. */}
+            <div style={{ position: 'relative' }} className="nv-menu-wrap">
+              <button
+                type="button"
+                onClick={() => setLangOpen((o) => !o)}
+                className={`nv-actas lang-btn ${langOpen ? 'open' : ''}`}
+                title="Language"
+                aria-label="Change language"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
+                </svg>
+                <span>{LANGS.find((l) => l.code === lang)?.native ?? 'EN'}</span>
+                <svg className="chev" width="11" height="11" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+
+              {langOpen && (
+                <>
+                  <div className="nv-menu-catch" onClick={() => setLangOpen(false)} />
+                  <div className="nv-menu" style={{ width: 190, padding: 6 }}>
+                    <div className="nv-menu-head">
+                      <b>Language</b>
+                      <span>Interface language</span>
+                    </div>
+                    <div className="nv-menu-list" style={{ maxHeight: 280 }}>
+                      {LANGS.map((l) => (
+                        <button
+                          key={l.code}
+                          type="button"
+                          className="nv-menu-item"
+                          onClick={() => { setLang(l.code); setLangOpen(false); }}
+                          style={{ justifyContent: 'space-between' }}
+                        >
+                          <span className="nv-menu-txt"><b>{l.native}</b><em>{l.label}</em></span>
+                          {lang === l.code && (
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             {latestNotice && (
               <div style={{ position: 'relative', marginRight: 10 }}>
                 <button
@@ -670,20 +873,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   }}>
                     <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
-                        <div style={{ fontSize: 12, fontWeight: 700 }}>Latest notification</div>
-                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(latestNotice.createdAt).toLocaleString()}</div>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>{t('Latest notification')}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(latestNotice.createdAt).toLocaleString(locale === 'en' ? 'en-US' : locale)}</div>
                       </div>
                       <button type="button" onClick={() => setNoticeOpen(false)} style={{ border: 'none', background: 'transparent', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: 14 }}>
                         ×
                       </button>
                     </div>
                     <div style={{ padding: '14px 16px' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{latestNotice.title || 'Untitled notice'}</div>
-                      <div style={{ fontSize: 13, color: 'var(--text)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{latestNotice.body || 'No details available.'}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{latestNotice.title || t('Untitled notice')}</div>
+                      <div style={{ fontSize: 13, color: 'var(--text)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{latestNotice.body || t('No details available.')}</div>
                     </div>
                     <div style={{ borderTop: '1px solid var(--border)', padding: '10px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                       <button type="button" onClick={() => { setNoticeOpen(false); router.push('/communication'); }} style={{ border: '1px solid var(--border)', borderRadius: 9, background: 'transparent', color: 'var(--text)', fontSize: 12, padding: '8px 12px', cursor: 'pointer' }}>
-                        View all
+                        {t('View all')}
                       </button>
                     </div>
                   </div>
@@ -864,7 +1067,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             )}
             <div className="status-pill">
               <span className="status-dot" />
-              Online
+              {t('Online')}
             </div>
             <div className="topbar-clock">{time}</div>
 
@@ -913,7 +1116,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface-2)')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
-                      My Profile
+                      {t('My Profile')}
                     </button>
                     <button
                       onClick={() => { setAccountOpen(false); router.push('/admin-center?tab=settings'); }}
@@ -921,7 +1124,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface-2)')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
-                      Settings
+                      {t('Settings')}
                     </button>
 
                     <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
@@ -932,7 +1135,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,.1)')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
-                      Log out
+                      {t('Log out')}
                     </button>
                   </div>
                 </>

@@ -24,6 +24,17 @@ export class SecurityController {
     return this.security.setRolePermissions(role.toUpperCase(), body.permissions || []);
   }
 
+  // ── Recommended presets (one-click per tier) ───────────────────
+  @Get('presets')
+  presets() {
+    return this.security.presets();
+  }
+
+  @Put('presets/:role')
+  applyPreset(@Param('role') role: string) {
+    return this.security.applyPreset(role.toUpperCase());
+  }
+
   // ── Delegated per-child permissions ───────────────────────────
   @Get('child-permissions/catalog')
   permCatalog() {

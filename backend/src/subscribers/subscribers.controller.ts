@@ -155,8 +155,8 @@ export class SubscribersController {
    * Send `dryRun: true` first — it validates everything and writes nothing.
    */
   @Post('import/panel')
-  importPanel(@Body() body: any) {
-    return this.subscribersService.importPanelFormat(body || {});
+  importPanel(@Body() body: any, @Req() req: any) {
+    return this.subscribersService.importPanelFormat(body || {}, req.user);
   }
 
   @Get('export')
@@ -165,8 +165,8 @@ export class SubscribersController {
   }
 
   @Post('import')
-  importSubscribers(@Body() body: { rows: any[]; salespersonId?: number | null }) {
-    return this.subscribersService.importSubscribers(body);
+  importSubscribers(@Body() body: { rows: any[]; salespersonId?: number | null }, @Req() req: any) {
+    return this.subscribersService.importSubscribers(body, req.user);
   }
 
   /**

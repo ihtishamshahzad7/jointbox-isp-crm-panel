@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API_BASE from "../components/api";
+import { BRAND } from "../../lib/brand";
 
 const API = API_BASE;
 
@@ -37,7 +38,7 @@ export default function CommunicationPage() {
   const [areas, setAreas] = useState<any[]>([]);
   const [packages, setPackages] = useState<any[]>([]);
   // test
-  const [testForm, setTestForm] = useState({ channel: "SMS", recipient: "", message: "Test from Jointbox" });
+  const [testForm, setTestForm] = useState({ channel: "SMS", recipient: "", message: `Test from ${BRAND.name}` });
   // log
   const [log, setLog] = useState<any[]>([]);
   const [logCursor, setLogCursor] = useState<number | null>(null);

@@ -120,7 +120,7 @@ export default function SettingsPage() {
       icon: "👤",
       fields: [
         { label: "Full Name", value: user?.name || "Admin User" },
-        { label: "Email Address", value: user?.email || "admin@jointbox.com" },
+        { label: "Email Address", value: user?.email || "admin@example.com" },
         { label: "Role", value: user?.role || "Administrator" },
       ]
     },

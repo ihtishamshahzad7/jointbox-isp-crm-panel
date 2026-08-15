@@ -4,6 +4,7 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
 import { SkeletonCards } from "../components/skeleton";
+import { BRAND } from "../../lib/brand";
 
 /**
  * Documentation — every feature, what it does, where it lives and when to use it.
@@ -68,7 +69,7 @@ export default function DocsPage() {
 
       <div className="doc-hero">
         <h1>Documentation</h1>
-        <p>Every feature in Jointbox — what it does, where to find it, and when to use it.
+        <p>Every feature in {BRAND.name} — what it does, where to find it, and when to use it.
           The built-in assistant (✦, bottom-right) answers from this same guide, so you can
           either browse here or just ask it.</p>
         <div className="doc-search">

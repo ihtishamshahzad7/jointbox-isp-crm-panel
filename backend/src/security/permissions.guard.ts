@@ -118,6 +118,10 @@ export class PermissionsGuard implements CanActivate {
     if (!perms.length) return true; // unconfigured role = unrestricted (deny-list still applied above)
 
     if (perms.includes('*') || perms.includes(`${resource}.*`) || perms.includes(needed)) return true;
+    // Granular keys saved into the role matrix (e.g. a preset loaded for
+    // "subscribers.import") grant exactly that action, not the whole resource.
+    const granular = permissionForRoute(req.method, requestPath);
+    if (granular && perms.includes(granular)) return true;
     // write permission implies read
     if (action === 'read' && perms.includes(`${resource}.write`)) return true;
 

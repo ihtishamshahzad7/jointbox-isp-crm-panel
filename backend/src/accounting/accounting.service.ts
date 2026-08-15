@@ -38,13 +38,13 @@ export class AccountingService {
   // ─────────────────────────────────────────────────────────────
 
   /** Post a balanced set of ledger lines. Throws if debits ≠ credits. */
-  async post(lines: LedgerLine[]) {
+  async post(lines: LedgerLine[], client: any = this.prisma) {
     const debits = lines.reduce((s, l) => s + (l.debit || 0), 0);
     const credits = lines.reduce((s, l) => s + (l.credit || 0), 0);
     if (Math.abs(debits - credits) > 0.005) {
       throw new BadRequestException(`Unbalanced ledger posting: debits ${debits} ≠ credits ${credits}`);
     }
-    await this.prisma.ledgerEntry.createMany({
+    await client.ledgerEntry.createMany({
       data: lines.map((l) => ({
         account: l.account,
         debit: l.debit || 0,
@@ -392,29 +392,85 @@ export class AccountingService {
     return { subscriberId, balance: updated.balance };
   }
 
-  /** Deduct wallet balance (used by auto-renewal). Records tx + ledger. */
-  async deductBalance(subscriberId: number, amount: number, reference: string, type = 'RENEWAL', userId?: number) {
-    const subscriber = await this.prisma.subscriber.findUnique({ where: { id: subscriberId } });
-    if (!subscriber) throw new NotFoundException('Subscriber not found');
-    if (subscriber.balance < amount) throw new BadRequestException('Insufficient balance');
+  /**
+   * Deduct wallet balance (used by BALANCE-mode renewal). Records tx + ledger.
+   *
+   * IDEMPOTENCY + RACE SAFETY: a double-fired BALANCE renewal used to deduct the
+   * wallet twice, because the reference was a freshly-minted invoice number and
+   * nothing checked for an existing row. Now:
+   *
+   *   1. `reference` must be DETERMINISTIC for a given logical charge (the caller
+   *      passes the same activation key for a replayed request).
+   *   2. The deduction first takes a `FOR UPDATE` row lock on the subscriber, so
+   *      two concurrent deductions serialize; the loser re-checks and finds the
+   *      winner's BalanceTransaction → `alreadyDeducted` → the caller aborts
+   *      WITHOUT a second deduction and without losing money.
+   *   3. `tx` lets the caller run this inside ITS transaction (activateRenewal),
+   *      so a failed activation rolls the deduction back with everything else.
+   */
+  async deductBalance(
+    subscriberId: number,
+    amount: number,
+    reference: string,
+    type = 'RENEWAL',
+    userId?: number,
+    tx?: any,
+  ) {
+    const client: any = tx ?? this.prisma;
 
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.subscriber.update({ where: { id: subscriberId }, data: { balance: { decrement: amount } } }),
-      this.prisma.balanceTransaction.create({
+    // Serialize per-subscriber wallet spending; replay of the same charge is a no-op.
+    if (client.$queryRaw) {
+      await client.$queryRaw`SELECT id FROM "Subscriber" WHERE id = ${subscriberId} FOR UPDATE`;
+    }
+    const already = await client.balanceTransaction.findFirst({ where: { subscriberId, reference } });
+    if (already) {
+      return { subscriberId, balance: null as number | null, alreadyDeducted: true };
+    }
+
+    const subscriber = await client.subscriber.findUnique({ where: { id: subscriberId } });
+    if (!subscriber) throw new NotFoundException('Subscriber not found');
+    if (Number(subscriber.balance) < amount) throw new BadRequestException('Insufficient balance');
+
+    const createEntry = () =>
+      client.balanceTransaction.create({
         data: {
           subscriberId,
           type,
           amount: -amount,
-          balanceAfter: subscriber.balance - amount,
+          balanceAfter: Number(subscriber.balance) - amount,
           reference,
           createdBy: userId,
         },
-      }),
-    ]);
+      });
+
+    let updated;
+    if (tx) {
+      // Inside the caller's transaction — both writes are atomic with it.
+      updated = await tx.subscriber.update({
+        where: { id: subscriberId },
+        data: { balance: { decrement: amount } },
+      });
+      await createEntry();
+    } else {
+      [updated] = await this.prisma.$transaction([
+        this.prisma.subscriber.update({ where: { id: subscriberId }, data: { balance: { decrement: amount } } }),
+        this.prisma.balanceTransaction.create({
+          data: {
+            subscriberId,
+            type,
+            amount: -amount,
+            balanceAfter: Number(subscriber.balance) - amount,
+            reference,
+            createdBy: userId,
+          },
+        }),
+      ]);
+    }
+
     await this.post([
       { account: 'SUBSCRIBER_BALANCE', debit: amount, refType: 'BALANCE', subscriberId, description: reference, createdBy: userId },
       { account: 'REVENUE', credit: amount, refType: 'BALANCE', subscriberId, description: reference, createdBy: userId },
-    ]);
+    ], client);
     return { subscriberId, balance: updated.balance };
   }
 

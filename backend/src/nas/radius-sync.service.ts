@@ -220,6 +220,14 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       // IPv6 dual-stack. Standard RADIUS attributes, so vendor-agnostic:
       ipv6Prefix?: string | null;          // Framed-IPv6-Prefix, e.g. 2401:db8:1::/64
       ipv6DelegatedPrefix?: string | null; // Delegated-IPv6-Prefix (DHCPv6-PD), e.g. 2401:db8:100::/56
+      /**
+       * SIMULTANEOUS-USE GUARD. true = the account may be online from several
+       * devices at once (no Simultaneous-Use check is written). false/omitted =
+       * one connection per account: the `Simultaneous-Use := 1` radcheck is
+       * written so FreeRADIUS REJECTS a second concurrent dial-in at auth time
+       * instead of letting both sessions run until a sweep finds them.
+       */
+      allowMultipleSessions?: boolean;
     },
   ): Promise<void> {
     this.ensureConnected();
@@ -235,6 +243,27 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
          VALUES ($1, 'Cleartext-Password', ':=', $2)`,
         [username, password],
       );
+
+      // ── SIMULTANEOUS-USE GUARD (one account = one online session) ──
+      // The same username dialling from a second device must be rejected AT
+      // AUTH TIME — killing it 2 minutes later is too late. FreeRADIUS honours
+      // a `Simultaneous-Use` check in radcheck: any value >= 1 means "reject if
+      // this many sessions are already open", so `:= 1` blocks the second
+      // device outright. Accounts opted into multi-session get no check row.
+      const multi = opts?.allowMultipleSessions;
+      if (multi) {
+        await this.pgClient.query(
+          `DELETE FROM radcheck WHERE username = $1 AND attribute = 'Simultaneous-Use'`,
+          [username],
+        );
+      } else {
+        await this.pgClient.query(
+          `INSERT INTO radcheck (username, attribute, op, value)
+           VALUES ($1, 'Simultaneous-Use', ':=', '1')
+           ON CONFLICT (username, attribute) DO UPDATE SET value = '1'`,
+          [username],
+        );
+      }
 
       // Tell the NAS how often to send interim accounting updates. Pushing this
       // from RADIUS is far more reliable than setting `/ppp aaa interim-update`

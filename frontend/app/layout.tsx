@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./dashboard.css";
 import { AppShellGate } from "./components/app-shell";
+import { I18nProvider } from "../lib/i18n";
+import { BRAND, DOC_TITLE } from "../lib/brand";
 
 // NOTE: We deliberately do NOT use next/font/google. That fetches the font from
 // fonts.googleapis.com AT BUILD TIME, which fails on servers with no access to
@@ -9,8 +11,9 @@ import { AppShellGate } from "./components/app-shell";
 // as .app-font in globals.css) — identical look on every OS, zero network.
 
 export const metadata: Metadata = {
-  title: "Jointbox — ISP Management",
+  title: DOC_TITLE,
   description: "Subscribers, packages, network and billing for internet service providers.",
+  applicationName: BRAND.name,
   icons: {
     icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
     shortcut: "/favicon.svg",
@@ -46,7 +49,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="app-font">
-        <AppShellGate>{children}</AppShellGate>
+        <I18nProvider>
+          <AppShellGate>{children}</AppShellGate>
+        </I18nProvider>
       </body>
     </html>
   );

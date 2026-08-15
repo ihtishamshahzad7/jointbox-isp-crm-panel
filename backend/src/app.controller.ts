@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
+import * as os from 'os';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { PermissionsGuard } from './security/permissions.guard';
 
@@ -338,6 +339,51 @@ export class AppController {
   @Get('health')
   health() {
     return { ok: true };
+  }
+
+  /**
+   * Server CPU % + RAM for the dashboard KPI row.
+   *
+   * Host-level details are ISP-only: SUPER_ADMIN / ADMIN see the numbers;
+   * any other role gets `visible:false` and the UI hides the cards. CPU% is a
+   * delta between two os.cpus() samples ~300ms apart (instantaneous busy share),
+   * RAM is used/total from the os module — no shell, works on any platform.
+   */
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Get('system/stats')
+  async systemStats(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
+      return { visible: false };
+    }
+
+    const sample = (list: os.CpuInfo[]) => {
+      let idle = 0;
+      let total = 0;
+      for (const c of list) {
+        idle += c.times.idle;
+        total += c.times.user + c.times.nice + c.times.sys + c.times.idle + c.times.irq;
+      }
+      return { idle, total };
+    };
+
+    const a = sample(os.cpus());
+    await new Promise((r) => setTimeout(r, 300));
+    const b = sample(os.cpus());
+    const dTotal = b.total - a.total;
+    const cpu = dTotal > 0 ? Math.round(((dTotal - (b.idle - a.idle)) / dTotal) * 100) : 0;
+
+    const ramTotal = os.totalmem();
+    const ramUsed = ramTotal - os.freemem();
+
+    return {
+      visible: true,
+      cpu: Math.min(100, Math.max(0, cpu)),
+      ramPct: ramTotal > 0 ? Math.round((ramUsed / ramTotal) * 100) : 0,
+      ramUsedGb: +(ramUsed / 1024 ** 3).toFixed(1),
+      ramTotalGb: +(ramTotal / 1024 ** 3).toFixed(1),
+      uptimeSecs: os.uptime(),
+    };
   }
 
   private assertSuperAdmin(req: any) {

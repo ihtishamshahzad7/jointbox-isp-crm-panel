@@ -1432,6 +1432,13 @@ model ServiceSettings {
   // Locks the connection to one MAC. Migration files carry it as a flag.
   macLockEnabled Boolean @default(false)
 
+  /// SIMULTANEOUS-USE GUARD. When false (default) the account may only be
+  /// online once — RADIUS rejects a second concurrent dial-in via the
+  /// `Simultaneous-Use := 1` check, and any second session that slips through
+  /// is cut by the duplicate-session sweep. When true the user may dial in
+  /// from several devices at once (no Simultaneous-Use check is written).
+  allowMultipleSessions Boolean @default(false)
+
   // Whether this customer receives SMS notifications.
   smsEnabled Boolean @default(true)
 
@@ -1500,6 +1507,15 @@ model Invoice {
 
   notes     String?
   createdBy Int?
+
+  /**
+   * Client idempotency key — the browser mints one per activation dialog and
+   * sends the same key for every attempt of that SAME click. Combined with the
+   * unique index, the database refuses a second invoice for the same key even
+   * when two requests race each other, so a double-clicked Activate/Renew can
+   * never produce a second charge. NULL for non-activation invoices.
+   */
+  idempotencyKey String? @unique
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

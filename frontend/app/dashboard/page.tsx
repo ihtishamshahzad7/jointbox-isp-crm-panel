@@ -9,6 +9,7 @@ import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import { BRAND } from "../../lib/brand";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -338,17 +339,52 @@ export default function DashboardPage() {
     return extractArray<T>(data);
   };
 
+  // Scoped headline counts (server-computed per login account, cached 30s):
+  // total / active / expired / expiring / onlineNow / offline / todaySignups.
+  // This is the authoritative source for the KPI row — the raw /subscribers
+  // list is capped, so counting from it silently under-reports on larger bases.
+  type SubscriberOverview = {
+    total?: number; active?: number; inactive?: number; suspended?: number;
+    expired?: number; expiring?: number; onlineNow?: number; stale?: number;
+    offline?: number; todaySignups?: number;
+  };
+  const overviewFetcher = async (url: string): Promise<SubscriberOverview | null> => {
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    return (await res.json()) as SubscriberOverview;
+  };
+
+  // Server CPU/RAM (ISP roles only — the endpoint returns visible:false for
+  // resellers, and the UI then hides the two cards).
+  type SystemStats = {
+    visible?: boolean;
+    cpu?: number;
+    ramPct?: number;
+    ramUsedGb?: number;
+    ramTotalGb?: number;
+    uptimeSecs?: number;
+  };
+  const systemFetcher = async (url: string): Promise<SystemStats | null> => {
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    return (await res.json()) as SystemStats;
+  };
+
   const subscribersKey = mounted && token ? `${API}/subscribers` : null;
   const invoicesKey = mounted && token ? `${API}/invoices` : null;
   const paymentsKey = mounted && token ? `${API}/payments` : null;
   const usersKey = mounted && token ? `${API}/users` : null;
   const nasKey = mounted && token ? `${API}/nas` : null;
+  const overviewKey = mounted && token ? `${API}/subscribers/overview` : null;
+  const systemKey = mounted && token ? `${API}/system/stats` : null;
 
   const { data: subscribersData, isLoading: subLoading, mutate: mutateSubscribers } = useSWR<Subscriber[]>(subscribersKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: invoicesData, isLoading: invLoading, mutate: mutateInvoices } = useSWR<Invoice[]>(invoicesKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: paymentsData, isLoading: payLoading, mutate: mutatePayments } = useSWR<Payment[]>(paymentsKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: usersData, isLoading: usrLoading, mutate: mutateUsers } = useSWR<User[]>(usersKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: nasData, isLoading: nasLoading, mutate: mutateNas } = useSWR<NasDevice[]>(nasKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
+  const { data: overviewData, isLoading: ovLoading, mutate: mutateOverview } = useSWR<SubscriberOverview | null>(overviewKey, overviewFetcher, { refreshInterval: 60000, revalidateOnFocus: true });
+  const { data: sysData, isLoading: sysLoading, mutate: mutateSystem } = useSWR<SystemStats | null>(systemKey, systemFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
 
   // ── Real-time SSE — instantly revalidate SWR caches on backend events ──
   useSSE({
@@ -366,7 +402,8 @@ export default function DashboardPage() {
   const payments = paymentsData || [];
   const users = usersData || [];
   const nas = nasData || [];
-  const loading = subLoading || invLoading || payLoading || usrLoading || nasLoading;
+  const loading = subLoading || invLoading || payLoading || usrLoading || nasLoading || ovLoading || sysLoading;
+  const systemStats = sysData && sysData.visible ? (sysData as SystemStats) : null;
 
   const systemStatus = useMemo(
     () => ({
@@ -383,7 +420,7 @@ export default function DashboardPage() {
   };
 
   const refreshAll = async () => {
-    await Promise.all([mutateSubscribers(), mutateInvoices(), mutatePayments(), mutateUsers(), mutateNas()]);
+    await Promise.all([mutateSubscribers(), mutateInvoices(), mutatePayments(), mutateUsers(), mutateNas(), mutateOverview(), mutateSystem()]);
     setRefreshKey((k) => k + 1);
   };
 
@@ -399,17 +436,29 @@ export default function DashboardPage() {
   const today = startOfDay(new Date());
 
   const homeStats = useMemo(() => {
-    const totalSubscribers = subscribers.length;
-    const activeSubscribers = subscribers.filter((s) => String(s.status).toUpperCase() === "ACTIVE").length;
-    const todaySignups = subscribers.filter((s) => s.createdAt && new Date(s.createdAt) >= today).length;
+    // Headline counts come from the scoped server-side overview when loaded —
+    // they are exact for THIS login account even when the subscriber list is
+    // paginated/capped. Fall back to the client-side list while loading.
+    const totalSubscribers = overviewData?.total ?? subscribers.length;
+    const activeSubscribers = overviewData?.active ?? subscribers.filter((s) => String(s.status).toUpperCase() === "ACTIVE").length;
+    const todaySignups = overviewData?.todaySignups ?? subscribers.filter((s) => s.createdAt && new Date(s.createdAt) >= today).length;
+    const onlineNow = overviewData?.onlineNow ?? subscribers.filter((s) => (s as any).liveStatus === "ONLINE").length;
+    const expired = overviewData?.expired ?? subscribers.filter((s) => String(s.status).toUpperCase() === "EXPIRED").length;
+    const expiringSoon = overviewData?.expiring ?? subscribers.filter((s) => {
+      const raw = s.expiryDate || s.expirationDate || s.expiresAt;
+      if (!raw) return false;
+      const dt = new Date(raw).getTime();
+      return dt >= today.getTime() && dt <= today.getTime() + 7 * 86400_000;
+    }).length;
+    const totalNas = nas.length;
     const revenueToday = payments
       .filter((p) => {
         const dt = p.paymentDate || p.createdAt;
         return dt ? new Date(dt) >= today : false;
       })
       .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-    return { totalSubscribers, activeSubscribers, todaySignups, revenueToday };
-  }, [subscribers, payments]);
+    return { totalSubscribers, activeSubscribers, todaySignups, revenueToday, onlineNow, expired, expiringSoon, totalNas };
+  }, [subscribers, payments, overviewData, nas.length]);
 
   const activityFeed = useMemo(() => {
     const acts: Array<{ at: Date; text: string; type: string }> = [];
@@ -648,9 +697,10 @@ export default function DashboardPage() {
 
   const cardStyle: React.CSSProperties = {
     background: "var(--surface)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: 12,
-    padding: 16,
+    border: "1px solid var(--border)",
+    borderRadius: 16,
+    padding: 18,
+    boxShadow: "0 1px 2px rgba(15,23,42,.04)",
   };
 
   // Nova primary action — gradient fill with glow. The shell's delegated
@@ -747,14 +797,30 @@ export default function DashboardPage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
             {(() => {
               const activePct = homeStats.totalSubscribers ? Math.round((homeStats.activeSubscribers / homeStats.totalSubscribers) * 100) : 0;
+              const onlinePct = homeStats.activeSubscribers ? Math.round((homeStats.onlineNow / homeStats.activeSubscribers) * 100) : 0;
+              const expiredPct = homeStats.totalSubscribers ? Math.round((homeStats.expired / homeStats.totalSubscribers) * 100) : 0;
+              const expiringPct = homeStats.totalSubscribers ? Math.round((homeStats.expiringSoon / homeStats.totalSubscribers) * 100) : 0;
+              const sys = systemStats;
+              // Lifecycle metrics (online → expired → expiring) are grouped one
+              // after another; signups + revenue move to the very end.
               return [
                 { icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.30)", scolor: "#8B5CF6", tag: "base", good: true, spark: "0,24 25,20 50,15 75,10 100,6" },
                 { icon: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, grad: "linear-gradient(135deg,#00C9FF,#22c55e)", glow: "rgba(34,197,94,.26)", scolor: "#22c55e", tag: `${activePct}%`, good: activePct >= 70, spark: "0,16 25,18 50,12 75,10 100,13" },
+                { icon: "M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01", label: "Online now", value: homeStats.onlineNow, cap: "Users connected right now in your account", grad: "linear-gradient(135deg,#06b6d4,#3b82f6)", glow: "rgba(59,130,246,.28)", scolor: "#38bdf8", tag: `${onlinePct}% of active`, good: homeStats.onlineNow > 0, spark: "0,16 25,10 50,18 75,9 100,15" },
+                { icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expired", value: homeStats.expired, cap: "Accounts past their expiry date", grad: "linear-gradient(135deg,#f97316,#ef4444)", glow: "rgba(239,68,68,.28)", scolor: "#ef4444", tag: `${expiredPct}% of base`, good: homeStats.expired === 0, spark: "0,14 25,16 50,12 75,15 100,10" },
+                { icon: "M8 2v4 M16 2v4 M3 10h18 M9 16l2 2 4-4", label: "Expiring in 1 week", value: homeStats.expiringSoon, cap: "ACTIVE accounts expiring within 7 days", grad: "linear-gradient(135deg,#fbbf24,#f59e0b)", glow: "rgba(245,158,11,.28)", scolor: "#fbbf24", tag: `${expiringPct}% of base`, good: homeStats.expiringSoon === 0, spark: "0,14 25,18 50,13 75,16 100,11" },
+                { icon: "M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z M9 6h.01 M9 15h.01", label: "Total NAS", value: homeStats.totalNas, cap: "Routers visible to your account", grad: "linear-gradient(135deg,#0ea5e9,#6366f1)", glow: "rgba(14,165,233,.28)", scolor: "#0ea5e9", tag: "routers", good: homeStats.totalNas > 0, spark: "0,18 25,14 50,10 75,12 100,8" },
+                ...(sys
+                  ? [
+                      { icon: "M9 9h6v6H9z M9 1v4 M15 1v4 M9 19v4 M15 19v4 M1 9h4 M1 15h4 M19 9h4 M19 15h4", label: "CPU usage", value: `${sys.cpu ?? 0}%`, cap: "Server processor load", grad: "linear-gradient(135deg,#8b5cf6,#6366f1)", glow: "rgba(99,102,241,.28)", scolor: "#8b5cf6", tag: (sys.cpu ?? 0) < 60 ? "healthy" : "busy", good: (sys.cpu ?? 0) < 60, spark: "0,16 25,18 50,15 75,17 100,14" },
+                      { icon: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M9 10h6v4H9z M2 10v4 M22 10v4", label: "RAM usage", value: `${sys.ramPct ?? 0}%`, cap: sys.ramTotalGb ? `${sys.ramUsedGb ?? 0} / ${sys.ramTotalGb} GB used` : "Server memory load", grad: "linear-gradient(135deg,#f59e0b,#f97316)", glow: "rgba(249,115,22,.28)", scolor: "#f59e0b", tag: "server", good: (sys.ramPct ?? 0) < 80, spark: "0,15 25,17 50,13 75,15 100,12" },
+                    ]
+                  : []),
                 { icon: "M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6", label: "Signups today", value: homeStats.todaySignups, cap: "New activations since midnight", grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.28)", scolor: "#F7971E", tag: "today", good: true, spark: "0,20 25,22 50,17 75,18 100,12" },
                 { icon: "M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6", label: "Revenue today", value: toCurrency(homeStats.revenueToday), cap: "Payments received today", grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.28)", scolor: "#E9408B", tag: "today", good: true, spark: "0,24 25,20 50,17 75,12 100,7" },
               ];
             })().map((c) => (
-              <div key={c.label} style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10 }}>
+              <div key={c.label} className="kpi-card" style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10, transition: "border-color .18s ease, box-shadow .18s ease, transform .18s ease" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ width: 42, height: 42, borderRadius: 12, background: c.grad, boxShadow: `0 8px 22px ${c.glow}`, display: "grid", placeItems: "center" }}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={c.icon} /></svg>
@@ -776,43 +842,66 @@ export default function DashboardPage() {
           {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
           <OverviewCharts refreshKey={refreshKey} />
 
-          <div style={{ ...cardStyle }}>
-            <div style={{ fontWeight: 800, marginBottom: 10 }}>Quick Actions</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
-              <button style={btnStyle} onClick={() => router.push("/subscribers")}>Add Subscriber</button>
-              <button style={btnStyle} onClick={() => setShowInvoiceQuick(true)}>Generate Invoice</button>
-              <button style={btnStyle} onClick={() => setTab("reports")}>View Reports</button>
-              <button style={btnStyle} onClick={() => router.push("/nas")}>Manage NAS</button>
+          <div style={{ ...cardStyle }} className="panel-card">
+            <div style={{ fontWeight: 800, marginBottom: 12 }}>Quick Actions</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 }}>
+              {[
+                { label: "Add Subscriber", hint: "Create a new customer", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", onClick: () => router.push("/subscribers"), icon: "M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M20 8v6 M23 11h-6" },
+                { label: "Generate Invoice", hint: "Bill a customer", grad: "linear-gradient(135deg,#00C9FF,#22c55e)", onClick: () => setShowInvoiceQuick(true), icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M12 18v-6 M9 15h6" },
+                { label: "View Reports", hint: "Revenue & growth", grad: "linear-gradient(135deg,#F7971E,#FFD200)", onClick: () => setTab("reports"), icon: "M12 20V10 M18 20V4 M6 20v-4" },
+                { label: "Manage NAS", hint: "Routers & pools", grad: "linear-gradient(135deg,#E9408B,#F27121)", onClick: () => router.push("/nas"), icon: "M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z" },
+              ].map((t) => (
+                <button key={t.label} type="button" className="task-tile" onClick={t.onClick}>
+                  <span className="tt-ico" style={{ background: t.grad }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: "relative", zIndex: 1 }}>
+                      <path d={t.icon} />
+                    </svg>
+                  </span>
+                  <span className="tt-body">
+                    <b>{t.label}</b>
+                    <em>{t.hint}</em>
+                  </span>
+                  <svg className="tt-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+              ))}
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1.1fr .9fr", gap: 12 }}>
-            <div style={cardStyle}>
+            <div style={cardStyle} className="panel-card">
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Recent Activity (Latest 5)</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 {activityFeed.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "var(--muted)" }}>No recent activity yet.</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", padding: "10px 0" }}>No recent activity yet.</div>
                 ) : (
                   activityFeed.map((a, i) => (
-                    <div key={i} style={{ border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: 10, background: "rgba(255,255,255,0.02)" }}>
-                      <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600 }}>{a.text}</div>
-                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{a.at.toLocaleString()}</div>
+                    <div key={i} className="feed-row">
+                      <span className={`feed-dot ${a.type}`} />
+                      <div className="feed-body">
+                        <div className="feed-text">{a.text}</div>
+                        <div className="feed-time">{a.at.toLocaleString()}</div>
+                      </div>
                     </div>
                   ))
                 )}
               </div>
             </div>
 
-            <div style={cardStyle}>
+            <div style={cardStyle} className="panel-card">
               <div style={{ fontWeight: 800, marginBottom: 10 }}>System Status</div>
               {[
                 { label: "RADIUS Status", ok: systemStatus.radius },
                 { label: "NAS Status", ok: systemStatus.nas },
                 { label: "Database Status", ok: systemStatus.db },
               ].map((s) => (
-                <div key={s.label} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                  <span style={{ fontSize: 12, color: "#cbd5e1" }}>{s.label}</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: s.ok ? "#4ade80" : "#f87171" }}>{s.ok ? "ONLINE" : "OFFLINE"}</span>
+                <div key={s.label} className="sys-row">
+                  <span className="sys-label">
+                    <span className={`sys-dot ${s.ok ? "ok" : "bad"}`} />
+                    {s.label}
+                  </span>
+                  <span className={`sys-status ${s.ok ? "ok" : "bad"}`}>{s.ok ? "ONLINE" : "OFFLINE"}</span>
                 </div>
               ))}
             </div>
@@ -838,7 +927,7 @@ export default function DashboardPage() {
             </button>
             <button
               style={btnStyle}
-              onClick={() => simplePdfPrint("Jointbox Report", [
+              onClick={() => simplePdfPrint(`${BRAND.name} Report`, [
                 { metric: "Revenue", value: toCurrency(inRangePayments.reduce((a, b) => a + (b.amount || 0), 0)) },
                 { metric: "Payments", value: inRangePayments.length },
                 { metric: "New Subscribers", value: inRangeSubscribers.length },

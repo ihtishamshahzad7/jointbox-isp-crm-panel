@@ -123,6 +123,11 @@ export default function SubscriberProfilePage() {
   const [authLogs,     setAuthLogs]     = useState<RadiusAuth[]>([]);
   const [radiusChecks, setRadiusChecks] = useState<RadiusCheck[]>([]);
   const [radiusOnline, setRadiusOnline] = useState<boolean|null>(null);
+  /** SIMULTANEOUS-USE: how many open sessions this username has right now.
+   *  openCount > 1 = the same credentials are dialled in from more than one
+   *  device — credential sharing or a ghost session. Shown as a hard error. */
+  const [openSessions, setOpenSessions] = useState<number>(0);
+  const [cuttingAll, setCuttingAll] = useState(false);
   const [loadingLive,  setLoadingLive]  = useState(false);
   const [serviceSettings, setServiceSettings] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
@@ -264,6 +269,7 @@ export default function SubscriberProfilePage() {
         setLiveSession(data.session || null);
         setRadiusOnline(!!data.session);
         setSessionLogs(data.history || []);
+        setOpenSessions(Number(data.openCount || 0));
       }
 
       // 2. Auth logs from radpostauth
@@ -317,6 +323,45 @@ export default function SubscriberProfilePage() {
         showToast(e.message || "Failed to disconnect","err");
       }
     } catch { showToast("Network error disconnecting session","err"); }
+  };
+
+  /** Duplicate-login takedown: cut EVERY open session for this username. */
+  const cutAllSessions = async () => {
+    if (!sub?.username) return;
+    if (!confirm(`"${sub.username}" is online ${openSessions}× right now (password sharing or a stuck session). Cut ALL of its sessions so the customer re-dials exactly once?`)) return;
+    setCuttingAll(true);
+    try {
+      const r = await fetch(`${API}/network/disconnect/${encodeURIComponent(sub.username)}/all`, { method: 'POST', headers });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        showToast(`All ${d.sessionsCut || 0} duplicate session(s) cut — subscriber forced offline`, "ok");
+        setTimeout(() => loadLiveData(sub.username!), 2000);
+      } else {
+        showToast(d.message || "Failed to cut sessions","err");
+      }
+    } catch { showToast("Network error cutting sessions","err"); }
+    finally { setCuttingAll(false); }
+  };
+
+  /** Flip SIMULTANEOUS-USE per subscriber: allow one device (guarded) or many.
+   *  Persists in ServiceSettings and re-syncs the profile to RADIUS so the
+   *  Simultaneous-Use check is written/removed for the next dial-in. */
+  const toggleMultiSession = async () => {
+    if (!id) return;
+    const next = !serviceSettings?.allowMultipleSessions;
+    try {
+      const r = await fetch(`${API}/service-settings/subscriber/${id}/upsert`, {
+        method: "POST", headers,
+        body: JSON.stringify({ allowMultipleSessions: next }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); showToast(e.message || "Failed to save","err"); return; }
+      // The radcheck attribute only changes when the profile is re-synced.
+      const s = await fetch(`${API}/subscribers/${id}/sync-to-radius`, { method: "POST", headers });
+      if (!s.ok) { const e2 = await s.json().catch(() => ({})); showToast(`Saved, but RADIUS re-sync failed: ${e2.message || "unknown"} — the guard applies on next manual sync.`, "warn"); }
+      showToast(next ? "Multiple sessions ENABLED — RADIUS will no longer reject a 2nd dial-in." : "One-device guard ON — RADIUS rejects a 2nd dial-in.", next ? "warn" : "ok");
+      loadSub();
+      if (sub?.username) setTimeout(() => loadLiveData(sub.username!), 1500);
+    } catch { showToast("Network error saving setting","err"); }
   };
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -721,6 +766,32 @@ export default function SubscriberProfilePage() {
               <InfoRow label="Discount Type" value={serviceSettings?.discountType}/>
               <InfoRow label="Discount Value" value={serviceSettings?.discountValue?.toString() || "—"}/>
               <InfoRow label="SMS Notifications" value={serviceSettings?.smsEnabled ? "Enabled" : "Disabled"}/>
+              {/* SIMULTANEOUS-USE OPTION: allow one device per account (default,
+                  RADIUS rejects a 2nd dial-in) or several devices at once. */}
+              <div style={{
+                gridColumn:"1 / -1", display:"flex", alignItems:"center", gap:12,
+                marginTop:4, padding:"10px 12px", borderRadius:8,
+                background:d?"var(--surface)":"#f8fafc", border:`1px solid ${t.cardBorder}`,
+              }}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:12.5,color:t.text}}>Allow multiple simultaneous connections</div>
+                  <div style={{fontSize:11,color:t.textMuted,marginTop:2,lineHeight:1.5}}>
+                    OFF (default): one account = one online device. RADIUS rejects the second dial-in
+                    and any duplicate session is cut automatically. ON: the same username may be
+                    online from several devices at once — use only for genuinely shared accounts.
+                  </div>
+                </div>
+                <button onClick={toggleMultiSession}
+                  title={serviceSettings?.allowMultipleSessions ? "Disable — one device per account" : "Enable — several devices allowed"}
+                  style={{
+                    padding:"6px 14px", borderRadius:999, border:`1px solid ${serviceSettings?.allowMultipleSessions ? "rgba(245,158,11,.5)" : "rgba(34,197,94,.4)"}`,
+                    background:serviceSettings?.allowMultipleSessions ? "rgba(245,158,11,.15)" : "rgba(34,197,94,.12)",
+                    color:serviceSettings?.allowMultipleSessions ? "#fbbf24" : "#4ade80",
+                    fontSize:11, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap",
+                  }}>
+                  {serviceSettings?.allowMultipleSessions ? "MULTI-SESSION: ON" : "ONE DEVICE: ON"}
+                </button>
+              </div>
             </div>
             <div style={{marginTop:20,borderTop:`1px solid ${t.cardBorder}`,paddingTop:16}}>
               <SectionTitle icon={<Ic.Network/>} label="Bandwidth Override" color="#f59e0b" size="sm"/>
@@ -1053,6 +1124,38 @@ export default function SubscriberProfilePage() {
             TAB: CONNECTION (live from RADIUS)
         ════════════════════════════════════ */}
         {activeTab==="Connection" && (<>
+          {/* ══ DUPLICATE-SESSION GUARD ══ Same credentials online 2×+ → hard error.
+              The RADIUS Simultaneous-Use check rejects a second dial-in, but a
+              session already up when the guard lands, or one that slipped through,
+              is taken down here: cut all sessions so the customer reconnects once. */}
+          {openSessions > 1 && (
+            <div style={{
+              marginBottom:14, padding:"12px 14px", borderRadius:10,
+              background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.45)",
+              display:"flex", gap:12, alignItems:"flex-start",
+            }}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:800,fontSize:13,color:"#f87171",display:"flex",alignItems:"center",gap:6}}>
+                  <Ic.X/> DUPLICATE LOGIN DETECTED — {openSessions} online sessions
+                </div>
+                <div style={{fontSize:11.5,color:t.textMuted,marginTop:4,lineHeight:1.5}}>
+                  The same username (<b style={{color:t.text}}>{sub?.username}</b>) is connected from{" "}
+                  <b style={{color:t.text}}>{openSessions} devices at once</b> — password sharing or a
+                  stuck session. One account = one connection on this ISP. The second dial-in is
+                  rejected by RADIUS, but cut the running sessions now so the customer reconnects
+                  exactly once and nobody rides the account for free.
+                </div>
+                {radiusChecks.some((c) => c.attribute === "Simultaneous-Use")
+                  ? <div style={{fontSize:11,color:"#4ade80",marginTop:4}}>Guard active: RADIUS rejects a 2nd concurrent login (Simultaneous-Use := 1).</div>
+                  : <div style={{fontSize:11,color:t.amber,marginTop:4}}>Note: no Simultaneous-Use check in radcheck — "Allow multiple sessions" is ON, so the guard is not rejecting extra dial-ins.</div>}
+              </div>
+              <button onClick={cutAllSessions} disabled={cuttingAll}
+                title="Disconnect every session for this username right now"
+                style={{padding:"7px 14px",borderRadius:6,border:"none",fontSize:11,fontWeight:700,cursor:"pointer",background:"#ef4444",color:"#fff",display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}>
+                <Ic.X/> {cuttingAll ? "Cutting…" : `Cut all ${openSessions} sessions`}
+              </button>
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
             {/* Connection Status */}
             <Card>
