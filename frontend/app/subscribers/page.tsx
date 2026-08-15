@@ -13,6 +13,26 @@ import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
 import { silent } from "../components/silent";
 
+/**
+ * UUID that works on insecure origins too. `crypto.randomUUID` is only defined
+ * in a secure context (HTTPS / localhost); on a plain-HTTP LAN IP it is
+ * undefined and throws. Fall back to crypto.getRandomValues, then to a
+ * timestamp+random string.
+ */
+function makeUUID(): string {
+  try {
+    const c: any = typeof crypto !== "undefined" ? crypto : null;
+    if (c?.randomUUID) return c.randomUUID();
+    if (c?.getRandomValues) {
+      const b = c.getRandomValues(new Uint8Array(16));
+      b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+      const h = Array.from(b, (x: number) => x.toString(16).padStart(2, "0"));
+      return `${h.slice(0,4).join("")}-${h.slice(4,6).join("")}-${h.slice(6,8).join("")}-${h.slice(8,10).join("")}-${h.slice(10,16).join("")}`;
+    }
+  } catch { /* fall through */ }
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface Package {
   id: number;
@@ -665,7 +685,11 @@ export default function SubscribersPage() {
   // backend as the same transaction — never a second charge.
   const activationKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (showActivationModal) activationKeyRef.current = crypto.randomUUID();
+    // crypto.randomUUID only exists in a SECURE context (HTTPS or localhost).
+    // On a plain-HTTP LAN address it is undefined and throws, which crashed the
+    // whole page when Activate opened. Fall back to getRandomValues, then to a
+    // timestamp+random so the idempotency key is always produced.
+    if (showActivationModal) activationKeyRef.current = makeUUID();
   }, [showActivationModal]);
 
   // Price the renewal on the server as the operator changes the form. Doing
