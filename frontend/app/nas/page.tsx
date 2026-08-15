@@ -1015,10 +1015,9 @@ export default function NasPage() {
                 placeholder="e.g. ether1-wan, vlan100  (blank = all interfaces)"
                 style={{ ...inputSt, flex:1, minWidth:220 }} />
               <Btn variant="ghost" size="xs" onClick={async ()=>{
-                showToast("Discovering interfaces…", "ok");
                 const r = await fetch(`${API}/telemetry/nas/${viewDetail.nas.id}/discover-interfaces`, { headers });
                 const d = await r.json();
-                if (!d?.ok) { showToast(d?.error || "Discovery failed", "err"); return; }
+                if (!d?.ok) { alert(d?.error || "Discovery failed"); return; }
                 const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
                 const current = new Set((el?.value||"").split(",").map(s=>s.trim()).filter(Boolean));
                 const pick = d.interfaces.map((i:any)=>`${i.name}${i.up?"":" (down)"}`).join("\n");
@@ -1029,7 +1028,7 @@ export default function NasPage() {
                 const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
                 const ports = (el?.value || "").split(",").map(s=>s.trim()).filter(Boolean);
                 const r = await fetch(`${API}/nas/${viewDetail.nas.id}/monitored-ports`, { method:"PATCH", headers, body: JSON.stringify({ ports }) });
-                showToast(r.ok ? (ports.length ? `Monitoring ${ports.length} registered port(s)` : "Monitoring all interfaces") : "Save failed", r.ok ? "ok" : "err");
+                alert(r.ok ? (ports.length ? `Monitoring ${ports.length} registered port(s)` : "Monitoring all interfaces") : "Save failed");
               }}>Save</Btn>
               <span style={{ fontSize:10.5, color:t.textMuted, width:'100%' }}>Only these interfaces/ports are polled. Leave blank to monitor every interface.</span>
             </div>
