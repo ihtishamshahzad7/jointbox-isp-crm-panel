@@ -260,6 +260,7 @@ export class SubscribersService implements OnModuleInit {
         // so session/idle limits come from env defaults unless set explicitly.
         sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
         idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false,
       },
     );
 
@@ -964,6 +965,7 @@ export class SubscribersService implements OnModuleInit {
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(now);
     dayEnd.setHours(23, 59, 59, 999);
+    const expiringEnd = new Date(now.getTime() + 7 * 86400_000);
 
     const [
       total,
@@ -972,6 +974,7 @@ export class SubscribersService implements OnModuleInit {
       suspended,
       expired,
       todaySignups,
+      expiring,
       radiusOnlineRows,
     ] = await Promise.all([
       this.prisma.subscriber.count({ where: withScope({}) }),
@@ -980,6 +983,14 @@ export class SubscribersService implements OnModuleInit {
       this.prisma.subscriber.count({ where: withScope({ status: 'SUSPENDED' }) }),
       this.prisma.subscriber.count({ where: withScope({ status: 'EXPIRED' }) }),
       this.prisma.subscriber.count({ where: withScope({ createdAt: { gte: dayStart, lte: dayEnd } }) }),
+      // ACTIVE accounts whose expiry lands within the next 7 days — the
+      // renewal lookahead. Scoped, server-counted (list is capped).
+      this.prisma.subscriber.count({
+        where: withScope({
+          status: 'ACTIVE',
+          serviceSettings: { is: { expiryDate: { gte: now, lte: expiringEnd } } },
+        }),
+      }),
       this.prisma.$queryRaw<Array<{ username: string }>>`
         SELECT DISTINCT username
         FROM radacct
@@ -1039,6 +1050,7 @@ export class SubscribersService implements OnModuleInit {
       inactive,
       suspended,
       expired,
+      expiring,
       onlineNow,
       stale: staleCount,
       offline,
@@ -1100,6 +1112,7 @@ export class SubscribersService implements OnModuleInit {
       total: overview.total,
       active: overview.active,
       expired: overview.expired,
+      expiring: overview.expiring,
       suspended: overview.suspended,
       onlineNow: overview.onlineNow,
       offline: overview.offline,
@@ -1357,6 +1370,29 @@ export class SubscribersService implements OnModuleInit {
           );
         }
       }
+
+      /**
+       * STAMP THE EXPIRY FROM THE ACTIVATION MOMENT.
+       *
+       * A subscriber created straight into ACTIVE with a package was invoiced,
+       * charged and put online — but no expiryDate was ever written. With no
+       * expiry the daily suspension sweep can never expire them, so they kept
+       * the service for free after the period they paid for, and the "days left"
+       * UI had nothing to show. The period must run from NOW (activation time)
+       * for the package's own duration, exactly like activate-renewal does.
+       */
+      if (!unpaid) {
+        const dpkg = await this.prisma.package.findUnique({
+          where: { id: subscriber.packageId }, select: { duration: true },
+        });
+        const expiry = new Date();
+        expiry.setDate(expiry.getDate() + (dpkg?.duration || 30));
+        await this.prisma.serviceSettings.upsert({
+          where: { subscriberId: subscriber.id },
+          update: { expiryDate: expiry, isBlocked: false },
+          create: { subscriberId: subscriber.id, expiryDate: expiry },
+        }).catch((e: any) => this.logger.warn(`Expiry stamp failed for #${subscriber.id}: ${e?.message || e}`));
+      }
     }
 
 if (!unpaid && data.username && data.password) {
@@ -1402,6 +1438,7 @@ if (!unpaid && data.username && data.password) {
             macAddress: subForOpts?.serviceSettings?.macAddress ?? null,
             sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
             idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+            allowMultipleSessions: subForOpts?.serviceSettings?.allowMultipleSessions ?? false,
           },
         );
 
@@ -1713,6 +1750,7 @@ if (!unpaid && data.username && data.password) {
             macAddress: serviceSettings?.macAddress ?? null,
             sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
             idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+            allowMultipleSessions: serviceSettings?.allowMultipleSessions ?? false,
           },
         );
         this.logger.log(
@@ -1743,6 +1781,7 @@ if (!unpaid && data.username && data.password) {
             macAddress: serviceSettings?.macAddress ?? null,
             sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
             idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+            allowMultipleSessions: serviceSettings?.allowMultipleSessions ?? false,
           },
         );
         this.logger.log(
@@ -2641,7 +2680,22 @@ if (!unpaid && data.username && data.password) {
     });
     if (!subscriber) throw new NotFoundException('Subscriber not found');
 
+    /**
+     * ALREADY-ACTIVATED — the check the user asked for, with the package name
+     * and the price it was assigned at, so the operator sees WHY it is blocked
+     * and what a renewal would really do. No second invoice, no second charge.
+     */
     if (subscriber.status === 'ACTIVE' && payload.force !== true) {
+      let currentPkg: any = null;
+      if (subscriber.packageId) {
+        currentPkg = await this.prisma.package.findUnique({
+          where: { id: subscriber.packageId },
+          select: { id: true, name: true, price: true },
+        });
+      }
+      const currentPrice = subscriber.sellPrice != null
+        ? Number(subscriber.sellPrice)
+        : Number(currentPkg?.price || 0);
       const auditCreate = this.prisma.activityLog?.create;
       if (auditCreate) {
         await auditCreate({
@@ -2650,13 +2704,15 @@ if (!unpaid && data.username && data.password) {
             action: 'DUPLICATE_ACTIVATION_BLOCKED',
             entity: 'Subscriber',
             entityId: subscriberId,
-            details: `Blocked duplicate activation for subscriber #${subscriberId} because the record is already ACTIVE.`,
+            details: `Blocked duplicate activation for subscriber #${subscriberId} — already ACTIVE on "${currentPkg?.name ?? '—'}" at ${currentPrice}.`,
           },
         }).catch(() => null);
       }
 
       throw new ConflictException(
-        `Subscriber #${subscriberId} is already ACTIVE. Duplicate activation is blocked to prevent double-charging.`,
+        `Subscriber "${subscriber.fullName}" (#${subscriberId}) is already activated — ` +
+        `the package "${currentPkg?.name ?? '—'}" was already assigned at ${currentPrice}. ` +
+        `No second charge is possible. Renew only when the period expires, or change the package to migrate.`,
       );
     }
 
@@ -2707,69 +2763,19 @@ if (!unpaid && data.username && data.password) {
     });
     const expiryDate = quote.newExpiry;
 
-    // NOTE: the record is NOT marked ACTIVE yet, and the service is NOT
-    // unblocked yet. Activation (the "lock") and the RADIUS sync are held back
-    // until the reseller wallet charge below actually succeeds — so a customer
-    // can never be locked-active or online without the money having moved. Set
-    // only the package and the new expiry here.
-    await this.prisma.subscriber.update({
-      where: { id: subscriberId },
-      data: { packageId },
-    });
-
-    const currentSettings = await this.prisma.serviceSettings.findUnique({ where: { subscriberId } });
-    if (currentSettings) {
-      await this.prisma.serviceSettings.update({
-        where: { subscriberId },
-        data: { expiryDate },
-      });
-    } else {
-      await this.prisma.serviceSettings.create({
-        data: { subscriberId, expiryDate },
-      });
-    }
-
-    // A new period means a fresh data allowance, so clear any FUP throttle
-    // carried over from the previous cycle.
-    await this.prisma.subscriber.update({
-      where: { id: subscriberId },
-      data: { fupApplied: false, fupAppliedAt: null },
-    });
-
-    // Charge what the quote says, not the sticker price — a 5-day renewal must
-    // not bill a full month.
-    const total = quote.total;
-    // Full timestamp + a short random tail, so two activations in the same
-    // minute cannot mint the same invoice number (the old `slice(-6)` repeated
-    // every ~16.7 minutes and caused collisions).
-    const invoiceNo = `INV-${new Date().getFullYear()}-${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
-    const invoice = await this.prisma.invoice.create({
-      data: {
-        invoiceNo,
-        subscriberId,
-        amount: total,
-        total,
-        dueAmount: total,
-        paidAmount: 0,
-        dueDate: expiryDate,
-        notes: payload.notes || null,
-        status: 'UNPAID',
-        items: {
-          create: [
-            {
-              description: `Activation/Renewal - ${pkg.name} (${quote.days} day${quote.days === 1 ? '' : 's'})`,
-              quantity: 1,
-              unitPrice: quote.amount,
-              total: quote.amount,
-            },
-            ...(extraFee > 0
-              ? [{ description: 'Extra Fee', quantity: 1, unitPrice: extraFee, total: extraFee }]
-              : []),
-          ],
-        },
-      },
-      include: { items: true },
-    });
+    /**
+     * DETERMINISTIC SETTLEMENT KEY — the heart of "charged once, never twice".
+     *
+     * The settlement reference used to be `RENEW:${invoice.id}`, and every
+     * request minted a fresh invoice — so a double-clicked button created two
+     * invoices, two different references, and TWO wallet charges. The key is
+     * now derived ONLY from what the customer is actually getting: the package
+     * and the day the period ends. A replayed request computes the same key and
+     * is refused by settleActivation, whatever invoice number it carries. A
+     * genuine next renewal ends on a later day → a different key → a legitimate
+     * second charge.
+     */
+    const actKey = `ACT:${pkg.id}:${expiryDate.toISOString().slice(0, 10)}`;
 
     const methodMap: Record<string, 'CASH' | 'BANK_TRANSFER' | 'CARD' | 'ONLINE'> = {
       CASH: 'CASH',
@@ -2781,78 +2787,217 @@ if (!unpaid && data.username && data.password) {
       ? ('BALANCE' as any)
       : methodMap[(payload.paymentMethod || 'CASH').toUpperCase()] || 'CASH';
 
-    // Paying from the wallet must actually move the money out of it, otherwise
-    // the same balance could be spent repeatedly.
-    if (mode === 'BALANCE') {
-      await this.accounting.deductBalance(
-        subscriberId, total, invoiceNo, 'RENEWAL', payload.actorId,
+    const sell = payload.sellPrice != null && payload.sellPrice !== ''
+      ? Number(payload.sellPrice)
+      : (subscriber.sellPrice ?? Number(pkg.price || 0));
+
+    const total = quote.total;
+    // Full timestamp + a short random tail, so two activations in the same
+    // minute cannot mint the same invoice number (the old `slice(-6)` repeated
+    // every ~16.7 minutes and caused collisions).
+    const invoiceNo = `INV-${new Date().getFullYear()}-${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
+
+    let invoice: any = null;
+    let payment: any = null;
+    // True when settleActivation recognised an OLD, already-charged settlement
+    // for this exact (package, expiry-day) — a previous attempt took the money
+    // but died before the subscriber was marked ACTIVE. We finish the job
+    // without charging again (recovery), never with a second charge.
+    let isRecovery = false;
+    let recoveredInvoice: any = null;
+
+    try {
+      /**
+       * ONE ATOMIC TRANSACTION for the whole money segment.
+       *
+       * Package, expiry, the invoice, the reseller wallet charge, a BALANCE-mode
+       * wallet deduction and the payment now commit — or roll back — together.
+       * Before this, each step ran as its own write: a failure part-way left
+       * orphans (an invoice with no charge, a deducted wallet with no invoice,
+       * a charged reseller with no activation). Now any single failure rolls
+       * the whole segment back to the state before the operator clicked.
+       */
+      await this.prisma.$transaction(async (tx) => {
+        // ── 0. Idempotency gate: ONE client key = ONE charge ──
+        // The browser mints a key per activation dialog and sends the same key
+        // for every attempt of the SAME click. If an invoice for this subscriber
+        // already carries this key, the request is a replay (double-click, or a
+        // timed-out retry) — refuse it and roll back whatever this attempt had
+        // started, so the same click can never charge twice.
+        if (payload.idempotencyKey) {
+          const replay = await tx.invoice.findFirst({
+            where: { subscriberId, idempotencyKey: payload.idempotencyKey },
+            select: { id: true },
+          });
+          if (replay) {
+            throw new ConflictException(
+              `Subscriber "${subscriber.fullName}" (#${subscriberId}) is already activated — ` +
+              `the package "${pkg.name}" was already assigned at ${total}, and this exact activation was already recorded. ` +
+              `No second charge was made.`,
+            );
+          }
+        }
+
+        // ── 1. State the period: package + expiry (+ fresh FUP allowance) ──
+        await tx.subscriber.update({
+          where: { id: subscriberId },
+          data: { packageId },
+        });
+
+        const currentSettings = await tx.serviceSettings.findUnique({ where: { subscriberId } });
+        if (currentSettings) {
+          await tx.serviceSettings.update({
+            where: { subscriberId },
+            data: { expiryDate },
+          });
+        } else {
+          await tx.serviceSettings.create({
+            data: { subscriberId, expiryDate },
+          });
+        }
+
+        // A new period means a fresh data allowance, so clear any FUP throttle
+        // carried over from the previous cycle.
+        await tx.subscriber.update({
+          where: { id: subscriberId },
+          data: { fupApplied: false, fupAppliedAt: null },
+        });
+
+        // ── 2. Charge — but only once ──
+        if (subscriber.userId) {
+          // `activationCost` is a read-only price-ladder computation.
+          const cost = await this.pricing.activationCost(subscriber.userId, packageId, Number(pkg.price || 0));
+          await tx.subscriber.update({
+            where: { id: subscriberId },
+            data: { sellPrice: sell, costPrice: cost, profit: Math.round((sell - cost) * 100) / 100 },
+          });
+
+          let settlement: any;
+          try {
+            // Same tx → a duplicate rolls back the invoice WITH the settlement.
+            // Same deterministic actKey → the replay collapses onto the first charge.
+            settlement = await this.pricing.settleActivation(subscriberId, {
+              byUserId: subscriber.userId,
+              event: actKey,
+            }, tx);
+          } catch (e: any) {
+            // Insufficient prepaid balance (or any charge failure). Roll back all.
+            throw new Error(`charge failed: ${e?.message || e}`);
+          }
+
+          if (!settlement?.settled) {
+            if (settlement?.alreadySettled) {
+              // The buyer asked for the SAME period twice. If the first charge is
+              // moments old, it is a double-click — refuse with the friendly error.
+              // If it is old AND the subscriber is still not ACTIVE, a previous
+              // attempt died between charging and activating: recover instead.
+              const settledAt = settlement.settledAt ? new Date(settlement.settledAt).getTime() : 0;
+              const recent = Date.now() - settledAt < 15_000;
+              if (recent || subscriber.status === 'ACTIVE') {
+                throw new ConflictException(
+                  `Subscriber "${subscriber.fullName}" (#${subscriberId}) is already activated — ` +
+                  `the package "${pkg.name}" was already assigned at ${total}. ` +
+                  `No second charge was made. Renew only when the period expires, or change the package to migrate.`,
+                );
+              }
+              // Stale settlement + still INACTIVE → finish a half-done activation.
+              isRecovery = true;
+            } else {
+              throw new Error((settlement as any)?.reason || 'settlement returned unsettled');
+            }
+          }
+        }
+
+        // ── 3. Invoice + payment (skipped on recovery — the money and the
+        //       original invoice already exist) ──
+        if (!isRecovery) {
+          try {
+            invoice = await tx.invoice.create({
+              data: {
+                invoiceNo,
+                subscriberId,
+                amount: total,
+                total,
+                dueAmount: total,
+                paidAmount: 0,
+                dueDate: expiryDate,
+                notes: payload.notes || null,
+                idempotencyKey: payload.idempotencyKey || null,
+                status: 'UNPAID',
+                items: {
+                  create: [
+                    {
+                      description: `Activation/Renewal - ${pkg.name} (${quote.days} day${quote.days === 1 ? '' : 's'})`,
+                      quantity: 1,
+                      unitPrice: quote.amount,
+                      total: quote.amount,
+                    },
+                    ...(extraFee > 0
+                      ? [{ description: 'Extra Fee', quantity: 1, unitPrice: extraFee, total: extraFee }]
+                      : []),
+                  ],
+                },
+              },
+              include: { items: true },
+            });
+          } catch (e2: any) {
+            // The UNIQUE index on idempotencyKey caught a concurrent replay that
+            // slipped past the findFirst gate above — the same click, in flight
+            // twice. Same friendly refusal; the whole transaction (and the wallet
+            // deduction that may already have run) rolls back.
+            if (e2?.code === 'P2002') {
+              throw new ConflictException(
+                `Subscriber "${subscriber.fullName}" (#${subscriberId}) is already activated — ` +
+                `the package "${pkg.name}" was already assigned at ${total}. No second charge was made.`,
+              );
+            }
+            throw e2;
+          }
+
+          // Paying from the wallet must actually move the money out of it,
+          // otherwise the same balance could be spent repeatedly. Runs AFTER the
+          // reseller charge outcome so a duplicate never reaches the wallet, and
+          // INSIDE this tx so a failure rolls the deduction back.
+          if (mode === 'BALANCE') {
+            const deduct = await this.accounting.deductBalance(subscriberId, total, actKey, 'RENEWAL', payload.actorId, tx);
+            if (deduct.alreadyDeducted) {
+              throw new ConflictException(
+                `Subscriber "${subscriber.fullName}" (#${subscriberId}) is already activated — ` +
+                `the wallet was already charged ${total} for "${pkg.name}". No second deduction was made.`,
+              );
+            }
+          }
+
+          payment = await tx.payment.create({
+            data: {
+              paymentNo: `PAY-${Date.now()}`,
+              invoiceId: invoice.id,
+              subscriberId,
+              amount: total,
+              method: paymentMethod,
+              notes: payload.notes || null,
+            },
+          });
+        }
+      });
+    } catch (e: any) {
+      // A duplicate attempt → keep the friendly Conflict message; the whole
+      // transaction (including any partial invoice/payment) is already rolled back.
+      if (e instanceof ConflictException) throw e;
+      // Otherwise the money did NOT move (rolled back) — report and clean up.
+      await this.abortActivationUnpaid(subscriberId, invoice?.id ?? Number.NaN, `charge failed: ${e?.message || e}`, subscriber.status !== 'ACTIVE');
+      throw new ForbiddenException(
+        `Activation blocked — the account was not charged: ${e?.message || e}. ` +
+        `The customer was NOT activated. Top up the wallet and try again.`,
       );
     }
 
-    const payment = await this.prisma.payment.create({
-      data: {
-        paymentNo: `PAY-${Date.now()}`,
-        invoiceId: invoice.id,
-        subscriberId,
-        amount: total,
-        method: paymentMethod,
-        notes: payload.notes || null,
-      },
-    });
-
     /**
-     * CHARGE FIRST, THEN ACTIVATE — activation and the wallet must stay in sync.
-     *
-     * The reseller wallet is debited BEFORE the customer is marked ACTIVE or put
-     * into RADIUS. If the charge cannot happen (empty wallet, no price ladder,
-     * an error), we abort: the record is left INACTIVE and blocked, the invoice
-     * is voided, and nobody gets online. This is what "sync activation with the
-     * deduction" means — you can never be locked-active without having paid, and
-     * you can never be charged without being activated.
-     *
-     * Direct-ISP customers have no upstream reseller to pay; settleActivation
-     * still returns settled:true for them, so they activate normally.
+     * Money has moved (or was recovered) — NOW lock the record ACTIVE, unblock
+     * and put into RADIUS. The invoice is marked paid and the ledger posted only
+     * after RADIUS succeeds, so a sync failure never leaves a "paid" bill for a
+     * customer who is not actually online.
      */
-    if (subscriber.userId) {
-      const sell = payload.sellPrice != null && payload.sellPrice !== ''
-        ? Number(payload.sellPrice)
-        : (subscriber.sellPrice ?? Number(pkg.price || 0));
-      const cost = await this.pricing.activationCost(subscriber.userId, packageId, Number(pkg.price || 0));
-      await this.prisma.subscriber.update({
-        where: { id: subscriberId },
-        data: { sellPrice: sell, costPrice: cost, profit: Math.round((sell - cost) * 100) / 100 },
-      });
-
-      let settlement: any;
-      try {
-        // event = invoice.id (globally unique) so a genuine repeat charge is
-        // never mistaken for a duplicate, and a duplicate is never charged twice.
-        settlement = await this.pricing.settleActivation(subscriberId, {
-          byUserId: subscriber.userId,
-          event: `RENEW:${invoice.id}`,
-        });
-      } catch (e: any) {
-        // Insufficient prepaid balance (or any charge failure). ABORT activation.
-        await this.abortActivationUnpaid(subscriberId, invoice.id, `charge failed: ${e?.message || e}`, subscriber.status !== 'ACTIVE');
-        throw new ForbiddenException(
-          `Activation blocked — the account was not charged: ${e?.message || e}. ` +
-          `The customer was NOT activated. Top up the wallet and try again.`,
-        );
-      }
-
-      if (!settlement?.settled && !settlement?.alreadySettled) {
-        // No owner/package or price ladder returned nothing to charge — do not
-        // silently activate for free.
-        await this.abortActivationUnpaid(subscriberId, invoice.id, (settlement as any)?.reason || 'settlement returned unsettled', subscriber.status !== 'ACTIVE');
-        throw new ForbiddenException(
-          `Activation blocked — could not settle the reseller charge (${(settlement as any)?.reason || 'no price configured'}). ` +
-          `The customer was NOT activated.`,
-        );
-      }
-      this.logger.log(`🔁 Activation charged for subscriber #${subscriberId} (invoice ${invoice.id})`);
-    }
-
-    // Money has moved — NOW lock the record ACTIVE, unblock and put into RADIUS.
     await this.prisma.subscriber.update({
       where: { id: subscriberId },
       data: { status: 'ACTIVE' },
@@ -2871,18 +3016,45 @@ if (!unpaid && data.username && data.password) {
       );
     }
 
-    // Ledger postings + mark the invoice paid.
-    await this.accounting.postInvoiceCreated(invoice);
-    await this.accounting.postPaymentReceived(payment);
-    void this.notifications.fireEvent('RENEWAL', { ...subscriber, package: pkg }, {
-      amount: total,
-      invoiceNo: invoice.invoiceNo,
-      expiry: expiryDate,
-    });
-    await this.prisma.invoice.update({
-      where: { id: invoice.id },
-      data: { paidAmount: total, dueAmount: 0, status: 'PAID', paidDate: new Date() },
-    });
+    if (isRecovery) {
+      // The original attempt left a paid-for-but-uncompleted activation. Its
+      // UNPAID invoice is still on the books — complete that invoice (the real
+      // record of the money already taken), post its ledger once, and notify.
+      recoveredInvoice = await this.prisma.invoice.findFirst({
+        where: { subscriberId, status: 'UNPAID' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (recoveredInvoice) {
+        await this.accounting.postInvoiceCreated(recoveredInvoice).catch((err: any) =>
+          this.logger.warn(`Recovery: could not post ledger for invoice #${recoveredInvoice.id}: ${err?.message || err}`));
+        await this.prisma.invoice.update({
+          where: { id: recoveredInvoice.id },
+          data: { paidAmount: recoveredInvoice.total, dueAmount: 0, status: 'PAID', paidDate: new Date() },
+        });
+        void this.notifications.fireEvent('RENEWAL', { ...subscriber, package: pkg }, {
+          amount: recoveredInvoice.total,
+          invoiceNo: recoveredInvoice.invoiceNo,
+          expiry: expiryDate,
+        });
+      }
+      this.logger.warn(
+        `Activation #${subscriberId} completed in RECOVERY — the charge for ${actKey} already existed; ` +
+        `no second charge was made` + (recoveredInvoice ? `, original invoice #${recoveredInvoice.id} marked paid.` : '.'),
+      );
+    } else if (invoice) {
+      // Ledger postings + mark the invoice paid.
+      await this.accounting.postInvoiceCreated(invoice);
+      await this.accounting.postPaymentReceived(payment);
+      void this.notifications.fireEvent('RENEWAL', { ...subscriber, package: pkg }, {
+        amount: total,
+        invoiceNo: invoice.invoiceNo,
+        expiry: expiryDate,
+      });
+      await this.prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { paidAmount: total, dueAmount: 0, status: 'PAID', paidDate: new Date() },
+      });
+    }
 
     return {
       subscriberId,
@@ -2890,11 +3062,12 @@ if (!unpaid && data.username && data.password) {
       packageName: pkg.name,
       expiryDate,
       totalAmount: total,
-      invoiceId: invoice.id,
+      invoiceId: (invoice ?? recoveredInvoice)?.id ?? null,
+      recovered: isRecovery,
     };
   }
 
-  async importSubscribers(payload: { rows: any[]; salespersonId?: number | null }) {
+  async importSubscribers(payload: { rows: any[]; salespersonId?: number | null }, actor?: Actor) {
     const rows = payload.rows || [];
     let success = 0;
     let failed = 0;
@@ -2917,7 +3090,7 @@ if (!unpaid && data.username && data.password) {
           connectionType: row.connectionType,
           status: row.profileStatus || 'ACTIVE',
           installationDate: row.installationDate,
-        });
+        }, actor);
         success++;
       } catch (error: any) {
         failed++;
@@ -2959,7 +3132,7 @@ if (!unpaid && data.username && data.password) {
     dryRun?: boolean;
     updateExisting?: boolean;
     defaultSalespersonId?: number | null;
-  }) {
+  }, actor?: Actor) {
     const rows = payload.rows || [];
     const problems: Array<{ row: number; username?: string; issue: string; fatal: boolean }> = [];
     const seen = new Set<string>();
@@ -3128,12 +3301,57 @@ if (!unpaid && data.username && data.password) {
           await this.syncToRadius(found.id).catch(() => null);
           updated++;
         } else {
-          const sub = await this.prisma.subscriber.create({ data });
+          // OWNER = THE ACCOUNT DOING THE IMPORT. The file has no owner column,
+          // and an ownerless ACTIVE subscriber used to sync into RADIUS with no
+          // wallet movement at all — imported internet for free. Assigning the
+          // importer puts the row in their subtree and makes the activation
+          // charge below land on someone real.
+          const ownerId = actor ? this.scope.actorId(actor) : null;
+          const sub = await this.prisma.subscriber.create({ data: { ...data, userId: ownerId } });
           await this.prisma.serviceSettings.create({
             data: { subscriberId: sub.id, ...settings },
           });
+
+          /**
+           * CHARGE-THEN-ACTIVATE on import, same contract as create().
+           *
+           * A new row imported as ACTIVE gets its first invoice raised and the
+           * owner's wallet charged BEFORE it ever reaches RADIUS. If the charge
+           * fails (empty wallet, no price ladder) the row is left INACTIVE and
+           * blocked — the customer exists in the panel but gets no internet —
+           * exactly like a failed manual activation. Only a settled import is
+           * synced to RADIUS.
+           */
+          if (sub.status === 'ACTIVE' && sub.packageId) {
+            try {
+              await this.autoInvoiceForSubscriber(sub.id, sub.packageId, data.sellPrice ?? undefined)
+                .catch((e: any) => this.logger.warn(`Import invoice skipped for #${sub.id}: ${e?.message || e}`));
+              if (ownerId) {
+                await this.pricing.settleActivation(sub.id, { byUserId: ownerId });
+              }
+            } catch (e: any) {
+              const reason = e?.message || 'Wallet could not cover this activation.';
+              await this.prisma.subscriber.update({
+                where: { id: sub.id },
+                data: { status: 'INACTIVE' },
+              }).catch(() => null);
+              await this.prisma.serviceSettings.update({
+                where: { subscriberId: sub.id },
+                data: { isBlocked: true },
+              }).catch(() => null);
+              failed++;
+              problems.push({
+                row: line, username, fatal: false,
+                issue: `Imported but NOT activated - ${reason} No internet until the wallet is topped up and the subscriber is activated.`,
+              });
+              continue;
+            }
+          }
+
           // Without this the customer exists in the panel but cannot dial in,
-          // which is the most confusing possible half-success.
+          // which is the most confusing possible half-success. Only runs when
+          // the import settled (ACTIVE rows) or the row starts non-active but
+          // simply needs its RADIUS profile (password/speed) written.
           await this.syncToRadius(sub.id).catch(() => null);
           created++;
         }
@@ -3230,6 +3448,7 @@ if (!unpaid && data.username && data.password) {
       where: { status: 'ACTIVE' },
       include: {
         package: { include: { pool: true } },
+        serviceSettings: true,
       },
     });
 
@@ -3246,6 +3465,7 @@ if (!unpaid && data.username && data.password) {
           sub.username,
           sub.password,
           sub.package ?? null,
+          { allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false },
         );
         success++;
         console.log(
@@ -3274,7 +3494,10 @@ if (!unpaid && data.username && data.password) {
     console.log('📡 SYNC MISSING SUBSCRIBERS → RADIUS');
 
     const subscribers = await this.prisma.subscriber.findMany({
-      include: { package: { include: { pool: true } } },
+      include: {
+        package: { include: { pool: true } },
+        serviceSettings: true,
+      },
     });
 
     let synced  = 0;
@@ -3291,6 +3514,7 @@ if (!unpaid && data.username && data.password) {
             sub.username,
             sub.password,
             sub.package ?? null,
+            { allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false },
           );
           synced++;
           console.log(`✅ Synced: ${sub.username}`);
@@ -3362,7 +3586,7 @@ if (!unpaid && data.username && data.password) {
   async getRadiusSession(username: string) {
     try {
       const pg = this.radiusSync.getPgClient();
-      if (!pg) return { session: null, history: [] };
+      if (!pg) return { session: null, history: [], openCount: 0, duplicate: false };
 
       // Active session — no stop time means currently online
       const activeRes = await pg.query(`
@@ -3434,13 +3658,29 @@ if (!unpaid && data.username && data.password) {
         return { ...r, terminateLabel: info.label, terminateDescription: info.description, terminateCode: info.code };
       };
 
+      /**
+       * SIMULTANEOUS-USE FLAG. Count ALL open sessions — not just the fresh
+       * ones — so the profile can warn the operator the moment the same
+       * username is dialled in from more than one device (credential sharing or
+       * a ghost). The duplicate-session sweep closes stalls to the router timer,
+       * so a second open row here genuinely means "two online connections".
+       */
+      const dupRes = await pg.query(`
+        SELECT COUNT(*)::int AS open_count
+        FROM radacct
+        WHERE username = $1 AND acctstoptime IS NULL
+      `, [username]);
+      const openCount = Number(dupRes.rows[0]?.open_count || 0);
+
       return {
         session: enrich(activeRes.rows[0] || null),
         history: histRes.rows.map(enrich),
+        openCount,
+        duplicate: openCount > 1,
       };
     } catch (error: any) {
       this.logger.error(`getRadiusSession error: ${error.message}`);
-      return { session: null, history: [] };
+      return { session: null, history: [], openCount: 0, duplicate: false };
     }
   }
 
