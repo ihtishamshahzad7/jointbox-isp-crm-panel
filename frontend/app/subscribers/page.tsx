@@ -1661,6 +1661,7 @@ export default function SubscribersPage() {
                 onEdit={openEdit}
                 onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
                 onDeactivate={deactivateSub}
+                onActivate={(r) => { setActivationForm((p) => ({ ...p, subscriberId: String(r.id), packageId: String(r.packageId || "") })); setShowActivationModal(true); }}
                 onDelete={(r) => setDeleteConfirm(r)}
               />
 
@@ -1683,6 +1684,7 @@ export default function SubscribersPage() {
                 onEdit={openEdit}
                 onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
                 onDeactivate={deactivateSub}
+                onActivate={(r) => { setActivationForm((p) => ({ ...p, subscriberId: String(r.id), packageId: String(r.packageId || "") })); setShowActivationModal(true); }}
                 onDelete={(r) => setDeleteConfirm(r)}
                 money={money}
                 onRefresh={loadAll}

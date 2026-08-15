@@ -3073,9 +3073,51 @@ if (!unpaid && data.username && data.password) {
     let failed = 0;
     const errors: Array<{ index: number; username?: string; error: string }> = [];
 
+    /**
+     * RESOLVE NAMES → IDS ONCE, UP FRONT.
+     *
+     * A spreadsheet almost never carries the internal numeric ids — it carries
+     * the human names ("4mb", "Gulberg", the router's name). The old import fed
+     * those straight in as packageId/nasId/areaId, where parseInt() turned them
+     * into NaN and dropped them silently — which is exactly why imported
+     * subscribers came in with no package, no speed and no expiry, forcing a
+     * manual edit of every single one. Here we build name→id maps (numbers pass
+     * through untouched) so a package/area/NAS given by name is matched to its
+     * real record, the subscriber activates, and the expiry is stamped.
+     */
+    const [pkgs, areas, nases] = await Promise.all([
+      this.prisma.package.findMany({ select: { id: true, name: true } }),
+      this.prisma.area.findMany({ select: { id: true, name: true } }),
+      this.prisma.nas.findMany({ select: { id: true, shortname: true, nasname: true, nasIp: true } }),
+    ]);
+    const norm = (v: any) => String(v ?? '').trim().toLowerCase();
+    const pkgByName = new Map(pkgs.map((p) => [norm(p.name), p.id]));
+    const areaByName = new Map(areas.map((a) => [norm(a.name), a.id]));
+    const nasByName = new Map<string, number>();
+    for (const n of nases) {
+      for (const k of [n.shortname, n.nasname, n.nasIp]) if (k) nasByName.set(norm(k), n.id);
+    }
+    // Resolve a cell that may be a numeric id OR a name into a numeric id.
+    const resolve = (raw: any, byName: Map<string, number>): number | undefined => {
+      if (raw == null || raw === '') return undefined;
+      if (/^\d+$/.test(String(raw).trim())) return Number(raw);
+      return byName.get(norm(raw));
+    };
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
+        const packageId = resolve(row.packageId ?? row.package ?? row.packageName, pkgByName);
+        const areaId = resolve(row.areaId ?? row.area ?? row.areaName, areaByName);
+        const nasId = resolve(row.nasId ?? row.nas ?? row.nasName, nasByName);
+
+        // Flag an unmatched package by NAME so the operator knows why a row came
+        // in without service, instead of it failing silently as before.
+        const rawPkg = row.packageId ?? row.package ?? row.packageName;
+        if (rawPkg && !packageId) {
+          throw new Error(`package "${rawPkg}" not found — check the name matches a package exactly`);
+        }
+
         await this.create({
           fullName: row.fullName || row.fullname,
           username: row.username,
@@ -3084,8 +3126,9 @@ if (!unpaid && data.username && data.password) {
           phone: row.phone,
           email: row.email,
           address: row.address,
-          packageId: row.packageId || row.package,
-          nasId: row.nasId || row.nas,
+          packageId,
+          areaId,
+          nasId,
           salespersonId: row.salespersonId || payload.salespersonId || row.salesperson,
           connectionType: row.connectionType,
           status: row.profileStatus || 'ACTIVE',

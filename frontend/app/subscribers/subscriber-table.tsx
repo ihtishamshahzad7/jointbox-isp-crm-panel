@@ -23,7 +23,7 @@ import { fileUrl } from "../components/image-upload";
 type Row = any;
 
 export function SubscriberTable({
-  rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, money,
+  rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, onActivate, money,
   onRefresh,
 }: {
   rows: Row[];
@@ -35,6 +35,7 @@ export function SubscriberTable({
   onMove: (r: Row) => void;
   onDeactivate: (r: Row) => void;
   onDelete: (r: Row) => void;
+  onActivate: (r: Row) => void;
   money: (n: any) => string;
   /** Optional: enables the WinBox-style "Live" auto-refresh toggle + manual refresh. */
   onRefresh?: () => void;
@@ -273,6 +274,11 @@ export function SubscriberTable({
                 </td>
 
                 <td className="act" onClick={(e) => e.stopPropagation()}>
+                  {String(r.status ?? "").toUpperCase() === "ACTIVE" ? (
+                    <span className="act-badge" title="Subscriber is active">● Active</span>
+                  ) : (
+                    <button className="ok" onClick={() => onActivate(r)} title="Activate this subscriber">Activate</button>
+                  )}
                   <button onClick={() => onEdit(r)} title="Edit">Edit</button>
                   <button onClick={() => onMove(r)} title="Move">Move</button>
                   <button className="warn" onClick={() => onDeactivate(r)} title="Deactivate">Off</button>
@@ -410,6 +416,9 @@ const CSS = `
 .st td.act button:hover{border-color:#7C4DFF;color:#C4B5FD;background:rgba(124,77,255,.12);transform:translateY(-1px)}
 .st td.act button.warn:hover{color:#FCD34D;border-color:#F59E0B;background:rgba(245,158,11,.12)}
 .st td.act button.bad:hover{color:#FCA5A5;border-color:#EF4444;background:rgba(239,68,68,.12)}
+.st td.act button.ok{color:#10B981;border-color:rgba(16,185,129,.5)}
+.st td.act button.ok:hover{color:#34D399;border-color:#10B981;background:rgba(16,185,129,.12)}
+.st td.act .act-badge{display:inline-block;margin-left:6px;padding:5px 11px;border-radius:8px;font-size:11px;font-weight:700;color:#10B981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.35)}
 
 /* WinBox flags column. */
 .st th.flg,.st td.flg{width:64px;white-space:nowrap}

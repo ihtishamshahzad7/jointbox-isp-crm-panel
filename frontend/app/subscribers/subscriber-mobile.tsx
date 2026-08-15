@@ -30,7 +30,7 @@ const S = {
 };
 
 export function SubscriberMobileList({
-  rows, onOpen, onEdit, onMove, onDeactivate, onDelete,
+  rows, onOpen, onEdit, onMove, onDeactivate, onDelete, onActivate,
 }: {
   rows: Row[];
   onOpen: (r: Row) => void;
@@ -38,6 +38,7 @@ export function SubscriberMobileList({
   onMove: (r: Row) => void;
   onDeactivate: (r: Row) => void;
   onDelete: (r: Row) => void;
+  onActivate?: (r: Row) => void;
 }) {
   return (
     <div className="sm-wrap">
@@ -95,6 +96,11 @@ export function SubscriberMobileList({
 
               {/* Actions — real tap targets */}
               <div className="sm-acts">
+                {String(r.status ?? "").toUpperCase() === "ACTIVE" ? (
+                  <span className="sm-active">● Active</span>
+                ) : (
+                  <button className="ok" onClick={() => onActivate?.(r)}>Activate</button>
+                )}
                 <button onClick={() => onEdit(r)}>Edit</button>
                 <button onClick={() => onMove(r)}>Move</button>
                 <button className="warn" onClick={() => onDeactivate(r)}>Off</button>
@@ -137,12 +143,14 @@ const CSS = `
   .sm-facts .v.mono{font-family:ui-monospace,"JetBrains Mono",monospace;font-size:12px}
   .sm-days{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;
     border-radius:999px}
-  .sm-acts{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;
+  .sm-acts{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;
     padding:0 14px 13px}
   .sm-acts button{min-height:40px;border:1px solid #E2E8F0;background:#F7F9FC;
     border-radius:9px;font-size:12.5px;font-weight:600;color:#1C2434;cursor:pointer;
     font-family:inherit}
   .sm-acts button:active{transform:scale(.97)}
+  .sm-acts button.ok{background:#E7F6EC;border-color:#C6E9D3;color:#157F43}
+  .sm-acts .sm-active{display:flex;align-items:center;justify-content:center;min-height:40px;border-radius:9px;font-size:12.5px;font-weight:700;color:#157F43;background:#E7F6EC;border:1px solid #C6E9D3}
   .sm-acts button.warn{background:#FDF3E3;border-color:#F5DFB4;color:#8A6209}
   .sm-acts button.bad{background:#FDE8EA;border-color:#F5C2C7;color:#B02A37}
   .sm-empty{padding:40px 20px;text-align:center}
