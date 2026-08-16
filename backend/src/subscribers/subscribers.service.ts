@@ -1653,7 +1653,18 @@ if (!unpaid && data.username && data.password) {
         installationDate: data.installationDate === undefined ? undefined : (data.installationDate ? new Date(data.installationDate) : null),
         latitude:         data.latitude      === undefined ? undefined : (data.latitude      ? parseFloat(data.latitude)    : null),
         longitude:        data.longitude     === undefined ? undefined : (data.longitude     ? parseFloat(data.longitude)   : null),
-        status:           this.normalizeStatus(data.status || old.status),
+        /**
+         * A plain edit may DOWNGRADE status (active → suspended/inactive) but must
+         * NEVER upgrade a subscriber to ACTIVE. Activation is the only path that
+         * charges the wallet, raises the invoice and stamps the expiry; letting the
+         * edit form flip status to ACTIVE created a "fake active" — billed as live,
+         * no money taken, no expiry, and not even synced to RADIUS. Upgrades go
+         * through Activate/Renew.
+         */
+        status: (() => {
+          const requested = this.normalizeStatus(data.status || old.status);
+          return (requested === 'ACTIVE' && old.status !== 'ACTIVE') ? old.status : requested;
+        })(),
       },
     });
 
