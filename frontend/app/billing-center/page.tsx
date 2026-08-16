@@ -10,6 +10,7 @@ import Gateways from "../gateways/page";
 import Earnings from "../earnings/page";
 import Reversals from "../reversals/page";
 import WalletManager from "../accounting/wallets";
+import Accountability from "../accounting/accountability";
 
 /**
  * Money in one place — the ledger, what was billed, what was collected, and
@@ -20,6 +21,7 @@ export default function BillingCenter() {
     <Hub
       storageKey="billing"
       tabs={[
+        { id: "accountability", label: "Profit & Accountability", hint: "Are you earning? Profit by day/week/month, balance flow, and what each child earns you.", render: () => <Accountability /> },
         { id: "accounting", label: "Accounting",         hint: "Wallets, ledger and reseller settlement.", render: () => <Accounting /> },
         { id: "wallets",    label: "Wallets",            hint: "Add or reclaim balance for a downline account — with the full transaction record of who moved what.", render: () => <WalletManager /> },
         { id: "earnings",   label: "Collections",        hint: "What you collected, by day, package and method.", render: () => <Earnings /> },

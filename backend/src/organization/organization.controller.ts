@@ -43,6 +43,12 @@ export class OrganizationController {
     return this.pricing.myBooks(req.user);
   }
 
+  /** Full accountability: period P&L, balance flow, per-child earnings. */
+  @Get('accountability')
+  accountability(@Request() req: any) {
+    return this.pricing.accountability(req.user);
+  }
+
   @Get('profit/subscriber/:subscriberId')
   profitBySubscriber(@Param('subscriberId') subscriberId: string, @Request() req: any) {
     return this.pricing.profitBySubscriber(req.user, +subscriberId);

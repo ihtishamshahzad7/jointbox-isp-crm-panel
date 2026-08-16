@@ -693,6 +693,122 @@ export class ResellerPricingService {
     };
   }
 
+  /**
+   * FULL ACCOUNTABILITY for the logged-in account: profit / cost / expenses over
+   * time (today, this week, this month, all-time), the balance flow (what the
+   * parent loaded to you, what you loaded to your children, your wallet now), and
+   * a per-child breakdown ("from this child you earned X; you loaded them Y").
+   * Everything ties back to recorded transactions so it is auditable in production.
+   */
+  async accountability(actor: Actor) {
+    const r2 = (n: any) => Math.round(Number(n || 0) * 100) / 100;
+    const meId = await this.scope.rootId(actor);
+    const now = new Date();
+    const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(dayStart);
+    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7)); // Monday
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // ── Period P&L ────────────────────────────────────────────────
+    const pnl = async (from: Date | null) => {
+      const paidFrom = from ? Prisma.sql`AND p."paymentDate" >= ${from}` : Prisma.empty;
+      const txFrom   = from ? Prisma.sql`AND t."createdAt"   >= ${from}` : Prisma.empty;
+      const expFrom  = from ? Prisma.sql`AND e."expenseDate" >= ${from}` : Prisma.empty;
+
+      const [collectedRow] = await this.prisma.$queryRaw<Array<{ v: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(p.amount - p."refundedAmount"), 0) AS v
+        FROM "Payment" p JOIN "Subscriber" s ON s.id = p."subscriberId"
+        WHERE s."userId" = ${meId} ${paidFrom}`);
+      const [movesRow] = await this.prisma.$queryRaw<Array<{ paidup: number; earneddown: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0) AS paidup,
+               COALESCE(SUM(CASE WHEN t.amount > 0 THEN  t.amount ELSE 0 END), 0) AS earneddown
+        FROM "UserBalanceTransaction" t
+        WHERE t."userId" = ${meId} AND t.reference LIKE 'SUB#%' ${txFrom}`);
+      const [expRow] = await this.prisma.$queryRaw<Array<{ v: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(e.amount), 0) AS v FROM "Expense" e
+        WHERE e."createdBy" = ${meId} AND e.status = 'APPROVED' ${expFrom}`);
+
+      const collected = Number(collectedRow?.v || 0);
+      const paidUp = Number(movesRow?.paidup || 0);
+      const earnedDown = Number(movesRow?.earneddown || 0);
+      const expenses = Number(expRow?.v || 0);
+      const revenue = collected + earnedDown;
+      return {
+        revenue: r2(revenue), collectedFromCustomers: r2(collected), marginFromDownline: r2(earnedDown),
+        activationCost: r2(paidUp), expenses: r2(expenses),
+        profit: r2(revenue - paidUp - expenses),
+      };
+    };
+    const [today, week, month, all] = await Promise.all([pnl(dayStart), pnl(weekStart), pnl(monthStart), pnl(null)]);
+
+    // ── Balance flow ──────────────────────────────────────────────
+    const [me, flowRow] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: meId }, select: { balance: true, name: true } }),
+      this.prisma.$queryRaw<Array<{ loadedin: number; loadedout: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(CASE WHEN type='TOPUP' THEN amount ELSE 0 END), 0)            AS loadedin,
+               COALESCE(SUM(CASE WHEN type='DEDUCT' AND reference LIKE 'TOP#%' THEN -amount ELSE 0 END), 0) AS loadedout
+        FROM "UserBalanceTransaction" WHERE "userId" = ${meId}`),
+    ]);
+
+    // ── Per-child breakdown ───────────────────────────────────────
+    const children = await this.prisma.user.findMany({
+      where: { parentId: meId },
+      select: { id: true, name: true, role: true, balance: true },
+    });
+
+    // My margin credits, each tied to a subscriber; bucket by which child's
+    // subtree that subscriber sits in, so "earned from this child" is exact.
+    const credits = await this.prisma.userBalanceTransaction.findMany({
+      where: { userId: meId, amount: { gt: 0 }, reference: { startsWith: 'SUB#' } },
+      select: { amount: true, reference: true, createdAt: true },
+    });
+    const subIdOf = (ref: string | null) => {
+      const m = ref && ref.match(/^SUB#(\d+)/); return m ? Number(m[1]) : null;
+    };
+    const subIds = [...new Set(credits.map((c) => subIdOf(c.reference)).filter((x): x is number => x != null))];
+    const subOwners = subIds.length
+      ? await this.prisma.subscriber.findMany({ where: { id: { in: subIds } }, select: { id: true, userId: true } })
+      : [];
+    const ownerBySub = new Map(subOwners.map((s) => [s.id, s.userId]));
+
+    const perChild = await Promise.all(children.map(async (c) => {
+      const set = new Set(await this.scope.descendantIds(c.id)); // c + its subtree
+      let earnedAll = 0, earnedMonth = 0;
+      for (const cr of credits) {
+        const sid = subIdOf(cr.reference); if (sid == null) continue;
+        const owner = ownerBySub.get(sid);
+        if (owner != null && set.has(owner)) {
+          earnedAll += cr.amount;
+          if (cr.createdAt >= monthStart) earnedMonth += cr.amount;
+        }
+      }
+      // Balance I loaded into this child (top-ups on the child, done by me).
+      const [loaded] = await this.prisma.$queryRaw<Array<{ v: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(amount), 0) AS v FROM "UserBalanceTransaction"
+        WHERE "userId" = ${c.id} AND type='TOPUP' AND ("createdBy" = ${meId} OR "createdBy" IS NULL)`);
+      const [subCount] = await this.prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`
+        SELECT COUNT(*) AS n FROM "Subscriber" WHERE "userId" IN (${Prisma.join([...set])})`);
+      return {
+        id: c.id, name: c.name, role: c.role, balance: r2(c.balance),
+        earnedFromThisChild: r2(earnedAll),
+        earnedThisMonth: r2(earnedMonth),
+        balanceYouLoaded: r2(Number(loaded?.v || 0)),
+        subscribersInTree: Number(subCount?.n || 0),
+      };
+    }));
+
+    return {
+      account: me?.name,
+      periods: { today, week, month, all },
+      balance: {
+        wallet: r2(me?.balance ?? 0),
+        loadedFromParent: r2(Number(flowRow?.[0]?.loadedin || 0)),
+        loadedToChildren: r2(Number(flowRow?.[0]?.loadedout || 0)),
+      },
+      children: perChild.sort((a, b) => b.earnedFromThisChild - a.earnedFromThisChild),
+    };
+  }
+
   /** Per-subscriber step-by-step breakdown: what each layer earned/paid on this sale. */
   async profitBySubscriber(actor: Actor, subscriberId: number) {
     await this.scope.assertSubscriber(actor, subscriberId);
