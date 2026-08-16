@@ -338,7 +338,10 @@ export class AppController {
 
   @Get('health')
   health() {
-    return { ok: true };
+    // `build` lets a deploy/smoke-test confirm the NEW code is actually live
+    // (deterministic, unlike grepping one-shot startup logs across cluster
+    // workers). Bump BUILD_MARKER in main.ts alongside significant changes.
+    return { ok: true, build: (globalThis as any).__JB_BUILD__ || 'unknown', ts: new Date().toISOString() };
   }
 
   /**

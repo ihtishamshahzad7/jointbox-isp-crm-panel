@@ -206,6 +206,7 @@ async function bootstrap() {
   // Build marker — bump this whenever the activation/money path changes, so a
   // quick `pm2 logs jointbox-backend | grep BUILD` after deploy PROVES the new
   // code is live (and not the old dist a failed migrate/build left running).
+  (globalThis as any).__JB_BUILD__ = 'activation-money-fix-2026-08-16';
   console.log('🏷  BUILD MARKER: activation-money-fix-2026-08-16 (charge-in-tx, prepaid-enforced)');
 
   // Bull-Board queue dashboard (the Laravel Horizon equivalent). Only mounts

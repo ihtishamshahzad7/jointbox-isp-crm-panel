@@ -43,16 +43,17 @@ if [ -z "${DATABASE_URL:-}" ]; then c_y "DATABASE_URL not found in $BACKEND/.env
 
 # ── 1. Is the new build live? ────────────────────────────────────────────────
 hdr "1. Backend build is live"
-if command -v pm2 >/dev/null 2>&1; then
-  if pm2 logs "$PM2_APP" --lines 300 --nostream 2>/dev/null | grep -q "BUILD MARKER"; then
-    pm2 logs "$PM2_APP" --lines 300 --nostream 2>/dev/null | grep "BUILD MARKER" | tail -1
-    c_g "OK — BUILD MARKER found, the new code is running."
-  else
-    c_r "NOT FOUND — the deploy may have failed and pm2 is serving the OLD build."
-    c_y "  Check: cd $REPO && bash update-jointbox.sh   (look for a red migration/build error)"
-  fi
+API_PORT="${API_PORT:-3001}"
+HEALTH="$(curl -s "http://127.0.0.1:${API_PORT}/health" 2>/dev/null)"
+if echo "$HEALTH" | grep -q '"build"'; then
+  BUILD="$(echo "$HEALTH" | sed -n 's/.*"build":"\([^"]*\)".*/\1/p')"
+  echo "  /health build = ${BUILD}"
+  c_g "OK — API responding and reporting its build tag (new code is live)."
+elif echo "$HEALTH" | grep -q '"ok":true'; then
+  c_y "API is up but /health has no build tag — an OLDER build (pre build-tag) is running."
+  c_y "  If you just deployed, re-run: cd $REPO && bash update-jointbox.sh"
 else
-  c_y "pm2 not found — skipping (check your process manager manually)."
+  c_r "API not responding on :${API_PORT}/health — the backend may be down or the deploy failed."
 fi
 
 # ── 2. Migrations ────────────────────────────────────────────────────────────
