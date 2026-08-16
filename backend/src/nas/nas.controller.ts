@@ -50,7 +50,7 @@ export class NasController {
   // IMPORTANT: named routes like 'stats' and 'radius/stats' must come
   // BEFORE ':id' — otherwise NestJS treats them as id params
   @Get('radius/stats')
-  getRadiusStats() { return this.nasService.getRadiusStats(); }
+  getRadiusStats(@Req() req: any) { return this.nasService.getRadiusStats(req.user); }
 
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) { return this.nasService.findOne(+id, req.user); }

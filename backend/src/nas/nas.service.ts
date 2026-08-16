@@ -844,15 +844,19 @@ export class NasService implements OnModuleInit {
   }
 
   // ── RADIUS-wide stats ───────────────────────────────────────
-  async getRadiusStats() {
+  async getRadiusStats(actor?: any) {
     const [alive, authStats] = await Promise.all([
       this.radiusSync.isRadiusAlive(),
       this.radiusSync.getAuthStats(),
     ]);
+    // NEVER expose the real backend/RADIUS host to non-ISP accounts (resellers,
+    // demo). They still get the live health + port numbers, but the address is
+    // masked — the panel must not leak infrastructure to the downline.
+    const isIsp = actor?.role === 'ADMIN' || actor?.role === 'SUPER_ADMIN';
     return {
       ...alive,
       ...authStats,
-      serverIp:   process.env.RADIUS_SERVER_IP || '127.0.0.1',
+      serverIp:   isIsp ? (process.env.RADIUS_SERVER_IP || '127.0.0.1') : 'internal',
       radiusPort: parseInt(process.env.RADIUS_AUTH_PORT || '1812'),
       acctPort:   parseInt(process.env.RADIUS_ACCT_PORT || '1813'),
     };
