@@ -26,19 +26,36 @@ export class NotificationFeedService {
     private scope: ScopeService,
   ) {}
 
-  /** Actions worth interrupting someone for, mapped to plain language. */
-  private static readonly INTERESTING: Record<string, { verb: string; icon: string }> = {
-    CREATE_SUBSCRIBER: { verb: 'added a new subscriber', icon: 'user-plus' },
-    ACTIVATE_SUBSCRIBER: { verb: 'activated', icon: 'check' },
-    RENEW_SUBSCRIBER: { verb: 'renewed', icon: 'refresh' },
-    SUSPEND_SUBSCRIBER: { verb: 'suspended', icon: 'pause' },
-    DELETE_SUBSCRIBER: { verb: 'deleted', icon: 'trash' },
-    CREATE_PAYMENT: { verb: 'recorded a payment for', icon: 'cash' },
-    REFUND_PAYMENT: { verb: 'refunded', icon: 'arrow-back' },
-    CREATE_USER: { verb: 'created the account', icon: 'user-plus' },
-    CREATE_NAS: { verb: 'added the router', icon: 'router' },
-    DELETE_NAS: { verb: 'removed the router', icon: 'router-off' },
-    TOPUP: { verb: 'topped up', icon: 'wallet' },
+  /**
+   * Plain-language label + icon for the actions that ACTUALLY land in
+   * ActivityLog. The global audit interceptor records `action` as the uppercased
+   * permission key (e.g. SUBSCRIBERS.ACTIVATION, USERS.TOPUP) or, when no route
+   * mapping exists, the generic CREATE / UPDATE / DELETE. The feed previously
+   * looked for names like CREATE_SUBSCRIBER that are never written, so it was
+   * always empty. These keys match the real log.
+   */
+  private static readonly VERBS: Record<string, { verb: string; icon: string }> = {
+    'SUBSCRIBERS.WRITE':            { verb: 'added / edited a subscriber', icon: 'user-plus' },
+    'SUBSCRIBERS.ACTIVATION':       { verb: 'activated / renewed', icon: 'check' },
+    'SUBSCRIBERS.DISCONNECT':       { verb: 'disconnected', icon: 'pause' },
+    'SUBSCRIBERS.DELETE':           { verb: 'deleted a subscriber', icon: 'trash' },
+    'SUBSCRIBERS.MASSDELETE':       { verb: 'bulk-deleted subscribers', icon: 'trash' },
+    'SUBSCRIBERS.GRACEPERIOD':      { verb: 'granted grace to', icon: 'clock' },
+    'SUBSCRIBERS.CHANGEBANDWIDTH':  { verb: 'changed bandwidth for', icon: 'gauge' },
+    'GRACE_PERIOD_GRANTED':         { verb: 'granted grace to', icon: 'clock' },
+    'PAYMENTS.WRITE':               { verb: 'recorded a payment', icon: 'cash' },
+    'USERS.WRITE':                  { verb: 'added / edited an account', icon: 'user-plus' },
+    'USERS.DELETE':                 { verb: 'deleted an account', icon: 'trash' },
+    'USERS.TOPUP':                  { verb: 'topped up a wallet', icon: 'wallet' },
+    'USERS.TRANSFERSUBSCRIBERS':    { verb: 'moved subscribers', icon: 'refresh' },
+    'NAS.WRITE':                    { verb: 'added / edited a router', icon: 'router' },
+    'NAS.DELETE':                   { verb: 'removed a router', icon: 'router-off' },
+    'INVOICES.WRITE':               { verb: 'raised an invoice', icon: 'file' },
+    'AREAS.WRITE':                  { verb: 'changed an area', icon: 'map' },
+    // generic fallbacks the interceptor writes for unmapped routes
+    CREATE: { verb: 'created', icon: 'plus' },
+    UPDATE: { verb: 'updated', icon: 'edit' },
+    DELETE: { verb: 'deleted', icon: 'trash' },
   };
 
   /**
@@ -50,7 +67,7 @@ export class NotificationFeedService {
    * something new", and a timestamp answers that exactly.
    */
   async feed(actor: Actor, since?: string, limit = 20) {
-    const where: any = { action: { in: Object.keys(NotificationFeedService.INTERESTING) } };
+    const where: any = { action: { in: Object.keys(NotificationFeedService.VERBS) } };
 
     /**
      * Non-admins see only their own subtree's activity.
@@ -80,7 +97,7 @@ export class NotificationFeedService {
 
     const sinceDate = since ? new Date(since) : null;
     const items = rows.map((r) => {
-      const meta = NotificationFeedService.INTERESTING[r.action] || { verb: r.action.toLowerCase(), icon: 'bell' };
+      const meta = NotificationFeedService.VERBS[r.action] || { verb: r.action.replace(/[._]/g, ' ').toLowerCase(), icon: 'bell' };
       const who = r.user?.name || r.user?.email || 'Someone';
       return {
         id: r.id,
