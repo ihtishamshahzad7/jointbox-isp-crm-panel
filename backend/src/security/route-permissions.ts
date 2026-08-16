@@ -130,6 +130,10 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   // create / edit / toggle fall back to the coarse nas.write.
 
   // ── NETWORK ───────────────────────────────────────────────────────────────
+  { method: 'POST',   test: /^\/network\/bandwidth\//,                 key: 'subscribers.changeBandwidth' },
+  { method: 'POST',   test: /^\/network\/mac\//,                       key: 'network.mac' },
+  { method: 'DELETE', test: /^\/network\/mac\//,                       key: 'network.mac' },
+  { method: 'POST',   test: /^\/network\/disconnect\//,                key: 'network.disconnect' },
   { method: 'POST',   test: /^\/network\/.*disconnect\b/,              key: 'network.disconnect' },
   { method: 'POST',   test: /^\/network\/bandwidth\/\d+$/,             key: 'subscribers.changeBandwidth' },
   { method: 'POST',   test: /^\/network\/mac\//,                       key: 'network.mac' },
