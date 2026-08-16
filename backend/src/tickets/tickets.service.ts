@@ -52,16 +52,26 @@ export class TicketsService {
     });
   }
 
-  async getStats() {
-    const total      = await this.prisma.ticket.count();
-    const open       = await this.prisma.ticket.count({ where: { status: 'OPEN' } });
-    const inProgress = await this.prisma.ticket.count({ where: { status: 'IN_PROGRESS' } });
-    const resolved   = await this.prisma.ticket.count({ where: { status: 'RESOLVED' } });
-    const closed     = await this.prisma.ticket.count({ where: { status: 'CLOSED' } });
+  async getStats(actor?: Actor) {
+    // Scope to the caller's subtree (same as findAll) — unscoped, every dealer
+    // saw the whole ISP's ticket counts.
+    const scope: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      scope.subscriber = { userId: { in: ids.length ? ids : [-1] } };
+    }
+    const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
+
+    const total      = await this.prisma.ticket.count({ where: w() });
+    const open       = await this.prisma.ticket.count({ where: w({ status: 'OPEN' }) });
+    const inProgress = await this.prisma.ticket.count({ where: w({ status: 'IN_PROGRESS' }) });
+    const resolved   = await this.prisma.ticket.count({ where: w({ status: 'RESOLVED' }) });
+    const closed     = await this.prisma.ticket.count({ where: w({ status: 'CLOSED' }) });
 
     const byCategory = await this.prisma.ticket.groupBy({
       by:    ['category'],
       _count: { _all: true },
+      where: w(),
     });
 
     return { total, open, inProgress, resolved, closed, byCategory };

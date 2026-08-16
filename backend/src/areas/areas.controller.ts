@@ -15,7 +15,7 @@ export class AreasController {
   findAll(@Req() req: any) { return this.areasService.findAll(req.user); }
 
   @Get('stats')
-  getStats() { return this.areasService.getStats(); }
+  getStats(@Req() req: any) { return this.areasService.getStats(req.user); }
 
   @Get(':id')
   findOne(@Param('id') id: string) { return this.areasService.findOne(+id); }

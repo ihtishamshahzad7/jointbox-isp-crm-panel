@@ -33,8 +33,8 @@ export class TicketsController {
   }
 
   @Get('stats')
-  getStats() {
-    return this.ticketsService.getStats();
+  getStats(@Req() req: any) {
+    return this.ticketsService.getStats(req.user);
   }
 
   @Get('subscriber/:subscriberId')

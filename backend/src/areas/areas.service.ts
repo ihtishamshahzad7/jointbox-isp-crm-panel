@@ -69,10 +69,14 @@ export class AreasService {
     });
   }
 
-  async getStats() {
-    const total = await this.prisma.area.count();
-    const active = await this.prisma.area.count({ where: { isActive: true } });
-    const inactive = await this.prisma.area.count({ where: { isActive: false } });
+  async getStats(actor?: Actor) {
+    // Scope to the caller's own areas (same ownedWhere as findAll) — unscoped it
+    // leaked every account's area counts.
+    const base = await this.scope.ownedWhere(actor as any);
+    const w = (extra: any = {}) => (base && Object.keys(base).length ? { AND: [base, extra] } : extra);
+    const total = await this.prisma.area.count({ where: w() });
+    const active = await this.prisma.area.count({ where: w({ isActive: true }) });
+    const inactive = await this.prisma.area.count({ where: w({ isActive: false }) });
     return { total, active, inactive };
   }
 }
