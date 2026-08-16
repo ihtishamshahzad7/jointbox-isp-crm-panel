@@ -1362,11 +1362,16 @@ export class SubscribersService implements OnModuleInit {
       // Packaged subscriber: 1) raise the first invoice, then 2) charge the
       // owner's wallet (resellers only — the ISP owner has no wallet gate).
       // Only if both steps are satisfied does the customer reach RADIUS below.
-      if (data.skipInvoice !== true) {
+      // MIGRATION IMPORT (skipCharge): the subscriber already exists in real
+      // life and is mid-cycle — we are recording them, not selling to them. So
+      // no invoice and no wallet charge; we just set their package, expiry and
+      // RADIUS access. Otherwise importing a 100-customer book would try to bill
+      // the owner 100 times and stall on the first empty-wallet.
+      if (data.skipInvoice !== true && data.skipCharge !== true) {
         await this.autoInvoiceForSubscriber(subscriber.id, subscriber.packageId, sellPrice ?? undefined)
           .catch((e: any) => this.logger.warn(`Invoice at activation skipped for #${subscriber.id}: ${e?.message || e}`));
       }
-      if (subscriber.userId) {
+      if (subscriber.userId && data.skipCharge !== true) {
         try {
           await this.pricing.settleActivation(subscriber.id, { byUserId: ownerId ?? undefined });
         } catch (e: any) {
@@ -1393,11 +1398,21 @@ export class SubscribersService implements OnModuleInit {
        * for the package's own duration, exactly like activate-renewal does.
        */
       if (!unpaid) {
-        const dpkg = await this.prisma.package.findUnique({
-          where: { id: subscriber.packageId }, select: { duration: true },
-        });
-        const expiry = new Date();
-        expiry.setDate(expiry.getDate() + (dpkg?.duration || 30));
+        // Honour an explicit expiry from the import file (a migrated customer
+        // keeps their real remaining days); otherwise run from now for the
+        // package duration.
+        let expiry: Date | null = null;
+        if (data.expiryDate) {
+          const e = new Date(data.expiryDate);
+          if (!isNaN(e.getTime())) expiry = e;
+        }
+        if (!expiry) {
+          const dpkg = await this.prisma.package.findUnique({
+            where: { id: subscriber.packageId }, select: { duration: true },
+          });
+          expiry = new Date();
+          expiry.setDate(expiry.getDate() + (dpkg?.duration || 30));
+        }
         await this.prisma.serviceSettings.upsert({
           where: { subscriberId: subscriber.id },
           update: { expiryDate: expiry, isBlocked: false },
@@ -3105,7 +3120,7 @@ if (!unpaid && data.username && data.password) {
     };
   }
 
-  async importSubscribers(payload: { rows: any[]; salespersonId?: number | null }, actor?: Actor) {
+  async importSubscribers(payload: { rows: any[]; salespersonId?: number | null; charge?: boolean }, actor?: Actor) {
     const rows = payload.rows || [];
     let success = 0;
     let failed = 0;
@@ -3169,8 +3184,13 @@ if (!unpaid && data.username && data.password) {
           nasId,
           salespersonId: row.salespersonId || payload.salespersonId || row.salesperson,
           connectionType: row.connectionType,
-          status: row.profileStatus || 'ACTIVE',
+          status: row.profileStatus || row.status || 'ACTIVE',
           installationDate: row.installationDate,
+          // Migrating an existing book: keep their real expiry, and DON'T charge
+          // the owner's wallet or raise an invoice for a customer they already
+          // have. (Pass migrate:false in the payload to bill on import instead.)
+          expiryDate: row.expiryDate || undefined,
+          skipCharge: payload.charge === true ? undefined : true,
         }, actor);
         success++;
       } catch (error: any) {

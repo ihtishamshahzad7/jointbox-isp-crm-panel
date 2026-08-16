@@ -873,11 +873,17 @@ export default function SubscribersPage() {
     mobile: "phone", contact: "phone", phone_number: "phone", phone: "phone",
     email: "email", e_mail: "email",
     nas_id: "nasId", nasid: "nasId", nas: "nasId", nas_name: "nasId", nas_ip: "nasId",
+    nasname: "nasId", router: "nasId", router_name: "nasId", mikrotik: "nasId", nas_server: "nasId", server: "nasId",
     package_id: "packageId", packageid: "packageId", plan_id: "packageId", plan: "packageId", package_name: "packageId", package: "packageId",
+    profile: "packageId", service: "packageId", service_plan: "packageId", internet_package: "packageId",
+    package_profile: "packageId", pppoe_profile: "packageId", speed: "packageId", ppp_profile: "packageId",
     connection_type: "connectionType", conn_type: "connectionType",
     profile_status: "status", profilestatus: "status", status: "status",
     static_ip: "staticIp", mac_address: "macAddress", previous_balance: "previousBalance",
-    address: "address", expiration_date: "expiryDate", expiry_date: "expiryDate", join_date: "joinDate",
+    address: "address",
+    expiration_date: "expiryDate", expiry_date: "expiryDate", expiry: "expiryDate",
+    expire_date: "expiryDate", expire: "expiryDate", due_date: "expiryDate", valid_till: "expiryDate", end_date: "expiryDate",
+    join_date: "joinDate", installation_date: "installationDate", install_date: "installationDate", activation_date: "installationDate",
   };
   // Foreign panel tree/geo ids that mean nothing here — dropped so they can't
   // leak in. The salesperson chosen in the dialog anchors the tree instead.
@@ -912,7 +918,11 @@ export default function SubscribersPage() {
       const canon = (r: Record<string, any>) => {
         const obj: Record<string, any> = {};
         for (const k of Object.keys(r)) {
-          const key = k.trim().toLowerCase();
+          // Normalise "Expiry Date", "NAS IP", "Package Name" → expiry_date,
+          // nas_ip, package_name so they match the alias map (spaces AND hyphens
+          // collapse to underscore). Without this, any header with a space was
+          // silently unmapped — which is why package/expiry didn't import.
+          const key = k.trim().toLowerCase().replace(/[\s-]+/g, "_");
           if (IMPORT_DROP.has(key)) continue;
           const dest = IMPORT_ALIAS[key] || k.trim();
           const v = typeof r[k] === "string" ? r[k].trim() : r[k];
