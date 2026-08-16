@@ -34,6 +34,7 @@ export interface MikrotikDetails {
   ipAddresses: IpAddress[];
   pppoeProfiles: PppoeProfile[];
   activeConnections: number;
+  apiErrors?: string[];
 }
 
 export interface MikrotikInterface {
@@ -387,20 +388,30 @@ export class MikrotikSyncService {
     return withMikrotik(
       { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 12000 },
       async (client) => {
+        // Capture per-command failures instead of silently returning [] — that
+        // was turning a permission/credential problem on the router into a
+        // meaningless wall of "Unknown". If the API user cannot read
+        // /system/resource, the UI now says exactly that.
+        const apiErrors: string[] = [];
+        const call = (cmd: string[], label: string) =>
+          client.send(cmd).catch((e: any) => { apiErrors.push(`${label}: ${e?.message || e}`); return [] as any[]; });
         const [
           identity, resource, interfaces, pppoeServers, pppoeProfiles,
           radiusClients, apiServices, ipAddresses, activeSecrets,
         ] = await Promise.all([
-          client.send(['/system/identity/print']).catch(() => []),
-          client.send(['/system/resource/print']).catch(() => []),
-          client.send(['/interface/print']).catch(() => []),
-          client.send(['/interface/pppoe-server/server/print']).catch(() => []),
-          client.send(['/ppp/profile/print']).catch(() => []),
-          client.send(['/radius/print']).catch(() => []),
-          client.send(['/ip/service/print', '?name=api']).catch(() => []),
-          client.send(['/ip/address/print']).catch(() => []),
-          client.send(['/ppp/active/print', 'count-only']).catch(() => []),
+          call(['/system/identity/print'], 'identity'),
+          call(['/system/resource/print'], 'system-resource'),
+          call(['/interface/print'], 'interfaces'),
+          call(['/interface/pppoe-server/server/print'], 'pppoe-server'),
+          call(['/ppp/profile/print'], 'ppp-profiles'),
+          call(['/radius/print'], 'radius-clients'),
+          call(['/ip/service/print', '?name=api'], 'ip-services'),
+          call(['/ip/address/print'], 'ip-addresses'),
+          call(['/ppp/active/print', 'count-only'], 'active-count'),
         ]);
+        if (apiErrors.length) {
+          this.logger.warn(`MikroTik ${nasIp}: ${apiErrors.length} API command(s) failed — ${apiErrors.join('; ')}`);
+        }
 
         const res = resource[0] || {};
         const id = identity[0] || {};
@@ -471,7 +482,11 @@ export class MikrotikSyncService {
             disabled: ip.disabled || 'false',
           })),
           activeConnections: parseInt(activeSecrets[0]?.ret || '0', 10),
-        };
+          // Surface WHY fields are blank (e.g. the API user lacks 'read'/'api'
+          // policy), so the detail view can tell the operator instead of just
+          // showing "Unknown".
+          apiErrors,
+        } as MikrotikDetails;
       },
     );
   }

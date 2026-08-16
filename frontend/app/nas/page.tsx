@@ -69,6 +69,7 @@ interface MikrotikDetails {
   radiusClients: RadiusClient[];
   apiService: ApiServiceInfo | null;
   ipAddresses: IpAddress[];
+  apiErrors?: string[];
 }
 interface MikrotikInterface {
   name: string; type: string; mtu: string; macAddress: string;
@@ -1103,6 +1104,15 @@ export default function NasPage() {
                       <Icons.Router /> MikroTik Device Details
                       {viewDetail.loadingDetails && <span style={{ color:t.amber, fontWeight:400 }}>— syncing…</span>}
                     </div>
+                    {/* If the router returned data but the API user couldn't read
+                        it, say so instead of showing a wall of "Unknown". */}
+                    {viewDetail.details?.apiErrors?.length ? (
+                      <div style={{ background:'rgba(239,68,68,.10)', border:'1px solid rgba(239,68,68,.35)', borderRadius:8, padding:'8px 10px', marginBottom:10, fontSize:11, color:'#f87171', lineHeight:1.6 }}>
+                        ⚠️ The router API rejected {viewDetail.details.apiErrors.length} command(s), so the details below are blank.
+                        This is usually the API user (<b>{(viewDetail as any).apiUsername || 'test'}</b>) missing the <b>read</b>/<b>api</b> permission on the MikroTik, or wrong credentials.
+                        <div style={{ marginTop:4, opacity:.85, fontFamily:'monospace', fontSize:10 }}>{viewDetail.details.apiErrors.slice(0,4).join(' · ')}</div>
+                      </div>
+                    ) : null}
                     {/* Row 1: identity/version/cpu/uptime */}
                     <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:8 }}>
                       {[
