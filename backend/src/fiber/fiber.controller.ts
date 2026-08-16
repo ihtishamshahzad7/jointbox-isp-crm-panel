@@ -92,7 +92,7 @@ export class FiberController {
   listOnus(@Query() query: {
     oltId?: string; portId?: string; subscriberId?: string;
     unassigned?: string; page?: string; limit?: string;
-  }) {
+  }, @Req() req: any) {
     return this.fiber.listOnus({
       ...(query.oltId ? { oltId: +query.oltId } : {}),
       ...(query.portId ? { portId: +query.portId } : {}),
@@ -100,7 +100,7 @@ export class FiberController {
       ...(query.unassigned ? { unassigned: true } : {}),
       page: query.page ? +query.page : undefined,
       limit: query.limit ? +query.limit : undefined,
-    });
+    }, req.user);
   }
 
   @Post('onus/:id/assign/:subscriberId')

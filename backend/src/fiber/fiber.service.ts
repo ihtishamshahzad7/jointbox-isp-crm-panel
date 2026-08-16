@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ScopeService, Actor } from '../common/scope.service';
 import { TopologyService } from '../topology/topology.service';
 import { OnuProvisionService } from './onu-provision.service';
 
@@ -16,6 +17,7 @@ export class FiberService {
 
   constructor(
     private prisma: PrismaService,
+    private scope: ScopeService,
     private topology: TopologyService,
     private onuProvision: OnuProvisionService,
   ) {}
@@ -207,12 +209,24 @@ export class FiberService {
   async listOnus(query: {
     oltId?: number; portId?: number; subscriberId?: number;
     unassigned?: boolean; page?: number; limit?: number;
-  }) {
+  }, actor?: Actor) {
     const where: any = {};
     if (query.oltId) where.oltId = query.oltId;
     if (query.portId) where.ponPortId = query.portId;
     if (query.subscriberId) where.subscriberId = query.subscriberId;
     if (query.unassigned) where.subscriberId = null;
+
+    // TENANT ISOLATION: a reseller must only see ONUs that are unassigned OR
+    // bound to a subscriber in their own subtree — never another tenant's
+    // customer name/phone. OLT/PON infrastructure is shared, but this binding is
+    // subscriber PII.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where.AND = [
+        ...(where.AND || []),
+        { OR: [{ subscriberId: null }, { subscriber: { userId: { in: ids.length ? ids : [-1] } } }] },
+      ];
+    }
 
     const limit = Math.min(Number(query.limit) || 50, 200);
     const page = Math.max(Number(query.page) || 1, 1);
