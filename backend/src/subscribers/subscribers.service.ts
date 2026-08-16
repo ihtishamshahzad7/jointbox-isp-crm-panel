@@ -2753,6 +2753,42 @@ if (!unpaid && data.username && data.password) {
       );
     }
 
+    /**
+     * THE ACTIVATING RESELLER CLAIMS THE CUSTOMER — so the sale is priced and
+     * charged at THEIR tier.
+     *
+     * A subscriber the ISP (or any ancestor) created sits at the TOP of the
+     * tree, so its cost is 0 and its price falls to the package base — which is
+     * why a dealer saw "Costs you 0 / Customer pays 250" instead of their real
+     * 800 / 1000. When a reseller activates a customer that currently sits AT OR
+     * ABOVE them (not one already owned further down their own subtree), that
+     * reseller becomes the owner and salesperson, so the whole activation runs
+     * on their pricing. A parent activating one of a child's customers does NOT
+     * steal it (the owner is below them → left untouched).
+     */
+    if (payload.actorId) {
+      const actorUser = await this.prisma.user.findUnique({
+        where: { id: Number(payload.actorId) },
+        select: { id: true, role: true, branchId: true },
+      });
+      if (actorUser && !this.scope.isAdmin(actorUser.role) && subscriber.userId !== actorUser.id) {
+        const below = await this.scope.descendantIds(actorUser.id); // self + descendants
+        const ownerIsBelowActor = subscriber.userId != null && below.includes(subscriber.userId);
+        if (!ownerIsBelowActor) {
+          await this.prisma.subscriber.update({
+            where: { id: subscriberId },
+            data: {
+              userId: actorUser.id,
+              salespersonId: actorUser.id,
+              ...(actorUser.branchId != null ? { branchId: actorUser.branchId } : {}),
+            },
+          });
+          subscriber.userId = actorUser.id; // downstream quote/settlement price at this tier
+          this.logger.log(`Activation: subscriber #${subscriberId} claimed by reseller #${actorUser.id} (priced at their tier)`);
+        }
+      }
+    }
+
     const pkg = await this.prisma.package.findUnique({ where: { id: packageId } });
     if (!pkg) throw new Error('Package not found');
 

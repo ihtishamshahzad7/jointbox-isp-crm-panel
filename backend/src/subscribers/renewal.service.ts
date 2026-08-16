@@ -87,6 +87,27 @@ export class RenewalService {
     if (!pkg) throw new BadRequestException('No package selected for this renewal.');
 
     /**
+     * EFFECTIVE OWNER — who this activation is really priced for. If a reseller
+     * is previewing/activating a customer that sits AT OR ABOVE them (e.g. the
+     * ISP created it), THEY will own it on activation, so we must price at THEIR
+     * tier here too — otherwise the modal shows the base price (250, cost 0)
+     * while the actual charge would be their 800/1000. Mirrors the claim logic
+     * in activateRenewal so the preview and the charge always agree.
+     */
+    let effectiveOwnerId = sub.userId ?? null;
+    let claimed = false;
+    if (actor && !this.scope.isAdmin((actor as any).role)) {
+      const actorId = this.scope.actorId(actor);
+      if (actorId && sub.userId !== actorId) {
+        const below = await this.scope.descendantIds(actorId);
+        if (!(sub.userId != null && below.includes(sub.userId))) {
+          effectiveOwnerId = actorId;
+          claimed = true;
+        }
+      }
+    }
+
+    /**
      * Three-step fallback: this subscriber's own stored price, then the owning
      * account's retail price for THIS package, then the package base price.
      *
@@ -97,11 +118,13 @@ export class RenewalService {
      * activation at a stale figure (e.g. 250) instead of the owner's real retail
      * (1000). So a package change forces a fresh resolve from the owner's retail.
      */
-    const pricingSamePackage = sub.packageId != null && pkg.id === sub.packageId;
+    // The stored sellPrice belongs to the CURRENT owner — ignore it when the
+    // activating reseller is claiming the customer (different tier).
+    const pricingSamePackage = !claimed && sub.packageId != null && pkg.id === sub.packageId;
     let resolved = (pricingSamePackage && sub.sellPrice != null) ? Number(sub.sellPrice) : null;
-    if (resolved == null && sub.userId) {
+    if (resolved == null && effectiveOwnerId) {
       const own = await this.prisma.resellerPackagePrice.findUnique({
-        where: { userId_packageId: { userId: sub.userId, packageId: pkg.id } },
+        where: { userId_packageId: { userId: effectiveOwnerId, packageId: pkg.id } },
         select: { retailPrice: true },
       });
       if (own?.retailPrice != null && own.retailPrice > 0) resolved = own.retailPrice;
@@ -185,11 +208,11 @@ export class RenewalService {
      * tree (ISP) buys from no one, so its cost is 0.
      */
     let ownerCost = 0;
-    if (sub.userId) {
-      const me = await this.prisma.user.findUnique({ where: { id: sub.userId }, select: { parentId: true } });
+    if (effectiveOwnerId) {
+      const me = await this.prisma.user.findUnique({ where: { id: effectiveOwnerId }, select: { parentId: true } });
       if (me?.parentId) {
         const buy = await this.prisma.resellerPackagePrice.findUnique({
-          where: { userId_packageId: { userId: sub.userId, packageId: pkg.id } },
+          where: { userId_packageId: { userId: effectiveOwnerId, packageId: pkg.id } },
           select: { price: true },
         });
         ownerCost = buy?.price != null ? Number(buy.price) : Number(base);
