@@ -203,6 +203,10 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
   console.log('✅ Backend running on:');
   console.log(`  - http://localhost:${port}`);
+  // Build marker — bump this whenever the activation/money path changes, so a
+  // quick `pm2 logs jointbox-backend | grep BUILD` after deploy PROVES the new
+  // code is live (and not the old dist a failed migrate/build left running).
+  console.log('🏷  BUILD MARKER: activation-money-fix-2026-08-16 (charge-in-tx, prepaid-enforced)');
 
   // Bull-Board queue dashboard (the Laravel Horizon equivalent). Only mounts
   // when Redis is on AND the optional packages are installed — otherwise skips
