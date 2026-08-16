@@ -140,11 +140,15 @@ export class LogsController {
   radiusSessions(
     @Query('limit') limit: string,
     @Query('username') username: string,
+    @Query('cause') cause: string,
+    @Query('sinceHours') sinceHours: string,
     @Req() req: any,
   ) {
     return this.logs.getRadiusSessions(req.user, {
       limit: limit ? +limit : undefined,
       username: username || undefined,
+      cause: cause || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
     });
   }
 

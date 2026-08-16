@@ -40,6 +40,9 @@ export default function LogsPage() {
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [radiusSessions, setRadiusSessions] = useState<any[]>([]);
+  const [radiusSummary, setRadiusSummary] = useState<any[]>([]);
+  const [radCause, setRadCause] = useState<string>("");   // "" = all, "online", or a cause label
+  const [radWindow, setRadWindow] = useState<number>(0);  // 0 = all time, else hours
   const [failedActs, setFailedActs] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
@@ -132,7 +135,7 @@ export default function LogsPage() {
         fetch(`${API}/logs/network?limit=100`, { headers }).catch((err) => { console.error('Network logs fetch failed', err); return null; }),
         fetch(`${API}/logs/system?limit=100`, { headers }).catch((err) => { console.error('System logs fetch failed', err); return null; }),
         fetch(`${API}/logs/sessions${fuq}`, { headers }).catch((err) => { console.error('Session logs fetch failed', err); return null; }),
-        fetch(`${API}/logs/radius-sessions?limit=300`, { headers }).catch((err) => { console.error('RADIUS session logs fetch failed', err); return null; }),
+        fetch(`${API}/logs/radius-sessions?limit=500${radCause ? `&cause=${encodeURIComponent(radCause)}` : ""}${radWindow ? `&sinceHours=${radWindow}` : ""}`, { headers }).catch((err) => { console.error('RADIUS session logs fetch failed', err); return null; }),
       ]);
       if (loginRes) {
         if (loginRes.ok) { const d = await loginRes.json(); setLoginLogs(d.logs || []); }
@@ -155,11 +158,11 @@ export default function LogsPage() {
         else console.error('Session logs HTTP error', sessionsRes.status, await sessionsRes.text());
       }
       if (radiusRes) {
-        if (radiusRes.ok) { const d = await radiusRes.json(); setRadiusSessions(Array.isArray(d) ? d : []); }
+        if (radiusRes.ok) { const d = await radiusRes.json(); setRadiusSessions(Array.isArray(d?.items) ? d.items : []); setRadiusSummary(Array.isArray(d?.summary) ? d.summary : []); }
         else console.error('RADIUS session logs HTTP error', radiusRes.status, await radiusRes.text());
       }
     } finally { setLoading(false); }
-  }, [token, focusUser]);
+  }, [token, focusUser, radCause, radWindow]);
 
   // Initial load
   useEffect(() => {
@@ -641,6 +644,42 @@ export default function LogsPage() {
 
           {/* ═══════════════ TAB: RADIUS SESSIONS (with termination cause) ═══════════════ */}
           {activeTab === "radsess" && (
+          <>
+            {/* Time window */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Window:</span>
+              {[[0,"All"],[24,"24h"],[72,"3d"],[168,"7d"]].map(([h,lbl]) => (
+                <button key={h as number} onClick={() => setRadWindow(h as number)}
+                  style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                    border: `1px solid ${radWindow === h ? t.accent : t.cardBorder}`,
+                    background: radWindow === h ? t.accent : "transparent", color: radWindow === h ? "#fff" : t.textSub }}>
+                  {lbl as string}
+                </button>
+              ))}
+            </div>
+            {/* Per-cause summary chips — click to filter */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              <button onClick={() => setRadCause("")}
+                style={{ fontSize: 11, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${radCause === "" ? t.accent : t.cardBorder}`,
+                  background: radCause === "" ? t.accent : "transparent", color: radCause === "" ? "#fff" : t.textSub }}>
+                All
+              </button>
+              {radiusSummary.map((c: any) => {
+                const val = c.online ? "online" : c.label;
+                const active = radCause.toLowerCase() === String(val).toLowerCase();
+                return (
+                  <button key={val} onClick={() => setRadCause(active ? "" : val)}
+                    title={c.online ? "Currently online" : `Terminate code #${c.code}`}
+                    style={{ fontSize: 11, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                      border: `1px solid ${active ? t.accent : t.cardBorder}`,
+                      background: active ? t.accent : (c.online ? "rgba(74,222,128,.1)" : "rgba(251,191,36,.1)"),
+                      color: active ? "#fff" : (c.online ? "#4ade80" : "#fbbf24") }}>
+                    {c.online ? "● Online" : `#${c.code} ${c.label}`} · {c.count}
+                  </button>
+                );
+              })}
+            </div>
             <LogTable data={radiusSessions} d={d} t={t}
               headers={["User", "Status / Cause", "IP", "Started", "Duration", "Down / Up"]}
               render={(s: any) => {
@@ -668,6 +707,7 @@ export default function LogsPage() {
                   </tr>
                 );
               }} />
+          </>
           )}
 
           {/* ═══════════════ TAB: FAILED ACTIVATIONS ═══════════════ */}

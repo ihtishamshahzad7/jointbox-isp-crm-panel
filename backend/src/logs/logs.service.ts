@@ -380,8 +380,11 @@ export class LogsService {
    * label + description. This is the view an operator needs to see why a
    * customer keeps dropping. Scoped to the caller's own subscribers.
    */
-  async getRadiusSessions(actor: Actor, opts: { limit?: number; username?: string } = {}) {
-    const take = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+  async getRadiusSessions(
+    actor: Actor,
+    opts: { limit?: number; username?: string; cause?: string; sinceHours?: number } = {},
+  ) {
+    const take = Math.min(Math.max(opts.limit ?? 200, 1), 2000);
     const where: any = {};
 
     // Scope: non-admins only see their own subtree's subscriber usernames.
@@ -389,10 +392,14 @@ export class LogsService {
       const subWhere = await this.scope.subscriberWhere(actor);
       const subs = await this.prisma.subscriber.findMany({ where: subWhere, select: { username: true } });
       const names = subs.map((s) => s.username).filter(Boolean) as string[];
-      if (!names.length) return [];
+      if (!names.length) return { items: [], summary: [], total: 0 };
       where.username = { in: names };
     }
     if (opts.username) where.username = opts.username;
+    // Time window: sessions that STARTED within the last N hours.
+    if (opts.sinceHours && opts.sinceHours > 0) {
+      where.acctstarttime = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
+    }
 
     const rows = await this.prisma.radAcct.findMany({
       where,
@@ -401,7 +408,7 @@ export class LogsService {
     });
 
     const MB = 1024 * 1024;
-    return rows.map((r) => {
+    let items = rows.map((r) => {
       const online = r.acctstoptime == null;
       const info = terminateInfo(online ? null : r.acctterminatecause);
       return {
@@ -423,6 +430,28 @@ export class LogsService {
         terminateDescription: info.description,
       };
     });
+
+    // Per-cause count summary (built BEFORE the cause filter, so the chips always
+    // show the full breakdown to pick from). Repeated NAS reboots or carrier
+    // losses jump out here.
+    const counts = new Map<string, { code: number; label: string; count: number; online: boolean }>();
+    for (const it of items) {
+      const key = it.online ? 'online' : `${it.terminateCode}:${it.terminateLabel}`;
+      const cur = counts.get(key) || { code: it.terminateCode, label: it.online ? 'Online' : it.terminateLabel, count: 0, online: it.online };
+      cur.count++;
+      counts.set(key, cur);
+    }
+    const summary = Array.from(counts.values()).sort((a, b) => b.count - a.count);
+
+    // Optional filter by a specific cause label (or "online").
+    if (opts.cause) {
+      const c = opts.cause.toLowerCase();
+      items = items.filter((it) =>
+        c === 'online' ? it.online : (!it.online && it.terminateLabel.toLowerCase() === c),
+      );
+    }
+
+    return { items, summary, total: items.length };
   }
 
   // ── Failed Activations ────────────────────────────────────────
