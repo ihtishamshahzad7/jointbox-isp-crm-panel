@@ -298,6 +298,17 @@ export default function DashboardPage() {
   const router = useRouter();
 
   const [mounted, setMounted] = useState(false);
+  // Mobile detection — inline styles beat CSS media queries, so multi-column
+  // grids are collapsed to one column in JS on narrow screens. `cols(desktop)`
+  // returns "1fr" on phones so nothing is squeezed.
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  const cols = (desktop: string) => (isMobile ? "1fr" : desktop);
   const [refreshKey, setRefreshKey] = useState(0);
   const [tab, setTab] = useState<DashboardTab>("home");
   const [busyAction, setBusyAction] = useState<string>("");
@@ -737,10 +748,16 @@ export default function DashboardPage() {
     border: "1px solid #E2E8F0",
     borderRadius: 12,
     boxShadow: "0 1px 3px rgba(0,0,0,.05)",
+    // On phones the section tabs scroll sideways instead of overflowing the page.
+    overflowX: "auto",
+    maxWidth: "100%",
+    flexWrap: "nowrap",
+    WebkitOverflowScrolling: "touch",
   };
 
   const tabButtonStyle = (active: boolean): React.CSSProperties => ({
     minWidth: 138,
+    flexShrink: 0,
     display: "flex",
     flexDirection: "column",
     alignItems: "flex-start",
@@ -756,7 +773,7 @@ export default function DashboardPage() {
   });
 
   return (
-    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
       {!mounted ? (
         <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ width: "100%", maxWidth: 420, background: "var(--surface)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 18 }}>
@@ -869,7 +886,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1.1fr .9fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols("1.1fr .9fr"), gap: 12 }}>
             <div style={cardStyle} className="panel-card">
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Recent Activity (Latest 5)</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -937,7 +954,7 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols("1fr 1fr"), gap: 12 }}>
             <div style={cardStyle}>
               <div style={{ fontWeight: 700, marginBottom: 3 }}>Revenue</div>
               <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 14 }}>Collected per day, last 14 days</div>
@@ -952,7 +969,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols("1fr 1fr"), gap: 12 }}>
             <div style={cardStyle}>
               <div style={{ fontWeight: 700, marginBottom: 3 }}>Package distribution</div>
               <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 14 }}>How your customers split across plans</div>
@@ -993,8 +1010,8 @@ export default function DashboardPage() {
           </div>
 
           <div style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
-            <div style={{ maxHeight: 560, overflow: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <div style={{ maxHeight: 560, overflow: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table style={{ width: "100%", minWidth: isMobile ? 640 : undefined, borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ position: "sticky", top: 0, background: "var(--surface)" }}>
                     {[
@@ -1071,7 +1088,7 @@ export default function DashboardPage() {
             <button style={btnStyle} onClick={() => setShowInvoiceQuick(true)}>Quick Invoice Generation</button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols("1fr 1fr"), gap: 12 }}>
             <div style={{ ...cardStyle, maxHeight: 380, overflow: "auto" }}>
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Invoice List</div>
               {accountingInvoices.map((i) => {
@@ -1135,8 +1152,8 @@ export default function DashboardPage() {
           </div>
 
           <div style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
-            <div style={{ maxHeight: 520, overflow: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <div style={{ maxHeight: 520, overflow: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table style={{ width: "100%", minWidth: isMobile ? 640 : undefined, borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "var(--surface)", position: "sticky", top: 0 }}>
                     {"Name,Email,Role,Permissions,Last Login,Status,Actions".split(",").map((h) => (
@@ -1253,7 +1270,7 @@ export default function DashboardPage() {
               <button style={ghostBtn} onClick={() => setSelectedSubscriber(null)}>Close</button>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: cols("1fr 1fr"), gap: 12 }}>
               <div style={{ ...cardStyle, padding: 12 }}>
                 <div style={{ fontWeight: 700, marginBottom: 8 }}>Personal Info</div>
                 <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.8 }}>
