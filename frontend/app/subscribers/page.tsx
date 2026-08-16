@@ -1773,7 +1773,16 @@ export default function SubscribersPage() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 8 }}>
               {filtered
-                .filter((s) => !!s.serviceSettings?.expiryDate)
+                // Truly expired OR expiring within 30 days — not just "has an
+                // expiry" (which wrongly listed customers 145 days out), and
+                // sorted soonest-first so the ones needing attention lead.
+                .filter((s) => {
+                  const e = s.serviceSettings?.expiryDate;
+                  if (!e) return false;
+                  const days = Math.ceil((new Date(e).getTime() - Date.now()) / 86400000);
+                  return days <= 30;
+                })
+                .sort((a, b) => new Date(a.serviceSettings!.expiryDate!).getTime() - new Date(b.serviceSettings!.expiryDate!).getTime())
                 .slice(0, 8)
                 .map((s) => {
                   const expiry = new Date(s.serviceSettings?.expiryDate || "");

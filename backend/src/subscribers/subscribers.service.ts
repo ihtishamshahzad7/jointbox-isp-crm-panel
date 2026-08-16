@@ -183,6 +183,9 @@ export class SubscribersService implements OnModuleInit {
       nas:         true,
       salesperson: true,
       serviceSettings: true,
+      // The actual OWNER (who the wallet is charged and whose subtree this is).
+      // Without it the "Owner" column silently fell back to the salesperson.
+      user: { select: { id: true, name: true, role: true } },
     };
 
     // Hierarchy scoping: a reseller only sees subscribers in its subtree.
@@ -1073,6 +1076,7 @@ export class SubscribersService implements OnModuleInit {
         // Needed for expiry/IP details — without it the profile and the public
         // API both reported a null expiry date for every subscriber.
         serviceSettings: true,
+        user: { select: { id: true, name: true, role: true } },
       },
     });
   }
@@ -1092,15 +1096,22 @@ export class SubscribersService implements OnModuleInit {
     };
     const scopeWhere = await this.scope.subscriberWhere(actor);
     const where = Object.keys(scopeWhere).length ? { AND: [base, scopeWhere] } : base;
-    return this.prisma.subscriber.findMany({
+    const rows = await this.prisma.subscriber.findMany({
       where,
+      // MUST match findAll's shape, or a searched list silently loses expiry
+      // (days-left) and online/offline status that the full list shows.
       include: {
         package:     { include: { pool: true } },
         area:        true,
         nas:         true,
         salesperson: true,
+        serviceSettings: true,
+        user: { select: { id: true, name: true, role: true } },
       },
+      orderBy: { createdAt: 'desc' },
     });
+    // Same live-status enrichment as findAll so search rows show correct online.
+    return this.attachLiveStatus(rows);
   }
 
   // ─────────────────────────────────────────────────────────────
