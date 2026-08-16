@@ -341,16 +341,16 @@ export class IpPoolService {
   // ─────────────────────────────────────────────────────────────
   // STATS
   // ─────────────────────────────────────────────────────────────
-  async getStats() {
-    const total      = await this.prisma.ipPool.count();
-    const assigned   = await this.prisma.ipPool.count({
-      where: { packages: { some: {} } },
-    });
+  async getStats(actor?: Actor) {
+    // Scope to the caller's own pools (same poolWhere as findAll) — pools are
+    // per-tenant, so an unscoped count leaked every account's pool totals.
+    const base = await this.scope.poolWhere(actor as any);
+    const w = (extra: any = {}) => (base && Object.keys(base).length ? { AND: [base, extra] } : extra);
+    const total      = await this.prisma.ipPool.count({ where: w() });
+    const assigned   = await this.prisma.ipPool.count({ where: w({ packages: { some: {} } }) });
     const unassigned = total - assigned;
-    // Total packages that have a pool assigned
-    const packages   = await this.prisma.package.count({
-      where: { poolId: { not: null } },
-    });
+    // Packages that have a pool assigned (catalogue-level — packages are shared).
+    const packages   = await this.prisma.package.count({ where: { poolId: { not: null } } });
     return { total, assigned, unassigned, packages };
   }
 
