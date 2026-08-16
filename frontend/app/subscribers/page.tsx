@@ -97,6 +97,10 @@ interface RadiusSession {
   framedprotocol?: string | null;
   servicetype?: string | null;
   acctterminatecause?: string | null;
+  // Enriched RFC 2866 termination cause (added by the backend history query).
+  terminateCode?: number | null;
+  terminateLabel?: string | null;
+  terminateDescription?: string | null;
   acctinterval?: number | null;
 }
 
