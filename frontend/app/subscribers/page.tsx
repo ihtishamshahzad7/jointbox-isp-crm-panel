@@ -2695,7 +2695,17 @@ export default function SubscribersPage() {
                                 <td style={{ padding: "8px 10px", fontWeight: 600 }}>{fmtDuration(sess.duration_seconds)}</td>
                                 <td style={{ padding: "8px 10px", color: "#4ade80" }}>{fmtBytes(sess.upload_bytes)}</td>
                                 <td style={{ padding: "8px 10px", color: "#60a5fa" }}>{fmtBytes(sess.download_bytes)}</td>
-                                <td style={{ padding: "8px 10px", fontSize: 10 }}>{sess.acctterminatecause || "—"}</td>
+                                <td style={{ padding: "8px 10px", fontSize: 10 }}>
+                                  {active ? (
+                                    <span style={{ color: t.textMuted }}>—</span>
+                                  ) : sess.terminateLabel ? (
+                                    <span title={sess.terminateDescription || ""} style={{ cursor: "help" }}>
+                                      <span style={{ display: "inline-block", padding: "2px 7px", borderRadius: 999, fontWeight: 700, fontSize: 10, color: "#fbbf24", background: "rgba(251,191,36,.12)", border: "1px solid rgba(251,191,36,.35)" }}>
+                                        {sess.terminateCode ? `#${sess.terminateCode} ` : ""}{sess.terminateLabel}
+                                      </span>
+                                    </span>
+                                  ) : (sess.acctterminatecause || "—")}
+                                </td>
                               </tr>
                             );
                           })}
