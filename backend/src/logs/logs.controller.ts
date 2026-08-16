@@ -135,6 +135,19 @@ export class LogsController {
     });
   }
 
+  // ── RADIUS session history (with RFC 2866 termination causes) ──
+  @Get('radius-sessions')
+  radiusSessions(
+    @Query('limit') limit: string,
+    @Query('username') username: string,
+    @Req() req: any,
+  ) {
+    return this.logs.getRadiusSessions(req.user, {
+      limit: limit ? +limit : undefined,
+      username: username || undefined,
+    });
+  }
+
   // ── Failed Activations ────────────────────────────────────────
   @Get('failed-activations')
   failedActivations(

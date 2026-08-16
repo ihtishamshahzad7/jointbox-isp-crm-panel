@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+import { terminateInfo } from '../common/radius-terminate';
 
 @Injectable()
 export class LogsService {
@@ -370,6 +371,58 @@ export class LogsService {
       },
     });
     return sessions;
+  }
+
+  /**
+   * RADIUS SESSION HISTORY — the real accounting record (radacct), including
+   * WHY each session ended, mapped from the RFC 2866 Acct-Terminate-Cause codes
+   * (User-Request, Idle/Session-Timeout, NAS-Reboot, Lost-Carrier, …) to a plain
+   * label + description. This is the view an operator needs to see why a
+   * customer keeps dropping. Scoped to the caller's own subscribers.
+   */
+  async getRadiusSessions(actor: Actor, opts: { limit?: number; username?: string } = {}) {
+    const take = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+    const where: any = {};
+
+    // Scope: non-admins only see their own subtree's subscriber usernames.
+    if (!this.scope.isAdmin(actor?.role)) {
+      const subWhere = await this.scope.subscriberWhere(actor);
+      const subs = await this.prisma.subscriber.findMany({ where: subWhere, select: { username: true } });
+      const names = subs.map((s) => s.username).filter(Boolean) as string[];
+      if (!names.length) return [];
+      where.username = { in: names };
+    }
+    if (opts.username) where.username = opts.username;
+
+    const rows = await this.prisma.radAcct.findMany({
+      where,
+      orderBy: { radacctid: 'desc' },
+      take,
+    });
+
+    const MB = 1024 * 1024;
+    return rows.map((r) => {
+      const online = r.acctstoptime == null;
+      const info = terminateInfo(online ? null : r.acctterminatecause);
+      return {
+        id: r.radacctid,
+        username: r.username,
+        nasIp: r.nasipaddress,
+        framedIp: r.framedipaddress,
+        callingStation: r.callingstationid,
+        start: r.acctstarttime,
+        stop: r.acctstoptime,
+        lastSeen: r.acctupdatetime,
+        durationSec: r.acctsessiontime ?? null,
+        downloadMB: r.acctoutputoctets != null ? Math.round(Number(r.acctoutputoctets) / MB) : null,
+        uploadMB: r.acctinputoctets != null ? Math.round(Number(r.acctinputoctets) / MB) : null,
+        online,
+        // The star of this view — the mapped RFC 2866 termination cause.
+        terminateCode: info.code,
+        terminateLabel: info.label,
+        terminateDescription: info.description,
+      };
+    });
   }
 
   // ── Failed Activations ────────────────────────────────────────

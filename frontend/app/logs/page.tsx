@@ -39,6 +39,7 @@ export default function LogsPage() {
   const [networkLogs, setNetworkLogs] = useState<any[]>([]);
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
+  const [radiusSessions, setRadiusSessions] = useState<any[]>([]);
   const [failedActs, setFailedActs] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
@@ -125,12 +126,13 @@ export default function LogsPage() {
     try {
       const fu = focusUser ? `&forUser=${focusUser}` : "";
       const fuq = focusUser ? `?forUser=${focusUser}` : "";
-      const [loginRes, activityRes, networkRes, systemRes, sessionsRes] = await Promise.all([
+      const [loginRes, activityRes, networkRes, systemRes, sessionsRes, radiusRes] = await Promise.all([
         fetch(`${API}/logs/login?limit=100${fu}`, { headers }).catch((err) => { console.error('Login logs fetch failed', err); return null; }),
         fetch(`${API}/logs/activity?limit=100${fu}`, { headers }).catch((err) => { console.error('Activity logs fetch failed', err); return null; }),
         fetch(`${API}/logs/network?limit=100`, { headers }).catch((err) => { console.error('Network logs fetch failed', err); return null; }),
         fetch(`${API}/logs/system?limit=100`, { headers }).catch((err) => { console.error('System logs fetch failed', err); return null; }),
         fetch(`${API}/logs/sessions${fuq}`, { headers }).catch((err) => { console.error('Session logs fetch failed', err); return null; }),
+        fetch(`${API}/logs/radius-sessions?limit=300`, { headers }).catch((err) => { console.error('RADIUS session logs fetch failed', err); return null; }),
       ]);
       if (loginRes) {
         if (loginRes.ok) { const d = await loginRes.json(); setLoginLogs(d.logs || []); }
@@ -151,6 +153,10 @@ export default function LogsPage() {
       if (sessionsRes) {
         if (sessionsRes.ok) { const d = await sessionsRes.json(); setSessions(Array.isArray(d) ? d : []); }
         else console.error('Session logs HTTP error', sessionsRes.status, await sessionsRes.text());
+      }
+      if (radiusRes) {
+        if (radiusRes.ok) { const d = await radiusRes.json(); setRadiusSessions(Array.isArray(d) ? d : []); }
+        else console.error('RADIUS session logs HTTP error', radiusRes.status, await radiusRes.text());
       }
     } finally { setLoading(false); }
   }, [token, focusUser]);
@@ -255,6 +261,7 @@ export default function LogsPage() {
     { id: "network",    label: "🖧 Network" },
     { id: "system",     label: "⚙️ System" },
     { id: "sessions",   label: "🟢 Sessions" },
+    { id: "radsess",    label: "📶 RADIUS Sessions" },
     { id: "failed",     label: "⛔ Failed" },
     { id: "radius",     label: "🩺 RADIUS" },
   ];
@@ -630,6 +637,37 @@ export default function LogsPage() {
                   <td style={{ padding: "8px 12px", fontSize: 11, color: t.amber }}>{new Date(s.expiresAt).toLocaleString()}</td>
                 </tr>
               )} />
+          )}
+
+          {/* ═══════════════ TAB: RADIUS SESSIONS (with termination cause) ═══════════════ */}
+          {activeTab === "radsess" && (
+            <LogTable data={radiusSessions} d={d} t={t}
+              headers={["User", "Status / Cause", "IP", "Started", "Duration", "Down / Up"]}
+              render={(s: any) => {
+                const dur = s.durationSec != null
+                  ? (s.durationSec >= 3600 ? `${Math.floor(s.durationSec/3600)}h ${Math.floor((s.durationSec%3600)/60)}m` : s.durationSec >= 60 ? `${Math.floor(s.durationSec/60)}m ${s.durationSec%60}s` : `${s.durationSec}s`)
+                  : "—";
+                return (
+                  <tr key={s.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
+                    <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600 }}>
+                      {s.username}
+                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: "monospace" }}>{s.callingStation || ""}</div>
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {s.online
+                        ? <Badge color="#4ade80" bg="#14532d">● Online</Badge>
+                        : <span title={s.terminateDescription} style={{ cursor: "help" }}>
+                            <Badge color="#fbbf24" bg="#78350f">#{s.terminateCode} {s.terminateLabel}</Badge>
+                            <div style={{ fontSize: 10, color: t.textMuted, marginTop: 3, maxWidth: 340 }}>{s.terminateDescription}</div>
+                          </span>}
+                    </td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>{s.framedIp || "—"}<div style={{ fontSize: 10, color: t.textMuted }}>{s.nasIp}</div></td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.start ? new Date(s.start).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11 }}>{dur}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.downloadMB != null ? `${s.downloadMB} / ${s.uploadMB} MB` : "—"}</td>
+                  </tr>
+                );
+              }} />
           )}
 
           {/* ═══════════════ TAB: FAILED ACTIVATIONS ═══════════════ */}
