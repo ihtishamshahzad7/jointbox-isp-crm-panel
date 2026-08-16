@@ -749,7 +749,14 @@ export default function FiberPage() {
               {provisionCommands.length===0 ? "No commands generated for this ONU." : provisionCommands.join("\n")}
             </div>
             {provisionCommands.length>0 && (
-              <button onClick={()=>{navigator.clipboard.writeText(provisionCommands.join("\n"));alert("Commands copied!");}} style={{marginTop:12,padding:"8px 16px",background:t.accent,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+              <button onClick={()=>{
+                const text=provisionCommands.join("\n");
+                // navigator.clipboard is undefined on plain HTTP (secure-context
+                // only), so fall back to a hidden textarea + execCommand.
+                const done=()=>alert("Commands copied!");
+                if(navigator.clipboard?.writeText){navigator.clipboard.writeText(text).then(done).catch(()=>{});}
+                else{try{const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);done();}catch{alert("Copy not supported here — select the text manually.");}}
+              }} style={{marginTop:12,padding:"8px 16px",background:t.accent,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>
                 📋 Copy All
               </button>
             )}

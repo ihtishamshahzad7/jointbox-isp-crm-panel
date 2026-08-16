@@ -2138,12 +2138,21 @@ export default function SubscribersPage() {
                   value={form.status}
                   onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}
                 >
-                  {["ACTIVE", "EXPIRED", "SUSPENDED", "INACTIVE"].map((o) => (
-                    <option key={o} value={o}>
-                      {o}
-                    </option>
-                  ))}
+                  {/* When EDITING a subscriber that isn't already active, hide
+                      "ACTIVE": the backend won't activate from an edit (that must
+                      go through Activate/Renew, which charges + sets expiry). Add
+                      and already-active records keep the full list. */}
+                  {["ACTIVE", "EXPIRED", "SUSPENDED", "INACTIVE"]
+                    .filter((o) => !(o === "ACTIVE" && editSub && String((editSub as any).status).toUpperCase() !== "ACTIVE"))
+                    .map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
                 </select>
+                {editSub && String((editSub as any).status).toUpperCase() !== "ACTIVE" && (
+                  <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 4 }}>
+                    To activate, use the <b>Activate</b> button — it charges the wallet and sets the expiry.
+                  </div>
+                )}
               </div>
 
               <div
