@@ -84,8 +84,10 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'DELETE', test: /^\/organization\/franchise-pricing\//,     key: 'packages.manageProfit' },
   { method: 'POST',   test: /^\/organization\/pricing\/(reverse|settle|assign-bulk)\b/, key: 'packages.manageProfit' },
   { method: 'POST',   test: /^\/organization\/pricing\/reverse\b/,      key: 'subscribers.revertInvoice' },
-  { method: 'POST',   test: /^\/organization\/resellers\/\d+\/wallet\b/,key: 'users.moveBalance' },
-  { method: 'POST',   test: /^\/organization\/wallet\/reverse-topup\b/, key: 'users.moveBalance' },
+  // Funding a child's wallet IS "Add / manage balance (child account)" = users.topup.
+  // (Was users.moveBalance, so unticking "Add / manage balance" did nothing.)
+  { method: 'POST',   test: /^\/organization\/resellers\/\d+\/wallet\b/,key: 'users.topup' },
+  { method: 'POST',   test: /^\/organization\/wallet\/reverse-topup\b/, key: 'users.topup' },
   { method: 'PUT',    test: /^\/organization\/resellers\/\d+\/(credit-limit|price-permission|topup-permission|nas-permission|commission)\b/, key: 'organization.limits' },
 
   // ISP structure (franchise/branch admin) — ISP-only floor in the guard.
