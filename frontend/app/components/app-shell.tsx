@@ -534,13 +534,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     // avatar updates immediately without a full reload.
     const onPhoto = () => loadProfile();
     window.addEventListener('profile-photo-changed', onPhoto);
+    // Keep the header wallet balance fresh — it used to be fetched only once, so
+    // after an activation or top-up it showed a stale figure. Refresh on a timer
+    // and whenever the tab regains focus.
+    const balanceTimer = window.setInterval(loadProfile, 45000);
+    const onFocus = () => loadProfile();
+    window.addEventListener('focus', onFocus);
+    // Any code that moves money can dispatch this to refresh the header at once.
+    const onBalance = () => loadProfile();
+    window.addEventListener('wallet-changed', onBalance);
 
     fetch(`${API}/communication/latest`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setLatestNotice(data || null))
       .catch(() => setLatestNotice(null));
 
-    return () => window.removeEventListener('profile-photo-changed', onPhoto);
+    return () => {
+      window.removeEventListener('profile-photo-changed', onPhoto);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('wallet-changed', onBalance);
+      window.clearInterval(balanceTimer);
+    };
   }, []);
 
   useEffect(() => {

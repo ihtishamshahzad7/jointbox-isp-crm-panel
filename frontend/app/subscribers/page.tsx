@@ -810,6 +810,8 @@ export default function SubscribersPage() {
         "ok",
       );
       setShowActivationModal(false);
+      // Activation charged the wallet — refresh the header balance immediately.
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("wallet-changed"));
       await loadAll();
     } catch (error: any) {
       showToast(error.message || "Activation failed", "err");

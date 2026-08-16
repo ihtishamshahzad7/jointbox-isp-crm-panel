@@ -56,6 +56,8 @@ export default function WalletManager() {
       if (!r.ok) throw new Error(d?.message || "Failed");
       setMsg({ ok: true, t: `${mode === "TOPUP" ? "Added" : "Withdrew"} ${money(val)} ${mode === "TOPUP" ? "to" : "from"} ${sel.name}` });
       setAmount(""); setNotes("");
+      // Your wallet moved (funder debited) — refresh the header balance.
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("wallet-changed"));
       await Promise.all([loadAccts(), pick({ ...sel })]);
     } catch (e: any) {
       setMsg({ ok: false, t: e?.message || "Could not complete the transfer" });

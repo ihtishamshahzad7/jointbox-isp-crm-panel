@@ -309,6 +309,11 @@ export default function DashboardPage() {
     return () => window.removeEventListener("resize", check);
   }, []);
   const cols = (desktop: string) => (isMobile ? "1fr" : desktop);
+  const fmtUptime = (secs?: number) => {
+    if (!secs || secs <= 0) return "—";
+    const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60);
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
   const [refreshKey, setRefreshKey] = useState(0);
   const [tab, setTab] = useState<DashboardTab>("home");
   const [busyAction, setBusyAction] = useState<string>("");
@@ -849,9 +854,8 @@ export default function DashboardPage() {
                   <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 5, fontWeight: 600 }}>{c.label}</div>
                   <div style={{ fontSize: 11, color: "var(--muted)", opacity: 0.75, marginTop: 7 }}>{c.cap}</div>
                 </div>
-                <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 28, opacity: 0.45 }}>
-                  <polyline fill="none" stroke={c.scolor} strokeWidth="2" points={c.spark} />
-                </svg>
+                {/* Sparkline removed — it was a hardcoded decorative polyline, not
+                    real per-metric history, so it implied a trend that didn't exist. */}
               </div>
             ))}
           </div>
@@ -909,16 +913,21 @@ export default function DashboardPage() {
             <div style={cardStyle} className="panel-card">
               <div style={{ fontWeight: 800, marginBottom: 10 }}>System Status</div>
               {[
-                { label: "RADIUS Status", ok: systemStatus.radius },
-                { label: "NAS Status", ok: systemStatus.nas },
-                { label: "Database Status", ok: systemStatus.db },
+                // Real signals, not placeholders:
+                //  • Database — proven reachable because the API returned data.
+                //  • RADIUS  — live online count from the scoped overview (radacct + router presence).
+                //  • Routers — how many NAS are configured for this account.
+                { label: "Database", ok: !loading && systemStatus.db, value: (!loading && systemStatus.db) ? "Reachable" : "No data" },
+                { label: "RADIUS sessions online", ok: homeStats.onlineNow > 0, value: `${homeStats.onlineNow} online` },
+                { label: "NAS / routers", ok: homeStats.totalNas > 0, value: `${homeStats.totalNas} configured` },
+                ...(systemStats ? [{ label: "Server uptime", ok: true, value: fmtUptime(systemStats.uptimeSecs) }] : []),
               ].map((s) => (
                 <div key={s.label} className="sys-row">
                   <span className="sys-label">
                     <span className={`sys-dot ${s.ok ? "ok" : "bad"}`} />
                     {s.label}
                   </span>
-                  <span className={`sys-status ${s.ok ? "ok" : "bad"}`}>{s.ok ? "ONLINE" : "OFFLINE"}</span>
+                  <span className={`sys-status ${s.ok ? "ok" : "bad"}`}>{s.value}</span>
                 </div>
               ))}
             </div>
