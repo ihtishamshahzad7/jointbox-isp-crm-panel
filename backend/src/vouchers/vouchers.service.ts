@@ -43,17 +43,26 @@ export class VouchersService {
     });
   }
 
-  async getStats() {
-    const total = await this.prisma.voucher.count();
-    const unused = await this.prisma.voucher.count({ where: { status: 'UNUSED' } });
-    const used = await this.prisma.voucher.count({ where: { status: 'USED' } });
-    const expired = await this.prisma.voucher.count({ where: { status: 'EXPIRED' } });
-    
+  async getStats(actor?: Actor) {
+    // Scope to the caller's own vouchers (createdBy in subtree) — the same
+    // isolation findAll() uses. Unscoped, a dealer saw every account's voucher
+    // counts and redeemed value.
+    const scope: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      scope.createdBy = { in: ids.length ? ids : [-1] };
+    }
+    const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
+    const total = await this.prisma.voucher.count({ where: w() });
+    const unused = await this.prisma.voucher.count({ where: w({ status: 'UNUSED' }) });
+    const used = await this.prisma.voucher.count({ where: w({ status: 'USED' }) });
+    const expired = await this.prisma.voucher.count({ where: w({ status: 'EXPIRED' }) });
+
     const totalAmount = await this.prisma.voucher.aggregate({
-      where: { status: 'USED' },
+      where: w({ status: 'USED' }),
       _sum: { amount: true },
     });
-    
+
     return { total, unused, used, expired, totalRedeemed: totalAmount._sum.amount || 0 };
   }
 

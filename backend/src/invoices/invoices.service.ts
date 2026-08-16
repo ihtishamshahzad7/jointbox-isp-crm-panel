@@ -67,16 +67,29 @@ export class InvoicesService {
     });
   }
 
-  async getStats() {
-    const total   = await this.prisma.invoice.count();
-    const unpaid  = await this.prisma.invoice.count({ where: { status: 'UNPAID' } });
-    const partial = await this.prisma.invoice.count({ where: { status: 'PARTIAL' } });
-    const paid    = await this.prisma.invoice.count({ where: { status: 'PAID' } });
-    const overdue = await this.prisma.invoice.count({ where: { status: 'OVERDUE' } });
+  async getStats(actor?: Actor) {
+    /**
+     * SCOPE THE TOTALS. These counts/sums were computed over EVERY invoice in
+     * the system with no filter, so a reseller opening the invoices page saw the
+     * whole ISP's billing volume — wrong numbers AND a cross-tenant leak. Scope
+     * to the caller's own subtree, exactly like findAll() does.
+     */
+    const scope: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      scope.subscriber = { userId: { in: ids.length ? ids : [-1] } };
+    }
+    const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
 
-    const totalAmount = await this.prisma.invoice.aggregate({ _sum: { total: true } });
-    const totalPaid   = await this.prisma.invoice.aggregate({ _sum: { paidAmount: true } });
-    const totalDue    = await this.prisma.invoice.aggregate({ _sum: { dueAmount: true } });
+    const total   = await this.prisma.invoice.count({ where: w() });
+    const unpaid  = await this.prisma.invoice.count({ where: w({ status: 'UNPAID' }) });
+    const partial = await this.prisma.invoice.count({ where: w({ status: 'PARTIAL' }) });
+    const paid    = await this.prisma.invoice.count({ where: w({ status: 'PAID' }) });
+    const overdue = await this.prisma.invoice.count({ where: w({ status: 'OVERDUE' }) });
+
+    const totalAmount = await this.prisma.invoice.aggregate({ _sum: { total: true }, where: w() });
+    const totalPaid   = await this.prisma.invoice.aggregate({ _sum: { paidAmount: true }, where: w() });
+    const totalDue    = await this.prisma.invoice.aggregate({ _sum: { dueAmount: true }, where: w() });
 
     return {
       total,

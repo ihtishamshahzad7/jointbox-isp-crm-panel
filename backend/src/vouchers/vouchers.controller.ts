@@ -17,8 +17,8 @@ export class VouchersController {
   }
 
   @Get('stats')
-  getStats() {
-    return this.vouchersService.getStats();
+  getStats(@Req() req: any) {
+    return this.vouchersService.getStats(req.user);
   }
 
   @Get('code/:code')

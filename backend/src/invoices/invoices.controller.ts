@@ -17,8 +17,8 @@ export class InvoicesController {
   }
 
   @Get('stats')
-  getStats() {
-    return this.invoicesService.getStats();
+  getStats(@Req() req: any) {
+    return this.invoicesService.getStats(req.user);
   }
 
   @Get('subscriber/:subscriberId')

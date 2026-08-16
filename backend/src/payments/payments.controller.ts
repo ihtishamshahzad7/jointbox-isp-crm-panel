@@ -25,8 +25,8 @@ export class PaymentsController {
   }
 
   @Get('stats')
-  async getStats() {
-    return this.paymentsService.getStats();
+  async getStats(@Req() req: any) {
+    return this.paymentsService.getStats(req.user);
   }
 
   /** Cash-collection reconciliation (who took how much, by method). */

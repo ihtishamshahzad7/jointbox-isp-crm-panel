@@ -119,14 +119,22 @@ export class PaymentsService {
     });
   }
 
-  async getStats() {
+  async getStats(actor?: any) {
+    // Scope to the caller's subtree (same as findAll) — an unscoped total leaked
+    // the whole ISP's collections to every reseller.
+    const scope: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      scope.subscriber = { userId: { in: ids.length ? ids : [-1] } };
+    }
+    const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
     const [total, totalAmount, cashCount, bankCount, onlineCount, chequeCount] = await Promise.all([
-      this.prisma.payment.count(),
-      this.prisma.payment.aggregate({ _sum: { amount: true } }),
-      this.prisma.payment.count({ where: { method: PaymentMethod.CASH } }),
-      this.prisma.payment.count({ where: { method: PaymentMethod.BANK_TRANSFER } }),
-      this.prisma.payment.count({ where: { method: PaymentMethod.ONLINE } }),
-      this.prisma.payment.count({ where: { method: PaymentMethod.CHEQUE } }),
+      this.prisma.payment.count({ where: w() }),
+      this.prisma.payment.aggregate({ _sum: { amount: true }, where: w() }),
+      this.prisma.payment.count({ where: w({ method: PaymentMethod.CASH }) }),
+      this.prisma.payment.count({ where: w({ method: PaymentMethod.BANK_TRANSFER }) }),
+      this.prisma.payment.count({ where: w({ method: PaymentMethod.ONLINE }) }),
+      this.prisma.payment.count({ where: w({ method: PaymentMethod.CHEQUE }) }),
     ]);
 
     return {
