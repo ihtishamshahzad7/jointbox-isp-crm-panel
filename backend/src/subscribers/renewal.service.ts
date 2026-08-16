@@ -203,9 +203,11 @@ export class RenewalService {
 
     /**
      * What the ACTIVATING account pays its own parent (its cost) for this
-     * package, prorated over the same days — so the modal can show the customer
-     * price, the operator's cost, and the profit between them. The top of the
-     * tree (ISP) buys from no one, so its cost is 0.
+     * package — the flat "You pay" figure from the package/price ladder. It is
+     * NOT prorated: the wallet cascade (settleActivation) always debits the full
+     * cost per activation, so showing a prorated 827 for a 31-day "full period"
+     * disagreed with both the package screen (800) and the real deduction. The
+     * top of the tree (ISP) buys from no one, so its cost is 0.
      */
     let ownerCost = 0;
     if (effectiveOwnerId) {
@@ -218,7 +220,7 @@ export class RenewalService {
         ownerCost = buy?.price != null ? Number(buy.price) : Number(base);
       }
     }
-    const costForPeriod = Math.round((ownerCost / duration) * days);
+    const costForPeriod = Math.round(ownerCost);
     const profit = Math.round(amount) - costForPeriod;
 
     return {
