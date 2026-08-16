@@ -756,46 +756,57 @@ export class ResellerPricingService {
       select: { id: true, name: true, role: true, balance: true },
     });
 
-    // My margin credits, each tied to a subscriber; bucket by which child's
-    // subtree that subscriber sits in, so "earned from this child" is exact.
-    const credits = await this.prisma.userBalanceTransaction.findMany({
-      where: { userId: meId, amount: { gt: 0 }, reference: { startsWith: 'SUB#' } },
-      select: { amount: true, reference: true, createdAt: true },
-    });
-    const subIdOf = (ref: string | null) => {
-      const m = ref && ref.match(/^SUB#(\d+)/); return m ? Number(m[1]) : null;
-    };
-    const subIds = [...new Set(credits.map((c) => subIdOf(c.reference)).filter((x): x is number => x != null))];
-    const subOwners = subIds.length
-      ? await this.prisma.subscriber.findMany({ where: { id: { in: subIds } }, select: { id: true, userId: true } })
-      : [];
-    const ownerBySub = new Map(subOwners.map((s) => [s.id, s.userId]));
+    /**
+     * All three per-child rollups in SET-BASED SQL (constant number of queries,
+     * regardless of downline size). A recursive CTE maps every descendant back to
+     * the DIRECT child of mine it sits under; my SUB# margin credits are then
+     * bucketed by that root child, so "earned from this child" is exact and fast.
+     */
+    const tree = Prisma.sql`
+      WITH RECURSIVE tree AS (
+        SELECT id AS descendant, id AS root FROM "User" WHERE "parentId" = ${meId}
+        UNION ALL
+        SELECT u.id, tree.root FROM "User" u JOIN tree ON u."parentId" = tree.descendant
+      )`;
+    const [earnedRows, loadedRows, subRows] = await Promise.all([
+      // My margin per direct child, all-time and this month.
+      this.prisma.$queryRaw<Array<{ root: number; all: number; month: number }>>(Prisma.sql`
+        ${tree}
+        SELECT tree.root AS root,
+               COALESCE(SUM(t.amount), 0) AS all,
+               COALESCE(SUM(CASE WHEN t."createdAt" >= ${monthStart} THEN t.amount ELSE 0 END), 0) AS month
+        FROM "UserBalanceTransaction" t
+        JOIN "Subscriber" s ON s.id = CAST(substring(t.reference from 'SUB#([0-9]+)') AS INTEGER)
+        JOIN tree ON tree.descendant = s."userId"
+        WHERE t."userId" = ${meId} AND t.amount > 0 AND t.reference LIKE 'SUB#%'
+        GROUP BY tree.root`),
+      // Balance I loaded into each direct child.
+      this.prisma.$queryRaw<Array<{ child: number; v: number }>>(Prisma.sql`
+        SELECT t."userId" AS child, COALESCE(SUM(t.amount), 0) AS v
+        FROM "UserBalanceTransaction" t JOIN "User" u ON u.id = t."userId"
+        WHERE u."parentId" = ${meId} AND t.type = 'TOPUP' AND (t."createdBy" = ${meId} OR t."createdBy" IS NULL)
+        GROUP BY t."userId"`),
+      // Subscribers anywhere in each direct child's subtree.
+      this.prisma.$queryRaw<Array<{ root: number; n: number }>>(Prisma.sql`
+        ${tree}
+        SELECT tree.root AS root, COUNT(s.id) AS n
+        FROM tree JOIN "Subscriber" s ON s."userId" = tree.descendant
+        GROUP BY tree.root`),
+    ]);
+    const earnedMap = new Map(earnedRows.map((r) => [Number(r.root), { all: Number(r.all), month: Number(r.month) }]));
+    const loadedMap = new Map(loadedRows.map((r) => [Number(r.child), Number(r.v)]));
+    const subMap = new Map(subRows.map((r) => [Number(r.root), Number(r.n)]));
 
-    const perChild = await Promise.all(children.map(async (c) => {
-      const set = new Set(await this.scope.descendantIds(c.id)); // c + its subtree
-      let earnedAll = 0, earnedMonth = 0;
-      for (const cr of credits) {
-        const sid = subIdOf(cr.reference); if (sid == null) continue;
-        const owner = ownerBySub.get(sid);
-        if (owner != null && set.has(owner)) {
-          earnedAll += cr.amount;
-          if (cr.createdAt >= monthStart) earnedMonth += cr.amount;
-        }
-      }
-      // Balance I loaded into this child (top-ups on the child, done by me).
-      const [loaded] = await this.prisma.$queryRaw<Array<{ v: number }>>(Prisma.sql`
-        SELECT COALESCE(SUM(amount), 0) AS v FROM "UserBalanceTransaction"
-        WHERE "userId" = ${c.id} AND type='TOPUP' AND ("createdBy" = ${meId} OR "createdBy" IS NULL)`);
-      const [subCount] = await this.prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`
-        SELECT COUNT(*) AS n FROM "Subscriber" WHERE "userId" IN (${Prisma.join([...set])})`);
+    const perChild = children.map((c) => {
+      const e = earnedMap.get(c.id) ?? { all: 0, month: 0 };
       return {
         id: c.id, name: c.name, role: c.role, balance: r2(c.balance),
-        earnedFromThisChild: r2(earnedAll),
-        earnedThisMonth: r2(earnedMonth),
-        balanceYouLoaded: r2(Number(loaded?.v || 0)),
-        subscribersInTree: Number(subCount?.n || 0),
+        earnedFromThisChild: r2(e.all),
+        earnedThisMonth: r2(e.month),
+        balanceYouLoaded: r2(loadedMap.get(c.id) ?? 0),
+        subscribersInTree: subMap.get(c.id) ?? 0,
       };
-    }));
+    });
 
     return {
       account: me?.name,
