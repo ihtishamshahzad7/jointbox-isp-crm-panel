@@ -93,14 +93,22 @@ function BigChart({ points, kind }: { points: Point[]; kind: "latency" }) {
   const W = 900, HH = 200, pad = 26;
   const [hover, setHover] = React.useState<number | null>(null);
   if (points.length < 2) return <div className="md-graph empty">Not enough data yet — samples appear as the poller runs.</div>;
-  const vals = points.map((p) => (p.up && p.latencyMs != null ? p.latencyMs : 0));
-  const max = Math.max(10, ...vals) * 1.15;
+  // Scale to the data range (not zero) so real jitter is visible.
+  const okVals = points.filter((p) => p.up && p.latencyMs != null).map((p) => p.latencyMs!) as number[];
+  if (okVals.length < 2) return <div className="md-graph empty">No latency samples in this range.</div>;
+  const lo = Math.min(...okVals), hi = Math.max(...okVals);
+  const span = Math.max(hi - lo, 1);
+  const yMin = Math.max(0, lo - span * 0.2), yMax = hi + span * 0.2;
   const stepX = (W - pad * 2) / (points.length - 1);
   const x = (i: number) => pad + i * stepX;
-  const y = (v: number) => HH - pad - (v / max) * (HH - pad * 2);
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.up && p.latencyMs != null ? p.latencyMs : 0).toFixed(1)}`).join(" ");
-  const area = `${line} L${x(points.length - 1).toFixed(1)},${HH - pad} L${x(0).toFixed(1)},${HH - pad} Z`;
-  const gy = [0, 0.5, 1].map((f) => ({ v: Math.round(max * (1 - f)), y: pad + f * (HH - pad * 2) }));
+  const y = (v: number) => pad + (1 - (v - yMin) / (yMax - yMin)) * (HH - pad * 2);
+  let line = ""; let started = false;
+  points.forEach((p, i) => {
+    if (p.up && p.latencyMs != null) { line += `${started ? "L" : "M"}${x(i).toFixed(1)},${y(p.latencyMs).toFixed(1)} `; started = true; }
+    else { started = false; }
+  });
+  const area = line ? `${line} L${x(points.length - 1).toFixed(1)},${HH - pad} L${x(0).toFixed(1)},${HH - pad} Z` : "";
+  const gy = [0, 0.5, 1].map((f) => ({ v: Math.round(yMax - f * (yMax - yMin)), y: pad + f * (HH - pad * 2) }));
   return (
     <div style={{ position: "relative" }}>
       <svg className="md-graph" viewBox={`0 0 ${W} ${HH}`} preserveAspectRatio="none"
@@ -108,8 +116,8 @@ function BigChart({ points, kind }: { points: Point[]; kind: "latency" }) {
         onMouseLeave={() => setHover(null)}>
         <defs><linearGradient id="mdg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" /><stop offset="100%" stopColor="#22c55e" stopOpacity="0" /></linearGradient></defs>
         {gy.map((g, i) => <g key={i}><line x1={pad} x2={W - pad} y1={g.y} y2={g.y} stroke="var(--border)" strokeWidth="0.5" /><text x={2} y={g.y + 3} fontSize="9" fill="#94A3B8">{g.v}</text></g>)}
-        <path d={area} fill="url(#mdg)" />
-        <path d={line} fill="none" stroke="#22c55e" strokeWidth="1.6" strokeLinejoin="round" />
+        {area && <path d={area} fill="url(#mdg)" />}
+        {line && <path d={line} fill="none" stroke="#22c55e" strokeWidth="1.6" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
         {points.map((p, i) => (!p.up ? <rect key={i} x={x(i) - stepX / 2} y={pad} width={stepX} height={HH - pad * 2} fill="rgba(239,68,68,.12)" /> : null))}
         {hover != null && <line x1={x(hover)} x2={x(hover)} y1={pad} y2={HH - pad} stroke="#3C50E0" strokeWidth="0.7" />}
       </svg>
@@ -191,9 +199,19 @@ function DiagResult({ tab, out }: { tab: string; out: any }) {
   if (tab === "traceroute" || tab === "tcp-trace") return (
     <div className="md-diag-out">
       {tab === "tcp-trace" && <div style={{ marginBottom: 8, fontWeight: 700, color: out.destinationReached ? "#157F43" : "#B02A37" }}>{out.destinationReached ? `✅ DESTINATION REACHED — TCP :${out.port} in ${out.connectLatencyMs} ms` : `❌ ${out.connectError || "not reachable"}`}</div>}
-      <table className="md-hops"><thead><tr><th>Hop</th><th>IP</th><th>Latency</th></tr></thead><tbody>
-        {(out.hops || []).map((h: any, i: number) => <tr key={i}><td>{h.hop}</td><td>{h.timedOut ? <span className="dim">* (no reply)</span> : h.ip}</td><td>{h.latencyMs != null ? `${h.latencyMs} ms` : "—"}</td></tr>)}
-      </tbody></table>
+      {/* Why the hop table is empty — missing binary or no raw-socket capability. */}
+      {(out.error || out.pathError) && (
+        <div className="md-diag-warn">
+          ⚠ {out.error || out.pathError}
+          {out.hint && <div className="md-hint">{out.hint}</div>}
+        </div>
+      )}
+      {out.tool && <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 4 }}>via {out.tool}</div>}
+      {(out.hops || []).length > 0 && (
+        <table className="md-hops"><thead><tr><th>Hop</th><th>IP</th><th>Latency</th></tr></thead><tbody>
+          {out.hops.map((h: any, i: number) => <tr key={i}><td>{h.hop}</td><td>{h.timedOut ? <span className="dim">* (no reply)</span> : h.ip}</td><td>{h.latencyMs != null ? `${h.latencyMs} ms` : "—"}</td></tr>)}
+        </tbody></table>
+      )}
       <div className="md-note">{out.note}</div>
     </div>
   );
@@ -237,4 +255,6 @@ const CSS = `
 .md-hops th,.md-hops td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--border)}
 .md-hops .dim{color:#94A3B8}
 .md-note{font-size:11px;color:#94A3B8;margin-top:8px;line-height:1.6}
+.md-diag-warn{background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.4);color:#b45309;border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.6;margin-bottom:8px}
+.md-hint{margin-top:6px;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#92400e;background:rgba(245,158,11,.12);padding:6px 8px;border-radius:6px;word-break:break-all}
 `;

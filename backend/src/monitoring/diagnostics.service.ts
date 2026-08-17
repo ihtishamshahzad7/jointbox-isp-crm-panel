@@ -36,6 +36,48 @@ export class DiagnosticsService {
     });
   }
 
+  /**
+   * Run a command and report WHY it failed — previously a missing binary was
+   * swallowed and the UI just showed an empty hop list with no explanation.
+   */
+  private runDetailed(cmd: string, args: string[], timeoutMs: number): Promise<{ ok: boolean; out: string; missing: boolean; error?: string }> {
+    return new Promise((resolve) => {
+      execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (e: any, stdout, stderr) => {
+        const out = String(stdout || '') + (stderr ? `\n${stderr}` : '');
+        if (e && (e.code === 'ENOENT' || /not found/i.test(String(e.message)))) {
+          return resolve({ ok: false, out, missing: true, error: `${cmd} is not installed on the server` });
+        }
+        // A timeout still yields partial hops, which are useful.
+        resolve({ ok: !e || out.trim().length > 0, out, missing: false, error: e ? (e.killed ? 'timed out' : e.message) : undefined });
+      });
+    });
+  }
+
+  /**
+   * True when the tool ran but could not actually probe — e.g. it lacks raw
+   * socket capability. Without this check `tracepath`'s "1: send failed" line
+   * parses as a real hop and the UI shows one meaningless row.
+   */
+  private unusableOutput(out: string): string | null {
+    const o = out.toLowerCase();
+    if (/send failed/.test(o)) return 'the tool cannot open raw sockets (missing CAP_NET_RAW)';
+    if (/permission denied|operation not permitted|failure to open/.test(o)) return 'permission denied opening probe sockets';
+    if (/name or service not known|unknown host|cannot handle/.test(o)) return 'host could not be resolved';
+    return null;
+  }
+
+  /** Parse hop lines from traceroute/tracepath output. */
+  private parseHops(out: string) {
+    return out.split('\n').map((l) => l.trim()).filter((l) => /^\d+[\s:]/.test(l)).map((l) => {
+      const parts = l.replace(':', ' ').split(/\s+/);
+      const hop = Number(parts[0]);
+      const ipTok = parts.find((p, i) => i > 0 && (/^\d+\.\d+\.\d+\.\d+$/.test(p) || /^[0-9a-f:]{6,}$/i.test(p)));
+      const msM = l.match(/([\d.]+)\s*ms/);
+      const timedOut = !ipTok || /\*/.test(parts[1] || '');
+      return { hop, ip: ipTok || null, latencyMs: msM ? parseFloat(msM[1]) : null, timedOut };
+    }).filter((h) => Number.isFinite(h.hop));
+  }
+
   // ── Ping ─────────────────────────────────────────────────────
   async ping(host: string, count = 4) {
     const h = this.assertHost(host);
@@ -55,20 +97,43 @@ export class DiagnosticsService {
   async traceroute(host: string, maxHops = 20) {
     const h = this.assertHost(host);
     const m = Math.min(Math.max(maxHops, 1), 30);
-    // -n numeric, -w 2s per probe, -q 1 probe/hop, -m max hops. No shell.
-    const out = await this.run('traceroute', ['-n', '-w', '2', '-q', '1', '-m', String(m), h], (m + 6) * 2000);
-    const hops = out.split('\n').map((line) => line.trim()).filter((l) => /^\d+\s/.test(l)).map((l) => {
-      const parts = l.split(/\s+/);
-      const hop = Number(parts[0]);
-      const ip = parts[1] === '*' ? null : parts[1];
-      const msM = l.match(/([\d.]+)\s*ms/);
-      return { hop, ip, latencyMs: msM ? parseFloat(msM[1]) : null, timedOut: parts[1] === '*' };
-    });
+    const budget = (m + 6) * 2000;
+
+    // Try the common tools in order. Ubuntu often ships `tracepath` (iputils)
+    // even when `traceroute` isn't installed, and `mtr` is common on NOC boxes.
+    const attempts: Array<{ cmd: string; args: string[] }> = [
+      { cmd: 'traceroute', args: ['-n', '-w', '2', '-q', '1', '-m', String(m), h] },
+      { cmd: 'tracepath',  args: ['-n', '-m', String(m), h] },
+      { cmd: 'mtr',        args: ['-n', '-r', '-c', '1', '-m', String(m), h] },
+    ];
+    const tried: string[] = [];
+    const problems: string[] = [];
+    for (const a of attempts) {
+      const r = await this.runDetailed(a.cmd, a.args, budget);
+      tried.push(a.cmd);
+      if (r.missing) { problems.push(`${a.cmd}: not installed`); continue; }
+      // Ran, but couldn't probe (no raw-socket capability) → don't report junk hops.
+      const bad = this.unusableOutput(r.out);
+      if (bad) { problems.push(`${a.cmd}: ${bad}`); continue; }
+      const hops = this.parseHops(r.out);
+      if (hops.length === 0) { problems.push(`${a.cmd}: produced no hops`); continue; }
+      const last = hops[hops.length - 1];
+      return {
+        host: h, tool: a.cmd, hops,
+        reachedDestination: !!last && !last.timedOut,
+        note: 'Intermediate hops may not answer probes (that is normal and does not mean they are down). Destination reachability is evaluated separately.',
+        raw: r.out.trim().slice(0, 4000),
+      };
+    }
+    // Nothing usable — say exactly why and how to fix it, instead of an empty table.
     return {
-      host: h, hops,
-      note: 'Intermediate hops may not answer probes (that is normal and does not mean they are down). Destination reachability is evaluated separately.',
-      reachedDestination: hops.some((x) => x.ip && !x.timedOut && hops.indexOf(x) === hops.length - 1),
-      raw: out.trim(),
+      host: h, tool: null, hops: [], reachedDestination: false,
+      error: `Traceroute could not run on the monitoring server. ${problems.join(' · ')}`,
+      hint: 'Install a tool and allow raw sockets:  sudo apt install traceroute  ' +
+            '&&  sudo setcap cap_net_raw+ep $(which traceroute)   ' +
+            '(the backend runs unprivileged, so the binary needs CAP_NET_RAW).',
+      note: 'Ping, TCP test, TCP trace, DNS and HTTP diagnostics still work without it.',
+      raw: '',
     };
   }
 
@@ -98,16 +163,16 @@ export class DiagnosticsService {
     const p = this.assertPort(port);
     // Definitive answer: can we actually open the TCP port to the destination?
     const connect: any = await this.tcpPort(h, p, 5000);
-    // Best-effort path (traceroute -T needs privilege; if it fails we still have
-    // the connect result, which is what actually matters).
-    const out = await this.run('traceroute', ['-n', '-T', '-p', String(p), '-w', '2', '-q', '1', '-m', '20', h], 45000);
-    const hops = out.split('\n').map((l) => l.trim()).filter((l) => /^\d+\s/.test(l)).map((l) => {
-      const parts = l.split(/\s+/);
-      const msM = l.match(/([\d.]+)\s*ms/);
-      return { hop: Number(parts[0]), ip: parts[1] === '*' ? null : parts[1], latencyMs: msM ? parseFloat(msM[1]) : null, timedOut: parts[1] === '*' };
-    });
+    // Best-effort path (traceroute -T needs privilege; if it's missing or not
+    // permitted we still return the connect result, which is what matters).
+    const r = await this.runDetailed('traceroute', ['-n', '-T', '-p', String(p), '-w', '2', '-q', '1', '-m', '20', h], 45000);
+    const hops = r.missing ? [] : this.parseHops(r.out);
     return {
       host: h, port: p,
+      pathAvailable: !r.missing && hops.length > 0,
+      pathError: r.missing
+        ? 'traceroute is not installed on the server (sudo apt install traceroute) — the TCP result below is still authoritative.'
+        : (hops.length === 0 ? 'TCP path probing needs root privileges on this server; the TCP result below is still authoritative.' : undefined),
       destinationReached: connect.open,
       connectLatencyMs: connect.latencyMs,
       connectError: connect.error,

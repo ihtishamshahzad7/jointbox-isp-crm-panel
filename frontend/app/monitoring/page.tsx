@@ -192,32 +192,53 @@ function Card({ t, onDelete, onCheck, onToggle }: { t: Target; onDelete: () => v
   );
 }
 
-/** Small ~220×64 latency sparkline with a filled area; red marks for down samples. */
+/**
+ * Small latency line graph. The Y axis is scaled to the DATA RANGE (min…max),
+ * not to zero — a 22 ms line with 1 ms of jitter drawn from zero looks like a
+ * dead flat line, which is what made these graphs useless. Range-scaling makes
+ * the real variation visible, with the min/max printed so the scale is honest.
+ */
 function LatencyGraph({ history, up }: { history: Sample[]; up: boolean | null }) {
-  const W = 220, HH = 64, pad = 4;
+  const W = 220, HH = 72, padX = 3, padT = 10, padB = 12;
   const pts = (history || []).slice(-40);
-  if (pts.length < 2) {
-    return <div className="mon-graph empty">gathering data…</div>;
-  }
-  const vals = pts.map((p) => (p.up && p.ms != null ? p.ms : 0));
-  const max = Math.max(20, ...vals) * 1.15;
-  const stepX = (W - pad * 2) / (pts.length - 1);
-  const x = (i: number) => pad + i * stepX;
-  const y = (v: number) => HH - pad - (v / max) * (HH - pad * 2);
-  const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.up && p.ms != null ? p.ms : 0).toFixed(1)}`).join(" ");
-  const area = `${line} L${x(pts.length - 1).toFixed(1)},${HH - pad} L${x(0).toFixed(1)},${HH - pad} Z`;
+  if (pts.length < 2) return <div className="mon-graph empty">gathering data…</div>;
+
+  const okVals = pts.filter((p) => p.up && p.ms != null).map((p) => p.ms!) as number[];
+  if (okVals.length < 2) return <div className="mon-graph empty">no latency samples</div>;
+  const lo = Math.min(...okVals), hi = Math.max(...okVals);
+  const span = Math.max(hi - lo, 1);           // never divide by zero
+  const yMin = Math.max(0, lo - span * 0.25);  // headroom so the line isn't glued to the edge
+  const yMax = hi + span * 0.25;
+
+  const stepX = (W - padX * 2) / (pts.length - 1);
+  const x = (i: number) => padX + i * stepX;
+  const y = (v: number) => padT + (1 - (v - yMin) / (yMax - yMin)) * (HH - padT - padB);
+
+  // Build the line only across samples we have latency for; a down sample breaks it.
+  let d = ""; let started = false;
+  pts.forEach((p, i) => {
+    if (p.up && p.ms != null) { d += `${started ? "L" : "M"}${x(i).toFixed(1)},${y(p.ms).toFixed(1)} `; started = true; }
+    else { started = false; }
+  });
   const stroke = up === false ? "#ef4444" : "#22c55e";
+  const gid = `mg${Math.round(lo)}_${Math.round(hi)}`;
+  const areaD = d ? `${d} L${x(pts.length - 1).toFixed(1)},${HH - padB} L${x(0).toFixed(1)},${HH - padB} Z` : "";
+
   return (
     <svg className="mon-graph" viewBox={`0 0 ${W} ${HH}`} preserveAspectRatio="none">
       <defs>
-        <linearGradient id="mg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={stroke} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={stroke} stopOpacity="0.22" />
+          <stop offset="100%" stopColor={stroke} stopOpacity="0.02" />
         </linearGradient>
       </defs>
-      <path d={area} fill="url(#mg)" />
-      <path d={line} fill="none" stroke={stroke} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
-      {pts.map((p, i) => (!p.up ? <circle key={i} cx={x(i)} cy={HH - pad - 2} r="1.8" fill="#ef4444" /> : null))}
+      {/* down periods shaded */}
+      {pts.map((p, i) => (!p.up ? <rect key={`d${i}`} x={x(i) - stepX / 2} y={padT} width={stepX} height={HH - padT - padB} fill="rgba(239,68,68,.14)" /> : null))}
+      {areaD && <path d={areaD} fill={`url(#${gid})`} />}
+      {d && <path d={d} fill="none" stroke={stroke} strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+      {/* honest scale labels */}
+      <text x={padX} y={7} fontSize="7.5" fill="#94A3B8">{Math.round(hi)}ms</text>
+      <text x={padX} y={HH - 3} fontSize="7.5" fill="#94A3B8">{Math.round(lo)}ms</text>
     </svg>
   );
 }
@@ -262,7 +283,7 @@ const CSS = `
 .mon-card-name b{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mon-card-name em{font-style:normal;font-size:10.5px;color:#94A3B8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mon-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0;margin-top:3px}
-.mon-graph{width:100%;height:64px;display:block}
+.mon-graph{width:100%;height:72px;display:block}
 .mon-graph.empty{display:flex;align-items:center;justify-content:center;font-size:10.5px;color:#94A3B8;border:1px dashed var(--border);border-radius:8px}
 .mon-card-metrics{display:flex;justify-content:space-between;font-size:11.5px;font-weight:600}
 .mon-card-metrics .muted{color:#94A3B8;font-weight:500}
