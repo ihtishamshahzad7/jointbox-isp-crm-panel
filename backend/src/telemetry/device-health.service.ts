@@ -3,6 +3,8 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { IF, IF_HC, IF_EXTRA, IF_OPER_UP, healthProfileFor, HealthOid } from './oids';
+import { SecretsService } from '../common/secrets.service';
+import { decField } from '../nas/nas-credentials';
 
 /**
  * DEVICE HEALTH + INTERFACE RATE COLLECTOR.
@@ -33,7 +35,7 @@ export class DeviceHealthService {
   /** Previous uptime per NAS, to detect a reboot (counters reset). */
   private prevUptime = new Map<number, number>();
 
-  constructor(private prisma: PrismaService) {
+  constructor(private prisma: PrismaService, private secrets: SecretsService) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       this.snmp = require('net-snmp');
@@ -52,6 +54,7 @@ export class DeviceHealthService {
         select: {
           id: true, nasname: true, nasIp: true, deviceType: true,
           snmpCommunity: true, snmpPort: true, snmpVersion: true, monitoredPorts: true,
+          snmpTimeoutMs: true, snmpRetries: true,
         },
       });
       for (const nas of list) {
@@ -68,8 +71,12 @@ export class DeviceHealthService {
 
   private session(nas: any) {
     const version = nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;
-    return this.snmp.createSession(this.host(nas), nas.snmpCommunity || 'public', {
-      port: nas.snmpPort || 161, version, timeout: 4000, retries: 1,
+    // The community is encrypted at rest; decField() also passes legacy
+    // plaintext values through unchanged.
+    const community = decField(this.secrets, nas.snmpCommunity) || 'public';
+    return this.snmp.createSession(this.host(nas), community, {
+      port: nas.snmpPort || 161, version,
+      timeout: nas.snmpTimeoutMs || 4000, retries: nas.snmpRetries ?? 1,
     });
   }
 
@@ -167,6 +174,73 @@ export class DeviceHealthService {
     if (uptime != null && uptime >= 0) out.uptime = uptime;
     if (temperature != null && temperature > -50 && temperature < 150) out.temperature = temperature;
     return out;
+  }
+
+  /**
+   * TEST SNMP — a real probe, not a config check. Contacts the device now and
+   * reports what actually came back (or precisely why it didn't), so the
+   * operator can fix community/firewall/service without guessing.
+   */
+  async testSnmp(nasId: number): Promise<any> {
+    const nas = await this.prisma.nas.findUnique({
+      where: { id: nasId },
+      select: {
+        id: true, nasname: true, nasIp: true, deviceType: true, snmpEnabled: true,
+        snmpCommunity: true, snmpPort: true, snmpVersion: true,
+        snmpTimeoutMs: true, snmpRetries: true,
+      },
+    });
+    if (!nas) return { ok: false, error: 'NAS not found.' };
+    if (!this.snmp) return { ok: false, error: 'net-snmp is not installed on the server.' };
+    if (!this.host(nas)) return { ok: false, error: 'This NAS has no IP address configured.' };
+
+    const started = Date.now();
+    const session = this.session(nas);
+    try {
+      const scalars = await this.get(session, [IF.sysUpTime, IF.sysDescr]);
+      const responseMs = Date.now() - started;
+      const ticks = this.num(scalars.get(IF.sysUpTime));
+
+      if (ticks == null) {
+        return {
+          ok: false,
+          target: `${this.host(nas)}:${nas.snmpPort || 161}`,
+          version: nas.snmpVersion,
+          error: 'No SNMP reply (timeout).',
+          check: [
+            'The community string matches the device',
+            'SNMP is enabled on the device',
+            'UDP 161 is open from this server to the device',
+            'The device allows this server’s IP in its SNMP ACL',
+          ],
+        };
+      }
+
+      const [oper, health] = await Promise.all([
+        this.walk(session, IF.operStatus),
+        this.readHealth(session, nas.deviceType),
+      ]);
+      const upSecs = Math.round(ticks / 100);
+      return {
+        ok: true,
+        device: nas.nasname,
+        target: `${this.host(nas)}:${nas.snmpPort || 161}`,
+        version: nas.snmpVersion,
+        responseMs,
+        sysDescr: String(scalars.get(IF.sysDescr) ?? '').slice(0, 160) || null,
+        uptimeSeconds: upSecs,
+        uptimeText: `${Math.floor(upSecs / 86400)}d ${Math.floor((upSecs % 86400) / 3600)}h`,
+        interfaces: oper.size,
+        cpu: health.cpu ?? null,
+        memory: health.memory ?? null,
+        temperature: health.temperature ?? null,
+        note: nas.snmpEnabled ? undefined : 'SNMP answered, but polling is disabled for this NAS — enable it to collect history.',
+      };
+    } catch (e: any) {
+      return { ok: false, target: `${this.host(nas)}:${nas.snmpPort || 161}`, error: e?.message || 'SNMP test failed.' };
+    } finally {
+      try { session.close(); } catch { /* already closed */ }
+    }
   }
 
   // ── One device ───────────────────────────────────────────────

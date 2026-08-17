@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { LinkAggregatorService } from './link-aggregator.service';
 import { IF, IF_OPER_UP, ONT_RX_POWER, signalStatus } from './oids';
+import { SecretsService } from '../common/secrets.service';
+import { decField } from '../nas/nas-credentials';
 
 /**
  * SNMP poller — the "works on ANY device" collector.
@@ -30,6 +32,7 @@ export class SnmpPollerService {
   constructor(
     private prisma: PrismaService,
     private aggregator: LinkAggregatorService,
+    private secrets: SecretsService,
   ) {
     try {
       // Lazy require so a missing optional dep can't crash startup.
@@ -103,7 +106,8 @@ export class SnmpPollerService {
   private session(nas: any) {
     const version =
       nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;
-    return this.snmp.createSession(this.host(nas), nas.snmpCommunity || 'public', {
+    // Community is encrypted at rest (legacy plaintext still passes through).
+    return this.snmp.createSession(this.host(nas), decField(this.secrets, nas.snmpCommunity) || 'public', {
       port: nas.snmpPort || 161,
       version,
       retries: 1,

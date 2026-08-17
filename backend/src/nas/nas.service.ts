@@ -5,6 +5,8 @@ import { NasType } from '@prisma/client';
 import { Prisma } from '@prisma/client'; // ⚠️ ADD THIS IMPORT
 import { MikrotikSyncService } from './mikrotik-sync.service';
 import { RadiusSyncService } from './radius-sync.service';
+import { SecretsService } from '../common/secrets.service';
+import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credentials';
 
 @Injectable()
 export class NasService implements OnModuleInit {
@@ -15,6 +17,7 @@ export class NasService implements OnModuleInit {
     private mikrotikSync: MikrotikSyncService,
     private radiusSync: RadiusSyncService,
     private scope: ScopeService,
+    private secrets: SecretsService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -109,7 +112,9 @@ export class NasService implements OnModuleInit {
       options.include.accessGroups = { select: { groupId: true } };
     }
 
-    return this.prisma.nas.findMany(options);
+    // Credentials never leave the server — the list returns masks plus a
+    // has<Field> flag so the UI can show "configured" and a Change button.
+    return sanitizeNasList(await this.prisma.nas.findMany(options));
   }
 
   /**
@@ -237,7 +242,7 @@ export class NasService implements OnModuleInit {
     // Deliberately the same message whether it is missing or simply not
     // theirs — otherwise the difference tells them which ids exist.
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
-    return nas;
+    return sanitizeNas(nas);
   }
 
   /**
@@ -378,7 +383,8 @@ export class NasService implements OnModuleInit {
         apiPollSec:    data.apiPollSec ?? undefined,
         snmpEnabled:   data.snmpEnabled ?? undefined,
         snmpPort:      data.snmpPort ?? undefined,
-        snmpCommunity: data.snmpCommunity ?? undefined,
+        // Encrypted at rest — only our pollers read it, and the API returns a mask.
+        snmpCommunity: encField(this.secrets, data.snmpCommunity) ?? undefined,
         snmpVersion:   (data.snmpVersion as any) ?? undefined,
         snmpPollSec:   data.snmpPollSec ?? undefined,
         syslogEnabled: data.syslogEnabled ?? undefined,
@@ -431,12 +437,15 @@ export class NasService implements OnModuleInit {
     // The friendly name is stored in `shortname`, never in `nasname`.
     if (data.nasName !== undefined)     updateData.shortname    = data.nasName;
     if (data.shortname !== undefined)   updateData.shortname    = data.shortname;
-    if (data.secret !== undefined)      updateData.secret       = data.secret;
+    // Masked values are the form echoing back what we sent it — never save them
+    // over the real credential. (RADIUS `secret` stays plaintext at rest because
+    // FreeRADIUS reads this table directly; it is masked in responses only.)
+    if (data.secret !== undefined && !isMask(data.secret)) updateData.secret = data.secret;
     if (data.apiPort !== undefined)     updateData.apiPort      = data.apiPort;
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
     if (data.nasIdentifier !== undefined) updateData.nasIdentifier = (data.nasIdentifier || '').trim() || null;
     if (data.apiUsername !== undefined) updateData.apiUsername  = data.apiUsername;
-    if (data.apiPassword !== undefined) updateData.apiPassword  = data.apiPassword;
+    if (data.apiPassword !== undefined && !isMask(data.apiPassword)) updateData.apiPassword = data.apiPassword;
     if (data.nasType !== undefined)     updateData.type         = this.resolveNasType(data.nasType);
     if (data.isActive !== undefined)    updateData.isActive     = data.isActive;
     if (data.description !== undefined) updateData.description  = data.description;
@@ -445,7 +454,11 @@ export class NasService implements OnModuleInit {
     if (data.apiPollSec !== undefined)    updateData.apiPollSec    = data.apiPollSec;
     if (data.snmpEnabled !== undefined)   updateData.snmpEnabled   = data.snmpEnabled;
     if (data.snmpPort !== undefined)      updateData.snmpPort      = data.snmpPort;
-    if (data.snmpCommunity !== undefined) updateData.snmpCommunity = data.snmpCommunity;
+    // A masked value means the operator didn't retype it — leave the stored
+    // secret alone instead of overwriting it with bullet characters.
+    if (data.snmpCommunity !== undefined && !isMask(data.snmpCommunity)) {
+      updateData.snmpCommunity = encField(this.secrets, data.snmpCommunity);
+    }
     if (data.snmpVersion !== undefined)   updateData.snmpVersion   = data.snmpVersion as any;
     if (data.snmpPollSec !== undefined)   updateData.snmpPollSec   = data.snmpPollSec;
     if (data.syslogEnabled !== undefined) updateData.syslogEnabled = data.syslogEnabled;

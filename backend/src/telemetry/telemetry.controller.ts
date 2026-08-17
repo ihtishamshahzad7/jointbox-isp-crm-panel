@@ -1,7 +1,8 @@
-import { Controller, Get, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { TelemetryService } from './telemetry.service';
 import { NasMonitorService } from './nas-monitor.service';
 import { SnmpPollerService } from './snmp-poller.service';
+import { DeviceHealthService } from './device-health.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -13,6 +14,7 @@ export class TelemetryController {
     private readonly telemetry: TelemetryService,
     private readonly monitor: NasMonitorService,
     private readonly snmp: SnmpPollerService,
+    private readonly health: DeviceHealthService,
     private readonly scope: ScopeService,
   ) {}
 
@@ -20,6 +22,15 @@ export class TelemetryController {
   @Get('nas/:id/discover-interfaces')
   discover(@Param('id', ParseIntPipe) id: number) {
     return this.snmp.discoverInterfaces(id);
+  }
+
+  /**
+   * Really contact the device over SNMP and report what came back — uptime,
+   * interface count, CPU/memory — or exactly why it failed.
+   */
+  @Post('nas/:id/snmp-test')
+  snmpTest(@Param('id', ParseIntPipe) id: number) {
+    return this.health.testSnmp(id);
   }
 
   /** Health of every NAS: online count + throughput + reporting status. */

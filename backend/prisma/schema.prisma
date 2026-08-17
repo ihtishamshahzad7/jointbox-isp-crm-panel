@@ -419,9 +419,20 @@ model Nas {
 
   snmpEnabled    Boolean     @default(false)
   snmpPort       Int         @default(161)
+  /// v1/v2c community. Stored ENCRYPTED (enc:v1:… ) and never returned to the
+  /// browser — the API sends a mask. Legacy plaintext values still read fine.
   snmpCommunity  String?     @default("public")
   snmpVersion    SnmpVersion @default(V2C)
   snmpPollSec    Int         @default(30)
+  snmpTimeoutMs  Int         @default(4000)
+  snmpRetries    Int         @default(1)
+  /// SNMPv3 (USM). Passwords are encrypted at rest, like the community.
+  snmpV3User      String?    @db.VarChar(64)
+  snmpV3SecLevel  String?    @db.VarChar(24)  // noAuthNoPriv | authNoPriv | authPriv
+  snmpV3AuthProto String?    @db.VarChar(12)  // MD5 | SHA
+  snmpV3AuthPass  String?
+  snmpV3PrivProto String?    @db.VarChar(12)  // DES | AES
+  snmpV3PrivPass  String?
   /// JSON array of interface names or ifIndexes to monitor, e.g.
   /// ["ether1-wan","vlan100"] or ["1","3"]. When set (non-empty), ONLY these
   /// registered ports/interfaces are polled; empty/null monitors all.
