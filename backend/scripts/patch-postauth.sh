@@ -75,12 +75,17 @@ else:
 PY
 
 # 4) Validate; roll back if FreeRADIUS refuses the new config.
-if freeradius -XC >/dev/null 2>&1; then
+ERR_LOG="/var/log/jointbox-postauth-patch.err"
+if freeradius -XC >/dev/null 2>&1 || radiusd -XC >/dev/null 2>&1; then
   systemctl restart freeradius 2>/dev/null || service freeradius restart 2>/dev/null || true
   log "post-auth capture enabled and FreeRADIUS reloaded"
 else
   latest_bak=$(ls -t "$QCONF".bak.* 2>/dev/null | head -1)
   [ -n "$latest_bak" ] && cp -a "$latest_bak" "$QCONF"
-  echo "  ! new config failed validation — reverted. Run 'freeradius -XC' to see why."
-  exit 1
+  # Capture the ACTUAL parser error (not just "reverted") so it can be fixed.
+  { freeradius -XC 2>&1 || radiusd -XC 2>&1; } | grep -iE "error|Failed|expand|unknown|Parse" | tail -8 > "$ERR_LOG" 2>/dev/null
+  echo "  ! post-auth MAC/NAS capture could not be enabled (optional — accounting is unaffected)."
+  echo "    Reverted safely. The exact parser error was saved to: $ERR_LOG"
+  [ -s "$ERR_LOG" ] && sed 's/^/      /' "$ERR_LOG"
+  exit 0   # optional enhancement — never fail the deploy over it
 fi
