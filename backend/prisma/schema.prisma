@@ -440,6 +440,8 @@ model Nas {
   staticIps     StaticIp[]      @relation("NasStaticIps")
   subscribers   Subscriber[]  @relation("SubscriberNas")
   networkLogs   NetworkLog[]  @relation("NetworkLogNas")
+  deviceMetrics    DeviceMetric[]
+  interfaceMetrics InterfaceMetric[]
   routerLogs    RouterLog[]   @relation("NasRouterLogs")
   olts          Olt[]         @relation("NasOlts")
   pppoeSessions PppoeSession[] @relation("PppoeSessionNas")
@@ -2982,4 +2984,45 @@ model ProfitEntry {
   @@index([fromUserId, at])
   @@index([reference])
   @@map("profit_entry")
+}
+
+/// Device health samples (CPU %, memory %, uptime seconds, temperature °C).
+/// One row per metric per poll — the series behind the health graphs.
+model DeviceMetric {
+  id     Int      @id @default(autoincrement())
+  nasId  Int
+  ts     DateTime @default(now())
+  metric String   @db.VarChar(24) // cpu | memory | uptime | temperature | snmpMs
+  value  Float
+
+  nas Nas @relation(fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@index([nasId, metric, ts])
+  @@map("device_metric")
+}
+
+/// Per-interface samples. `rxBps`/`txBps` are RATES already derived from counter
+/// deltas by the poller (never raw counters — a raw ifInOctets graphed as Mbps
+/// is meaningless and wraps). Raw counters are kept only to compute the next
+/// delta and to detect rollover / device reboot.
+model InterfaceMetric {
+  id        Int      @id @default(autoincrement())
+  nasId     Int
+  ifIndex   Int
+  name      String   @db.VarChar(96)
+  ts        DateTime @default(now())
+  rxBps     Float    @default(0)
+  txBps     Float    @default(0)
+  inErrors  Float    @default(0)  // per second
+  outErrors Float    @default(0)
+  inDiscards  Float  @default(0)
+  outDiscards Float  @default(0)
+  up        Boolean  @default(true)
+  speedMbps Int?
+
+  nas Nas @relation(fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@index([nasId, ifIndex, ts])
+  @@index([ts])
+  @@map("interface_metric")
 }
