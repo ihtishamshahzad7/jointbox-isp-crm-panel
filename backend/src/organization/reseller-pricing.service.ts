@@ -480,7 +480,9 @@ export class ResellerPricingService {
     const sell: Record<number, number> = {};
     for (const node of chain) sell[node.id] = await this.priceFor(node.id, sub.packageId, base);
 
-    const movements: { userId: number; role: string; delta: number; note: string }[] = [];
+    // `sale`/`cost` are carried so the profit ledger can record what the tier
+    // below paid and what this tier paid upward, not just the net margin.
+    const movements: { userId: number; role: string; delta: number; note: string; sale?: number; cost?: number }[] = [];
 
     /**
      * `sell[userId]` is that user's BUY price — what their parent charges them.
@@ -518,7 +520,11 @@ export class ResellerPricingService {
         const childPays = sell[chain[i - 1].id];
         const iPay = sell[chain[i].id];
         const margin = Math.round((childPays - iPay) * 100) / 100;
-        movements.push({ userId: chain[i].id, role: chain[i].role, delta: margin, note: `Margin ${childPays}−${iPay}` });
+        movements.push({
+          userId: chain[i].id, role: chain[i].role, delta: margin,
+          note: `Margin ${childPays}−${iPay}`,
+          sale: childPays, cost: iPay,
+        });
       }
 
       // The ISP RECEIVES what its direct child pays it. It owns the package,
@@ -529,6 +535,8 @@ export class ResellerPricingService {
       movements.push({
         userId: root.id, role: root.role, delta: theyPayMe,
         note: `Received from ${directChild.role.toLowerCase()} (${theyPayMe})`,
+        // The ISP owns the package, so it pays nobody: the whole amount is margin.
+        sale: theyPayMe, cost: 0,
       });
     }
 
@@ -719,18 +727,22 @@ export class ResellerPricingService {
         SELECT COALESCE(SUM(p.amount - p."refundedAmount"), 0) AS v
         FROM "Payment" p JOIN "Subscriber" s ON s.id = p."subscriberId"
         WHERE s."userId" = ${meId} ${paidFrom}`);
-      const [movesRow] = await this.prisma.$queryRaw<Array<{ paidup: number; earneddown: number }>>(Prisma.sql`
-        SELECT COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0) AS paidup,
-               COALESCE(SUM(CASE WHEN t.amount > 0 THEN  t.amount ELSE 0 END), 0) AS earneddown
+      // Money actually paid upward (wallet) — margins now live in the profit ledger.
+      const [movesRow] = await this.prisma.$queryRaw<Array<{ paidup: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0) AS paidup
         FROM "UserBalanceTransaction" t
         WHERE t."userId" = ${meId} AND t.reference LIKE 'SUB#%' ${txFrom}`);
+      const profFrom = from ? Prisma.sql`AND p."at" >= ${from}` : Prisma.empty;
+      const [profRow] = await this.prisma.$queryRaw<Array<{ earneddown: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(p."profitAmount"), 0) AS earneddown
+        FROM "profit_entry" p WHERE p."userId" = ${meId} ${profFrom}`);
       const [expRow] = await this.prisma.$queryRaw<Array<{ v: number }>>(Prisma.sql`
         SELECT COALESCE(SUM(e.amount), 0) AS v FROM "Expense" e
         WHERE e."createdBy" = ${meId} AND e.status = 'APPROVED' ${expFrom}`);
 
       const collected = Number(collectedRow?.v || 0);
       const paidUp = Number(movesRow?.paidup || 0);
-      const earnedDown = Number(movesRow?.earneddown || 0);
+      const earnedDown = Number(profRow?.earneddown || 0);
       const expenses = Number(expRow?.v || 0);
       const revenue = collected + earnedDown;
       return {
@@ -769,16 +781,15 @@ export class ResellerPricingService {
         SELECT u.id, tree.root FROM "User" u JOIN tree ON u."parentId" = tree.descendant
       )`;
     const [earnedRows, loadedRows, subRows] = await Promise.all([
-      // My margin per direct child, all-time and this month.
+      // My margin per direct child, from the PROFIT LEDGER (never the wallet).
       this.prisma.$queryRaw<Array<{ root: number; all: number; month: number }>>(Prisma.sql`
         ${tree}
         SELECT tree.root AS root,
-               COALESCE(SUM(t.amount), 0) AS all,
-               COALESCE(SUM(CASE WHEN t."createdAt" >= ${monthStart} THEN t.amount ELSE 0 END), 0) AS month
-        FROM "UserBalanceTransaction" t
-        JOIN "Subscriber" s ON s.id = CAST(substring(t.reference from 'SUB#([0-9]+)') AS INTEGER)
-        JOIN tree ON tree.descendant = s."userId"
-        WHERE t."userId" = ${meId} AND t.amount > 0 AND t.reference LIKE 'SUB#%'
+               COALESCE(SUM(p."profitAmount"), 0) AS all,
+               COALESCE(SUM(CASE WHEN p."at" >= ${monthStart} THEN p."profitAmount" ELSE 0 END), 0) AS month
+        FROM "profit_entry" p
+        JOIN tree ON tree.descendant = COALESCE(p."fromUserId", -1)
+        WHERE p."userId" = ${meId}
         GROUP BY tree.root`),
       // Balance I loaded into each direct child.
       this.prisma.$queryRaw<Array<{ child: number; v: number }>>(Prisma.sql`
@@ -817,6 +828,102 @@ export class ResellerPricingService {
         loadedToChildren: r2(Number(flowRow?.[0]?.loadedout || 0)),
       },
       children: perChild.sort((a, b) => b.earnedFromThisChild - a.earnedFromThisChild),
+    };
+  }
+
+  /**
+   * PROFIT REPORT — margin earned by this account, from the profit ledger.
+   *
+   * Deliberately separate from the wallet: these numbers are what the business
+   * MADE, not money sitting in an account. Totals by day/week/month/year (plus a
+   * custom range), a breakdown per downline seller, and the line items behind
+   * them (customer, package, sale, cost, profit, when).
+   */
+  async profitReport(actor: Actor, opts: { from?: string; to?: string; limit?: number } = {}) {
+    const meId = await this.scope.rootId(actor);
+    const now = new Date();
+    const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(dayStart); weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+
+    const sum = async (from: Date | null, to?: Date | null) => {
+      const [r] = await this.prisma.$queryRaw<Array<{ profit: number; sales: number; n: number }>>(Prisma.sql`
+        SELECT COALESCE(SUM(p."profitAmount"), 0) AS profit,
+               COALESCE(SUM(p."saleAmount"), 0)   AS sales,
+               COUNT(*)                            AS n
+        FROM "profit_entry" p
+        WHERE p."userId" = ${meId}
+          ${from ? Prisma.sql`AND p."at" >= ${from}` : Prisma.empty}
+          ${to ? Prisma.sql`AND p."at" <= ${to}` : Prisma.empty}`);
+      return {
+        profit: Math.round(Number(r?.profit || 0) * 100) / 100,
+        sales: Math.round(Number(r?.sales || 0) * 100) / 100,
+        activations: Number(r?.n || 0),
+      };
+    };
+
+    const customFrom = opts.from ? new Date(opts.from) : null;
+    const customTo = opts.to ? new Date(`${opts.to}T23:59:59`) : null;
+
+    const [today, week, month, year, total, custom] = await Promise.all([
+      sum(dayStart), sum(weekStart), sum(monthStart), sum(yearStart), sum(null),
+      customFrom || customTo ? sum(customFrom, customTo) : Promise.resolve(null),
+    ]);
+
+    // Which downline account generated the profit (the seller).
+    const bySeller = await this.prisma.$queryRaw<Array<any>>(Prisma.sql`
+      SELECT u.id, u.name, u.role,
+             COALESCE(SUM(p."profitAmount"), 0) AS profit,
+             COALESCE(SUM(p."saleAmount"), 0)   AS sales,
+             COUNT(*)                            AS activations
+      FROM "profit_entry" p
+      LEFT JOIN "User" u ON u.id = p."fromUserId"
+      WHERE p."userId" = ${meId}
+        ${customFrom ? Prisma.sql`AND p."at" >= ${customFrom}` : Prisma.empty}
+        ${customTo ? Prisma.sql`AND p."at" <= ${customTo}` : Prisma.empty}
+      GROUP BY u.id, u.name, u.role
+      ORDER BY profit DESC`);
+
+    // The line items behind the totals.
+    const take = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+    const rows = await this.prisma.profitEntry.findMany({
+      where: {
+        userId: meId,
+        ...(customFrom || customTo ? { at: { ...(customFrom ? { gte: customFrom } : {}), ...(customTo ? { lte: customTo } : {}) } } : {}),
+      },
+      orderBy: { at: 'desc' },
+      take,
+      include: { subscriber: { select: { id: true, fullName: true, username: true } } },
+    });
+    const sellerIds = [...new Set(rows.map((r) => r.fromUserId).filter(Boolean))] as number[];
+    const pkgIds = [...new Set(rows.map((r) => r.packageId).filter(Boolean))] as number[];
+    const [sellers, pkgs] = await Promise.all([
+      sellerIds.length ? this.prisma.user.findMany({ where: { id: { in: sellerIds } }, select: { id: true, name: true } }) : [],
+      pkgIds.length ? this.prisma.package.findMany({ where: { id: { in: pkgIds } }, select: { id: true, name: true } }) : [],
+    ]);
+    const sellerBy = new Map(sellers.map((s) => [s.id, s.name]));
+    const pkgBy = new Map(pkgs.map((p) => [p.id, p.name]));
+
+    return {
+      periods: { today, week, month, year, total, custom },
+      bySeller: bySeller.map((s) => ({
+        id: s.id ? Number(s.id) : null,
+        name: s.name ?? 'Direct / unknown',
+        role: s.role ?? null,
+        profit: Math.round(Number(s.profit) * 100) / 100,
+        sales: Math.round(Number(s.sales) * 100) / 100,
+        activations: Number(s.activations),
+      })),
+      entries: rows.map((r) => ({
+        id: r.id, at: r.at,
+        seller: r.fromUserId ? (sellerBy.get(r.fromUserId) ?? `#${r.fromUserId}`) : '—',
+        subscriber: r.subscriber ? (r.subscriber.fullName || r.subscriber.username) : '—',
+        subscriberId: r.subscriberId,
+        packageName: r.packageId ? (pkgBy.get(r.packageId) ?? `#${r.packageId}`) : '—',
+        sale: r.saleAmount, cost: r.costAmount, profit: r.profitAmount,
+        note: r.note,
+      })),
     };
   }
 
@@ -914,6 +1021,24 @@ export class ResellerPricingService {
             balanceAfter: updated.balance, reference: reversalReference,
             notes: `Reversal of ${reference} — ${note}`, createdBy: opts.actorId ?? null,
           } as any,
+        });
+      }
+      /**
+       * Reverse the PROFIT LEDGER too. The margin never touched a wallet, but a
+       * reversed sale must not keep showing as profit in the reports — so we
+       * write mirror-image negative entries rather than deleting, keeping the
+       * original visible in the audit trail.
+       */
+      const earned = await tx.profitEntry.findMany({ where: { reference } });
+      for (const p of earned) {
+        await tx.profitEntry.create({
+          data: {
+            userId: p.userId, fromUserId: p.fromUserId, subscriberId: p.subscriberId,
+            packageId: p.packageId,
+            saleAmount: -p.saleAmount, costAmount: -p.costAmount, profitAmount: -p.profitAmount,
+            reference: reversalReference,
+            note: `Reversal of ${reference}`,
+          },
         });
       }
       // Keep service state consistent with the ledger when asked.
@@ -1120,26 +1245,58 @@ export class ResellerPricingService {
         }
       }
 
+      /**
+       * WALLETS MOVE ONLY FOR REAL MONEY; MARGIN IS RECORDED, NOT CREDITED.
+       *
+       * The upline's margin used to be added to its wallet balance. That
+       * double-counts: the parent was already paid when it sold the prepaid
+       * credit the child just spent, so crediting again invented money and made
+       * "load balance" impossible to reconcile. Now:
+       *
+       *   • the ACTIVATOR is debited (real money leaving a real wallet), and
+       *   • every upline margin is written to the PROFIT LEDGER for reporting.
+       *
+       * Wallet balances therefore only change through genuine transactions:
+       * loads, transfers, adjustments and the activator's own deduction.
+       */
+      const activatorId = q.movements[0]?.userId ?? null;
       for (const m of q.movements) {
         if (!m.delta) continue;
-        // The activator was already debited atomically above; skip it here so
-        // the deduction is not applied a second time.
-        if (enforce && m === q.movements[0] && m.delta < 0) continue;
-        const after = await db.user.update({
-          where: { id: m.userId },
-          data: { balance: { increment: m.delta } },
-          select: { balance: true },
-        });
-        await db.userBalanceTransaction.create({
+
+        if (m.delta < 0) {
+          // A real outgoing payment. The activator was already debited above
+          // when enforcement is on; skip it so it is not deducted twice.
+          if (enforce && m === q.movements[0]) continue;
+          const after = await db.user.update({
+            where: { id: m.userId },
+            data: { balance: { increment: m.delta } },
+            select: { balance: true },
+          });
+          await db.userBalanceTransaction.create({
+            data: {
+              userId: m.userId, type: 'DEDUCT', amount: m.delta,
+              balanceAfter: after.balance, reference,
+              notes: `Package activation: ${m.note}`,
+              createdBy: opts.byUserId ?? null,
+            } as any,
+          });
+          continue;
+        }
+
+        // delta > 0 → this tier EARNED a margin. Reporting only.
+        await db.profitEntry.create({
           data: {
             userId: m.userId,
-            type: m.delta >= 0 ? 'COMMISSION' : 'DEDUCT',
-            amount: m.delta,
-            balanceAfter: after.balance,
+            fromUserId: activatorId,
+            subscriberId,
+            packageId: q.packageId ?? null,
+            // What the tier below paid this tier, what it paid upward, and the margin.
+            saleAmount: Math.round((m.sale ?? m.delta) * 100) / 100,
+            costAmount: Math.round((m.cost ?? 0) * 100) / 100,
+            profitAmount: Math.round(m.delta * 100) / 100,
             reference,
-            notes: `Package activation: ${m.note}`,
-            createdBy: opts.byUserId ?? null,
-          } as any,
+            note: m.note?.slice(0, 200) ?? null,
+          },
         });
       }
       return null; // no duplicate → proceed

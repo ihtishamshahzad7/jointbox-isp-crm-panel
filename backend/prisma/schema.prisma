@@ -613,6 +613,7 @@ model User {
   branch   Branch? @relation("BranchUsers", fields: [branchId], references: [id])
   walletTxs UserBalanceTransaction[] @relation("UserBalanceTxs")
   monitorTargets MonitorTarget[] @relation("UserMonitorTargets")
+  profitEntries  ProfitEntry[]   @relation("UserProfitEntries")
 
   ownedSubscribers Subscriber[]  @relation("UserSubscribers")
   salesSubscribers Subscriber[]  @relation("SalespersonSubscribers")
@@ -1296,6 +1297,7 @@ model Subscriber {
   balanceTxs      BalanceTransaction[] @relation("SubscriberBalanceTxs")
   invoices        Invoice[]        @relation("SubscriberInvoices")
   payments        Payment[]        @relation("SubscriberPayments")
+  profitEntries   ProfitEntry[]
   tickets         Ticket[]         @relation("SubscriberTickets")
   vouchers        Voucher[]        @relation("SubscriberVouchers")
   networkLogs     NetworkLog[]     @relation("SubscriberNetworkLogs")
@@ -2945,4 +2947,39 @@ model MonitorSample {
 
   @@index([targetId, at])
   @@map("monitor_sample")
+}
+
+/// PROFIT LEDGER — reporting only, never wallet money.
+///
+/// When a downline account activates a customer, each tier above it earns a
+/// margin. That margin must NOT be credited to the tier's wallet: the parent was
+/// already paid when it sold the credit the child just spent, so crediting again
+/// double-counts. The margin is recorded here instead, so profit can be reported
+/// by day/week/month/year and traced to the child, customer and package that
+/// produced it, while wallets only move on real transactions (loads, transfers,
+/// and the activator's own deduction).
+model ProfitEntry {
+  id           Int      @id @default(autoincrement())
+  at           DateTime @default(now())
+  /// The account that EARNED this margin (the parent/tier).
+  userId       Int
+  /// The downline account whose activation generated it (the seller).
+  fromUserId   Int?
+  subscriberId Int?
+  packageId    Int?
+  /// What the child paid this tier, what this tier paid upward, and the margin.
+  saleAmount   Float    @default(0)
+  costAmount   Float    @default(0)
+  profitAmount Float    @default(0)
+  /// Same reference as the settlement, so a reversal can find its entries.
+  reference    String?  @db.VarChar(120)
+  note         String?  @db.VarChar(200)
+
+  user       User        @relation("UserProfitEntries", fields: [userId], references: [id], onDelete: Cascade)
+  subscriber Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([userId, at])
+  @@index([fromUserId, at])
+  @@index([reference])
+  @@map("profit_entry")
 }

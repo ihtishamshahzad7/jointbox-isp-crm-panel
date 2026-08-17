@@ -49,6 +49,20 @@ export class OrganizationController {
     return this.pricing.accountability(req.user);
   }
 
+  /**
+   * Profit report — margin earned (reporting only, never wallet money):
+   * today / week / month / year / custom range, per downline seller, line items.
+   */
+  @Get('profit/report')
+  profitReport(
+    @Request() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.pricing.profitReport(req.user, { from, to, limit: limit ? +limit : undefined });
+  }
+
   @Get('profit/subscriber/:subscriberId')
   profitBySubscriber(@Param('subscriberId') subscriberId: string, @Request() req: any) {
     return this.pricing.profitBySubscriber(req.user, +subscriberId);
