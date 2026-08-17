@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -51,15 +51,28 @@ export class AreasService {
     });
   }
 
-  async update(id: number, data: any) {
+  /** Non-admins may only touch an area inside their own subtree. */
+  private async assertOwnsArea(id: number, actor?: Actor) {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const area = await this.prisma.area.findUnique({ where: { id }, select: { ownerId: true } });
+    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+    if (!area || area.ownerId == null || !ids.includes(area.ownerId)) {
+      throw new NotFoundException(`Area ${id} not found`);
+    }
+  }
+
+  async update(id: number, data: any, actor?: Actor) {
+    await this.assertOwnsArea(id, actor);
     return this.prisma.area.update({ where: { id }, data });
   }
 
-  async remove(id: number) {
+  async remove(id: number, actor?: Actor) {
+    await this.assertOwnsArea(id, actor);
     return this.prisma.area.delete({ where: { id } });
   }
 
-  async toggleArea(id: number) {
+  async toggleArea(id: number, actor?: Actor) {
+    await this.assertOwnsArea(id, actor);
     const area = await this.prisma.area.findUnique({ where: { id } });
     if (!area) throw new Error('Area not found');
 

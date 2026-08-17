@@ -448,6 +448,17 @@ export class IpPoolService {
   //      (admin may need to fix a typo in the MikroTik name)
   //   3. NAS field is intentionally ignored
   // ─────────────────────────────────────────────────────────────
+  /** Non-admins may only modify a pool they own/can access (same poolWhere). */
+  private async assertOwnsPool(id: number, actor?: Actor) {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const base = await this.scope.poolWhere(actor as any);
+    const ok = await this.prisma.ipPool.findFirst({
+      where: base && Object.keys(base).length ? { AND: [{ id }, base] } : { id },
+      select: { id: true },
+    });
+    if (!ok) throw new NotFoundException(`IP Pool with ID ${id} not found`);
+  }
+
   async update(
     id: number,
     data: {
@@ -455,7 +466,9 @@ export class IpPoolService {
       network?: string;
       subnet?:  string;
     },
+    actor?: Actor,
   ) {
+    await this.assertOwnsPool(id, actor);
     const existing = await this.prisma.ipPool.findUnique({
       where: { id },
       include: { _count: { select: { packages: true } } },
@@ -522,7 +535,8 @@ export class IpPoolService {
   // DELETE
   // Cannot delete if a package is still using this pool
   // ─────────────────────────────────────────────────────────────
-  async remove(id: number) {
+  async remove(id: number, actor?: Actor) {
+    await this.assertOwnsPool(id, actor);
     const pool = await this.prisma.ipPool.findUnique({
       where: { id },
       include: {

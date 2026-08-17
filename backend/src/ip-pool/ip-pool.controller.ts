@@ -114,7 +114,7 @@ export class IpPoolController {
   // ── PUT /ip-pools/:id
   // All fields are optional — only send what you want to change
   @Put(':id')
-  update(@Param('id') id: string, @Body() body: any) {
+  update(@Param('id') id: string, @Body() body: any, @Req() req: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) throw new BadRequestException('Pool ID must be a number');
 
@@ -125,15 +125,15 @@ export class IpPoolController {
     if (body.subnet  !== undefined) updateData.subnet  = String(body.subnet);
     // nasId is intentionally never updated
 
-    return this.ipPoolService.update(numId, updateData);
+    return this.ipPoolService.update(numId, updateData, req.user);
   }
 
   // ── DELETE /ip-pools/:id
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  remove(@Param('id') id: string) {
+  remove(@Param('id') id: string, @Req() req: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) throw new BadRequestException('Pool ID must be a number');
-    return this.ipPoolService.remove(numId);
+    return this.ipPoolService.remove(numId, req.user);
   }
 }
