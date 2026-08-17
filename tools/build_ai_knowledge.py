@@ -48,6 +48,7 @@ MENU = {
     "support-center": "Daily Work → Support",
     "trace": "Daily Work → Trace Search",
     "network-center": "Operations → Network",
+    "monitoring": "Operations → Monitoring",
     "operations": "Operations → Network → Operations",
     "noc": "Operations → Network → NOC / Uptime",
     "nas": "Operations → Network → NAS / Routers",
@@ -178,6 +179,33 @@ def scan_actions() -> list[dict]:
 # labels, so every risky control comes with "what happens" and "can I undo it".
 # Matching is longest-key-first so "bulk delete" wins over "delete".
 RISK = {
+    "change package": (
+        "Migrates the customer to a different plan mid-cycle (e.g. 4mb → 8mb).",
+        "The expiry date does NOT move — the customer keeps the days they paid for. "
+        "The unused days of the old plan are credited and the same days of the new plan are charged, "
+        "both at your cost, so an upgrade only costs the pro-rata difference and a downgrade refunds it. "
+        "You see the exact credit/charge/net before confirming. The new speed reaches the router immediately. "
+        "An upgrade is blocked if your wallet cannot cover the difference.",
+        "medium"),
+    "apply migration": (
+        "Confirms the plan change and settles the money.",
+        "Charges or refunds your wallet by the pro-rata amount shown in the preview, re-stamps cost/sell/profit, "
+        "and re-syncs the new speed to RADIUS. The expiry date stays the same.",
+        "medium"),
+    "add monitor": (
+        "Starts pinging this host every 30 seconds from the server.",
+        "Safe. It only sends ICMP pings; it changes nothing on the target. The host is private to your account.",
+        "low"),
+    "traceroute": (
+        "Traces the network path to the target, hop by hop.",
+        "Read-only. Intermediate hops that show '*' are normal — many routers do not answer probes, "
+        "and that does not mean they are down. Destination reachability is judged separately.",
+        "low"),
+    "tcp trace": (
+        "Tests whether a TCP port is actually reachable, and traces the path to it.",
+        "Read-only. The 'DESTINATION REACHED' line is authoritative — it comes from a real TCP connection, "
+        "not from hops that may silently drop probes.",
+        "low"),
     "delete": ("Removes the record for good.",
                "Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
                "high"),
@@ -304,9 +332,31 @@ def clean_label(raw: str) -> str:
     return s
 
 
-def risk_for(label: str):
-    """Longest matching hand-written safety note for a button label, or None."""
+# Screen-specific overrides for labels whose global note would be misleading.
+RISK_BY_SCREEN = {
+    "monitoring": {
+        "delete": ("Stops monitoring this host and removes its history.",
+                   "It only deletes the monitor — the device itself is untouched. "
+                   "You can add the host again at any time, but the recorded latency history is gone.",
+                   "medium"),
+        "pause": ("Stops pinging this host until you resume.",
+                  "No alerts will fire for it while paused. Nothing else changes.",
+                  "low"),
+    },
+}
+
+
+def risk_for(label: str, route: str = ""):
+    """Longest matching hand-written safety note for a button label, or None.
+
+    `route` scopes the note to a screen: the generic "Delete" warning talks about
+    invoices and payments, which is right on Subscribers and plainly wrong on
+    Monitoring. A per-screen override wins over the global note.
+    """
     low = label.lower().strip()
+    scoped = RISK_BY_SCREEN.get((route or "").split("/")[0], {})
+    if low in scoped:
+        return scoped[low]
     if low in RISK:                       # exact label always wins
         return RISK[low]
     # Whole-word matching only: substring matching made "Create Allocation"
@@ -339,6 +389,14 @@ def scan_buttons() -> tuple[list[dict], dict]:
         labels: list[str] = []
         # <button ...>Label</button>  (literal text only)
         labels += re.findall(r"<button\b[^>]*>([^<]{2,48}?)</button>", text)
+        # <Btn ...>Label</Btn> — the shared button component used across the
+        # panel. Without this the scan missed most real controls (they are
+        # <Btn>, not <button>), so the docs never described them. An optional
+        # leading self-closing icon (<Ic.Refresh />) is skipped.
+        # `(?:[^>]|=>)*?` — attributes contain arrow functions, and a plain
+        # `[^>]*` stops at the `>` in `=>`, which silently dropped every button
+        # whose onClick is an inline arrow (i.e. most of them).
+        labels += re.findall(r"<Btn\b(?:[^>]|=>)*?>\s*(?:<[A-Za-z][^>]*/>\s*)?([^<>{}]{2,48}?)\s*</Btn>", text)
         # aria-label / title on a button — the accessible name IS the label
         labels += re.findall(r"<button\b[^>]*?(?:aria-label|title)=\"([^\"]{2,48})\"", text)
         # Toolbar/tab arrays declared as objects:
@@ -373,9 +431,9 @@ def scan_buttons() -> tuple[list[dict], dict]:
             continue
         where = MENU.get(route) or MENU.get(top) or f"/{route}"
         index[route] = [
-            {"label": l, "does": (risk_for(l) or ("", "", "low"))[0],
-             "careful": (risk_for(l) or ("", "", "low"))[1],
-             "risk": (risk_for(l) or ("", "", "low"))[2]}
+            {"label": l, "does": (risk_for(l, route) or ("", "", "low"))[0],
+             "careful": (risk_for(l, route) or ("", "", "low"))[1],
+             "risk": (risk_for(l, route) or ("", "", "low"))[2]}
             for l in keep[:40]
         ]
 
@@ -389,7 +447,7 @@ def scan_buttons() -> tuple[list[dict], dict]:
         # ...plus a dedicated entry per RISKY control, because those are the
         # clicks that cost money or cut someone's internet.
         for lab in keep:
-            r = risk_for(lab)
+            r = risk_for(lab, route)
             if not r or r[2] == "low":
                 continue
             does, careful, level = r

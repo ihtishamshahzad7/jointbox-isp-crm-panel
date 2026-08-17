@@ -2,11 +2,11 @@
   "generated": true,
   "note": "Auto-generated from the codebase by tools/build_ai_knowledge.py. Do not edit by hand — re-run the script instead.",
   "counts": {
-    "screens": 57,
-    "actions": 49,
-    "tabs": 51,
-    "buttons": 72,
-    "total": 229
+    "screens": 58,
+    "actions": 50,
+    "tabs": 52,
+    "buttons": 79,
+    "total": 239
   },
   "tabs": {
     "admin-center": [
@@ -42,6 +42,11 @@
       }
     ],
     "billing-center": [
+      {
+        "id": "accountability",
+        "label": "Profit & Accountability",
+        "hint": "Are you earning? Profit by day/week/month, balance flow, and what each child earns you."
+      },
       {
         "id": "accounting",
         "label": "Accounting",
@@ -411,6 +416,18 @@
     ],
     "areas": [
       {
+        "label": "View",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Edit",
+        "does": "Opens this record so you can change it.",
+        "careful": "Your changes apply only after you press Save.",
+        "risk": "low"
+      },
+      {
         "label": "Total Areas",
         "does": "",
         "careful": "",
@@ -430,6 +447,12 @@
       }
     ],
     "billing-center": [
+      {
+        "label": "Profit & Accountability",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
       {
         "label": "Accounting",
         "does": "",
@@ -500,6 +523,12 @@
       }
     ],
     "complaints": [
+      {
+        "label": "View",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
       {
         "label": "Technical",
         "does": "",
@@ -643,6 +672,30 @@
         "does": "",
         "careful": "",
         "risk": "low"
+      },
+      {
+        "label": "Add Subscriber",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Generate Invoice",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "View Reports",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Manage NAS",
+        "does": "",
+        "careful": "",
+        "risk": "low"
       }
     ],
     "docs": [
@@ -705,6 +758,42 @@
         "risk": "low"
       },
       {
+        "label": "+ New OLT",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "+ New Port",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "+ Add OLT",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Assign",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Free",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
         "label": "Total OLTs",
         "does": "",
         "careful": "",
@@ -762,6 +851,12 @@
       }
     ],
     "gateways": [
+      {
+        "label": "Reconcile",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
       {
         "label": "Stripe",
         "does": "",
@@ -935,6 +1030,54 @@
     ],
     "ip-pools": [
       {
+        "label": "Add IP Pool",
+        "does": "Opens a form to create a new record.",
+        "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "⬆ Import",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "⬇ Export",
+        "does": "Downloads what you are looking at as a file.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Cancel",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Edit",
+        "does": "Opens this record so you can change it.",
+        "careful": "Your changes apply only after you press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Delete",
+        "does": "Removes the record for good.",
+        "careful": "Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+        "risk": "high"
+      },
+      {
+        "label": "Close",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Done",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
         "label": "Add",
         "does": "Opens a form to create a new record.",
         "careful": "Nothing is created until you fill the form and press Save.",
@@ -1027,6 +1170,12 @@
         "risk": "low"
       },
       {
+        "label": "📶 RADIUS Sessions",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
         "label": "⛔ Failed",
         "does": "",
         "careful": "",
@@ -1037,6 +1186,20 @@
         "does": "",
         "careful": "",
         "risk": "low"
+      }
+    ],
+    "monitoring": [
+      {
+        "label": "Check now",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Delete",
+        "does": "Stops monitoring this host and removes its history.",
+        "careful": "It only deletes the monitor — the device itself is untouched. You can add the host again at any time, but the recorded latency history is gone.",
+        "risk": "medium"
       }
     ],
     "my-work": [
@@ -1060,6 +1223,66 @@
       }
     ],
     "nas": [
+      {
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Discover",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Save",
+        "does": "Writes your changes.",
+        "careful": "Nothing you typed takes effect until you press this.",
+        "risk": "low"
+      },
+      {
+        "label": "Edit",
+        "does": "Opens this record so you can change it.",
+        "careful": "Your changes apply only after you press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Refresh All",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Close",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Done",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Cancel",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Clear",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Delete Permanently",
+        "does": "Removes the record for good.",
+        "careful": "Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+        "risk": "high"
+      },
       {
         "label": "Owner",
         "does": "",
@@ -1112,12 +1335,6 @@
         "label": "Device",
         "does": "",
         "careful": "",
-        "risk": "low"
-      },
-      {
-        "label": "Refresh",
-        "does": "Re-reads the latest data.",
-        "careful": "Read-only — it changes nothing.",
         "risk": "low"
       }
     ],
@@ -1607,6 +1824,18 @@
     ],
     "settings": [
       {
+        "label": "Sign Out",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Change Password",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
         "label": "Email Address",
         "does": "",
         "careful": "",
@@ -1695,9 +1924,141 @@
     ],
     "subscribers": [
       {
-        "label": "Add subscriber",
+        "label": "Refresh",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Add Subscriber",
         "does": "Opens a form to create a new record.",
         "careful": "Nothing is created until you fill the form and press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "✓ Activate",
+        "does": "Starts the customer's service and their billing period.",
+        "careful": "This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
+        "risk": "medium"
+      },
+      {
+        "label": "⏳ Grace",
+        "does": "Gives the customer extra days without paying yet.",
+        "careful": "Their expiry moves forward and auto-suspend skips them until it passes.",
+        "risk": "medium"
+      },
+      {
+        "label": "✉ Message",
+        "does": "Sends a real SMS or notification to real customers.",
+        "careful": "It cannot be unsent. Check exactly who is selected first.",
+        "risk": "high"
+      },
+      {
+        "label": "⇄ Move",
+        "does": "Hands this customer over to a different dealer or account.",
+        "careful": "Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
+        "risk": "high"
+      },
+      {
+        "label": "⚙ Settings",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "🗑 Delete",
+        "does": "Removes the record for good.",
+        "careful": "Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+        "risk": "high"
+      },
+      {
+        "label": "Cancel",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Open full profile",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Edit",
+        "does": "Opens this record so you can change it.",
+        "careful": "Your changes apply only after you press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Sync now",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Force Sync",
+        "does": "Rewrites this customer's login into FreeRADIUS from scratch.",
+        "careful": "Safe to press any time. It fixes 'renewed but still cannot connect'. It does not change their password.",
+        "risk": "low"
+      },
+      {
+        "label": "Fix Password",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Refresh Live Data",
+        "does": "Re-reads the latest data.",
+        "careful": "Read-only — it changes nothing.",
+        "risk": "low"
+      },
+      {
+        "label": "Change Package",
+        "does": "Migrates the customer to a different plan mid-cycle (e.g. 4mb → 8mb).",
+        "careful": "The expiry date does NOT move — the customer keeps the days they paid for. The unused days of the old plan are credited and the same days of the new plan are charged, both at your cost, so an upgrade only costs the pro-rata difference and a downgrade refunds it. You see the exact credit/charge/net before confirming. The new speed reaches the router immediately. An upgrade is blocked if your wallet cannot cover the difference.",
+        "risk": "medium"
+      },
+      {
+        "label": "Sync to RADIUS",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Delete",
+        "does": "Removes the record for good.",
+        "careful": "Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+        "risk": "high"
+      },
+      {
+        "label": "Close",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Import",
+        "does": "Adds many records at once from a file.",
+        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+        "risk": "medium"
+      },
+      {
+        "label": "Delete All",
+        "does": "Removes the record for good.",
+        "careful": "Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+        "risk": "high"
+      },
+      {
+        "label": "Apply to All",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "30d",
+        "does": "",
+        "careful": "",
         "risk": "low"
       },
       {
@@ -1741,60 +2102,6 @@
         "does": "Hands this customer over to a different dealer or account.",
         "careful": "Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
         "risk": "high"
-      },
-      {
-        "label": "Add",
-        "does": "Opens a form to create a new record.",
-        "careful": "Nothing is created until you fill the form and press Save.",
-        "risk": "low"
-      },
-      {
-        "label": "Activate",
-        "does": "Starts the customer's service and their billing period.",
-        "careful": "This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
-        "risk": "medium"
-      },
-      {
-        "label": "Grace",
-        "does": "Gives the customer extra days without paying yet.",
-        "careful": "Their expiry moves forward and auto-suspend skips them until it passes.",
-        "risk": "medium"
-      },
-      {
-        "label": "Message",
-        "does": "Sends a real SMS or notification to real customers.",
-        "careful": "It cannot be unsent. Check exactly who is selected first.",
-        "risk": "high"
-      },
-      {
-        "label": "Remove",
-        "does": "Takes this item out of the list.",
-        "careful": "Check you are on the right row — the row you are hovering is the one that goes.",
-        "risk": "high"
-      },
-      {
-        "label": "Disable",
-        "does": "Switches this record off so it stops being used.",
-        "careful": "Anyone relying on it loses access until you enable it again.",
-        "risk": "high"
-      },
-      {
-        "label": "Move",
-        "does": "Hands this customer over to a different dealer or account.",
-        "careful": "Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
-        "risk": "high"
-      },
-      {
-        "label": "Import",
-        "does": "Adds many records at once from a file.",
-        "careful": "Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
-        "risk": "medium"
-      },
-      {
-        "label": "Sync RADIUS",
-        "does": "",
-        "careful": "",
-        "risk": "low"
       },
       {
         "label": "Full period",
@@ -1848,6 +2155,18 @@
       }
     ],
     "users": [
+      {
+        "label": "Edit",
+        "does": "Opens this record so you can change it.",
+        "careful": "Your changes apply only after you press Save.",
+        "risk": "low"
+      },
+      {
+        "label": "Pricing",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
       {
         "label": "Total Users",
         "does": "",
@@ -2064,6 +2383,12 @@
       "src": "screens"
     },
     {
+      "t": "Screen: Monitoring",
+      "k": "monitoring monitoring page screen where find open go to monitoring",
+      "a": "Operations → Monitoring. Network Monitoring — each account adds hosts (IP/hostname), grouped, pinged continuously by the backend. Small live latency graphs, and a loud in-app alert (beep + spoken \"<host> is down\", repeating) the moment one drops.",
+      "src": "screens"
+    },
+    {
       "t": "Screen: My Business",
       "k": "my-business my business page screen where find open go to my business",
       "a": "Daily Work → My Work → My Business. My Business — reseller/franchise operations snapshot.",
@@ -2198,7 +2523,7 @@
     {
       "t": "Screen: Security",
       "k": "security security page screen where find open go to security",
-      "a": "System → Administration → Security.",
+      "a": "System → Administration → Security. Fill the matrix with a tier's recommended set (not yet saved).",
       "src": "screens"
     },
     {
@@ -2234,7 +2559,7 @@
     {
       "t": "Screen: Subscribers",
       "k": "subscribers subscribers page screen where find open go to subscribers",
-      "a": "Daily Work → Subscribers. Not in shared Icons — keep inline.",
+      "a": "Daily Work → Subscribers. UUID that works on insecure origins too. `crypto.randomUUID` is only defined in a secure context (HTTPS / localhost); on a plain-HTTP LAN IP it is undefined and throws.",
       "src": "screens"
     },
     {
@@ -2402,7 +2727,13 @@
     {
       "t": "What the panel can do: logs",
       "k": "logs logs api action endpoint capability can i",
-      "a": "Available actions: create/run /logs/radius/close-stale; view /logs/activity; view /logs/failed-activations; view /logs/login; view /logs/network; view /logs/radius-auth; view /logs/radius/diagnostics; view /logs/router/subscriber/:id; view /logs/sessions; view /logs/stats; view /logs/system; view /logs/timeline.",
+      "a": "Available actions: create/run /logs/radius/close-stale; view /logs/activity; view /logs/failed-activations; view /logs/login; view /logs/network; view /logs/radius-auth; view /logs/radius-sessions; view /logs/radius/diagnostics; view /logs/router/subscriber/:id; view /logs/sessions; view /logs/stats; view /logs/system; view /logs/timeline.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: monitoring",
+      "k": "monitoring monitoring api action endpoint capability can i",
+      "a": "Available actions: create/run /monitoring/diagnostics/dns; create/run /monitoring/diagnostics/http; create/run /monitoring/diagnostics/ping; create/run /monitoring/diagnostics/tcp; create/run /monitoring/diagnostics/tcp-trace; create/run /monitoring/diagnostics/traceroute; create/run /monitoring/groups/rename; create/run /monitoring/targets; create/run /monitoring/targets/:id/check; remove /monitoring/targets/:id; replace /monitoring/targets/:id; view /monitoring/targets; view /monitoring/targets/:id; view /monitoring/targets/:id/history.",
       "src": "actions"
     },
     {
@@ -2414,7 +2745,7 @@
     {
       "t": "What the panel can do: network",
       "k": "network network api action endpoint capability can i",
-      "a": "SECURITY: verify the caller may act on this subscriber before any session-control action. Without this, a reseller could disconnect, re-speed or read the MAC of ANY customer in the whole ISP by guessing a username/id. Available actions: create/run /network/bandwidth/:subscriberId; create/run /network/disconnect/:username; create/run /network/mac/:username; create/run /network/mac/:username/autolearn; remove /network/mac/:username; view /network/live; view /network/live/stats; view /network/mac/:username; view /network/nas/:id/test-coa.",
+      "a": "SECURITY: verify the caller may act on this subscriber before any session-control action. Without this, a reseller could disconnect, re-speed or read the MAC of ANY customer in the whole ISP by guessing a username/id. Available actions: create/run /network/bandwidth/:subscriberId; create/run /network/disconnect/:username; create/run /network/disconnect/:username/all; create/run /network/duplicate-sessions/sweep; create/run /network/mac/:username; create/run /network/mac/:username/autolearn; remove /network/mac/:username; view /network/live; view /network/live/stats; view /network/mac/:username; view /network/nas/:id/test-coa.",
       "src": "actions"
     },
     {
@@ -2486,7 +2817,7 @@
     {
       "t": "What the panel can do: security",
       "k": "security security api action endpoint capability can i",
-      "a": "Available actions: create/run /security/2fa/confirm; create/run /security/2fa/disable; create/run /security/2fa/enroll; remove /security/sessions/:sessionId; replace /security/child-permissions/:userId; replace /security/permissions/:role; view /security/2fa; view /security/child-permissions/:userId; view /security/child-permissions/catalog; view /security/meta; view /security/permissions; view /security/sessions.",
+      "a": "Available actions: create/run /security/2fa/confirm; create/run /security/2fa/disable; create/run /security/2fa/enroll; remove /security/sessions/:sessionId; replace /security/child-permissions/:userId; replace /security/permissions/:role; replace /security/presets/:role; view /security/2fa; view /security/child-permissions/:userId; view /security/child-permissions/catalog; view /security/meta; view /security/permissions; view /security/presets; view /security/sessions.",
       "src": "actions"
     },
     {
@@ -2510,7 +2841,7 @@
     {
       "t": "What the panel can do: subscribers",
       "k": "subscribers subscribers api action endpoint capability can i",
-      "a": "Run the reminder + auto-suspend sweep now instead of waiting for 07:10. ISP only. Available actions: create/run /subscribers; create/run /subscribers/:id/deactivate; create/run /subscribers/:id/fix-radius-password; create/run /subscribers/:id/grace; create/run /subscribers/:id/sync-profile; create/run /subscribers/:id/sync-to-radius; create/run /subscribers/:id/transfer; create/run /subscribers/activate-renewal; create/run /subscribers/bulk-action; create/run /subscribers/bulk-sync-to-radius; create/run /subscribers/bulk-transfer; create/run /subscribers/export/panel; create/run /subscribers/export/preview; create/run /subscribers/export/run.",
+      "a": "Run the reminder + auto-suspend sweep now instead of waiting for 07:10. ISP only. Available actions: create/run /subscribers; create/run /subscribers/:id/deactivate; create/run /subscribers/:id/fix-radius-password; create/run /subscribers/:id/grace; create/run /subscribers/:id/package-change/quote; create/run /subscribers/:id/sync-profile; create/run /subscribers/:id/sync-to-radius; create/run /subscribers/:id/transfer; create/run /subscribers/activate-renewal; create/run /subscribers/bulk-action; create/run /subscribers/bulk-sync-to-radius; create/run /subscribers/bulk-transfer; create/run /subscribers/export/panel; create/run /subscribers/export/preview.",
       "src": "actions"
     },
     {
@@ -2583,6 +2914,12 @@
       "t": "Settings tab",
       "k": "settings settings tab admin-center admin center what is this screen",
       "a": "System → Administration → Settings tab. Currency, branding and system options.",
+      "src": "tabs"
+    },
+    {
+      "t": "Profit & Accountability tab",
+      "k": "accountability profit & accountability tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Profit & Accountability tab. Are you earning? Profit by day/week/month, balance flow, and what each child earns you.",
       "src": "tabs"
     },
     {
@@ -2882,13 +3219,13 @@
     {
       "t": "Buttons on Areas",
       "k": "areas buttons button options controls what can i click press tap here areas",
-      "a": "Operations → Plans & Stock → Areas. The controls on this screen are: Total Areas, Active Areas, Inactive Areas.",
+      "a": "Operations → Plans & Stock → Areas. The controls on this screen are: View, Edit, Total Areas, Active Areas, Inactive Areas.",
       "src": "buttons"
     },
     {
       "t": "Buttons on Billing Center",
       "k": "billing-center buttons button options controls what can i click press tap here billing center",
-      "a": "Business → Billing & Accounting. The controls on this screen are: Accounting, Wallets, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
+      "a": "Business → Billing & Accounting. The controls on this screen are: Profit & Accountability, Accounting, Wallets, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
       "src": "buttons"
     },
     {
@@ -2906,7 +3243,7 @@
     {
       "t": "Buttons on Complaints",
       "k": "complaints buttons button options controls what can i click press tap here complaints",
-      "a": "Daily Work → Support → Complaints. The controls on this screen are: Technical, Billing, Complaint, Installation, Disconnection, ⭕ Closed, 🔥 Escalated, Total Tickets, Open Tickets, In Progress, Resolved, Closed.",
+      "a": "Daily Work → Support → Complaints. The controls on this screen are: View, Technical, Billing, Complaint, Installation, Disconnection, ⭕ Closed, 🔥 Escalated, Total Tickets, Open Tickets, In Progress, Resolved, Closed.",
       "src": "buttons"
     },
     {
@@ -2924,7 +3261,7 @@
     {
       "t": "Buttons on Dashboard",
       "k": "dashboard buttons button options controls what can i click press tap here dashboard",
-      "a": "Daily Work → Dashboard. The controls on this screen are: Home, Reports, Subscribers, Accounting, Users, Expiring.",
+      "a": "Daily Work → Dashboard. The controls on this screen are: Home, Reports, Subscribers, Accounting, Users, Expiring, Add Subscriber, Generate Invoice, View Reports, Manage NAS.",
       "src": "buttons"
     },
     {
@@ -2942,7 +3279,7 @@
     {
       "t": "Buttons on Fiber",
       "k": "fiber buttons button options controls what can i click press tap here fiber",
-      "a": "Operations → Network → FTTH / Fiber. The controls on this screen are: Assign ONU, Total OLTs, PON Ports, Total ONUs, Assigned, Active, Utilization, OLTs, ONUs.",
+      "a": "Operations → Network → FTTH / Fiber. The controls on this screen are: Assign ONU, + New OLT, + New Port, + Add OLT, Refresh, Assign, Free, Total OLTs, PON Ports, Total ONUs, Assigned, Active, Utilization, OLTs, ONUs.",
       "src": "buttons"
     },
     {
@@ -2954,7 +3291,7 @@
     {
       "t": "Buttons on Gateways",
       "k": "gateways buttons button options controls what can i click press tap here gateways",
-      "a": "/gateways. The controls on this screen are: Stripe, bKash, SSLCommerz, JazzCash, Easypaisa, Available Gateways, Total Transactions, Pending/Initiated, Successful, Gateways, Transactions.",
+      "a": "/gateways. The controls on this screen are: Reconcile, Stripe, bKash, SSLCommerz, JazzCash, Easypaisa, Available Gateways, Total Transactions, Pending/Initiated, Successful, Gateways, Transactions.",
       "src": "buttons"
     },
     {
@@ -2984,7 +3321,19 @@
     {
       "t": "Buttons on Ip Pools",
       "k": "ip-pools buttons button options controls what can i click press tap here ip pools",
-      "a": "Operations → Network → IP Pools. The controls on this screen are: Add, Import, Export.",
+      "a": "Operations → Network → IP Pools. The controls on this screen are: Add IP Pool, ⬆ Import, ⬇ Export, Cancel, Edit, Delete, Close, Done, Add, Import, Export.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"⬆ Import\" button (Ip Pools)",
+      "k": "⬆ import ip-pools button what happens if i press click ⬆ import safe undo",
+      "a": "Operations → Network → IP Pools → ⬆ Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete\" button (Ip Pools)",
+      "k": "delete ip-pools button what happens if i press click delete safe undo",
+      "a": "Operations → Network → IP Pools → Delete. What it does: Removes the record for good. Before you press: Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
       "src": "buttons"
     },
     {
@@ -2996,7 +3345,19 @@
     {
       "t": "Buttons on Logs",
       "k": "logs buttons button options controls what can i click press tap here logs",
-      "a": "Business → Insights → Logs. The controls on this screen are: Login, Activity, Network, 🖥️ Console, 🧾 Activity Logs, 🔑 Login Logs, 📋 Timeline, 🔐 Login, 📝 Activity, 🖧 Network, ⚙️ System, 🟢 Sessions, ⛔ Failed, 🩺 RADIUS.",
+      "a": "Business → Insights → Logs. The controls on this screen are: Login, Activity, Network, 🖥️ Console, 🧾 Activity Logs, 🔑 Login Logs, 📋 Timeline, 🔐 Login, 📝 Activity, 🖧 Network, ⚙️ System, 🟢 Sessions, 📶 RADIUS Sessions, ⛔ Failed, 🩺 RADIUS.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Monitoring",
+      "k": "monitoring buttons button options controls what can i click press tap here monitoring",
+      "a": "Operations → Monitoring. The controls on this screen are: Check now, Delete.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete\" button (Monitoring)",
+      "k": "delete monitoring button what happens if i press click delete safe undo",
+      "a": "Operations → Monitoring → Delete. What it does: Stops monitoring this host and removes its history. Before you press: It only deletes the monitor — the device itself is untouched. You can add the host again at any time, but the recorded latency history is gone.",
       "src": "buttons"
     },
     {
@@ -3008,7 +3369,13 @@
     {
       "t": "Buttons on Nas",
       "k": "nas buttons button options controls what can i click press tap here nas",
-      "a": "Operations → Network → NAS / Routers. The controls on this screen are: Owner, Type, Site, Add, Import, Export, Secret, API Port, Device, Refresh.",
+      "a": "Operations → Network → NAS / Routers. The controls on this screen are: Refresh, Discover, Save, Edit, Refresh All, Close, Done, Cancel, Clear, Delete Permanently, Owner, Type, Site, Add, Import, Export, Secret, API Port, Device.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete Permanently\" button (Nas)",
+      "k": "delete permanently nas button what happens if i press click delete permanently safe undo",
+      "a": "Operations → Network → NAS / Routers → Delete Permanently. What it does: Removes the record for good. Before you press: Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
       "src": "buttons"
     },
     {
@@ -3182,7 +3549,7 @@
     {
       "t": "Buttons on Settings",
       "k": "settings buttons button options controls what can i click press tap here settings",
-      "a": "System → Administration → Settings. The controls on this screen are: Email Address, Role, Build Date, API Endpoint, Environment, Server Status, Database Status, RADIUS Service, No gateways loaded, Clear System Cache, Backup Database, View System Logs, Generate Report.",
+      "a": "System → Administration → Settings. The controls on this screen are: Sign Out, Change Password, Email Address, Role, Build Date, API Endpoint, Environment, Server Status, Database Status, RADIUS Service, No gateways loaded, Clear System Cache, Backup Database, View System Logs, Generate Report.",
       "src": "buttons"
     },
     {
@@ -3194,7 +3561,61 @@
     {
       "t": "Buttons on Subscribers",
       "k": "subscribers buttons button options controls what can i click press tap here subscribers",
-      "a": "Daily Work → Subscribers. The controls on this screen are: Add subscriber, Activation, Import subscribers, Export, Sync all to RADIUS, Mass delete, Mass service settings, Move to another account, Add, Activate, Grace, Message, Remove, Disable, Move, Import, Sync RADIUS, Full period, Set days, Until a date, Use balance, On credit.",
+      "a": "Daily Work → Subscribers. The controls on this screen are: Refresh, Add Subscriber, ✓ Activate, ⏳ Grace, ✉ Message, ⇄ Move, ⚙ Settings, 🗑 Delete, Cancel, Open full profile, Edit, Sync now, Force Sync, Fix Password, Refresh Live Data, Change Package, Sync to RADIUS, Delete, Close, Import, Delete All, Apply to All, 30d, Activation.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"✓ Activate\" button (Subscribers)",
+      "k": "✓ activate subscribers button what happens if i press click ✓ activate safe undo",
+      "a": "Daily Work → Subscribers → ✓ Activate. What it does: Starts the customer's service and their billing period. Before you press: This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"⏳ Grace\" button (Subscribers)",
+      "k": "⏳ grace subscribers button what happens if i press click ⏳ grace safe undo",
+      "a": "Daily Work → Subscribers → ⏳ Grace. What it does: Gives the customer extra days without paying yet. Before you press: Their expiry moves forward and auto-suspend skips them until it passes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"✉ Message\" button (Subscribers)",
+      "k": "✉ message subscribers button what happens if i press click ✉ message safe undo",
+      "a": "Daily Work → Subscribers → ✉ Message. What it does: Sends a real SMS or notification to real customers. Before you press: It cannot be unsent. Check exactly who is selected first.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"⇄ Move\" button (Subscribers)",
+      "k": "⇄ move subscribers button what happens if i press click ⇄ move safe undo",
+      "a": "Daily Work → Subscribers → ⇄ Move. What it does: Hands this customer over to a different dealer or account. Before you press: Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"🗑 Delete\" button (Subscribers)",
+      "k": "🗑 delete subscribers button what happens if i press click 🗑 delete safe undo",
+      "a": "Daily Work → Subscribers → 🗑 Delete. What it does: Removes the record for good. Before you press: Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Change Package\" button (Subscribers)",
+      "k": "change package subscribers button what happens if i press click change package safe undo",
+      "a": "Daily Work → Subscribers → Change Package. What it does: Migrates the customer to a different plan mid-cycle (e.g. 4mb → 8mb). Before you press: The expiry date does NOT move — the customer keeps the days they paid for. The unused days of the old plan are credited and the same days of the new plan are charged, both at your cost, so an upgrade only costs the pro-rata difference and a downgrade refunds it. You see the exact credit/charge/net before confirming. The new speed reaches the router immediately. An upgrade is blocked if your wallet cannot cover the difference.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete\" button (Subscribers)",
+      "k": "delete subscribers button what happens if i press click delete safe undo",
+      "a": "Daily Work → Subscribers → Delete. What it does: Removes the record for good. Before you press: Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Import\" button (Subscribers)",
+      "k": "import subscribers button what happens if i press click import safe undo",
+      "a": "Daily Work → Subscribers → Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Delete All\" button (Subscribers)",
+      "k": "delete all subscribers button what happens if i press click delete all safe undo",
+      "a": "Daily Work → Subscribers → Delete All. What it does: Removes the record for good. Before you press: Invoices and payments already raised are KEPT — they detach instead of being destroyed. The record itself does not come back.",
       "src": "buttons"
     },
     {
@@ -3234,48 +3655,6 @@
       "src": "buttons"
     },
     {
-      "t": "The \"Activate\" button (Subscribers)",
-      "k": "activate subscribers button what happens if i press click activate safe undo",
-      "a": "Daily Work → Subscribers → Activate. What it does: Starts the customer's service and their billing period. Before you press: This charges the package price and generates an invoice. Billing runs from TODAY, so activating late does not lose you days.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Grace\" button (Subscribers)",
-      "k": "grace subscribers button what happens if i press click grace safe undo",
-      "a": "Daily Work → Subscribers → Grace. What it does: Gives the customer extra days without paying yet. Before you press: Their expiry moves forward and auto-suspend skips them until it passes.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Message\" button (Subscribers)",
-      "k": "message subscribers button what happens if i press click message safe undo",
-      "a": "Daily Work → Subscribers → Message. What it does: Sends a real SMS or notification to real customers. Before you press: It cannot be unsent. Check exactly who is selected first.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Remove\" button (Subscribers)",
-      "k": "remove subscribers button what happens if i press click remove safe undo",
-      "a": "Daily Work → Subscribers → Remove. What it does: Takes this item out of the list. Before you press: Check you are on the right row — the row you are hovering is the one that goes.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Disable\" button (Subscribers)",
-      "k": "disable subscribers button what happens if i press click disable safe undo",
-      "a": "Daily Work → Subscribers → Disable. What it does: Switches this record off so it stops being used. Before you press: Anyone relying on it loses access until you enable it again.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Move\" button (Subscribers)",
-      "k": "move subscribers button what happens if i press click move safe undo",
-      "a": "Daily Work → Subscribers → Move. What it does: Hands this customer over to a different dealer or account. Before you press: Pricing is recalculated for the new owner and settled pro-rata. Ownership really changes.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Import\" button (Subscribers)",
-      "k": "import subscribers button what happens if i press click import safe undo",
-      "a": "Daily Work → Subscribers → Import. What it does: Adds many records at once from a file. Before you press: Nothing is saved until you press Import on the preview screen. Fix anything shown in red first.",
-      "src": "buttons"
-    },
-    {
       "t": "Buttons on Support Center",
       "k": "support-center buttons button options controls what can i click press tap here support center",
       "a": "Daily Work → Support. The controls on this screen are: Complaints, Field Jobs, Communication.",
@@ -3284,7 +3663,7 @@
     {
       "t": "Buttons on Users",
       "k": "users buttons button options controls what can i click press tap here users",
-      "a": "System → Administration → Users. The controls on this screen are: Total Users, Admins, Sales, Resellers, Role, Parent, KYC status.",
+      "a": "System → Administration → Users. The controls on this screen are: Edit, Pricing, Total Users, Admins, Sales, Resellers, Role, Parent, KYC status.",
       "src": "buttons"
     },
     {
