@@ -33,8 +33,8 @@ export class TicketsService {
     });
   }
 
-  async findOne(id: number) {
-    return this.prisma.ticket.findUnique({
+  async findOne(id: number, actor?: Actor) {
+    const t = await this.prisma.ticket.findUnique({
       where: { id },
       include: {
         subscriber:  true,
@@ -42,6 +42,12 @@ export class TicketsService {
         messages:    true,
       },
     });
+    // IDOR guard — a reseller can't open another tenant's ticket by id.
+    if (t && actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      if ((t as any).subscriber?.userId == null || !ids.includes((t as any).subscriber.userId)) return null;
+    }
+    return t;
   }
 
   async findBySubscriber(subscriberId: number) {

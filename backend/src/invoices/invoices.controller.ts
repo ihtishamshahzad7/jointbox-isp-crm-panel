@@ -27,8 +27,8 @@ export class InvoicesController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.invoicesService.findOne(+id);
+  findOne(@Param('id') id: string, @Req() req: any) {
+    return this.invoicesService.findOne(+id, req.user);
   }
 
   /** Printable HTML invoice (browser print → Save as PDF). */

@@ -29,11 +29,18 @@ export class VouchersService {
     });
   }
 
-  async findOne(id: number) {
-    return this.prisma.voucher.findUnique({
+  async findOne(id: number, actor?: Actor) {
+    const v = await this.prisma.voucher.findUnique({
       where: { id },
       include: { subscriber: true },
     });
+    // IDOR guard — vouchers are bearer value; a reseller must not read another
+    // account's voucher (code/PIN) by guessing its id.
+    if (v && actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      if (v.createdBy == null || !ids.includes(v.createdBy)) return null;
+    }
+    return v;
   }
 
   async findByCode(code: string) {

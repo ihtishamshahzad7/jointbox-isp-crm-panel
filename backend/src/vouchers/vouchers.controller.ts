@@ -27,8 +27,8 @@ export class VouchersController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.vouchersService.findOne(+id);
+  findOne(@Param('id') id: string, @Req() req: any) {
+    return this.vouchersService.findOne(+id, req.user);
   }
 
   @Post('bulk')

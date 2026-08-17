@@ -43,8 +43,8 @@ export class TicketsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.ticketsService.findOne(+id);
+  findOne(@Param('id') id: string, @Req() req: any) {
+    return this.ticketsService.findOne(+id, req.user);
   }
 
   @Post()

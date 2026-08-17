@@ -148,7 +148,7 @@ export class PaymentsService {
     };
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, actor?: any) {
     const payment = await this.prisma.payment.findUnique({
       where: { id },
       include: {
@@ -157,11 +157,17 @@ export class PaymentsService {
         receivedByUser: true,
       },
     });
-    
+
     if (!payment) {
       throw new NotFoundException(`Payment with ID ${id} not found`);
     }
-    
+    // IDOR guard — a reseller can't read another tenant's payment by id.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      if (payment.subscriber?.userId == null || !ids.includes(payment.subscriber.userId)) {
+        throw new NotFoundException(`Payment with ID ${id} not found`);
+      }
+    }
     return payment;
   }
 

@@ -45,8 +45,8 @@ export class InvoicesService {
     });
   }
 
-  async findOne(id: number) {
-    return this.prisma.invoice.findUnique({
+  async findOne(id: number, actor?: Actor) {
+    const inv = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
         subscriber: true,
@@ -54,6 +54,13 @@ export class InvoicesService {
         payments: true,
       },
     });
+    // IDOR guard: a reseller must not read another tenant's invoice by guessing
+    // its id. Non-owners get "not found" (don't reveal existence).
+    if (inv && actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      if (inv.subscriber?.userId == null || !ids.includes(inv.subscriber.userId)) return null;
+    }
+    return inv;
   }
 
   async findBySubscriber(subscriberId: number) {

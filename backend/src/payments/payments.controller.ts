@@ -36,8 +36,8 @@ export class PaymentsController {
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.paymentsService.findOne(+id);
+  async findOne(@Param('id') id: string, @Req() req: any) {
+    return this.paymentsService.findOne(+id, req.user);
   }
 
   @Post()
