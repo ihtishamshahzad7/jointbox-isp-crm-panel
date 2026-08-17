@@ -1424,10 +1424,13 @@ export class SubscribersService implements OnModuleInit {
           expiry = new Date();
           expiry.setDate(expiry.getDate() + (dpkg?.duration || 30));
         }
+        // Store the cycle LENGTH alongside the end date, so the current cycle's
+        // start is exact (expiry − duration) rather than a "30 days ago" guess.
+        const cycleDays = Math.max(1, Number(dpkg?.duration) || 30);
         await this.prisma.serviceSettings.upsert({
           where: { subscriberId: subscriber.id },
-          update: { expiryDate: expiry, isBlocked: false },
-          create: { subscriberId: subscriber.id, expiryDate: expiry },
+          update: { expiryDate: expiry, duration: cycleDays, isBlocked: false },
+          create: { subscriberId: subscriber.id, expiryDate: expiry, duration: cycleDays },
         }).catch((e: any) => this.logger.warn(`Expiry stamp failed for #${subscriber.id}: ${e?.message || e}`));
       }
     }
@@ -3001,15 +3004,26 @@ if (!unpaid && data.username && data.password) {
           data: { packageId },
         });
 
+        /**
+         * PERSIST THE CYCLE LENGTH, not just the end date.
+         *
+         * `duration` was never written here, so every normally-activated
+         * subscriber had it NULL. Anything that needs the START of the current
+         * cycle then fell back to "30 days before today" — which is why a
+         * customer activated on 17 Aug displayed "Cycle began 18 Jul", and why
+         * quota usage was summed over the wrong window. Storing the real period
+         * length makes cycleStart = expiry − duration exact.
+         */
         const currentSettings = await tx.serviceSettings.findUnique({ where: { subscriberId } });
+        const cycleDays = Math.max(1, Number(quote.days) || pkg.duration || 30);
         if (currentSettings) {
           await tx.serviceSettings.update({
             where: { subscriberId },
-            data: { expiryDate },
+            data: { expiryDate, duration: cycleDays },
           });
         } else {
           await tx.serviceSettings.create({
-            data: { subscriberId, expiryDate },
+            data: { subscriberId, expiryDate, duration: cycleDays },
           });
         }
 

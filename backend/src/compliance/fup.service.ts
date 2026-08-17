@@ -88,14 +88,27 @@ export class FupService {
     return base + (bonusGb && bonusGb > 0 ? bonusGb : 0);
   }
 
-  /** Start of the customer's current cycle — falls back to 30 days. */
-  private cycleStart(expiry?: Date | null, duration?: number | null): Date {
-    if (expiry && duration) {
+  /**
+   * Start of the customer's CURRENT billing cycle = expiry − duration.
+   *
+   * `duration` is now persisted on activation/renewal, so this is exact. The
+   * fallbacks below only apply to legacy rows written before that: prefer the
+   * package period (still anchored to the real expiry) over "30 days before
+   * today", which produced impossible cycle starts — a customer activated on
+   * 17 Aug was reported as "cycle began 18 Jul" — and summed quota usage over
+   * the wrong window.
+   */
+  private cycleStart(expiry?: Date | null, duration?: number | null, packageDays?: number | null): Date {
+    const days = (duration && duration > 0) ? duration
+      : (packageDays && packageDays > 0) ? packageDays
+      : 30;
+    if (expiry) {
       const start = new Date(expiry);
-      start.setDate(start.getDate() - duration);
+      start.setDate(start.getDate() - days);
       return start;
     }
-    return new Date(Date.now() - 30 * 86400_000);
+    // No expiry at all (never activated) — the only honest anchor is "now − period".
+    return new Date(Date.now() - days * 86400_000);
   }
 
   /** Live usage for one subscriber, with the quota position. */
@@ -111,7 +124,7 @@ export class FupService {
     const bonusGb = (sub.serviceSettings as any)?.bonusQuotaGb ?? 0;
     const quotaGb = this.quotaGb(sub.serviceSettings?.quota, (sub.package as any)?.dataQuotaGb, bonusGb);
 
-    const since = this.cycleStart(sub.serviceSettings?.expiryDate, sub.serviceSettings?.duration);
+    const since = this.cycleStart(sub.serviceSettings?.expiryDate, sub.serviceSettings?.duration, (sub.package as any)?.duration);
     const used = await this.usageBytes(sub.username, since);
     const usedGb = Math.round((used / 1024 ** 3) * 100) / 100;
 
@@ -195,7 +208,7 @@ export class FupService {
         const quotaGb = this.quotaGb(sub.serviceSettings?.quota, pkg?.dataQuotaGb, bonus);
         if (!quotaGb) continue;
 
-        const since = this.cycleStart(sub.serviceSettings?.expiryDate, sub.serviceSettings?.duration);
+        const since = this.cycleStart(sub.serviceSettings?.expiryDate, sub.serviceSettings?.duration, (sub.package as any)?.duration);
         const usedGb = (await this.usageBytes(sub.username, since)) / 1024 ** 3;
         if (usedGb < quotaGb) continue;
 
@@ -350,7 +363,7 @@ export class FupService {
     const usernames = subs.map((s) => s.username).filter(Boolean) as string[];
     const usage = new Map<string, { start: Date; bytes: number }>();
     if (usernames.length) {
-      const starts = subs.map((s) => this.cycleStart(s.serviceSettings?.expiryDate, s.serviceSettings?.duration));
+      const starts = subs.map((s) => this.cycleStart(s.serviceSettings?.expiryDate, s.serviceSettings?.duration, (s as any).package?.duration));
       const floor = new Date(Math.min(...starts.map((d) => d.getTime())));
       const agg = await this.prisma.$queryRaw<any[]>`
         SELECT username, acctstarttime,
@@ -363,7 +376,7 @@ export class FupService {
       for (const s of subs) {
         if (!s.username) continue;
         usage.set(s.username, {
-          start: this.cycleStart(s.serviceSettings?.expiryDate, s.serviceSettings?.duration),
+          start: this.cycleStart(s.serviceSettings?.expiryDate, s.serviceSettings?.duration, (s as any).package?.duration),
           bytes: 0,
         });
       }
