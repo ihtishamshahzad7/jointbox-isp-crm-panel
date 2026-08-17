@@ -369,43 +369,51 @@ export class StaticIpService {
     });
     const nas = sub?.nas;
 
-    // 1. Clear any secret-level address pin on the router.
-    if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
-      try {
-        await this.mikrotik.clearSecretRemoteAddress(
-          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username,
-        );
-      } catch (e: any) {
-        this.logger.warn(`Could not clear secret address for ${username}: ${e?.message || e}`);
-      }
+    const hasApi = !!(nas?.nasIp && nas.apiUsername && nas.apiPassword);
+
+    // 1. Make the ROUTER agree with RADIUS about the address.
+    //
+    // Writing Framed-IP-Address into radreply is not enough on its own: if a
+    // local /ppp/secret exists, MikroTik authenticates the customer itself and
+    // never asks RADIUS, so the reply attribute is never read and they land on
+    // the profile pool again on every reconnect. Pinning the secret to the same
+    // address closes that gap — whichever way the session is authorised, the
+    // customer gets this IP.
+    let pinnedOnRouter = false;
+    if (hasApi) {
+      pinnedOnRouter = await this.mikrotik.setSecretRemoteAddress(
+        nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username, newIp,
+      ).catch(() => false);
     }
 
-    // 2. Tear the session down.
+    // 2. Tear the session down. network.disconnect now falls back to the
+    //    MikroTik API by itself and throws rather than reporting a disconnect
+    //    that did not happen, so there is no second attempt to make here.
     let reconnected = false;
     let method = 'none';
     try {
       const r = await this.network.disconnect(username);
       reconnected = true;
       method = r?.method ?? 'coa';
-    } catch {
-      // No live session — nothing to release, the address applies on next dial-in.
+    } catch (e: any) {
+      // Either they were offline (fine — the address applies on next dial-in)
+      // or the cut genuinely failed, which the caller needs to hear about.
+      this.logger.warn(`Session for ${username} not cut: ${e?.message || e}`);
     }
 
-    // radacct-only means the CoA never reached the NAS: the row was closed in
-    // our database but the router still has the customer online holding the
-    // pool address. Go at it directly over the API.
-    if (method === 'radacct-only' && nas?.nasIp && nas.apiUsername && nas.apiPassword) {
-      const killed = await this.mikrotik.disconnectPppoeUser(
+    // 3. VERIFY rather than assume. Ask the router what address the customer
+    //    actually holds now; if they are back online on the old pool address
+    //    the operator must be told, not shown a success message.
+    let verifiedAddress: string | null = null;
+    if (hasApi && reconnected) {
+      await new Promise((r) => setTimeout(r, 4000)); // let them redial
+      verifiedAddress = await this.mikrotik.getActiveAddress(
         nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username,
       );
-      if (killed) {
-        method = 'mikrotik-api';
-        this.logger.log(`CoA did not land for ${username}; session removed via MikroTik API`);
-      } else {
-        reconnected = false;
+      if (verifiedAddress && verifiedAddress !== newIp) {
         this.logger.warn(
-          `${username} could not be disconnected — still on pool address ${releasedAddress ?? 'unknown'}. ` +
-            `${newIp} will apply when they next reconnect.`,
+          `${username} reconnected on ${verifiedAddress}, not ${newIp}. ` +
+            `Check that the PPP profile does not force a remote-address pool.`,
         );
       }
     }
@@ -420,7 +428,24 @@ export class StaticIpService {
         }).catch(() => null);
     }
 
-    return { reconnected, releasedAddress, method };
+    return {
+      reconnected,
+      releasedAddress,
+      method,
+      pinnedOnRouter,
+      verifiedAddress,
+      // Only claim the address is live when the router says so.
+      applied: verifiedAddress ? verifiedAddress === newIp : null,
+      warning:
+        verifiedAddress && verifiedAddress !== newIp
+          ? `The customer reconnected on ${verifiedAddress} instead of ${newIp}. ` +
+            `The PPP profile on ${nas?.nasname ?? 'the router'} is most likely forcing a ` +
+            `remote-address pool, which overrides both RADIUS and the secret.`
+          : !reconnected && releasedAddress
+            ? `${username} is still online on ${releasedAddress} — the session could not be cut, ` +
+              `so ${newIp} will only apply when they next reconnect.`
+            : null,
+    };
   }
 
   /**
@@ -536,8 +561,18 @@ export class StaticIpService {
     try {
       const sub = await this.prisma.subscriber.findUnique({
         where: { id: subscriberId },
-        select: { username: true },
+        select: { username: true, nas: true },
       });
+      // Un-pin the router first. A secret still carrying remote-address =
+      // the released IP would keep handing it out no matter what RADIUS says,
+      // and the address is now marked AVAILABLE for someone else — two
+      // customers on one IP.
+      const nas = sub?.nas as any;
+      if (sub?.username && nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+        await this.mikrotik.clearSecretRemoteAddress(
+          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
+        ).catch(() => null);
+      }
       if (sub?.username) await this.network.disconnect(sub.username);
     } catch {
       // Offline — they will pick up a pool address when they next dial in.

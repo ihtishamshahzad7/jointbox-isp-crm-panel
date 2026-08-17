@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'pg';
 import { allocateIpv6, ipv6AutoConfig } from './ipv6-alloc';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Resolved policy attributes from a package's linked RADIUS policies.
@@ -40,6 +41,46 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   private connected = false;
   private reconnecting = false;
   private stopped = false;
+
+  constructor(private prisma: PrismaService) {}
+
+  /**
+   * Look up everything needed for a FULL profile sync — package (+ pool) and
+   * ServiceSettings (static IP, MAC, multi-session flag) — from the app DB by
+   * username. Used as a safety net by the low-level helpers below
+   * (updateSubscriberPasswordInRadius's create-if-missing path,
+   * addSubscriberToRadius, bulkSyncSubscribers) so that a caller who only has
+   * a username/password can still write a COMPLETE RADIUS profile instead of
+   * one with no addressing at all.
+   *
+   * THE BUG THIS CLOSES: these three used to call
+   * `syncSubscriberProfile(username, password, null)` — no package, no opts —
+   * which writes ONLY the password. No Framed-Pool, no Framed-IP-Address. A
+   * subscriber with a static IP who went through any of these paths (a
+   * password reset that found no existing radcheck row, a legacy bulk sync,
+   * or the backward-compat "add" helper) had their static assignment silently
+   * erased; the next reconnect fell back to the router's local PPP profile
+   * pool with no static IP.
+   */
+  private async resolveFullProfile(username: string) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { username },
+      include: { package: { include: { pool: true } }, serviceSettings: true },
+    });
+    if (!sub) return null;
+    const wantsStatic = sub.authMethod === 'STATIC' || sub.serviceSettings?.ipType === 'STATIC';
+    return {
+      pkg: sub.package ?? null,
+      opts: {
+        serviceType: sub.authMethod as any,
+        staticIp: wantsStatic ? sub.serviceSettings?.ipAddress ?? null : null,
+        macAddress: sub.serviceSettings?.macAddress ?? null,
+        sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+        idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+        allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false,
+      },
+    };
+  }
 
   // ─────────────────────────────────────────────────────────────
   // STARTUP — connect to RADIUS PostgreSQL database
@@ -445,8 +486,10 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
         );
         this.logger.log(`✅ Password updated in RADIUS for "${username}"`);
       } else {
-        // User doesn't exist yet — create with just password
-        await this.syncSubscriberProfile(username, newPassword, null);
+        // User doesn't exist yet — create with the FULL profile (package +
+        // static IP if configured), not just the password.
+        const full = await this.resolveFullProfile(username);
+        await this.syncSubscriberProfile(username, newPassword, full?.pkg ?? null, full?.opts);
       }
     } catch (error: any) {
       this.logger.error(
@@ -548,7 +591,8 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   // Used for backward compatibility; prefer syncSubscriberProfile.
   // ─────────────────────────────────────────────────────────────
   async addSubscriberToRadius(username: string, password: string): Promise<void> {
-    await this.syncSubscriberProfile(username, password, null);
+    const full = await this.resolveFullProfile(username);
+    await this.syncSubscriberProfile(username, password, full?.pkg ?? null, full?.opts);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -563,7 +607,8 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
 
     for (const sub of subscribers) {
       try {
-        await this.syncSubscriberProfile(sub.username, sub.password, null);
+        const full = await this.resolveFullProfile(sub.username);
+        await this.syncSubscriberProfile(sub.username, sub.password, full?.pkg ?? null, full?.opts);
         success++;
       } catch {
         failed++;

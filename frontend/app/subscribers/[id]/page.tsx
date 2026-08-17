@@ -230,13 +230,25 @@ export default function SubscriberProfilePage() {
       const data = await r.json();
       if (!r.ok) throw new Error(data?.message || "Could not set the address");
       // Say plainly whether it is live yet — an online customer is reconnected,
-      // an offline one picks it up on their next dial-in.
-      showToast(
-        data.reconnected
-          ? `${data.ipAddress} is live — session reconnected`
-          : `${data.ipAddress} saved — applies on their next connection`,
-        "ok",
-      );
+      // an offline one picks it up on their next dial-in. `warning` and
+      // `applied` come from the backend's own post-disconnect verification
+      // (it queries the router, it does not assume) — surface that instead of
+      // a blanket "success" the moment the DB row is saved.
+      if (data.warning) {
+        showToast(data.warning, "warn");
+      } else if (data.reconnected && data.applied === false) {
+        showToast(`${data.ipAddress} saved, but the router did not apply it on reconnect — check the PPP profile.`, "err");
+      } else {
+        showToast(
+          data.reconnected
+            ? `${data.ipAddress} is live — session reconnected and verified`
+            : `${data.ipAddress} saved — applies on their next connection`,
+          "ok",
+        );
+      }
+      // Re-check the live session so the IP-mismatch badge above reflects
+      // reality immediately rather than the pre-change state.
+      if (sub?.username) setTimeout(() => loadLiveData(sub.username!), 2500);
       loadSub();
     } catch (e:any) { showToast(e.message,"err"); } finally { setIpBusy(false); }
   }
@@ -846,6 +858,42 @@ export default function SubscriberProfilePage() {
                 background: d?"rgba(14,165,233,.08)":"#eff6ff",
                 border:`1px solid ${t.accent}`, borderRadius:10, padding:14, marginBottom:14,
               }}>
+                {/*
+                  STATIC IP HEALTH CHECK — visible, not hidden.
+
+                  The database can say "static 192.168.88.151" while the customer's
+                  actual live PPP session is still on a pool address — that mismatch
+                  used to be invisible unless you compared "Leased IP" in the header
+                  against this card by eye. If the subscriber is online right now,
+                  show the two side by side and flag it loudly when they disagree,
+                  instead of only showing the configured address as if it were
+                  necessarily what the router is handing out.
+                */}
+                {liveSession?.framedipaddress && liveSession.framedipaddress !== staticIp.ipAddress ? (
+                  <div style={{
+                    display:"flex", alignItems:"flex-start", gap:8, marginBottom:12,
+                    background: d?"rgba(239,68,68,.12)":"#fef2f2",
+                    border:`1px solid ${t.red}`, borderRadius:8, padding:"10px 12px",
+                  }}>
+                    <span style={{fontSize:15,lineHeight:1}}>⚠</span>
+                    <div style={{fontSize:12,lineHeight:1.5}}>
+                      <b style={{color:t.red}}>IP Mismatch</b> — configured static address is{" "}
+                      <code style={{fontFamily:"ui-monospace,monospace"}}>{staticIp.ipAddress}</code>, but
+                      the live session is currently on{" "}
+                      <code style={{fontFamily:"ui-monospace,monospace"}}>{liveSession.framedipaddress}</code>.
+                      Disconnect &amp; let the customer reconnect, or use{" "}
+                      <b>Update address</b> below to re-push and reconnect automatically.
+                    </div>
+                  </div>
+                ) : liveSession?.framedipaddress === staticIp.ipAddress ? (
+                  <div style={{
+                    display:"flex", alignItems:"center", gap:6, marginBottom:12,
+                    fontSize:11.5, color:t.green, fontWeight:600,
+                  }}>
+                    <span>✓</span> Static IP applied — live session matches the configured address.
+                  </div>
+                ) : null}
+
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                   <div>
                     <div style={{fontSize:20,fontWeight:800,fontFamily:"ui-monospace,monospace",color:t.accent}}>

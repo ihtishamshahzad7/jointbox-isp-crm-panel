@@ -754,6 +754,84 @@ export class MikrotikSyncService {
   }
 
   /**
+   * Pin a PPP secret's remote-address to a specific IP.
+   *
+   * Counterpart to clearSecretRemoteAddress, and the reason a static IP could
+   * be recorded in the panel while the customer kept getting a pool address on
+   * every reconnect.
+   *
+   * MikroTik decides the address in this order:
+   *   1. /ppp/secret remote-address   (local, wins outright)
+   *   2. RADIUS Framed-IP-Address
+   *   3. the profile's remote-address pool
+   *
+   * If a LOCAL secret exists for the user, the router authenticates against it
+   * and never asks RADIUS at all — so Framed-IP-Address in radreply is simply
+   * never read, and the customer lands on the profile pool. Writing the address
+   * onto the secret makes the two agree, so the customer gets the same address
+   * whichever way the session is authorised.
+   *
+   * Returns true when a secret existed and was pinned. false means there is no
+   * local secret — which is fine, RADIUS is then genuinely in charge.
+   */
+  async setSecretRemoteAddress(
+    nasIp: string,
+    apiPort: number,
+    apiUsername: string,
+    apiPassword: string,
+    username: string,
+    ip: string,
+  ): Promise<boolean> {
+    try {
+      let pinned = false;
+      await withMikrotik(
+        { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
+        async (client) => {
+          const secrets = await client.send(['/ppp/secret/print', `?name=${username}`]);
+          for (const s of secrets || []) {
+            if (s['remote-address'] === ip) { pinned = true; continue; } // already correct
+            await client.send(['/ppp/secret/set', `=.id=${s['.id']}`, `=remote-address=${ip}`]);
+            pinned = true;
+            this.logger.log(`Pinned PPP secret "${username}" on ${nasIp} to ${ip}`);
+          }
+        },
+      );
+      return pinned;
+    } catch (error: any) {
+      this.logger.warn(`Could not pin PPP secret for ${username} on ${nasIp}: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * What address is the router actually handing this user right now?
+   *
+   * Used to VERIFY a static-IP change instead of assuming it worked. Returns
+   * null when the user is not online.
+   */
+  async getActiveAddress(
+    nasIp: string,
+    apiPort: number,
+    apiUsername: string,
+    apiPassword: string,
+    username: string,
+  ): Promise<string | null> {
+    try {
+      let addr: string | null = null;
+      await withMikrotik(
+        { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
+        async (client) => {
+          const active = await client.send(['/ppp/active/print', `?name=${username}`]);
+          addr = active?.[0]?.address || null;
+        },
+      );
+      return addr;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Delete the LOCAL PPP secret for this user from the router.
    *
    * This is why a "removed" customer keeps getting online. MikroTik checks its
@@ -793,34 +871,95 @@ export class MikrotikSyncService {
     return removed;
   }
 
+  /**
+   * Remove the active PPP session(s) for a user via the RouterOS API.
+   *
+   * THE BUG THIS FIXES: the old version returned `true` (success) whenever the
+   * API call completed without throwing — even when `/ppp/active/print` found
+   * NOTHING to remove. A name mismatch, a session already gone, or any other
+   * reason the filter matched zero rows all looked identical to "disconnected"
+   * from the caller's point of view. The panel then reported success while the
+   * customer stayed online on the router, with no way to tell the two cases
+   * apart from the logs.
+   *
+   * Now the result says exactly what happened: `found` is whether an active
+   * session existed for this username at all, `removed` is whether the API
+   * actually removed it. A caller that gets `{found:false, removed:false}`
+   * knows there was nothing to kill (already offline); one that gets
+   * `{found:true, removed:false}` knows a session was there and the remove
+   * command did not take — that is the case that must NOT be reported as
+   * success.
+   */
   async disconnectPppoeUser(
     nasIp: string,
     apiPort: number,
     apiUsername: string,
     apiPassword: string,
     username: string,
-  ): Promise<boolean> {
+  ): Promise<{ found: boolean; removed: boolean; sessionIds: string[] }> {
     this.logger.log(`🔌 Disconnecting PPPoE user ${username} from ${nasIp}`);
-    
-    try {
-      await withMikrotik(
-        { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
-        async (client) => {
-          // Find the active connection
-          const active = await client.send(['/ppp/active/print', `?name=${username}`]);
-          if (active && active.length > 0) {
-            // Remove the connection
-            await client.send(['/ppp/active/remove', `=.id=${active[0]['.id']}`]);
-            this.logger.log(`✅ User ${username} disconnected from ${nasIp}`);
-          } else {
-            this.logger.warn(`⚠️ User ${username} not found in active connections`);
+
+    const result = { found: false, removed: false, sessionIds: [] as string[] };
+    await withMikrotik(
+      { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
+      async (client) => {
+        // Find EVERY active connection for this username — a user can have
+        // more than one open session (duplicate login), and leaving a second
+        // one running after "disconnect" is exactly the kind of silent
+        // failure this rewrite exists to catch.
+        const active = await client.send(['/ppp/active/print', `?name=${username}`]);
+        if (!active || active.length === 0) {
+          this.logger.warn(`⚠️ User ${username} not found in active connections on ${nasIp}`);
+          return;
+        }
+        result.found = true;
+        let removedCount = 0;
+        for (const s of active) {
+          try {
+            await client.send(['/ppp/active/remove', `=.id=${s['.id']}`]);
+            result.sessionIds.push(s['.id']);
+            removedCount++;
+          } catch (e: any) {
+            this.logger.error(`❌ Remove failed for session ${s['.id']} (${username}) on ${nasIp}: ${e?.message || e}`);
           }
-        },
-      );
-      return true;
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to disconnect user ${username}: ${error.message}`);
-      return false;
-    }
+        }
+        result.removed = removedCount === active.length;
+        if (result.removed) {
+          this.logger.log(`✅ ${removedCount} session(s) for "${username}" removed from ${nasIp}`);
+        } else {
+          this.logger.error(`❌ Only ${removedCount}/${active.length} session(s) for "${username}" removed from ${nasIp}`);
+        }
+      },
+    ).catch((error: any) => {
+      this.logger.error(`❌ Failed to reach ${nasIp} to disconnect "${username}": ${error.message}`);
+      throw error;
+    });
+    return result;
+  }
+
+  /**
+   * VERIFY, don't assume. Used after a disconnect (or a reconnect following a
+   * static-IP change) to ask the router directly whether a username is still
+   * present in /ppp/active. Throws on a genuine connection/auth failure so the
+   * caller can tell "verified gone" apart from "could not verify" — the two
+   * must never be treated the same, or a router that's briefly unreachable
+   * would look identical to a customer who is truly offline.
+   */
+  async isSessionActive(
+    nasIp: string,
+    apiPort: number,
+    apiUsername: string,
+    apiPassword: string,
+    username: string,
+  ): Promise<boolean> {
+    let active = false;
+    await withMikrotik(
+      { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
+      async (client) => {
+        const rows = await client.send(['/ppp/active/print', `?name=${username}`]);
+        active = !!(rows && rows.length > 0);
+      },
+    );
+    return active;
   }
 }

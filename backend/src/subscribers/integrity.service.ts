@@ -6,6 +6,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { SubscribersService } from './subscribers.service';
 
 /**
  * IntegrityService — the two safety nets that catch silent drift.
@@ -34,6 +35,9 @@ export class IntegrityService implements OnModuleInit {
     private jobs: JobsService,
     private accounting: AccountingService,
     private mikrotik: MikrotikSyncService,
+    // Only used to rebuild a FULL RADIUS profile (package + static IP + MAC)
+    // when healing missing credentials — see healActiveCredentials() below.
+    private subscribers: SubscribersService,
   ) {}
 
   /** Expose the full reconcile as a background job the ISP can run on demand. */
@@ -208,7 +212,17 @@ export class IntegrityService implements OnModuleInit {
       for (const s of missing) {
         if (!s.username || !s.password) continue;
         try {
-          await this.radius.syncSubscriberProfile(s.username, s.password, null);
+          // BUG FIX: this used to call syncSubscriberProfile(username, password,
+          // null) directly. With no package/opts, that writes ONLY the
+          // password — no Framed-Pool, no Framed-IP-Address. This cron runs
+          // nightly (and on demand) and would silently strip a static IP or
+          // package speed from any subscriber it "healed", so on their next
+          // reconnect the router fell back to its local PPP profile pool
+          // instead of the customer's configured static address. Route
+          // through syncToRadius() so a heal always rebuilds the FULL
+          // profile from current package + ServiceSettings, exactly like a
+          // normal activation would.
+          await this.subscribers.syncToRadius(s.id);
           healed++;
         } catch (e: any) {
           this.logger.warn(`RADIUS heal failed for ${s.username}: ${e?.message || e}`);

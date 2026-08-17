@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
+import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Dynamic session control via standard RFC 3576/5176 RADIUS CoA/Disconnect.
@@ -10,12 +13,26 @@ import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession }
  * Cisco, Juniper, pfSense, vBNG/BiSON and any RADIUS OLT/BNG — no per-vendor
  * API needed. For MikroTik we additionally keep the router-API path as a
  * fallback (some setups don't open the CoA port), so it degrades gracefully.
+ *
+ * BUG FIX: this used to lazily `import('../mikrotik/mikrotik.service')` — a
+ * SECOND, unrelated RouterOS client — for the API fallback. That client's
+ * `disconnectPppoeUser` never queried `/ppp/active/print` at all; it called
+ * `/ppp/active/remove =.id=<username>`, i.e. it tried to remove a session
+ * using the USERNAME as the RouterOS internal `.id` (which always looks like
+ * `*1A`, never a name). That command could never match a real session, so
+ * this fallback silently did nothing while still reporting success. Every
+ * caller below now goes through `MikrotikSyncService`, the same client
+ * `NetworkService.disconnect()` uses, which finds the session by name first
+ * and reports whether anything was actually found/removed.
  */
 @Injectable()
 export class CoaService {
   private readonly logger = new Logger(CoaService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private mikrotik: MikrotikSyncService,
+  ) {}
 
   /** Look up the subscriber's current live session + its NAS (with CoA creds). */
   private async resolve(subscriberId: number) {
@@ -81,12 +98,26 @@ export class CoaService {
     // 2) MikroTik API fallback (only if the router exposes the API).
     try {
       if (sub.nas.apiUsername && sub.nas.apiPassword) {
-        const { MikrotikService } = await import('../mikrotik/mikrotik.service');
-        const mikrotik = new MikrotikService();
-        await mikrotik.disconnectPppoeUser(
+        const r = await this.mikrotik.disconnectPppoeUser(
           sub.nas.nasIp, sub.nas.apiPort ?? 8728, sub.nas.apiUsername, sub.nas.apiPassword, sub.username!,
         );
-        this.logger.log(`✅ Disconnect via MikroTik API: ${sub.username}`);
+        if (!r.found) {
+          return { success: false, message: `No active session found for ${sub.username} on the router — it may already be offline.` };
+        }
+        if (!r.removed) {
+          return { success: false, message: `Session for ${sub.username} was found on the router but could not be removed.` };
+        }
+        // VERIFY rather than trust the remove call — confirm the router
+        // actually agrees the session is gone before reporting success.
+        await sleep(1200);
+        const stillActive = await this.mikrotik
+          .isSessionActive(sub.nas.nasIp, sub.nas.apiPort ?? 8728, sub.nas.apiUsername, sub.nas.apiPassword, sub.username!)
+          .catch(() => null); // null = could not re-check; don't downgrade the reported removal
+        if (stillActive === true) {
+          this.logger.error(`Disconnect for ${sub.username} reported removed but session is STILL active on the router`);
+          return { success: false, message: `${sub.username} was still online on the router after the disconnect attempt.` };
+        }
+        this.logger.log(`✅ Disconnect via MikroTik API (verified): ${sub.username}`);
         return { success: true, message: 'Disconnected via router API (CoA unavailable)', method: 'mikrotik-api' };
       }
     } catch (e: any) {
@@ -190,19 +221,38 @@ export class CoaService {
       // MikroTik API fallback: removes ALL active PPP sessions matching the name
       // in one call, covering any the CoA did not acknowledge.
       const anyNas = [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword);
+      let verifiedGone: boolean | null = null;
       if (anyNas) {
         try {
-          const { MikrotikService } = await import('../mikrotik/mikrotik.service');
-          const mikrotik = new MikrotikService();
-          await mikrotik.disconnectPppoeUser(
+          await this.mikrotik.disconnectPppoeUser(
             anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username,
           );
+          await sleep(1200);
+          const stillActive = await this.mikrotik
+            .isSessionActive(anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username)
+            .catch(() => null);
+          verifiedGone = stillActive === null ? null : !stillActive;
         } catch (e: any) {
           this.logger.warn(`Simultaneous-Use: MikroTik API kick for "${username}" failed: ${e?.message || e}`);
         }
       }
+      if (verifiedGone === false) {
+        // The router still shows this user active after CoA + API kick. Do not
+        // pretend they are offline — surface it loudly so an operator follows up.
+        this.logger.error(`⛔ Simultaneous-Use: "${username}" is STILL ACTIVE on ${anyNas?.nasIp} after disconnect attempts.`);
+        await this.prisma.systemLog.create({
+          data: {
+            level: 'ERROR', source: 'simultaneous-use',
+            message: `"${username}" could not be fully disconnected — still active on ${anyNas?.nasIp} after CoA + MikroTik API kick.`,
+          },
+        }).catch(() => null);
+      }
 
-      // Close the ghost rows so nothing keeps showing them online.
+      // Close the accounting rows. Even when the live PPP session could not be
+      // confirmed gone, the radacct row must reflect that the panel considers
+      // this dial-in ended — otherwise it keeps counting as "online" forever in
+      // every report while the systemLog above already flags the router-side
+      // mismatch for an operator to chase down.
       await this.prisma.$executeRaw`
         UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
         WHERE username = ${username} AND acctstoptime IS NULL`;
@@ -353,19 +403,32 @@ export class CoaService {
 
     // MikroTik API fallback: one call removes ALL active PPP sessions for the name.
     const anyNas = [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword);
+    let stillActive: boolean | null = null;
     if (anyNas) {
       try {
-        const { MikrotikService } = await import('../mikrotik/mikrotik.service');
-        const mikrotik = new MikrotikService();
-        await mikrotik.disconnectPppoeUser(
+        await this.mikrotik.disconnectPppoeUser(
           anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username,
         );
+        await sleep(1200);
+        stillActive = await this.mikrotik
+          .isSessionActive(anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username)
+          .catch(() => null);
       } catch (e: any) {
         this.logger.warn(`Cut-all for "${username}": MikroTik API kick failed: ${e?.message || e}`);
       }
     }
+    if (stillActive === true) {
+      this.logger.error(`⛔ Cut-all for "${username}": STILL ACTIVE on ${anyNas?.nasIp} after CoA + MikroTik API kick.`);
+      await this.prisma.systemLog.create({
+        data: {
+          level: 'ERROR', source: 'network',
+          message: `Cut-all for "${username}" could not confirm the session was removed from ${anyNas?.nasIp}.`,
+        },
+      }).catch(() => null);
+    }
 
-    // Close the ghost rows so nothing keeps showing them online.
+    // Close the ghost rows so nothing keeps showing them online in billing.
+    // (Router-side mismatch, if any, is already flagged above.)
     const closed = await this.prisma.$executeRaw`
       UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
       WHERE username = ${username} AND acctstoptime IS NULL`;

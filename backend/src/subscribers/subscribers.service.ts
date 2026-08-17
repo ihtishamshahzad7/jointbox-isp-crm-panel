@@ -235,6 +235,48 @@ export class SubscribersService implements OnModuleInit {
    * and hotspot users need different attributes, so resolve them here in one
    * place rather than at each call site.
    */
+  /**
+   * Build the FULL set of RADIUS opts for a subscriber — package speed, pool
+   * OR static IP (never both — see radiusSync.syncSubscriberProfile), MAC,
+   * and session flags.
+   *
+   * THIS IS THE SINGLE SOURCE OF TRUTH for "what should this subscriber's
+   * RADIUS profile look like right now". Every place that re-syncs a
+   * subscriber to RADIUS — activation, renewal, grace period, password reset,
+   * static-IP assignment, bulk/missing sync, the credential-heal cron — must
+   * go through this (directly or via syncToRadius). Several call sites used
+   * to build their own partial opts (or pass none at all), which meant a
+   * static IP or package speed could be silently wiped by whichever one of
+   * them ran last. See git history / the audit notes on grantGracePeriod,
+   * syncAllToRadius and IntegrityService.healActiveCredentials for the
+   * concrete incidents this caused.
+   */
+  private buildFullRadiusOpts(sub: {
+    authMethod?: string | null;
+    serviceSettings?: {
+      ipType?: string | null;
+      ipAddress?: string | null;
+      macAddress?: string | null;
+      allowMultipleSessions?: boolean | null;
+    } | null;
+  }) {
+    // A static address is only honoured when the service is actually configured
+    // for one — otherwise a stale ipAddress field would pin a dynamic customer.
+    const wantsStatic =
+      sub.authMethod === 'STATIC' || sub.serviceSettings?.ipType === 'STATIC';
+    const staticIp = wantsStatic ? sub.serviceSettings?.ipAddress ?? null : null;
+    return {
+      serviceType: sub.authMethod as any,
+      staticIp,
+      macAddress: sub.serviceSettings?.macAddress ?? null,
+      // ServiceSettings.duration is the billing period, not a session limit,
+      // so session/idle limits come from env defaults unless set explicitly.
+      sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+      idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+      allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false,
+    };
+  }
+
   async syncToRadius(subscriberId: number) {
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
@@ -245,33 +287,20 @@ export class SubscribersService implements OnModuleInit {
     });
     if (!sub?.username) return { synced: false, reason: 'No username' };
 
-    // A static address is only honoured when the service is actually configured
-    // for one — otherwise a stale ipAddress field would pin a dynamic customer.
-    const wantsStatic =
-      sub.authMethod === 'STATIC' || sub.serviceSettings?.ipType === 'STATIC';
-    const staticIp = wantsStatic ? sub.serviceSettings?.ipAddress ?? null : null;
+    const opts = this.buildFullRadiusOpts(sub);
 
     await this.radiusSync.syncSubscriberProfile(
       sub.username,
       sub.password,
       sub.package as any,
-      {
-        serviceType: sub.authMethod as any,
-        staticIp,
-        macAddress: sub.serviceSettings?.macAddress ?? null,
-        // ServiceSettings.duration is the billing period, not a session limit,
-        // so session/idle limits come from env defaults unless set explicitly.
-        sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
-        idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
-        allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false,
-      },
+      opts,
     );
 
     return {
       synced: true,
       username: sub.username,
       authMethod: sub.authMethod,
-      addressing: staticIp ? `static ${staticIp}` : sub.package?.pool?.name ? `pool ${sub.package.pool.name}` : 'none',
+      addressing: opts.staticIp ? `static ${opts.staticIp}` : sub.package?.pool?.name ? `pool ${sub.package.pool.name}` : 'none',
     };
   }
 
@@ -519,9 +548,10 @@ export class SubscribersService implements OnModuleInit {
         await this.mikrotik.removePppSecret(
           nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
         ).catch((e: any) => this.logger.warn(`Transfer: PPP secret removal for ${sub.username} failed: ${e?.message || e}`));
-        sessionCut = await this.mikrotik.disconnectPppoeUser(
+        const killResult = await this.mikrotik.disconnectPppoeUser(
           nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
-        ).catch(() => false);
+        ).catch(() => null);
+        sessionCut = !!killResult?.removed;
       }
     } catch (e: any) {
       this.logger.warn(`Transfer of #${subscriberId}: could not cut live session (${e?.message || e})`);
@@ -1417,10 +1447,14 @@ export class SubscribersService implements OnModuleInit {
           const e = new Date(data.expiryDate);
           if (!isNaN(e.getTime())) expiry = e;
         }
+        // Declared OUTSIDE the if-block: the cycle length below needs it even
+        // when the expiry came from the import file. (Was previously scoped
+        // inside the if — a subscriber with an explicit expiryDate crashed
+        // here with "dpkg is not defined" and skipped the duration stamp.)
+        const dpkg = await this.prisma.package.findUnique({
+          where: { id: subscriber.packageId }, select: { duration: true },
+        });
         if (!expiry) {
-          const dpkg = await this.prisma.package.findUnique({
-            where: { id: subscriber.packageId }, select: { duration: true },
-          });
           expiry = new Date();
           expiry.setDate(expiry.getDate() + (dpkg?.duration || 30));
         }
@@ -2384,8 +2418,18 @@ if (!unpaid && data.username && data.password) {
       await this.prisma.subscriber.update({ where: { id }, data: { status: 'ACTIVE' } });
     }
     // Ensure they can authenticate during the grace window.
+    //
+    // BUG FIX: this used to call syncSubscriberProfile(username, password, null)
+    // directly — `null` package meant NO Framed-Pool AND no static IP was
+    // written, only the password. Any subscriber with a static IP who was
+    // granted a grace period would have their Framed-IP-Address silently
+    // erased; on their next reconnect the router had no addressing
+    // instruction from RADIUS at all and fell back to its local PPP profile
+    // pool. syncToRadius() rebuilds the FULL profile (package speed, pool OR
+    // static IP, MAC, session flags) from the subscriber's current settings,
+    // so grace periods can no longer downgrade a static-IP customer to pool.
     if (sub.username && sub.password) {
-      await this.radiusSync.syncSubscriberProfile(sub.username, sub.password, null).catch((e: any) =>
+      await this.syncToRadius(id).catch((e: any) =>
         this.logger.warn(`Grace RADIUS restore failed for ${sub.username}: ${e?.message || e}`));
     }
     await this.prisma.activityLog.create({
@@ -2457,9 +2501,10 @@ if (!unpaid && data.username && data.password) {
           await this.mikrotik.removePppSecret(
             nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
           );
-          sessionCut = await this.mikrotik.disconnectPppoeUser(
+          const killResult = await this.mikrotik.disconnectPppoeUser(
             nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
           );
+          sessionCut = !!killResult.removed;
         }
       } catch (e: any) {
         this.logger.warn(`Could not cut the live session for ${sub.username}: ${e?.message}`);
@@ -3680,18 +3725,27 @@ if (!unpaid && data.username && data.password) {
     for (const sub of subscribers) {
       if (!sub.username || !sub.password) { failed++; continue; }
       try {
+        // BUG FIX: this used to pass only `{ allowMultipleSessions }`, which
+        // meant a bulk "Sync All to RADIUS" silently stripped every static-IP
+        // subscriber back to pool addressing (and dropped their MAC lock and
+        // auth method) the moment an admin ran it. buildFullRadiusOpts()
+        // rebuilds the complete profile from current ServiceSettings, same as
+        // a single-subscriber syncToRadius() would.
+        const opts = this.buildFullRadiusOpts(sub);
         await this.radiusSync.syncSubscriberProfile(
           sub.username,
           sub.password,
           sub.package ?? null,
-          { allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false },
+          opts,
         );
         success++;
         console.log(
           `✅ ${sub.username} — ` +
-          (sub.package
-            ? `${sub.package.downloadSpeed}M/${sub.package.uploadSpeed}M, pool: ${sub.package.pool?.name ?? 'none'}`
-            : 'no package'),
+          (opts.staticIp
+            ? `static ${opts.staticIp}`
+            : sub.package
+              ? `${sub.package.downloadSpeed}M/${sub.package.uploadSpeed}M, pool: ${sub.package.pool?.name ?? 'none'}`
+              : 'no package'),
         );
       } catch (error: any) {
         failed++;
@@ -3733,7 +3787,7 @@ if (!unpaid && data.username && data.password) {
             sub.username,
             sub.password,
             sub.package ?? null,
-            { allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false },
+            this.buildFullRadiusOpts(sub),
           );
           synced++;
           console.log(`✅ Synced: ${sub.username}`);

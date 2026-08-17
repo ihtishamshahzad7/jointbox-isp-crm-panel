@@ -3,6 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { CoaService } from './coa.service';
 import { ScopeService } from '../common/scope.service';
+import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Phase 5 network operations. RADIUS tables live in the same Postgres DB,
@@ -21,6 +24,9 @@ export class NetworkService {
     private radiusSync: RadiusSyncService,
     private coa: CoaService,
     private scope: ScopeService,
+    // Needed so a disconnect can fall back to the router's own API when CoA
+    // is not acknowledged — see disconnect() below.
+    private mikrotik: MikrotikSyncService,
   ) {}
 
   // ── Live sessions ─────────────────────────────────────────────
@@ -78,39 +84,174 @@ export class NetworkService {
   }
 
   // ── CoA disconnect ────────────────────────────────────────────
+  /**
+   * Disconnect a live session, for real.
+   *
+   * THE BUG THIS FIXES: the old version trusted two things that are routinely
+   * untrue in the field.
+   *
+   *   1. It required an open `radacct` row and threw "No active session" when
+   *      there wasn't one. But radacct only reflects reality when the NAS sends
+   *      Interim-Updates — without them a row can be missing, stale or already
+   *      closed while the customer is very much online. The operator then had
+   *      to log into the router and remove the session by hand.
+   *   2. When CoA was not acknowledged it closed the radacct row anyway and
+   *      returned `disconnected: true`. The panel showed the customer offline
+   *      while the router kept forwarding their traffic — the worst kind of
+   *      failure, because nobody goes looking for it.
+   *
+   * Now the router itself is the source of truth: if CoA does not land we go
+   * straight at the MikroTik API and remove /ppp/active, and we only report
+   * success when something actually cut the session.
+   */
   async disconnect(username: string) {
-    // find the live session to get NAS IP + acct session id
     const rows = await this.prisma.$queryRaw<Array<any>>`
       SELECT acctsessionid, nasipaddress, framedipaddress
       FROM radacct WHERE username = ${username} AND acctstoptime IS NULL
       ORDER BY acctstarttime DESC LIMIT 1`;
-    if (!rows.length) throw new BadRequestException('No active session for this user');
-    const session = rows[0];
+    const session = rows[0] ?? null;
 
-    let method = 'radacct-only';
-    try {
-      // Standard RFC 3576 RADIUS Disconnect — vendor-agnostic (MikroTik, Cisco,
-      // Juniper, pfSense, vBNG, OLTs). No external tool required.
-      const res = await this.coa.disconnectByUsername(username);
-      if (res.ok) {
-        method = 'radius-coa';
-        this.logger.log(`CoA disconnect ACK for ${username} → ${session.nasipaddress}`);
-      } else {
-        this.logger.warn(`CoA disconnect not acknowledged for ${username}: ${res.message}; closing session in DB only`);
-      }
-    } catch (e: any) {
-      this.logger.warn(`CoA disconnect error for ${username} (${e.message}); closing session in DB only`);
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { username },
+      select: { id: true, nas: true },
+    });
+    const nas = sub?.nas as any;
+    const hasApi = !!(nas?.nasIp && nas.apiUsername && nas.apiPassword);
+
+    // No accounting row AND no way to ask the router — nothing we can do.
+    if (!session && !hasApi) {
+      throw new BadRequestException(
+        'No active session for this user, and this NAS has no API credentials ' +
+          'configured, so the router cannot be checked directly.',
+      );
     }
 
-    // always close the session record so dashboards reflect reality
-    await this.prisma.$executeRaw`
-      UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
-      WHERE acctsessionid = ${session.acctsessionid} AND acctstoptime IS NULL`;
+    const trail: string[] = []; // session action log — every attempt, not just the winning one
+    let method = 'none';
+    let cut = false;
+
+    // 1. Standard RFC 3576 Disconnect-Request — vendor-agnostic (MikroTik,
+    //    Cisco, Juniper, pfSense, vBNG, OLTs). No external tool required.
+    try {
+      const res = await this.coa.disconnectByUsername(username);
+      trail.push(`radius-coa: ${res.ok ? 'ACK' : `not acknowledged (${res.message})`}`);
+      if (res.ok) {
+        method = 'radius-coa';
+        cut = true;
+        this.logger.log(`CoA disconnect ACK for ${username} → ${session?.nasipaddress ?? nas?.nasIp}`);
+      } else {
+        this.logger.warn(`CoA disconnect not acknowledged for ${username}: ${res.message}`);
+      }
+    } catch (e: any) {
+      trail.push(`radius-coa: error (${e.message})`);
+      this.logger.warn(`CoA disconnect error for ${username}: ${e.message}`);
+    }
+
+    // 2. CoA did not land — go directly at the router. This is the step that
+    //    was missing: without it the panel reported a disconnect that never
+    //    happened and the customer stayed online.
+    //
+    //    disconnectPppoeUser now reports found/removed separately (it used to
+    //    return `true` whenever the API call didn't throw, even when the
+    //    print filter matched ZERO sessions — a name mismatch or an already-
+    //    dead session looked exactly like a successful kill). "found:false"
+    //    means the router already agrees the user is offline — that's a
+    //    legitimate success too, just not one where anything was removed.
+    if (!cut && hasApi) {
+      try {
+        const r = await this.mikrotik.disconnectPppoeUser(
+          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username,
+        );
+        trail.push(`mikrotik-api: ${!r.found ? 'no active session found (already offline)' : r.removed ? `${r.sessionIds.length} session(s) removed` : 'session found but remove did not confirm'}`);
+        if (r.removed || !r.found) {
+          cut = true;
+          method = r.found ? 'mikrotik-api' : 'already-offline';
+          this.logger.log(`CoA did not land for ${username}; ${trail[trail.length - 1]} (via MikroTik API)`);
+        }
+      } catch (e: any) {
+        trail.push(`mikrotik-api: error (${e?.message || e})`);
+        this.logger.warn(`MikroTik API disconnect failed for ${username}: ${e?.message || e}`);
+      }
+    }
+
+    // 3. VERIFY, don't assume. A CoA ACK or a reported MikroTik removal is
+    //    what the OLD code trusted blindly — but a router can ACK a
+    //    Disconnect-Request and still keep the session (bugs, queued
+    //    teardown, a stale entry the remove didn't actually match). If the
+    //    NAS exposes its API, ask it directly whether the user is still
+    //    there, and only accept "disconnected" once the router itself agrees.
+    let verified: boolean | null = null; // null = no way to verify (no API creds)
+    if (hasApi && cut) {
+      await sleep(1500);
+      try {
+        const stillActive = await this.mikrotik.isSessionActive(
+          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username,
+        );
+        if (!stillActive) {
+          verified = true;
+        } else {
+          // Whatever succeeded above did not actually take. One hard-kill
+          // retry via the API before giving up, then re-check.
+          trail.push(`verify: still active after ${method} — retrying mikrotik-api removal`);
+          const retry = await this.mikrotik
+            .disconnectPppoeUser(nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username)
+            .catch((e: any) => { trail.push(`mikrotik-api retry: error (${e?.message || e})`); return null; });
+          if (retry) trail.push(`mikrotik-api retry: ${retry.removed ? `${retry.sessionIds.length} session(s) removed` : 'remove did not confirm'}`);
+          await sleep(1200);
+          const stillActive2 = await this.mikrotik
+            .isSessionActive(nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username)
+            .catch((e: any) => { trail.push(`verify retry: error (${e?.message || e})`); return true; });
+          verified = !stillActive2;
+          if (verified && retry?.removed) method = 'mikrotik-api';
+        }
+        trail.push(`verify: ${verified ? 'session NOT FOUND on router — confirmed offline' : 'session STILL ACTIVE on router'}`);
+      } catch (e: any) {
+        // Could not reach the router to verify (it may have gone down between
+        // the disconnect call and now). Don't silently claim success — but
+        // don't downgrade a real CoA ACK either; report as unverified.
+        trail.push(`verify: could not reach router (${e?.message || e})`);
+      }
+    }
+
+    // A verified-active session means the disconnect genuinely failed, no
+    // matter what the CoA/API layer reported.
+    if (verified === false) cut = false;
+
+    // 4. Close the accounting row ONLY when the session was really cut (and,
+    //    when verifiable, actually confirmed gone). Closing it after a failed
+    //    disconnect is what made the panel lie.
+    if (cut && session) {
+      await this.prisma.$executeRaw`
+        UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
+        WHERE acctsessionid = ${session.acctsessionid} AND acctstoptime IS NULL`;
+    }
 
     await this.prisma.activityLog.create({
-      data: { action: 'DISCONNECT', entity: 'Session', details: `${username} via ${method}` },
-    });
-    return { disconnected: true, method };
+      data: {
+        action: cut ? 'DISCONNECT' : 'DISCONNECT_FAILED',
+        entity: 'Session',
+        entityId: sub?.id ?? null,
+        details:
+          `${username} @ ${nas?.nasname ?? nas?.nasIp ?? 'unknown NAS'}` +
+          (session?.acctsessionid ? ` (session ${session.acctsessionid})` : '') +
+          ` — ${trail.join(' → ')} — ` +
+          (cut ? `SUCCESS via ${method}` : 'FAILED — still online'),
+      },
+    }).catch(() => null);
+
+    if (!cut) {
+      throw new BadRequestException(
+        `${username} could not be disconnected — the session is still active on the router. ` +
+          trail.join(' → ') +
+          `. Check CoA port 3799, the RADIUS shared secret, and the NAS API credentials.`,
+      );
+    }
+
+    return {
+      disconnected: true,
+      method,
+      verified: verified === null ? 'unverified (NAS has no API credentials configured)' : 'confirmed offline on the router',
+    };
   }
 
   /** Cut EVERY open session for a username (duplicate-login takedown). */
