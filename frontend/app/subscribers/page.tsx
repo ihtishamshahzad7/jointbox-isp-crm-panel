@@ -4,8 +4,6 @@ import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import { SubscriberTable } from "./subscriber-table";
 import { SubscriberMobileList } from "./subscriber-mobile";
-import { WinBoxToolbar } from "../components/winbox-toolbar";
-import { Expandable } from "../components/expandable";
 import { SubscriberGroups } from "./subscriber-groups";
 import { SkeletonTable } from "../components/skeleton";
 import { Menu } from "../components/menu";
@@ -279,6 +277,8 @@ export default function SubscribersPage() {
   const [pageSize, setPageSize] = useState(25);
 
   const [showActivationModal, setShowActivationModal] = useState(false);
+  /** Expiring-within-N-days quick filter (null = off). Replaces the old panel. */
+  const [expiringDays, setExpiringDays] = useState<number | null>(null);
   // Mid-cycle package migration (4mb → 8mb) with a pro-rata money preview.
   const [migrateSub, setMigrateSub] = useState<Subscriber | null>(null);
   const [migratePkg, setMigratePkg] = useState<string>("");
@@ -511,6 +511,22 @@ export default function SubscribersPage() {
     }, 20_000);
     return () => clearInterval(iv);
   }, [detailSub?.username]);
+
+  /**
+   * KEEP THE LIST LIVE. Operators sit on this page all day; without this the
+   * online/offline dots, days-left and statuses silently went stale until
+   * someone clicked Refresh. Polls every 30s, but pauses while a modal/drawer is
+   * open or rows are selected so it can never yank the data out from under an
+   * action in progress.
+   */
+  useEffect(() => {
+    const busy = () => showForm || showActivationModal || showImportModal || showExportModal ||
+      showMassDeleteModal || showMassSettingsModal || showTransferModal || !!migrateSub ||
+      !!deleteConfirm || selectedIds.length > 0;
+    const iv = setInterval(() => { if (!busy() && !document.hidden) loadAll(); }, 30_000);
+    return () => clearInterval(iv);
+  }, [showForm, showActivationModal, showImportModal, showExportModal, showMassDeleteModal,
+      showMassSettingsModal, showTransferModal, migrateSub, deleteConfirm, selectedIds.length, loadAll]);
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
   const saveSub = async () => {
@@ -1351,6 +1367,14 @@ export default function SubscribersPage() {
       if (statusFilter === "STALE") return s.isStaleSession === true;
       return s.status === statusFilter;
     })
+    // Expiring-within-N-days chip (includes already-expired so nothing is missed).
+    .filter((s) => {
+      if (expiringDays == null) return true;
+      const raw = s.serviceSettings?.expiryDate;
+      if (!raw) return false;
+      const days = Math.ceil((new Date(raw).getTime() - Date.now()) / 86400000);
+      return days <= expiringDays;
+    })
     .filter((s) => connectionFilter === "ALL" || s.connectionType === connectionFilter)
     .filter((s) => packageFilter === "ALL" || String(s.packageId || "") === packageFilter)
     .filter((s) => salespersonFilter === "ALL" || String(s.salespersonId || "") === salespersonFilter)
@@ -1616,6 +1640,23 @@ export default function SubscribersPage() {
             {/* Filters live behind a toggle so the four selects only occupy
                 space when someone is actually narrowing the list. An active
                 dot flags that a filter is on while the row is hidden. */}
+            {/* Expiring quick-filters — replaces the old bottom "Expired &
+                Expiring" panel, so renewals are one click from the top bar. */}
+            <div className="jb-exp-chips">
+              {[
+                { d: 0, label: "Expiring" },
+                { d: 1, label: "1d" },
+                { d: 3, label: "3d" },
+                { d: 7, label: "7d" },
+                { d: 30, label: "30d" },
+              ].map((c) => (
+                c.d === 0
+                  ? <span key="lbl" className="jb-exp-lbl">{c.label}</span>
+                  : <button key={c.d} onClick={() => { setExpiringDays(expiringDays === c.d ? null : c.d); setPage(1); }}
+                      className={expiringDays === c.d ? "on" : ""}
+                      title={`Show subscribers expiring within ${c.d} day(s)`}>{c.label}</button>
+              ))}
+            </div>
             {(() => {
               const activeCount =
                 (connectionFilter !== "ALL" ? 1 : 0) +
@@ -1678,42 +1719,37 @@ export default function SubscribersPage() {
             </div>
           )}
 
-          {/* Grouping / classification panel */}
-          <SubscriberGroups onPick={(dim, key) => {
-            const k = String(key ?? "");
-            if (dim === "nas") setNasFilter(k);
-            else if (dim === "package") setPackageFilter(k);
-            else if (dim === "status") setStatusFilter(k);
-            else if (dim === "owner") setSalespersonFilter(k);
-            setPage(1);
-          }} />
+          {/* Grouping / classification — tucked behind Filters so it only takes
+              space when someone is actually narrowing the list. */}
+          {showFilters && (
+            <SubscriberGroups onPick={(dim, key) => {
+              const k = String(key ?? "");
+              if (dim === "nas") setNasFilter(k);
+              else if (dim === "package") setPackageFilter(k);
+              else if (dim === "status") setStatusFilter(k);
+              else if (dim === "owner") setSalespersonFilter(k);
+              setPage(1);
+            }} />
+          )}
 
-          {/* WinBox toolbar strip */}
-          <Expandable label="subscribers">
-          <WinBoxToolbar
-            selectedCount={selectedIds.length}
-            find={searchQ}
-            onFind={onSearch}
-            findPlaceholder="Find subscriber…"
-            groups={[
-              [{ label: "Add", icon: "＋", tone: "primary", title: "Add subscriber (register)", onClick: openCreate }],
-              [
-                { label: "Activate", icon: "✓", tone: "primary", selectionRequired: true, title: "Activate selected (charges wallet, generates invoice)", onClick: () => bulkAction("activate") },
-                { label: "Grace", icon: "⏳", selectionRequired: true, title: "Grant grace period to selected", onClick: () => bulkAction("grace") },
-                { label: "Message", icon: "✉", selectionRequired: true, title: "Send SMS to selected", onClick: () => bulkAction("message") },
-              ],
-              [
-                { label: "Remove", icon: "－", tone: "danger", selectionRequired: true, title: "Delete selected", onClick: () => setShowMassDeleteModal(true) },
-                { label: "Disable", icon: "⊘", tone: "warn", selectionRequired: true, title: "Mass service settings for selected", onClick: () => setShowMassSettingsModal(true) },
-                { label: "Move", icon: "⇄", selectionRequired: true, title: "Move selected to another account", onClick: openTransfer },
-              ],
-              [
-                { label: "Import", icon: "⬆", onClick: () => setShowImportModal(true) },
-                { label: "Export", icon: "⬇", onClick: () => setShowExportModal(true) },
-                { label: "Sync RADIUS", icon: "⟲", title: "Sync all to FreeRADIUS", onClick: bulkSyncToRadius },
-              ],
-            ]}
-          />
+          {/**
+           * SELECTION BAR — the single place bulk actions live. It appears only
+           * when rows are selected, so the toolbar isn't cluttered with buttons
+           * that do nothing 95% of the time. This replaces the old duplicate
+           * WinBox icon strip.
+           */}
+          {selectedIds.length > 0 && (
+            <div className="jb-selbar">
+              <span className="jb-selbar-count">{selectedIds.length} selected</span>
+              <Btn size="xs" variant="primary" onClick={() => bulkAction("activate")}>✓ Activate</Btn>
+              <Btn size="xs" onClick={() => bulkAction("grace")}>⏳ Grace</Btn>
+              <Btn size="xs" onClick={() => bulkAction("message")}>✉ Message</Btn>
+              <Btn size="xs" onClick={openTransfer}>⇄ Move</Btn>
+              <Btn size="xs" onClick={() => setShowMassSettingsModal(true)}>⚙ Settings</Btn>
+              <Btn size="xs" variant="danger" onClick={() => setShowMassDeleteModal(true)}>🗑 Delete</Btn>
+              <button className="jb-selbar-clear" onClick={() => setSelectedIds([])}>Clear</button>
+            </div>
+          )}
 
           {/* Subscriber Table */}
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
@@ -1798,119 +1834,17 @@ export default function SubscribersPage() {
               </div>
             )}
           </div>
-          </Expandable>
 
-          {/* Expired & Expiring Subscribers */}
-          <div style={{ marginTop: 14, background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 16px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontWeight: 700, fontSize: 13 }}>Expired & Expiring Subscribers</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {[1, 3, 7, 14, 30].map((d2) => (
-                  <button
-                    key={d2}
-                    onClick={() => {
-                      const now = new Date();
-                      const to = new Date();
-                      to.setDate(now.getDate() + d2);
-                      setDateFrom(now.toISOString().slice(0, 10));
-                      setDateTo(to.toISOString().slice(0, 10));
-                    }}
-                    style={{ background: "transparent", border: `1px solid ${t.cardBorder}`, borderRadius: 6, color: t.textSub, fontSize: 11, padding: "4px 8px", cursor: "pointer" }}
-                  >
-                    Expiring {d2}d
-                  </button>
-                ))}
-                <button
-                  onClick={() => {
-                    setDateFrom("");
-                    setDateTo("");
-                  }}
-                  style={{ background: "transparent", border: `1px solid ${t.cardBorder}`, borderRadius: 6, color: t.textSub, fontSize: 11, padding: "4px 8px", cursor: "pointer" }}
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 8 }}>
-              {filtered
-                // Truly expired OR expiring within 30 days — not just "has an
-                // expiry" (which wrongly listed customers 145 days out), and
-                // sorted soonest-first so the ones needing attention lead.
-                .filter((s) => {
-                  const e = s.serviceSettings?.expiryDate;
-                  if (!e) return false;
-                  const days = Math.ceil((new Date(e).getTime() - Date.now()) / 86400000);
-                  return days <= 30;
-                })
-                .sort((a, b) => new Date(a.serviceSettings!.expiryDate!).getTime() - new Date(b.serviceSettings!.expiryDate!).getTime())
-                .slice(0, 8)
-                .map((s) => {
-                  const expiry = new Date(s.serviceSettings?.expiryDate || "");
-                  const left = Math.ceil((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-                  const critical = left <= 1;
-                  const warning = left > 1 && left <= 3;
-                  const normal = left > 3;
-                  return (
-                    <div key={s.id} style={{ border: `1px solid ${critical ? "#7f1d1d" : warning ? "#7c2d12" : t.cardBorder}`, borderRadius: 8, padding: "10px", background: d ? "#0d1627" : "#f8fafc" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 700 }}>{s.fullName}</div>
-                          <div style={{ fontSize: 10, color: t.textMuted }}>{s.username} · {s.phone || "No phone"}</div>
-                        </div>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: critical ? "#ff7070" : warning ? "#f0a500" : "#10B981" }}>
-                          {left < 0 ? "Expired" : `${left}d`}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 10, color: t.textMuted, marginTop: 6 }}>{s.package?.name || "No package"} · {fmtDate(expiry.toISOString())}</div>
-                      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                        <Btn size="xs" variant="success" onClick={() => { setActivationForm((p) => ({ ...p, subscriberId: String(s.id), packageId: String(s.packageId || "") })); setShowActivationModal(true); }}>
-                          Renew
-                        </Btn>
-                        <Btn size="xs" variant="ghost" onClick={() => openDetail(s)}>
-                          View
-                        </Btn>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
+          {/* Compact RADIUS health badge — replaces the old full-width panel.
+              The expiring list is now the chips in the toolbar. */}
+          <div className="jb-radius-badge">
+            <StatusDot online={radiusInfo ? radiusInfo.alive : true} />
+            <span>RADIUS {radiusInfo?.alive === false ? "unreachable" : "healthy"}</span>
+            <span className="dim">auto-sync on add / password change / delete</span>
+            <button onClick={() => setShowRadiusDetail(true)}>Details</button>
+            <button onClick={bulkSyncToRadius} disabled={bulkSyncing}>{bulkSyncing ? "Syncing…" : "Sync all"}</button>
           </div>
 
-          {/* RADIUS Info Panel */}
-          <div style={{ marginTop: 14, background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 16px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <Ic.Shield />
-              <span style={{ fontWeight: 700, fontSize: 12, color: t.textSub, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                RADIUS Integration Status
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: t.textMuted }}>
-              <span>
-                <StatusDot online /> New subscriber → auto-written to <code style={{ color: "#38bdf8" }}>radcheck</code> + <code>radreply</code> (speed + pool)
-              </span>
-              <span>
-                <StatusDot online /> Password change → auto-updated in RADIUS
-              </span>
-              <span>
-                <StatusDot online /> Delete → auto-removed from RADIUS
-              </span>
-              <span>
-                <StatusDot online={radiusInfo ? radiusInfo.alive : true} /> RADIUS Server:{" "}
-                <b style={{ color: t.text }}>
-                  {radiusInfo?.serverIp ?? "…"}:{radiusInfo?.radiusPort ?? 1812}
-                </b>
-                <button
-                  onClick={() => setShowRadiusDetail(true)}
-                  style={{ marginLeft: 8, fontSize: 10, padding: "2px 8px", borderRadius: 6, border: `1px solid ${t.cardBorder}`, background: "transparent", color: "#38bdf8", cursor: "pointer", fontWeight: 700 }}
-                >
-                  Details
-                </button>
-              </span>
-              <span>
-                Click <b style={{ color: "#2dd4bf" }}>Sync All to RADIUS</b> to fix any subscribers missing from RADIUS.
-              </span>
-            </div>
-          </div>
 
           {/* RADIUS details popup */}
           {showRadiusDetail && (
@@ -2378,21 +2312,21 @@ export default function SubscribersPage() {
         </div></Portal>
       )}
 
-      {/* MODAL: Subscriber Detail (Full Tabbed View) */}
+      {/* MASTER–DETAIL: the selected subscriber opens in a docked right-hand
+          drawer instead of a centred modal. On desktop the backdrop does NOT
+          capture clicks, so the list behind stays usable — click another row and
+          the panel simply switches to that customer. On a phone it becomes a
+          normal full-screen sheet. */}
       {detailSub && (
         <Portal><div
-          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          className="jb-detail-backdrop"
           onClick={() => setDetailSub(null)}
         >
           <div
+            className="jb-detail-drawer"
             style={{
               background: t.card,
-              border: `1px solid ${t.cardBorder}`,
-              borderRadius: 14,
-              padding: 0,
-              width: "100%",
-              maxWidth: 1100,
-              maxHeight: "90vh",
+              borderLeft: `1px solid ${t.cardBorder}`,
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",

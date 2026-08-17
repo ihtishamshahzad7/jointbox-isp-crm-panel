@@ -6108,3 +6108,68 @@ html .main .recharts-responsive-container { width: 100% !important; }
 
 /* ── 11. Mobile "More" rail divider ── */
 [dir="rtl"] .jb-bottomnav.section .jb-bn-more { border-left: none; border-right: 1px solid #E2E8F0; }
+
+/* ─────────────────────────────────────────────────────────────
+   SUBSCRIBERS — unified toolbar, selection bar, expiring chips.
+   Replaces the old triple action surface (Actions menu + WinBox
+   icon strip + bottom panels) with one clear band.
+   ───────────────────────────────────────────────────────────── */
+.jb-exp-chips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.jb-exp-chips .jb-exp-lbl { font-size: 11px; color: #64748B; font-weight: 600; margin-right: 2px; }
+.jb-exp-chips button {
+  padding: 5px 10px; border-radius: 6px; border: 1px solid #E2E8F0; background: #fff;
+  color: #64748B; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.jb-exp-chips button:hover { border-color: #F59E0B; color: #8A6209; }
+.jb-exp-chips button.on { background: #F59E0B; border-color: #F59E0B; color: #fff; }
+
+.jb-selbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: #EEF1FE; border: 1px solid #C7CEF9; border-radius: 10px;
+  padding: 9px 13px; margin-bottom: 12px;
+}
+.jb-selbar-count { font-size: 12.5px; font-weight: 800; color: #3C50E0; margin-right: 4px; }
+.jb-selbar-clear {
+  margin-left: auto; background: transparent; border: none; color: #64748B;
+  font-size: 11.5px; font-weight: 600; cursor: pointer; text-decoration: underline; font-family: inherit;
+}
+
+.jb-radius-badge {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding: 8px 13px; border: 1px solid #E2E8F0;
+  border-radius: 9px; background: #F7F9FC; font-size: 11.5px; color: #1C2434;
+}
+.jb-radius-badge .dim { color: #94A3B8; }
+.jb-radius-badge button {
+  background: #fff; border: 1px solid #E2E8F0; border-radius: 6px; padding: 3px 10px;
+  font-size: 11px; font-weight: 600; color: #3C50E0; cursor: pointer; font-family: inherit;
+}
+.jb-radius-badge button:disabled { opacity: .6; cursor: default; }
+
+@media (max-width: 768px) {
+  .jb-selbar { gap: 6px; padding: 8px 10px; }
+  .jb-selbar-clear { margin-left: 0; }
+  .jb-radius-badge { font-size: 11px; }
+}
+
+/* SUBSCRIBERS — master-detail drawer.
+   Desktop: docked right, backdrop does not swallow clicks so the list stays
+   usable and clicking another row swaps the panel. Mobile: full-screen sheet. */
+.jb-detail-backdrop {
+  position: fixed; inset: 0; z-index: 2000;
+  display: flex; justify-content: flex-end; align-items: stretch;
+  background: transparent; pointer-events: none;   /* list stays clickable */
+}
+.jb-detail-drawer {
+  pointer-events: auto;                             /* the panel itself is live */
+  width: 620px; max-width: 92vw; height: 100%;
+  box-shadow: -18px 0 44px rgba(15, 23, 42, .18);
+  animation: jbDrawerIn .16s ease-out;
+}
+@keyframes jbDrawerIn { from { transform: translateX(18px); opacity: .6 } to { transform: none; opacity: 1 } }
+
+@media (max-width: 900px) {
+  /* Phone/tablet: behave like a normal sheet, with a dim so it reads as modal. */
+  .jb-detail-backdrop { background: rgba(15, 23, 42, .55); pointer-events: auto; }
+  .jb-detail-drawer { width: 100%; max-width: 100%; }
+}
