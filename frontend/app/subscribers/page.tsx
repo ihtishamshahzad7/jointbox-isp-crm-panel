@@ -218,6 +218,11 @@ const EMPTY_FORM = {
   // and from Package.serviceType (the customer segment).
   authMethod: "PPPOE",
   packageId: "", areaId: "", nasId: "", salespersonId: "",
+  /** Owner account (whose wallet pays). Blank = the account creating it. */
+  userId: "",
+  /** Register only by default — activation is a separate, deliberate act that
+   *  charges the owner's wallet and switches the service on. */
+  activateNow: false,
   documentUrl: "", installationDate: "", latitude: "", longitude: "",
   photoUrl: "", cnicFrontUrl: "", cnicBackUrl: "",
   sellPrice: "",
@@ -560,6 +565,19 @@ export default function SubscribersPage() {
       const wantedIpPrice = payload.staticIpPrice;
       delete payload.staticIpAddress;
       delete payload.staticIpPrice;
+
+      /**
+       * Activation is opt-IN on create. `activateNow` is a real boolean, so it
+       * must survive the empty-value stripping above — send it explicitly. On an
+       * edit we never send it (activation only happens via Activate/Renew).
+       */
+      if (editSub) {
+        delete payload.activateNow;
+        delete payload.userId;           // ownership changes go through Move
+      } else {
+        payload.activateNow = !!form.activateNow;
+        if (!form.userId) delete payload.userId;   // blank = the current account
+      }
 
       const res = await fetch(url, { method, headers, body: JSON.stringify(payload) });
       if (!res.ok) {
@@ -1273,10 +1291,20 @@ export default function SubscribersPage() {
   };
 
   // ── Form handlers ─────────────────────────────────────────────────────────
-  const openCreate = () => {
+  const openCreate = async () => {
     setForm({ ...EMPTY_FORM });
     setEditSub(null);
     setShowForm(true);
+    // Accounts you may assign this customer to (your own downline). Same list
+    // the Move dialog uses, so ownership can be set at creation instead of
+    // silently defaulting to whoever is logged in.
+    if (transferAccounts.length === 0) {
+      try {
+        const r = await fetch(`${API}/users`, { headers });
+        const rows = r.ok ? await r.json() : [];
+        setTransferAccounts(Array.isArray(rows) ? rows : rows?.data ?? []);
+      } catch { /* the field just shows "Me" */ }
+    }
   };
 
   // Deep-link: /subscribers?add=1 (from the command palette) opens the form.
@@ -1288,6 +1316,10 @@ export default function SubscribersPage() {
 
   const openEdit = async (sub: Subscriber) => {
     setForm({
+      // Create-only fields; ignored on edit (ownership moves via Move, and
+      // activation happens through Activate/Renew).
+      userId: "",
+      activateNow: false,
       fullName: sub.fullName || "",
       phone: sub.phone || "",
       email: sub.email || "",
@@ -2224,6 +2256,43 @@ export default function SubscribersPage() {
                   ))}
                 </select>
               </div>
+
+              {/* OWNER — the account this customer BELONGS to, i.e. whose wallet
+                  pays on activation and whose books they appear in. Distinct from
+                  Salesperson (who sold it). Without this the customer silently
+                  stayed owned by whoever created them. */}
+              {!editSub && (
+                <div>
+                  <label style={labelSt}>Owner account <span style={{ color: t.textMuted, fontWeight: 400 }}>(whose wallet pays)</span></label>
+                  <select
+                    style={{ ...inputSt, cursor: "pointer" }}
+                    value={form.userId}
+                    onChange={(e) => setForm((p) => ({ ...p, userId: e.target.value }))}
+                  >
+                    <option value="">— Me (the account I'm using) —</option>
+                    {transferAccounts.map((u: any) => (
+                      <option key={u.id} value={u.id}>{u.name} — {u.role}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* ACTIVATE NOW — off by default. Registering a customer and
+                  selling them a month are separate acts: leaving this off
+                  creates the record without charging anyone or switching the
+                  service on, so the owner can activate deliberately. */}
+              {!editSub && (
+                <label style={{ gridColumn: "span 2", display: "flex", alignItems: "flex-start", gap: 9, padding: "10px 12px", borderRadius: 9, border: `1px solid ${form.activateNow ? "rgba(21,127,67,.45)" : t.cardBorder}`, background: form.activateNow ? "rgba(21,127,67,.07)" : "transparent", cursor: "pointer" }}>
+                  <input type="checkbox" checked={form.activateNow} style={{ marginTop: 3 }}
+                    onChange={(e) => setForm((p) => ({ ...p, activateNow: e.target.checked }))} />
+                  <span style={{ fontSize: 11.5, color: t.textSub, lineHeight: 1.7 }}>
+                    <b style={{ color: t.text }}>Activate immediately</b><br />
+                    Charges the owner's wallet, raises the first invoice, starts the billing period and
+                    switches the internet on. Leave it <b>unticked</b> to just register the customer —
+                    they stay INACTIVE until someone presses <b>Activate</b>.
+                  </span>
+                </label>
+              )}
 
               <div
                 style={{

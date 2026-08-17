@@ -1350,14 +1350,25 @@ export class SubscribersService implements OnModuleInit {
     // ── Activation gate: a subscriber may ONLY reach RADIUS (get internet)
     // after being activated against a package, invoiced, and the activator's
     // wallet charged. No package → no activation → INACTIVE, no internet.
-    if (!subscriber.packageId) {
+    /**
+     * REGISTER-ONLY MODE (`activateNow: false`).
+     *
+     * Creating a customer and SELLING them a month are two different acts. An
+     * ISP that registers a customer and hands them to a dealer must not have the
+     * wallet charged and the service switched on behind their back — the dealer
+     * activates, and the dealer's wallet pays. Without this flag every create
+     * with a package silently invoiced, charged and went live.
+     */
+    if (!subscriber.packageId || data.activateNow === false) {
       unpaid = true; // reuse the "not activated → don't sync to RADIUS" path
-      unpaidReason = 'No package assigned. Assign a package to activate and enable internet.';
+      unpaidReason = !subscriber.packageId
+        ? 'No package assigned. Assign a package to activate and enable internet.'
+        : 'Created without activating. Use Activate to charge the wallet, raise the invoice and switch the service on.';
       await this.prisma.subscriber.update({
         where: { id: subscriber.id },
         data: { status: 'INACTIVE' },
       });
-      this.logger.warn(`Subscriber #${subscriber.id} created without a package — left INACTIVE (no internet).`);
+      this.logger.log(`Subscriber #${subscriber.id} created ${!subscriber.packageId ? 'without a package' : 'WITHOUT activation (register-only)'} — left INACTIVE (no charge, no internet).`);
     } else {
       // Packaged subscriber: 1) raise the first invoice, then 2) charge the
       // owner's wallet (resellers only — the ISP owner has no wallet gate).
