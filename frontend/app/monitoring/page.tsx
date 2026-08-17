@@ -182,6 +182,8 @@ function Card({ t, onDelete, onCheck, onToggle }: { t: Target; onDelete: () => v
       </div>
       {state === "down" && t.downSince && <div className="mon-down-since">down since {timeAgo(t.downSince)}</div>}
       <div className="mon-card-actions">
+        {/* Primary way into the per-host history + diagnostics page. */}
+        <a className="details" href={`/monitoring/${t.id}`}>📈 Details</a>
         <button onClick={onCheck}>Check now</button>
         <button onClick={onToggle}>{t.enabled ? "Pause" : "Resume"}</button>
         <button className="del" onClick={onDelete}>Delete</button>
@@ -265,8 +267,10 @@ const CSS = `
 .mon-card-metrics{display:flex;justify-content:space-between;font-size:11.5px;font-weight:600}
 .mon-card-metrics .muted{color:#94A3B8;font-weight:500}
 .mon-down-since{font-size:10.5px;color:#B02A37;font-weight:600}
-.mon-card-actions{display:flex;gap:6px}
-.mon-card-actions button{flex:1;height:30px;border:1px solid var(--border);background:var(--surface-2,#F7F9FC);border-radius:7px;font-size:11px;font-weight:600;color:var(--text);cursor:pointer;font-family:inherit}
+.mon-card-actions{display:flex;gap:6px;flex-wrap:wrap}
+.mon-card-actions button,.mon-card-actions .details{flex:1;height:30px;border:1px solid var(--border);background:var(--surface-2,#F7F9FC);border-radius:7px;font-size:11px;font-weight:600;color:var(--text);cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap}
+.mon-card-actions .details{flex-basis:100%;background:#EEF1FE;border-color:#C7CEF9;color:#3C50E0}
+.mon-card-actions .details:hover{background:#3C50E0;color:#fff}
 .mon-card-actions button.del{color:#B02A37;border-color:rgba(176,42,55,.3)}
 @media (max-width:640px){ .mon-grid{grid-template-columns:1fr 1fr} .mon-add input,.mon-add button{flex:1 1 100%} }
 `;
