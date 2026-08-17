@@ -30,6 +30,7 @@ export class ReportsService {
     const bySub: any = ids ? { subscriber: { userId: { in: ids } } } : {};
     const owned: any = ids ? { ownerId: { in: ids } } : {};
     const userWhere: any = ids ? { id: { in: ids } } : {};
+    const voucherWhere: any = ids ? { createdBy: { in: ids } } : {};
 
     const [
       subscribers,
@@ -47,7 +48,7 @@ export class ReportsService {
       this.prisma.area.count({ where: owned }),
       this.prisma.nas.count({ where: await this.scope.nasWhere(actor as any) }),
       this.prisma.invoice.count({ where: bySub }),
-      this.prisma.voucher.count(),
+      this.prisma.voucher.count({ where: voucherWhere }),   // scoped — was leaking every tenant's voucher count
       // "users" for a reseller means their own downline, not every staff
       // account in the system.
       this.prisma.user.count({ where: userWhere }),

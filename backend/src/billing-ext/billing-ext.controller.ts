@@ -82,13 +82,13 @@ export class BillingExtController {
   // ─── Invoice reversal ────────────────────────────────────────────────
 
   @Get('reversals')
-  listReversals(@Query() query: any) {
-    return this.svc.listReversals(query);
+  listReversals(@Query() query: any, @Req() req: any) {
+    return this.svc.listReversals(query, req.user);
   }
 
   @Get('reversals/:id')
-  getReversal(@Param('id') id: string) {
-    return this.svc.getReversal(+id);
+  getReversal(@Param('id') id: string, @Req() req: any) {
+    return this.svc.getReversal(+id, req.user);
   }
 
   @Post('invoices/:invoiceId/reverse')

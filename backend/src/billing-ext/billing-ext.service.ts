@@ -279,26 +279,41 @@ export class BillingExtService {
 
   // ─── INVOICE REVERSAL ────────────────────────────────────────────────
 
-  async listReversals(query: any) {
+  async listReversals(query: any, actor?: any) {
     const page = +query.page || 1;
     const size = Math.min(+query.pageSize || 25, 100);
+    // Scope to reversals of the caller's own invoices — was returning every
+    // tenant's reversals (with their subscriber + invoice money) to any viewer.
+    let where: any = {};
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where = { originalInvoice: { subscriber: { userId: { in: ids.length ? ids : [-1] } } } };
+    }
     const [rows, total] = await Promise.all([
       this.prisma.invoiceReversal.findMany({
+        where,
         orderBy: { id: 'desc' },
         skip: (page - 1) * size, take: size,
         include: { originalInvoice: true, reversalInvoice: true },
       }),
-      this.prisma.invoiceReversal.count(),
+      this.prisma.invoiceReversal.count({ where }),
     ]);
     return { rows, total, page, pageSize: size };
   }
 
-  async getReversal(id: number) {
+  async getReversal(id: number, actor?: any) {
     const r = await this.prisma.invoiceReversal.findUnique({
       where: { id },
-      include: { originalInvoice: true, reversalInvoice: true },
+      include: { originalInvoice: { include: { subscriber: { select: { userId: true } } } }, reversalInvoice: true },
     });
     if (!r) throw new NotFoundException(`Reversal ${id} not found`);
+    // Direct-id access must respect tenancy — otherwise a reseller reads any
+    // reversal by guessing its id.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      const owner = (r as any).originalInvoice?.subscriber?.userId;
+      if (owner == null || !ids.includes(owner)) throw new NotFoundException(`Reversal ${id} not found`);
+    }
     return r;
   }
 
