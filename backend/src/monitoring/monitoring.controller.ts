@@ -37,6 +37,11 @@ export class MonitoringController {
     return this.monitoring.list(req.user);
   }
 
+  @Get('targets/:id')
+  getOne(@Param('id') id: string, @Req() req: any) {
+    return this.monitoring.getOne(+id, req.user);
+  }
+
   @Post('targets')
   create(@Body() body: any, @Req() req: any) {
     return this.monitoring.create(body, req.user);

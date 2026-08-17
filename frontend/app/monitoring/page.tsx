@@ -168,10 +168,10 @@ function Card({ t, onDelete, onCheck, onToggle }: { t: Target; onDelete: () => v
   return (
     <div className={`mon-card ${state}`}>
       <div className="mon-card-top">
-        <div className="mon-card-name" title={t.host}>
+        <a className="mon-card-name" href={`/monitoring/${t.id}`} title="Open details">
           <b>{t.name || t.host}</b>
           <em>{t.host}</em>
-        </div>
+        </a>
         <span className="mon-dot" style={{ background: color }} title={label} />
       </div>
       <LatencyGraph history={t.history} up={t.isUp} />
@@ -255,7 +255,8 @@ const CSS = `
 .mon-card.down{border-color:rgba(176,42,55,.5);background:rgba(176,42,55,.05)}
 .mon-card.off{opacity:.65}
 .mon-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
-.mon-card-name{display:flex;flex-direction:column;min-width:0}
+.mon-card-name{display:flex;flex-direction:column;min-width:0;text-decoration:none;color:inherit;cursor:pointer}
+.mon-card-name:hover b{color:#3C50E0}
 .mon-card-name b{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mon-card-name em{font-style:normal;font-size:10.5px;color:#94A3B8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mon-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0;margin-top:3px}

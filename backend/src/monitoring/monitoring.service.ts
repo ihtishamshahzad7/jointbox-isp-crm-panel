@@ -46,6 +46,12 @@ export class MonitoringService {
     return rows.map((r) => ({ ...r, history: this.parseHistory(r.history) }));
   }
 
+  async getOne(id: number, actor?: Actor) {
+    await this.assertOwns(id, actor);
+    const t = await this.prisma.monitorTarget.findUnique({ where: { id } });
+    return t ? { ...t, history: this.parseHistory(t.history) } : null;
+  }
+
   async create(data: { name?: string; host?: string; groupName?: string; intervalSec?: number }, actor?: Actor) {
     const host = String(data.host || '').trim();
     if (!host) throw new BadRequestException('A host (IP or hostname) is required.');
