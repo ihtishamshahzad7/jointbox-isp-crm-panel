@@ -215,6 +215,49 @@ if [ -d /etc/freeradius/3.0 ]; then
     || echo "⚠ FreeRADIUS not active — run: journalctl -u freeradius -n 40 --no-pager"
 fi
 
+# -----------------------------------------------------------------------------
+# NETWORK DIAGNOSTICS TOOLING — installed automatically on every server.
+#
+# The Monitoring page runs ping / traceroute / TCP / DNS / HTTP checks. The
+# backend runs UNPRIVILEGED, so a traceroute binary alone is not enough: it also
+# needs CAP_NET_RAW to open probe sockets, otherwise it fails with "send failed"
+# and the hop table stays empty. Nobody can be asked to do this by hand on 1000+
+# client servers, so the updater does it — idempotently, and never fatally: if
+# apt is busy or offline the deploy still completes and the other diagnostics
+# (ping, TCP test, TCP trace, DNS, HTTP) keep working.
+# -----------------------------------------------------------------------------
+if [ "$(id -u)" = "0" ]; then
+  # traceroute = the prober; libcap2-bin = setcap/getcap (missing on minimal images).
+  MISSING_PKGS=""
+  command -v traceroute >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS traceroute"
+  command -v setcap     >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS libcap2-bin"
+  if [ -n "$MISSING_PKGS" ]; then
+    echo "🧰 Installing network diagnostics tooling:$MISSING_PKGS"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $MISSING_PKGS >/dev/null 2>&1 \
+      || DEBIAN_FRONTEND=noninteractive sh -c "apt-get update -qq && apt-get install -y -qq $MISSING_PKGS" >/dev/null 2>&1 \
+      || echo "   ⚠ could not install$MISSING_PKGS (offline?) — other diagnostics still work"
+  fi
+  # Grant raw-socket capability so the unprivileged backend can actually probe.
+  if command -v traceroute >/dev/null 2>&1 && command -v setcap >/dev/null 2>&1; then
+    TR_BIN="$(readlink -f "$(command -v traceroute)")"
+    if ! getcap "$TR_BIN" 2>/dev/null | grep -q cap_net_raw; then
+      setcap cap_net_raw+ep "$TR_BIN" 2>/dev/null \
+        && echo "   ✓ traceroute granted CAP_NET_RAW" \
+        || echo "   ⚠ setcap failed on $TR_BIN — traceroute hops may be empty"
+    fi
+  fi
+  # ping needs the same (Debian ships it setuid/with caps, but verify).
+  if command -v ping >/dev/null 2>&1 && command -v setcap >/dev/null 2>&1; then
+    PING_BIN="$(readlink -f "$(command -v ping)")"
+    if ! getcap "$PING_BIN" 2>/dev/null | grep -q cap_net_raw && [ ! -u "$PING_BIN" ]; then
+      setcap cap_net_raw+ep "$PING_BIN" 2>/dev/null || true
+    fi
+  fi
+  command -v traceroute >/dev/null 2>&1 \
+    && echo "🛰  Diagnostics ready (ping, traceroute, TCP, DNS, HTTP)" \
+    || echo "🛰  Diagnostics ready (ping, TCP, DNS, HTTP — traceroute unavailable)"
+fi
+
 echo ""
 echo "✅ Done. Status:"
 pm2 list
