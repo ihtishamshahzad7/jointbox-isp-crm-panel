@@ -1602,6 +1602,63 @@ if (!unpaid && data.username && data.password) {
     return updated;
   }
 
+  /**
+   * PREVIEW a mid-cycle package change (4mb → 8mb, etc.) without applying it —
+   * shows exactly what the wallet will do so the operator can confirm. Mirrors
+   * the pro-rata math in update(): the expiry never moves, the unused days of the
+   * old plan are credited and the same days of the new plan are charged, both at
+   * the owner's cost.
+   */
+  async packageChangeQuote(id: number, newPackageId: number, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriber(actor, id);
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id },
+      select: { id: true, packageId: true, userId: true, costPrice: true, sellPrice: true,
+                serviceSettings: { select: { expiryDate: true, duration: true } },
+                package: { select: { id: true, name: true, downloadSpeed: true, uploadSpeed: true } } },
+    });
+    if (!sub) throw new NotFoundException('Subscriber not found');
+    const newPkg = await this.prisma.package.findUnique({
+      where: { id: newPackageId },
+      select: { id: true, name: true, price: true, downloadSpeed: true, uploadSpeed: true },
+    });
+    if (!newPkg) throw new BadRequestException('Chosen package not found.');
+    if (sub.packageId === newPackageId) throw new BadRequestException('That is already the current package.');
+
+    const expiry = sub.serviceSettings?.expiryDate ? new Date(sub.serviceSettings.expiryDate) : null;
+    const cycleDays = sub.serviceSettings?.duration && sub.serviceSettings.duration > 0 ? sub.serviceSettings.duration : 30;
+    let remainingDays = expiry ? Math.ceil((expiry.getTime() - Date.now()) / 86400_000) : cycleDays;
+    remainingDays = Math.max(0, Math.min(remainingDays, cycleDays));
+    const frac = cycleDays > 0 ? remainingDays / cycleDays : 0;
+
+    const newBase = Number(newPkg.price ?? 0);
+    const newCost = sub.userId ? await this.pricing.activationCost(sub.userId, newPackageId, newBase) : newBase;
+    const oldCost = Number(sub.costPrice ?? 0);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const creditOld = round2(oldCost * frac);
+    const chargeNew = round2(newCost * frac);
+    const net = round2(creditOld - chargeNew); // >0 = refund to owner, <0 = charge owner
+
+    const own = sub.userId ? await this.prisma.resellerPackagePrice.findUnique({
+      where: { userId_packageId: { userId: sub.userId, packageId: newPackageId } }, select: { retailPrice: true },
+    }) : null;
+    const newSell = own?.retailPrice ?? newBase;
+
+    return {
+      subscriberId: id,
+      from: sub.package ? { id: sub.package.id, name: sub.package.name, speed: `${sub.package.downloadSpeed}/${sub.package.uploadSpeed}` } : null,
+      to: { id: newPkg.id, name: newPkg.name, speed: `${newPkg.downloadSpeed}/${newPkg.uploadSpeed}` },
+      remainingDays, cycleDays,
+      creditFromOldPlan: creditOld,
+      chargeForNewPlan: chargeNew,
+      // What the owner's wallet does: positive = refunded, negative = charged.
+      walletEffect: net,
+      newCost, newSell, newProfit: round2(newSell - newCost),
+      expiryUnchanged: true,
+      expiryDate: expiry,
+    };
+  }
+
   async update(id: number, data: any, actor?: Actor) {
     if (actor) {
       await this.scope.assertSubscriber(actor, id);

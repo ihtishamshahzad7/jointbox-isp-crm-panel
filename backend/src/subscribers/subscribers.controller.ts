@@ -392,6 +392,12 @@ export class SubscribersController {
     return this.subscribersService.update(+id, body, req.user);
   }
 
+  /** Preview a mid-cycle package migration (pro-rata credit/charge) before applying. */
+  @Post(':id/package-change/quote')
+  packageChangeQuote(@Param('id') id: string, @Body() body: { packageId: number }, @Req() req: any) {
+    return this.subscribersService.packageChangeQuote(+id, Number(body.packageId), req.user);
+  }
+
   /**
    * Cut service and free the addresses, keeping the record. The safe
    * alternative to deletion, and the one that keeps accounting intact.

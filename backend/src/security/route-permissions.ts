@@ -32,6 +32,7 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'POST',   test: /^\/subscribers\/(bulk-action|group-action)\b/, key: 'subscribers.massActivation' },
   { method: 'POST',   test: /^\/subscribers\/renew\/credit(s)?\b/,       key: 'subscribers.activation' },
   { method: 'POST',   test: /^\/subscribers\/renew\/quote\b/,            key: 'subscribers.activation' },
+  { method: 'POST',   test: /^\/subscribers\/\d+\/package-change\b/,      key: 'subscribers.changePackage' },
   { method: 'POST',   test: /^\/subscribers\/\d+\/deactivate\b/,         key: 'subscribers.disconnect' },
   { method: 'POST',   test: /^\/subscribers\/\d+\/grace\b/,              key: 'subscribers.gracePeriod' },
   { method: 'PATCH',  test: /^\/subscribers\/\d+\/hold\b/,               key: 'subscribers.disableNet' },

@@ -279,6 +279,11 @@ export default function SubscribersPage() {
   const [pageSize, setPageSize] = useState(25);
 
   const [showActivationModal, setShowActivationModal] = useState(false);
+  // Mid-cycle package migration (4mb → 8mb) with a pro-rata money preview.
+  const [migrateSub, setMigrateSub] = useState<Subscriber | null>(null);
+  const [migratePkg, setMigratePkg] = useState<string>("");
+  const [migrateQuote, setMigrateQuote] = useState<any>(null);
+  const [migrateBusy, setMigrateBusy] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showMassDeleteModal, setShowMassDeleteModal] = useState(false);
   const [showMassSettingsModal, setShowMassSettingsModal] = useState(false);
@@ -724,6 +729,45 @@ export default function SubscribersPage() {
     }, 250); // debounce so typing a day count doesn't spam the API
     return () => clearTimeout(timer);
   }, [showActivationModal, activationForm]);
+
+  // ── Package migration (change plan mid-cycle) ──
+  const openMigrate = (sub: Subscriber | null) => {
+    if (!sub) return;
+    setMigrateSub(sub); setMigratePkg(""); setMigrateQuote(null);
+    setDetailSub(null);
+  };
+  // Fetch the pro-rata preview whenever a new package is picked.
+  useEffect(() => {
+    if (!migrateSub || !migratePkg) { setMigrateQuote(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/subscribers/${migrateSub.id}/package-change/quote`, {
+          method: "POST", headers, body: JSON.stringify({ packageId: Number(migratePkg) }),
+        });
+        const d = await r.json();
+        if (!cancelled) setMigrateQuote(r.ok ? d : { error: d?.message || "Cannot preview this change" });
+      } catch { if (!cancelled) setMigrateQuote(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [migrateSub, migratePkg]);
+
+  const applyMigrate = async () => {
+    if (!migrateSub || !migratePkg) return;
+    setMigrateBusy(true);
+    try {
+      const r = await fetch(`${API}/subscribers/${migrateSub.id}`, {
+        method: "PUT", headers, body: JSON.stringify({ packageId: Number(migratePkg) }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { showToast(d?.message || "Migration failed", "err"); return; }
+      showToast("Package migrated — pro-rata applied and RADIUS re-synced", "ok");
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("wallet-changed"));
+      setMigrateSub(null); setMigratePkg(""); setMigrateQuote(null);
+      await loadAll();
+    } catch (e: any) { showToast(e?.message || "Migration failed", "err"); }
+    finally { setMigrateBusy(false); }
+  };
 
   const runActivation = async () => {
     if (!activationForm.subscriberId || !activationForm.packageId) {
@@ -2910,6 +2954,9 @@ export default function SubscribersPage() {
               <Btn onClick={refreshDetailLive} variant="teal" size="xs" disabled={loadingLive}>
                 <Ic.Refresh /> Refresh Live Data
               </Btn>
+              <Btn onClick={() => openMigrate(detailSub)} variant="primary" size="xs">
+                <Ic.Refresh /> Change Package
+              </Btn>
               <Btn onClick={() => syncSubToRadius(detailSub)} variant="success" size="xs">
                 <Ic.Sync /> Sync to RADIUS
               </Btn>
@@ -2917,6 +2964,49 @@ export default function SubscribersPage() {
                 <Ic.Trash /> Delete
               </Btn>
               <Btn variant="ghost" onClick={() => setDetailSub(null)}>Close</Btn>
+            </div>
+          </div>
+        </div></Portal>
+      )}
+
+      {/* Package Migration Modal */}
+      {migrateSub && (
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setMigrateSub(null)}>
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 20, width: "100%", maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Change / migrate package</div>
+            <div style={{ fontSize: 12, color: t.textSub, marginBottom: 14 }}>
+              {migrateSub.fullName} · {migrateSub.username}. The expiry date stays the same — only the plan, speed and the pro-rata money for the remaining days change.
+            </div>
+
+            <label style={{ fontSize: 12, color: t.textSub, display: "block", marginBottom: 5 }}>New package</label>
+            <select value={migratePkg} onChange={(e) => setMigratePkg(e.target.value)}
+              style={{ width: "100%", background: t.bg, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "9px 10px", color: t.text, fontSize: 13 }}>
+              <option value="">Select the new package…</option>
+              {packages.filter((pk) => String(pk.id) !== String((migrateSub as any).packageId)).map((pk) => (
+                <option key={pk.id} value={pk.id}>{pk.name} — {pk.downloadSpeed}/{pk.uploadSpeed} Mbps</option>
+              ))}
+            </select>
+
+            {migrateQuote && !migrateQuote.error && (
+              <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 10, background: "rgba(60,80,224,.07)", border: "1px solid rgba(60,80,224,.3)", fontSize: 12.5, lineHeight: 1.9 }}>
+                <div><b>{migrateQuote.from?.name ?? "—"}</b> ({migrateQuote.from?.speed} Mbps) → <b>{migrateQuote.to?.name}</b> ({migrateQuote.to?.speed} Mbps)</div>
+                <div style={{ color: t.textSub }}>{migrateQuote.remainingDays} of {migrateQuote.cycleDays} days remaining · expiry unchanged</div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}><span style={{ color: t.textSub }}>Credit from old plan</span><b style={{ color: "#4ade80" }}>{money(migrateQuote.creditFromOldPlan)}</b></div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: t.textSub }}>Charge for new plan</span><b style={{ color: "#f59e0b" }}>{money(migrateQuote.chargeForNewPlan)}</b></div>
+                <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${t.cardBorder}`, marginTop: 6, paddingTop: 6 }}>
+                  <span><b>{migrateQuote.walletEffect >= 0 ? "Refunded to your wallet" : "Charged to your wallet"}</b></span>
+                  <b style={{ color: migrateQuote.walletEffect >= 0 ? "#4ade80" : "#f87171", fontSize: 15 }}>{money(Math.abs(migrateQuote.walletEffect))}</b>
+                </div>
+                <div style={{ color: t.textMuted, fontSize: 11, marginTop: 4 }}>New retail {money(migrateQuote.newSell)} · your cost {money(migrateQuote.newCost)} · profit {money(migrateQuote.newProfit)}</div>
+              </div>
+            )}
+            {migrateQuote?.error && <div style={{ marginTop: 12, color: "#f87171", fontSize: 12 }}>{migrateQuote.error}</div>}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <Btn variant="ghost" onClick={() => setMigrateSub(null)}>Cancel</Btn>
+              <Btn variant="primary" onClick={applyMigrate} disabled={migrateBusy || !migratePkg || migrateQuote?.error}>
+                {migrateBusy ? "Migrating…" : "Apply migration"}
+              </Btn>
             </div>
           </div>
         </div></Portal>
