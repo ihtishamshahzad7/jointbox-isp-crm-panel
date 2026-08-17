@@ -133,6 +133,11 @@ export class MonitoringService {
       },
     });
 
+    // Persist the sample for the long-range history charts (retained ~30 days).
+    await this.prisma.monitorSample.create({
+      data: { targetId: t.id, up: res.up, latencyMs: res.ms, lossPct: res.loss },
+    }).catch(() => null);
+
     // Transition → alert (up↔down). Broadcast so the browser can beep/announce,
     // and log a durable record.
     if (wasUp !== null && wasUp !== res.up) {
@@ -173,5 +178,62 @@ export class MonitoringService {
     } finally {
       this.polling = false;
     }
+  }
+
+  /** Nightly: drop samples older than the retention window (default 30 days). */
+  @Cron('20 3 * * *')
+  async pruneSamples() {
+    const days = Number(process.env.MONITOR_RETENTION_DAYS || 30);
+    const cutoff = new Date(Date.now() - days * 86400_000);
+    const { count } = await this.prisma.monitorSample.deleteMany({ where: { at: { lt: cutoff } } });
+    if (count) this.logger.log(`Monitoring retention: pruned ${count} sample(s) older than ${days}d`);
+  }
+
+  // ── History for the detail-page charts ───────────────────────
+  async history(id: number, range: string, actor?: Actor) {
+    await this.assertOwns(id, actor);
+    const spans: Record<string, number> = {
+      '5m': 5 * 60_000, '1h': 3600_000, '6h': 6 * 3600_000,
+      '24h': 24 * 3600_000, '7d': 7 * 86400_000, '30d': 30 * 86400_000,
+    };
+    const ms = spans[range] ?? spans['1h'];
+    const from = new Date(Date.now() - ms);
+    const rows = await this.prisma.monitorSample.findMany({
+      where: { targetId: id, at: { gte: from } },
+      orderBy: { at: 'asc' },
+      select: { at: true, up: true, latencyMs: true, lossPct: true },
+    });
+
+    // Downsample long ranges to ~180 points so the chart stays light.
+    const MAX = 180;
+    let points = rows;
+    if (rows.length > MAX) {
+      const bucket = Math.ceil(rows.length / MAX);
+      const out: typeof rows = [];
+      for (let i = 0; i < rows.length; i += bucket) {
+        const slice = rows.slice(i, i + bucket);
+        const lat = slice.filter((s) => s.up && s.latencyMs != null).map((s) => s.latencyMs!);
+        out.push({
+          at: slice[Math.floor(slice.length / 2)].at,
+          up: slice.some((s) => s.up),
+          latencyMs: lat.length ? Math.round((lat.reduce((a, b) => a + b, 0) / lat.length) * 10) / 10 : null,
+          lossPct: Math.round((slice.reduce((a, s) => a + (s.lossPct ?? 0), 0) / slice.length)),
+        });
+      }
+      points = out;
+    }
+
+    // Stats over the raw rows (not the downsampled set).
+    const lats = rows.filter((s) => s.up && s.latencyMs != null).map((s) => s.latencyMs!);
+    const upCount = rows.filter((s) => s.up).length;
+    const stats = {
+      samples: rows.length,
+      min: lats.length ? Math.min(...lats) : null,
+      avg: lats.length ? Math.round((lats.reduce((a, b) => a + b, 0) / lats.length) * 10) / 10 : null,
+      max: lats.length ? Math.max(...lats) : null,
+      uptimePct: rows.length ? Math.round((upCount / rows.length) * 10000) / 100 : null,
+      lossPct: rows.length ? Math.round((rows.reduce((a, s) => a + (s.lossPct ?? 0), 0) / rows.length) * 100) / 100 : null,
+    };
+    return { range, from, points, stats };
   }
 }

@@ -2924,8 +2924,25 @@ model MonitorTarget {
   createdAt     DateTime @default(now())
 
   owner User? @relation("UserMonitorTargets", fields: [ownerId], references: [id], onDelete: Cascade)
+  samples MonitorSample[]
 
   @@index([ownerId])
   @@index([enabled])
   @@map("monitor_target")
+}
+
+/// One recorded ping result for a MonitorTarget — the persisted history behind
+/// the per-host charts (latency/loss/availability over time).
+model MonitorSample {
+  id        Int      @id @default(autoincrement())
+  targetId  Int
+  at        DateTime @default(now())
+  up        Boolean
+  latencyMs Float?
+  lossPct   Float?
+
+  target MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([targetId, at])
+  @@map("monitor_sample")
 }
