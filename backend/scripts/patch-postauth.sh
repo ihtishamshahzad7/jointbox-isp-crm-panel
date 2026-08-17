@@ -42,36 +42,45 @@ fi
 
 cp -a "$QCONF" "$QCONF.bak.$(date +%s)"
 
-# 3) Replace the whole post-auth { ... } block with an extended INSERT. Uses
-#    Python for a reliable multi-line replace (sed struggles with the block).
+# 3) SURGICAL edit: keep the distro's existing (known-good) post-auth INSERT and
+#    only add the 4 extra columns + values. Replacing the whole block with a
+#    hardcoded query is what kept failing `freeradius -XC` — versions differ in
+#    quoting and the password xlat. Appending to the real query preserves the
+#    exact working syntax, so it validates.
 python3 - "$QCONF" <<'PY'
 import re, sys
 path = sys.argv[1]
 src = open(path).read()
 
-new_block = '''post-auth {
-	query = "\\
-		INSERT INTO ${..postauth_table} \\
-			(username, pass, reply, authdate, callingstationid, calledstationid, nasipaddress, nasportid) \\
-		VALUES ( \\
-			'%{User-Name}', \\
-			'%{%{User-Password}:-%{Chap-Password}}', \\
-			'%{reply:Packet-Type}', \\
-			'%S', \\
-			'%{Calling-Station-Id}', \\
-			'%{Called-Station-Id}', \\
-			'%{NAS-IP-Address}', \\
-			'%{NAS-Port-Id}')"
-}'''
+# Isolate the post-auth { ... } block so we don't touch accounting queries.
+m = re.search(r'(post-auth\s*\{.*?\n\})', src, re.DOTALL)
+if not m:
+    print("  ! could not locate post-auth block — left unchanged"); sys.exit(0)
+block = m.group(1)
+orig = block
 
-# Match the first top-level post-auth { ... } block.
-pat = re.compile(r'post-auth\s*\{.*?\n\}', re.DOTALL)
-if pat.search(src):
-    src = pat.sub(new_block, src, count=1)
+# 3a) Add the columns after `authdate` in the column list (first occurrence).
+if 'callingstationid' not in block:
+    block = re.sub(
+        r'(\(\s*username\s*,\s*pass\s*,\s*reply\s*,\s*authdate)(\s*\))',
+        r'\1, callingstationid, calledstationid, nasipaddress, nasportid\2',
+        block, count=1)
+
+# 3b) Add the matching values right before the closing `)"` of the VALUES(...).
+#     `'%S'` is the authdate value in every distro default; insert after it.
+if "'%{Calling-Station-Id}'" not in block:
+    block = re.sub(
+        r"('%S')(\s*\)\s*\")",
+        r"\1, \\\n\t\t\t'%{Calling-Station-Id}', \\\n\t\t\t'%{Called-Station-Id}', \\\n\t\t\t'%{NAS-IP-Address}', \\\n\t\t\t'%{NAS-Port-Id}'\2",
+        block, count=1)
+
+if block != orig and 'callingstationid' in block:
+    src = src[:m.start()] + block + src[m.end():]
     open(path, 'w').write(src)
-    print("  • post-auth query rewritten to capture MAC/NAS/port")
+    print("  • post-auth query extended with MAC/NAS/port columns")
 else:
-    print("  ! could not locate post-auth block — left unchanged")
+    print("  ! post-auth query shape not recognised — left unchanged (accounting unaffected)")
+    sys.exit(0)
 PY
 
 # 4) Validate; roll back if FreeRADIUS refuses the new config.
