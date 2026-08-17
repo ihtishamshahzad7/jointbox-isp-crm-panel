@@ -16,8 +16,8 @@ export class OutagesController {
    * This is what support should check before dispatching a technician.
    */
   @Get('status')
-  status() {
-    return this.outages.currentStatus();
+  status(@Req() req: any) {
+    return this.outages.currentStatus(req.user);
   }
 
   /** Uptime split into ISP fault vs power — the honest version. */

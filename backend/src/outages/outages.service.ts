@@ -258,9 +258,12 @@ export class OutagesService {
    * Live view: which areas are dark right now, and whether it's expected.
    * This is what support should look at before dispatching anyone.
    */
-  async currentStatus() {
+  async currentStatus(actor?: Actor) {
+    // Scope to the caller's own areas — areas are per-tenant, so an unscoped
+    // list leaked every account's area names/cities and live subscriber counts.
+    const owned = await this.scope.ownedWhere(actor as any);
     const areas = await this.prisma.area.findMany({
-      where: { isActive: true },
+      where: owned && Object.keys(owned).length ? { AND: [owned, { isActive: true }] } : { isActive: true },
       select: { id: true, name: true, city: true },
     });
 
