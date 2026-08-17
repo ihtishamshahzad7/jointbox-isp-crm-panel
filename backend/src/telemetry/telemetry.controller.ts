@@ -33,6 +33,35 @@ export class TelemetryController {
     return this.health.testSnmp(id);
   }
 
+  /** Device health history (CPU/memory/temperature/SNMP response) for the graphs. */
+  @Get('nas/:id/health-history')
+  healthHistory(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('range') range?: string,
+    @Query('metrics') metrics?: string,
+  ) {
+    return this.health.history(id, {
+      range,
+      metrics: metrics ? metrics.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    });
+  }
+
+  /** Interfaces with their latest sample. */
+  @Get('nas/:id/interfaces')
+  ifaces(@Param('id', ParseIntPipe) id: number) {
+    return this.health.interfaces(id);
+  }
+
+  /** One interface's traffic/error history. */
+  @Get('nas/:id/interfaces/:ifIndex/history')
+  ifaceHistory(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('ifIndex', ParseIntPipe) ifIndex: number,
+    @Query('range') range?: string,
+  ) {
+    return this.health.interfaceHistory(id, ifIndex, range || '1h');
+  }
+
   /** Health of every NAS: online count + throughput + reporting status. */
   @Get('nas-health')
   nasHealth() {

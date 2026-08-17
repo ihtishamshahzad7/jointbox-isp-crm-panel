@@ -177,6 +177,143 @@ export class DeviceHealthService {
   }
 
   /**
+   * HISTORY for the graphs — aggregated in SQL, never row-by-row in Node.
+   *
+   * A year of 30-second samples is ~1M rows per metric; shipping those to a
+   * browser would be unusable. Postgres buckets them by an interval chosen from
+   * the range (raw for short windows, 5-minute / hourly / daily for long ones)
+   * so every range returns a couple of hundred points and stays fast.
+   */
+  async history(nasId: number, opts: { range?: string; metrics?: string[] } = {}) {
+    const RANGES: Record<string, { ms: number; bucketSec: number }> = {
+      '5m':  { ms: 5 * 60_000,        bucketSec: 30 },
+      '15m': { ms: 15 * 60_000,       bucketSec: 60 },
+      '1h':  { ms: 3600_000,          bucketSec: 60 },
+      '6h':  { ms: 6 * 3600_000,      bucketSec: 300 },
+      '24h': { ms: 24 * 3600_000,     bucketSec: 300 },
+      '7d':  { ms: 7 * 86400_000,     bucketSec: 1800 },
+      '30d': { ms: 30 * 86400_000,    bucketSec: 3600 },
+      '90d': { ms: 90 * 86400_000,    bucketSec: 21600 },
+      '1y':  { ms: 365 * 86400_000,   bucketSec: 86400 },
+    };
+    const r = RANGES[opts.range || '1h'] ?? RANGES['1h'];
+    const from = new Date(Date.now() - r.ms);
+    const wanted = opts.metrics?.length ? opts.metrics : ['cpu', 'memory', 'temperature', 'snmpMs'];
+
+    // Device metrics, bucketed + averaged.
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ bucket: Date; metric: string; avg: number; max: number }>>(
+      `SELECT to_timestamp(floor(extract(epoch from "ts") / $1) * $1) AS bucket,
+              "metric",
+              AVG("value")::float AS avg,
+              MAX("value")::float AS max
+         FROM "device_metric"
+        WHERE "nasId" = $2 AND "ts" >= $3 AND "metric" = ANY($4)
+        GROUP BY bucket, "metric"
+        ORDER BY bucket ASC`,
+      r.bucketSec, nasId, from, wanted,
+    );
+
+    const series: Record<string, Array<{ t: string; v: number }>> = {};
+    for (const row of rows) {
+      (series[row.metric] ||= []).push({ t: new Date(row.bucket).toISOString(), v: Math.round(Number(row.avg) * 10) / 10 });
+    }
+
+    // Latest values + min/avg/max per metric, for the stat row above each chart.
+    const stats: Record<string, { current: number | null; min: number; avg: number; max: number }> = {};
+    for (const [metric, pts] of Object.entries(series)) {
+      const vals = pts.map((p) => p.v);
+      stats[metric] = {
+        current: vals.length ? vals[vals.length - 1] : null,
+        min: vals.length ? Math.min(...vals) : 0,
+        avg: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : 0,
+        max: vals.length ? Math.max(...vals) : 0,
+      };
+    }
+    return { range: opts.range || '1h', from, bucketSec: r.bucketSec, series, stats };
+  }
+
+  /** Per-interface traffic/error history, same bucketing. */
+  async interfaceHistory(nasId: number, ifIndex: number, range = '1h') {
+    const RANGES: Record<string, { ms: number; bucketSec: number }> = {
+      '5m': { ms: 300_000, bucketSec: 30 }, '15m': { ms: 900_000, bucketSec: 60 },
+      '1h': { ms: 3600_000, bucketSec: 60 }, '6h': { ms: 21600_000, bucketSec: 300 },
+      '24h': { ms: 86400_000, bucketSec: 300 }, '7d': { ms: 604800_000, bucketSec: 1800 },
+      '30d': { ms: 2592000_000, bucketSec: 3600 }, '90d': { ms: 7776000_000, bucketSec: 21600 },
+      '1y': { ms: 31536000_000, bucketSec: 86400 },
+    };
+    const r = RANGES[range] ?? RANGES['1h'];
+    const from = new Date(Date.now() - r.ms);
+    const rows = await this.prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT to_timestamp(floor(extract(epoch from "ts") / $1) * $1) AS bucket,
+              AVG("rxBps")::float AS rx, AVG("txBps")::float AS tx,
+              MAX("rxBps")::float AS rxpeak, MAX("txBps")::float AS txpeak,
+              AVG("inErrors")::float AS inerr, AVG("outErrors")::float AS outerr,
+              AVG("inDiscards")::float AS indis, AVG("outDiscards")::float AS outdis
+         FROM "interface_metric"
+        WHERE "nasId" = $2 AND "ifIndex" = $3 AND "ts" >= $4
+        GROUP BY bucket ORDER BY bucket ASC`,
+      r.bucketSec, nasId, ifIndex, from,
+    );
+    const points = rows.map((x) => ({
+      t: new Date(x.bucket).toISOString(),
+      rx: Math.round(Number(x.rx)), tx: Math.round(Number(x.tx)),
+      inErrors: Math.round(Number(x.inerr) * 100) / 100,
+      outErrors: Math.round(Number(x.outerr) * 100) / 100,
+      inDiscards: Math.round(Number(x.indis) * 100) / 100,
+      outDiscards: Math.round(Number(x.outdis) * 100) / 100,
+    }));
+    const rxs = points.map((p) => p.rx), txs = points.map((p) => p.tx);
+    return {
+      range, from, points,
+      stats: {
+        rxCurrent: rxs.at(-1) ?? 0, txCurrent: txs.at(-1) ?? 0,
+        rxAvg: rxs.length ? Math.round(rxs.reduce((a, b) => a + b, 0) / rxs.length) : 0,
+        txAvg: txs.length ? Math.round(txs.reduce((a, b) => a + b, 0) / txs.length) : 0,
+        rxPeak: rows.length ? Math.round(Math.max(...rows.map((x) => Number(x.rxpeak)))) : 0,
+        txPeak: rows.length ? Math.round(Math.max(...rows.map((x) => Number(x.txpeak)))) : 0,
+      },
+    };
+  }
+
+  /** Current interface list with the latest sample for each. */
+  async interfaces(nasId: number) {
+    const rows = await this.prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT DISTINCT ON ("ifIndex") "ifIndex", "name", "rxBps", "txBps", "up",
+              "speedMbps", "inErrors", "outErrors", "ts"
+         FROM "interface_metric"
+        WHERE "nasId" = $1 AND "ts" >= NOW() - INTERVAL '30 minutes'
+        ORDER BY "ifIndex", "ts" DESC`,
+      nasId,
+    );
+    return rows.map((r) => ({
+      ifIndex: Number(r.ifIndex), name: r.name, up: r.up,
+      rxBps: Math.round(Number(r.rxBps)), txBps: Math.round(Number(r.txBps)),
+      speedMbps: r.speedMbps ? Number(r.speedMbps) : null,
+      inErrors: Number(r.inErrors), outErrors: Number(r.outErrors),
+      lastSeen: r.ts,
+    }));
+  }
+
+  /**
+   * RETENTION — monitoring data must not grow without bound. Raw samples are
+   * kept for a short window (they are only needed for recent, high-resolution
+   * graphs); longer ranges are served by SQL bucketing over what remains.
+   */
+  @Cron('40 3 * * *')
+  async prune() {
+    if (!isPrimaryInstance()) return;
+    const days = Number(process.env.METRIC_RETENTION_DAYS || 30);
+    const cutoff = new Date(Date.now() - days * 86400_000);
+    const [dm, im] = await Promise.all([
+      this.prisma.deviceMetric.deleteMany({ where: { ts: { lt: cutoff } } }),
+      this.prisma.interfaceMetric.deleteMany({ where: { ts: { lt: cutoff } } }),
+    ]);
+    if (dm.count || im.count) {
+      this.log.log(`Retention: pruned ${dm.count} device and ${im.count} interface samples older than ${days}d.`);
+    }
+  }
+
+  /**
    * TEST SNMP — a real probe, not a config check. Contacts the device now and
    * reports what actually came back (or precisely why it didn't), so the
    * operator can fix community/firewall/service without guessing.

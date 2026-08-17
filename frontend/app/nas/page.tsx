@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
+import { DeviceHealth } from './device-health';
 import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { GroupPanel } from "../components/group-panel";
@@ -192,7 +193,7 @@ export default function NasPage() {
   const [logs, setLogs] = useState<NasLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number|null>(null);
-  const [activeTab, setActiveTab] = useState<'overview'|'interfaces'|'pppoe'|'radius'|'ips'|'sessions'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview'|'health'|'interfaces'|'pppoe'|'radius'|'ips'|'sessions'>('overview');
 
   // Auto-refresh intervals
   const pollIntervalRef = useRef<NodeJS.Timeout|null>(null);
@@ -1163,12 +1164,18 @@ export default function NasPage() {
             {/* ── Tabs ── */}
             <div style={{ display:'flex', gap:4, marginBottom:12, flexWrap:'wrap' }}>
               <Tab id="overview"    label="Overview"    icon={<Icons.NAS />} />
+              <Tab id="health"      label="Health & Graphs" icon={<Icons.CPU />} />
               <Tab id="interfaces"  label={`Interfaces${viewDetail.details?.interfaces?.length ? ` (${viewDetail.details.interfaces.length})` : ''}`} icon={<Icons.Network />} />
               <Tab id="pppoe"       label="PPPoE Server" icon={<Icons.PPPoE />} />
               <Tab id="radius"      label="RADIUS Clients" icon={<Icons.Shield />} />
               <Tab id="ips"         label="IP Addresses" icon={<Icons.IP />} />
               <Tab id="sessions"    label={`Sessions (${viewDetail.sessions.length})`} icon={<Icons.Subscribers />} />
             </div>
+
+            {/* ── Tab: Health & Graphs — real SNMP history ── */}
+            {activeTab === 'health' && (
+              <DeviceHealth nasId={viewDetail.nas.id} nasName={viewDetail.nas.nasname} />
+            )}
 
             {/* ── Tab: Overview ── */}
             {activeTab === 'overview' && (
