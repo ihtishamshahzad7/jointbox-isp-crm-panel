@@ -68,6 +68,7 @@ const menuGroups = [
   { label: 'Operations', items: [
     // Operations + NOC + Live + NAS + Fiber + Pools + Static + Outages as tabs.
     { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
+    { id: 'monitoring', label: 'Monitoring', href: '/monitoring', Icon: navIcons.Network },
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
   ]},
   { label: 'Business', items: [
