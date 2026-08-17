@@ -130,6 +130,12 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'POST',   test: /^\/nas\/import\b/,                         key: 'nas.write' },
   // create / edit / toggle fall back to the coarse nas.write.
 
+  // ── TELEMETRY / SNMP ──────────────────────────────────────────────────────
+  // Probing a device and discovering its interfaces are actions, not reads —
+  // they make the server talk to the router, so they need the write key.
+  { method: 'POST',   test: /^\/telemetry\/nas\/\d+\/snmp-test\b/,      key: 'telemetry.write' },
+  { method: 'GET',    test: /^\/telemetry\/nas\/\d+\/discover-interfaces\b/, key: 'telemetry.write' },
+
   // ── NETWORK ───────────────────────────────────────────────────────────────
   { method: 'POST',   test: /^\/network\/bandwidth\//,                 key: 'subscribers.changeBandwidth' },
   { method: 'POST',   test: /^\/network\/mac\//,                       key: 'network.mac' },

@@ -20,7 +20,8 @@ export class TelemetryController {
 
   /** One-off SNMP walk to list a NAS's interfaces for port registration. */
   @Get('nas/:id/discover-interfaces')
-  discover(@Param('id', ParseIntPipe) id: number) {
+  async discover(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    await this.scope.assertNas(req.user, id);
     return this.snmp.discoverInterfaces(id);
   }
 
@@ -29,17 +30,20 @@ export class TelemetryController {
    * interface count, CPU/memory — or exactly why it failed.
    */
   @Post('nas/:id/snmp-test')
-  snmpTest(@Param('id', ParseIntPipe) id: number) {
+  async snmpTest(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    await this.scope.assertNas(req.user, id);
     return this.health.testSnmp(id);
   }
 
   /** Device health history (CPU/memory/temperature/SNMP response) for the graphs. */
   @Get('nas/:id/health-history')
-  healthHistory(
+  async healthHistory(
     @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
     @Query('range') range?: string,
     @Query('metrics') metrics?: string,
   ) {
+    await this.scope.assertNas(req.user, id);
     return this.health.history(id, {
       range,
       metrics: metrics ? metrics.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
@@ -48,17 +52,20 @@ export class TelemetryController {
 
   /** Interfaces with their latest sample. */
   @Get('nas/:id/interfaces')
-  ifaces(@Param('id', ParseIntPipe) id: number) {
+  async ifaces(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    await this.scope.assertNas(req.user, id);
     return this.health.interfaces(id);
   }
 
   /** One interface's traffic/error history. */
   @Get('nas/:id/interfaces/:ifIndex/history')
-  ifaceHistory(
+  async ifaceHistory(
     @Param('id', ParseIntPipe) id: number,
     @Param('ifIndex', ParseIntPipe) ifIndex: number,
+    @Req() req: any,
     @Query('range') range?: string,
   ) {
+    await this.scope.assertNas(req.user, id);
     return this.health.interfaceHistory(id, ifIndex, range || '1h');
   }
 
@@ -77,29 +84,34 @@ export class TelemetryController {
 
   /** MRTG-style traffic for a NAS: range = 1h | 6h | 7d | 30d, optional vlan. */
   @Get('nas/:id/traffic')
-  nasTraffic(
+  async nasTraffic(
     @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
     @Query('range') range?: string,
     @Query('vlan') vlan?: string,
   ) {
+    await this.scope.assertNas(req.user, id);
     return this.monitor.traffic(id, range || '7d', vlan || undefined);
   }
 
   /** Current per-VLAN online + throughput breakdown for a NAS. */
   @Get('nas/:id/vlans')
-  nasVlans(@Param('id', ParseIntPipe) id: number) {
+  async nasVlans(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    await this.scope.assertNas(req.user, id);
     return this.monitor.vlanBreakdown(id);
   }
 
   /** Availability % + downtime windows for a NAS over N days. */
   @Get('nas/:id/uptime')
-  nasUptime(@Param('id', ParseIntPipe) id: number, @Query('days') days?: string) {
+  async nasUptime(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Query('days') days?: string) {
+    await this.scope.assertNas(req.user, id);
     return this.monitor.nasUptime(id, days ? +days : 7);
   }
 
   /** Link up/down + optical signal for every ONU on a NAS. */
   @Get('nas/:id/signals')
-  nasSignals(@Param('id', ParseIntPipe) id: number) {
+  async nasSignals(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    await this.scope.assertNas(req.user, id);
     return this.monitor.nasSignals(id);
   }
 
@@ -117,11 +129,13 @@ export class TelemetryController {
 
   /** Durable event log, optionally filtered to one NAS. */
   @Get('events')
-  events(@Query('nasId') nasId?: string, @Query('limit') limit?: string) {
+  async events(@Req() req: any, @Query('nasId') nasId?: string, @Query('limit') limit?: string) {
+    if (nasId) await this.scope.assertNas(req.user, Number(nasId));
     return this.telemetry.events({
       nasId: nasId ? Number(nasId) : undefined,
       limit: limit ? Number(limit) : 100,
-    });
+      actor: req.user,          // service filters to the caller's own devices
+    } as any);
   }
 
   /** Full live connection path + signal history for one subscriber. */

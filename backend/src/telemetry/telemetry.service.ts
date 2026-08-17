@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LinkAggregatorService } from './link-aggregator.service';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Read-side of link tracing: the live feed (from the aggregator's ring buffer
@@ -12,6 +13,7 @@ export class TelemetryService {
   constructor(
     private prisma: PrismaService,
     private aggregator: LinkAggregatorService,
+    private scope: ScopeService,
   ) {}
 
   /** Live sidebar feed — in-memory recent events (newest first). */
@@ -20,9 +22,25 @@ export class TelemetryService {
   }
 
   /** All network events for a NAS or globally, from the durable log. */
-  async events(opts: { nasId?: number; limit?: number } = {}) {
+  async events(opts: { nasId?: number; limit?: number; actor?: any } = {}) {
+    /**
+     * Events are per-device data, so the list must be limited to the devices the
+     * caller may see. Unscoped, a reseller could read every tenant's link-down,
+     * ONU-LOS and auth-failure events straight from this endpoint.
+     */
+    let where: any = opts.nasId ? { nasId: opts.nasId } : undefined;
+    if (opts.actor && !this.scope.isAdmin(opts.actor.role)) {
+      const allowed = await this.prisma.nas.findMany({
+        where: await this.scope.nasWhere(opts.actor),
+        select: { id: true },
+      });
+      const ids = allowed.map((n) => n.id);
+      where = opts.nasId
+        ? { nasId: ids.includes(opts.nasId) ? opts.nasId : -1 }
+        : { nasId: { in: ids.length ? ids : [-1] } };
+    }
     return this.prisma.networkLog.findMany({
-      where: opts.nasId ? { nasId: opts.nasId } : undefined,
+      where,
       orderBy: { loggedAt: 'desc' },
       take: Math.min(opts.limit || 100, 500),
       select: {

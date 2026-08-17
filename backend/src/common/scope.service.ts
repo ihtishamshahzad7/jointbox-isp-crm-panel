@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -252,6 +252,32 @@ export class ScopeService {
     if (this.isAdmin(actor?.role)) return {};
     const ids = await this.descendantIds(await this.rootId(actor));
     return { id: { in: ids } };
+  }
+
+  /**
+   * True if the actor may see/act on this NAS (owned, shared directly, or
+   * inherited from an ancestor — exactly the rules nasWhere() encodes).
+   */
+  async canAccessNas(actor: Actor, nasId: number): Promise<boolean> {
+    if (this.isAdmin(actor?.role)) return true;
+    const where = await this.nasWhere(actor);
+    const hit = await this.prisma.nas.findFirst({
+      where: Object.keys(where).length ? { AND: [{ id: nasId }, where] } : { id: nasId },
+      select: { id: true },
+    });
+    return !!hit;
+  }
+
+  /**
+   * Throwing guard for every per-device monitoring endpoint (health, graphs,
+   * interfaces, SNMP test, syslog…). Without it a reseller could read another
+   * tenant's router telemetry — or make our server probe it — just by changing
+   * the id in the URL. "Not found" rather than "forbidden", so ids can't be
+   * enumerated.
+   */
+  async assertNas(actor: Actor, nasId: number): Promise<void> {
+    if (await this.canAccessNas(actor, nasId)) return;
+    throw new NotFoundException(`NAS ${nasId} not found`);
   }
 
   /** True if the actor may see/act on this subscriber. */

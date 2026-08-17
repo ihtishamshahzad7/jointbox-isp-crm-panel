@@ -155,6 +155,10 @@ const PERMISSION_CATALOG = [
     { key: 'monitoring.read', label: 'View monitoring' },
     { key: 'monitoring.write', label: 'Add / edit / delete monitors' },
   ]},
+  { resource: 'telemetry', label: 'SNMP / Device Telemetry', actions: [
+    { key: 'telemetry.read', label: 'View device health & graphs' },
+    { key: 'telemetry.write', label: 'Run SNMP test / discover interfaces' },
+  ]},
   { resource: 'network', label: 'Network', actions: [
     { key: 'network.read', label: 'View live network' },
     { key: 'network.disconnect', label: 'Disconnect users' },
