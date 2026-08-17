@@ -231,7 +231,20 @@ export class ScopeService {
     if (this.isAdmin(actor?.role)) return {};
     const ids = await this.descendantIds(await this.rootId(actor));
     // subscribers owned by anyone in my subtree, or sold by anyone in my subtree
-    return { OR: [{ userId: { in: ids } }, { salespersonId: { in: ids } }] };
+    /**
+     * OWNERSHIP decides visibility — not who sold the customer.
+     *
+     * This used to also match `salespersonId IN subtree`, which leaked a
+     * PARENT-owned customer into a CHILD's list: set the salesperson to a
+     * dealer and that dealer could see (and edit / move / delete) a customer
+     * belonging to the ISP. Ownership is the tenancy boundary, so it is the
+     * only thing that may grant access.
+     *
+     * SALES staff are unaffected: rootId() already resolves a SALES user to
+     * their parent, so they still see everything their own account owns — the
+     * salesperson clause was redundant for them and harmful for everyone else.
+     */
+    return { userId: { in: ids } };
   }
 
   /** Prisma where-fragment limiting USERS (resellers) to the actor's descendants. */
@@ -247,13 +260,12 @@ export class ScopeService {
     const ids = await this.descendantIds(await this.rootId(actor));
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
-      select: { userId: true, salespersonId: true },
+      select: { userId: true },
     });
     if (!sub) return false;
-    return (
-      (sub.userId != null && ids.includes(sub.userId)) ||
-      (sub.salespersonId != null && ids.includes(sub.salespersonId))
-    );
+    // Ownership only — see subscriberWhere(). Matching on salespersonId let a
+    // child account act on a customer owned by its parent.
+    return sub.userId != null && ids.includes(sub.userId);
   }
 
   /** Throwing guard used by mutations. */
