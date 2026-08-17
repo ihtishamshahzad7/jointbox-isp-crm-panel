@@ -151,6 +151,10 @@ const PERMISSION_CATALOG = [
     { key: 'static-ips.write', label: 'Add / assign / release' },
     { key: 'static-ips.delete', label: 'Delete' },
   ]},
+  { resource: 'monitoring', label: 'Network Monitoring', actions: [
+    { key: 'monitoring.read', label: 'View monitoring' },
+    { key: 'monitoring.write', label: 'Add / edit / delete monitors' },
+  ]},
   { resource: 'network', label: 'Network', actions: [
     { key: 'network.read', label: 'View live network' },
     { key: 'network.disconnect', label: 'Disconnect users' },

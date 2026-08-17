@@ -35,6 +35,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { StaticIpModule } from './static-ip/static-ip.module';
 import { OutagesModule } from './outages/outages.module';
+import { MonitoringModule } from './monitoring/monitoring.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { TopologyModule } from './topology/topology.module';
 import { SetupModule } from './setup/setup.module';
@@ -84,6 +85,7 @@ import { GroupsModule } from './groups/groups.module';
     IntegrationsModule,
     StaticIpModule,
     OutagesModule,
+    MonitoringModule,
     ComplianceModule,
     TopologyModule,
     SetupModule,

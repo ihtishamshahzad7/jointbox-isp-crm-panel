@@ -612,6 +612,7 @@ model User {
   children User[]  @relation("UserParent")
   branch   Branch? @relation("BranchUsers", fields: [branchId], references: [id])
   walletTxs UserBalanceTransaction[] @relation("UserBalanceTxs")
+  monitorTargets MonitorTarget[] @relation("UserMonitorTargets")
 
   ownedSubscribers Subscriber[]  @relation("UserSubscribers")
   salesSubscribers Subscriber[]  @relation("SalespersonSubscribers")
@@ -2903,4 +2904,28 @@ model CoaRequest {
   @@index([subscriberId, createdAt])
   @@index([status])
   @@map("coa_request")
+}
+/// A host the operator wants pinged continuously (network monitoring page).
+/// Scoped to its owner's subtree so a parent's targets are private unless shared.
+model MonitorTarget {
+  id            Int      @id @default(autoincrement())
+  ownerId       Int?
+  groupName     String?  @db.VarChar(80)   // free-text group ("Core", "Towers", …)
+  name          String   @db.VarChar(120)  // friendly label
+  host          String   @db.VarChar(255)  // hostname or IP to ping
+  enabled       Boolean  @default(true)
+  intervalSec   Int      @default(30)
+  isUp          Boolean?                    // null = never checked yet
+  lastLatencyMs Float?
+  lastCheckedAt DateTime?
+  downSince     DateTime?                   // set when it goes down, cleared when up
+  lossPct       Float?                      // packet loss % of the last check
+  history       String?                     // JSON: last ~60 {t,ms,up} samples for the mini graph
+  createdAt     DateTime @default(now())
+
+  owner User? @relation("UserMonitorTargets", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([enabled])
+  @@map("monitor_target")
 }
