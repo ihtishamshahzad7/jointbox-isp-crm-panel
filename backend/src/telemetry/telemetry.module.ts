@@ -7,6 +7,7 @@ import { LinkAggregatorService } from './link-aggregator.service';
 import { SnmpPollerService } from './snmp-poller.service';
 import { SyslogReceiverService } from './syslog-receiver.service';
 import { NasMonitorService } from './nas-monitor.service';
+import { DeviceHealthService } from './device-health.service';
 
 /**
  * Real-time subscriber link tracing. Three optional-per-NAS collectors
@@ -22,7 +23,8 @@ import { NasMonitorService } from './nas-monitor.service';
     SnmpPollerService,
     SyslogReceiverService,
     NasMonitorService,
+    DeviceHealthService,
   ],
-  exports: [TelemetryService, LinkAggregatorService, NasMonitorService],
+  exports: [TelemetryService, LinkAggregatorService, NasMonitorService, DeviceHealthService],
 })
 export class TelemetryModule {}
