@@ -943,7 +943,7 @@ export default function NasPage() {
               <NasTable
                 rows={filteredNasList}
                 me={me}
-                onView={openView}
+                onView={(nas) => { router.push(`/nas/${nas.id}`); }}
                 onEdit={openEdit}
                 onShare={openShare}
                 onCheck={checkNas}
