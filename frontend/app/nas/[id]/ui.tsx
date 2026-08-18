@@ -78,7 +78,7 @@ export function Panel({ title, sub, actions, children, style, className }: {
           {actions && <div className="nd-panel-a">{actions}</div>}
         </header>
       )}
-      {children}
+      <div className="nd-panel-b">{children}</div>
     </section>
   );
 }
@@ -310,13 +310,14 @@ const CSS = `
 .nd-btn.warn{background:rgba(180,83,9,.1);border-color:rgba(180,83,9,.4);color:#B45309}
 .nd-btn.warn:hover{background:rgba(180,83,9,.18)}
 
+.nd-panel a{color:var(--accent);text-decoration:none}
 /* ── Panels / KPI ── */
 .nd-panel{background:var(--surface);border:1px solid var(--border);border-radius:9px;overflow:hidden}
-.nd-panel-h{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--surface-2)}
-.nd-panel-h h3{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
-.nd-panel-h p{font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.5}
+.nd-panel-h{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:7px 16px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+.nd-panel-h h3{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0}
+.nd-panel-h p{font-size:10.5px;color:var(--muted);margin:2px 0 0;line-height:1.5}
 .nd-panel-a{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.nd-panel>.nd-panel-b{padding:12px}
+.nd-panel>.nd-panel-b{padding:11px 16px}
 
 .nd-kpi{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 11px;min-width:0}
 .nd-kpi-top{display:flex;align-items:center;gap:6px;margin-bottom:4px}
@@ -441,9 +442,31 @@ const CSS = `
 /* Responsive */
 @media (max-width:900px){
   .nd-top{flex-direction:column}
+  .nd-two-col{grid-template-columns:1fr !important}
 }
 @media (max-width:640px){
   .nd-title h1{font-size:16px}
   .nd-healthbar .sep{display:none}
+  /* Give the body real side space on phones and let cards breathe */
+  .nd-panel-b{padding:10px 12px}
+  .nd-root{gap:10px}
+  .nd-kpi-grid{grid-template-columns:repeat(2,1fr)}
+  /* Dialogs go edge-to-edge on phones */
+  .nd-modal-back{padding:10px;align-items:flex-end}
+  .nd-modal{max-height:94vh;border-radius:14px 14px 0 0}
+  .nd-drawer-back{width:100%}
+  .nd-drawer{width:100% !important;max-width:100%;border-left:none}
+  /* Key/value rows stack so long values stay readable */
+  .nd-def-row{flex-direction:column;align-items:flex-start;gap:2px}
+  .nd-def dd{text-align:left;word-break:break-word}
+  /* Full-width search boxes in panel headers */
+  .nd-sub-q{width:100%}
+  .nd-panel-a{width:100%}
+  .nd-refresh{width:100%;justify-content:space-between}
+  .nd-tabs{padding:6px 0 8px}
+}
+@media (max-width:400px){
+  .nd-kpi-grid{grid-template-columns:1fr}
+  .nd-title-ic{display:none}
 }
 `;
