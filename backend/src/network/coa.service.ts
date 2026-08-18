@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,6 +34,23 @@ export class CoaService {
     private prisma: PrismaService,
     private mikrotik: MikrotikSyncService,
   ) {}
+
+  /**
+   * Usernames whose duplicate sessions we could NOT kill, and when to try again.
+   *
+   * WHY THIS EXISTS: the sweep runs every 2 minutes. When a session genuinely
+   * cannot be cut — the usual cause is the NAS API user lacking the `write`
+   * policy, so `/ppp/active/remove` is refused — retrying every 2 minutes
+   * forever achieves nothing except two fresh ERROR rows each time. One stuck
+   * account produced ~1,440 identical log rows a day and buried every other
+   * event in the Logs page.
+   *
+   * So: after a failed attempt we back off, and we log the failure ONCE per
+   * back-off window rather than on every pass. The problem is still visible —
+   * it just stops shouting the same sentence at the operator 720 times a day.
+   */
+  private readonly unkillable = new Map<string, { retryAfter: number; failures: number }>();
+  private static readonly RETRY_BACKOFF_MS = 30 * 60_000; // 30 minutes
 
   /** Look up the subscriber's current live session + its NAS (with CoA creds). */
   private async resolve(subscriberId: number) {
@@ -142,6 +160,11 @@ export class CoaService {
   /** Sweep for duplicate logins every 2 minutes and cut them automatically. */
   @Cron('*/2 * * * *')
   async duplicateSessionSweep() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     try {
       await this.disconnectDuplicateSessions();
     } catch (e: any) {
@@ -161,9 +184,17 @@ export class CoaService {
     let sessionsCut = 0;
     const users: string[] = [];
 
+    const now = Date.now();
     for (const d of dupes) {
       const username = d.username;
       const count = Number(d.sessions);
+
+      // BACK-OFF: a user we already failed to cut is skipped until the window
+      // expires. Without this the sweep re-attempted (and re-logged) the same
+      // impossible disconnect every 2 minutes indefinitely.
+      const cooling = this.unkillable.get(username);
+      if (cooling && cooling.retryAfter > now) continue;
+
       users.push(username);
 
       // Every open session for this user, each with the attributes CoA needs.
@@ -261,14 +292,33 @@ export class CoaService {
         // The router verifiably (or at least unverifiably) still has the user.
         // Do not pretend they are offline — surface it loudly so an operator
         // follows up, and keep the accounting rows OPEN so the UI shows online.
-        this.logger.error(`⛔ Simultaneous-Use: "${username}" is STILL ACTIVE on ${anyNas?.nasIp ?? 'unknown NAS'} after disconnect attempts.`);
+        const prior = this.unkillable.get(username);
+        const failures = (prior?.failures ?? 0) + 1;
+        this.unkillable.set(username, {
+          retryAfter: now + CoaService.RETRY_BACKOFF_MS,
+          failures,
+        });
+
+        const mins = Math.round(CoaService.RETRY_BACKOFF_MS / 60_000);
+        this.logger.error(`⛔ Simultaneous-Use: "${username}" is STILL ACTIVE on ${anyNas?.nasIp ?? 'unknown NAS'} after disconnect attempts (attempt ${failures}); backing off ${mins} min.`);
         await this.prisma.systemLog.create({
           data: {
             level: 'ERROR', source: 'simultaneous-use',
-            message: `"${username}" could not be fully disconnected — session(s) ${stillOpen.map((s) => s.acctsessionid).join(', ')} still open on ${anyNas?.nasIp ?? 'unknown NAS'} after CoA + MikroTik API kick.`,
-            metadata: JSON.stringify({ username, nasIp: anyNas?.nasIp ?? null, stillActiveSessions: stillOpen.map((s) => ({ acctsessionid: s.acctsessionid, nas: s.nasipaddress })), timestamp: new Date().toISOString() }),
+            message: `"${username}" could not be fully disconnected — session(s) ${stillOpen.map((s) => s.acctsessionid).join(', ')} still open on ${anyNas?.nasIp ?? 'unknown NAS'} after CoA + MikroTik API kick. ` +
+              `Attempt ${failures}; not retrying for ${mins} minutes. ` +
+              `Most common cause: the NAS API user lacks the "write" policy, so /ppp/active/remove is refused — check System → Users → Groups on the router.`,
+            metadata: JSON.stringify({
+              username, nasIp: anyNas?.nasIp ?? null, failures,
+              retryAfter: new Date(now + CoaService.RETRY_BACKOFF_MS).toISOString(),
+              stillActiveSessions: stillOpen.map((s) => ({ acctsessionid: s.acctsessionid, nas: s.nasipaddress })),
+              timestamp: new Date().toISOString(),
+            }),
           },
         }).catch(() => null);
+      } else {
+        // Fully resolved — clear any back-off so a future recurrence is acted
+        // on immediately rather than silently waiting out a stale window.
+        this.unkillable.delete(username);
       }
 
       // Close ONLY the accounting rows whose sessions were actually terminated.

@@ -5,6 +5,7 @@ import { ScopeService, Actor } from '../common/scope.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { NetworkService } from '../network/network.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * FupService — Fair Usage Policy enforcement.
@@ -184,6 +185,11 @@ export class FupService {
    */
   @Cron('15 * * * *')
   async enforce() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (process.env.FUP_ENABLED === 'false') return;
     try {
       // Per-package action, resolved per subscriber:

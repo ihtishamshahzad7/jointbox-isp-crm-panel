@@ -8,6 +8,7 @@ import { SubscribersService } from '../subscribers/subscribers.service';
 import { NetworkService } from '../network/network.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * StaticIpService — allocation, billing and lifecycle of routable addresses.
@@ -713,6 +714,11 @@ export class StaticIpService {
    */
   @Cron('30 3 * * *')
   async expirySweep() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     try {
       const overdue = await this.prisma.staticIp.findMany({
         where: { status: 'ASSIGNED', expiresAt: { lt: new Date() } },
@@ -746,6 +752,11 @@ export class StaticIpService {
    */
   @Cron('45 3 * * *')
   async billRenewals() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     try {
       const due = await this.prisma.staticIp.findMany({
         where: {

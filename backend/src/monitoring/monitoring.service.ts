@@ -4,6 +4,7 @@ import { execFile } from 'child_process';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * Network monitoring — continuously pings the hosts each account adds, keeps a
@@ -167,6 +168,11 @@ export class MonitoringService {
   // ── Poller ───────────────────────────────────────────────────
   @Cron(CronExpression.EVERY_30_SECONDS)
   async poll() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (this.polling) return; // don't overlap slow runs
     this.polling = true;
     try {
@@ -189,6 +195,11 @@ export class MonitoringService {
   /** Nightly: drop samples older than the retention window (default 30 days). */
   @Cron('20 3 * * *')
   async pruneSamples() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     const days = Number(process.env.MONITOR_RETENTION_DAYS || 30);
     const cutoff = new Date(Date.now() - days * 86400_000);
     const { count } = await this.prisma.monitorSample.deleteMany({ where: { at: { lt: cutoff } } });

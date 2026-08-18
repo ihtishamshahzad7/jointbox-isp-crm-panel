@@ -5,6 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { isPrimaryInstance } from './cluster-util';
 
 const execAsync = promisify(exec);
 
@@ -77,6 +78,11 @@ export class BackupService implements OnModuleInit {
   /** Nightly at 02:00 — before the billing jobs at 00:30/01:00/02:00 finish. */
   @Cron('0 2 * * *')
   async scheduled() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (!this.enabled) return;
     await this.run();
   }

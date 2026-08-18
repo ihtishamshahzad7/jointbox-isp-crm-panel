@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * KycService — identity verification for connections.
@@ -354,6 +355,11 @@ export class KycService {
    */
   @Cron('0 5 * * *')
   async expirySweep() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     try {
       const res = await this.prisma.subscriber.updateMany({
         where: { cnicExpiry: { lt: new Date() }, kycStatus: { in: ['VERIFIED', 'PENDING'] } },

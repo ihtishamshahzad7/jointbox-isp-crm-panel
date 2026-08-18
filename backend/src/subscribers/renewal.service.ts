@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 export type RenewMode = 'FULL' | 'DAYS' | 'DATE' | 'BALANCE' | 'CREDIT';
 
@@ -380,6 +381,11 @@ export class RenewalService {
    */
   @Cron('30 6 * * *')
   async flagDefaults() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     try {
       const overdue = await this.prisma.creditExtension.findMany({
         where: { status: 'OUTSTANDING', dueDate: { lt: new Date() } },

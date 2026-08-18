@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import * as crypto from 'crypto';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * WebhooksService — outbound event notifications.
@@ -256,6 +257,11 @@ export class WebhooksService {
    */
   @Cron('*/5 * * * *')
   async retryFailed() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (process.env.WEBHOOKS_ENABLED === 'false') return;
     try {
       const due = await this.prisma.webhookDelivery.findMany({
@@ -300,6 +306,11 @@ export class WebhooksService {
   /** Housekeeping — delivery logs would otherwise grow without limit. */
   @Cron('0 4 * * *')
   async pruneDeliveries() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     const days = Number(process.env.WEBHOOK_LOG_RETAIN_DAYS || 30);
     const cutoff = new Date(Date.now() - days * 86400_000);
     const res = await this.prisma.webhookDelivery

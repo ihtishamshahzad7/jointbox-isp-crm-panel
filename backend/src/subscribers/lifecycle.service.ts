@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * LifecycleService — the automated billing lifecycle (dunning).
@@ -39,6 +40,11 @@ export class LifecycleService {
   /** 07:10 daily — after the credit-default sweep at 06:30. */
   @Cron('10 7 * * *')
   async dailySweep() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     try {
       const now = new Date();
       const reminders = this.reminderDays;

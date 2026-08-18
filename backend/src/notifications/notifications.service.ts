@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../common/queue.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * Phase 2 communication engine.
@@ -280,6 +281,11 @@ export class NotificationsService implements OnModuleInit {
   // ── Expiry reminder cron (09:00 daily) ────────────────────────
   @Cron('0 9 * * *')
   async cronExpiryReminders() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if ((process.env.BILLING_AUTOMATION || 'on').toLowerCase() === 'off') return;
     const reminderDays = (process.env.EXPIRY_REMINDER_DAYS || '3,1,0')
       .split(',')

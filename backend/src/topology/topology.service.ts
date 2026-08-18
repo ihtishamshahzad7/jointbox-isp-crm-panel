@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * TopologyService — learns and traces the transmission path.
@@ -127,6 +128,11 @@ export class TopologyService {
    */
   @Cron('0 */10 * * * *')
   async learnFromSessions() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (process.env.TOPOLOGY_AUTODETECT === 'false') return;
     try {
       // Latest session per user carrying a port id, over the last week.

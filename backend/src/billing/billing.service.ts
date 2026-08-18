@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NetworkService } from '../network/network.service';
 import { WebhooksService } from '../integrations/webhooks.service';
 import { ProrationService } from './proration.service';
+import { isPrimaryInstance } from '../common/cluster-util';
 
 /**
  * Phase 1 billing automation.
@@ -52,14 +53,29 @@ export class BillingService {
   // ── Cron triggers ─────────────────────────────────────────────
   @Cron('30 0 * * *')
   cronAutoInvoice() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (this.enabled) void this.queue.add('billing-auto-invoice');
   }
   @Cron('0 1 * * *')
   cronAutoRenewal() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (this.enabled) void this.queue.add('billing-auto-renewal');
   }
   @Cron('0 2 * * *')
   cronSuspension() {
+    // CLUSTER GUARD — background work must run on ONE process only.
+    // Without this the cron fired on every pm2 instance (11 web + 1 worker
+    // = 12 concurrent runs of the same job), which duplicated side effects
+    // and flooded the logs with identical rows.
+    if (!isPrimaryInstance()) return;
     if (this.enabled) void this.queue.add('billing-suspension');
   }
 
