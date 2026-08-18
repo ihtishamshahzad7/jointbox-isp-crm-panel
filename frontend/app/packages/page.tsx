@@ -5,6 +5,8 @@ import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
 import { silent } from "../components/silent";
 import { PackageShareModal } from "./package-share-modal";
+import PackageDetailDrawer from "./package-detail-drawer";
+import PackageImpactModal from "./impact-modal";
 
 const API = API_BASE;
 
@@ -154,10 +156,12 @@ export default function PackagesPage() {
   const [showPolicyModal, setShowPolicyModal] = useState(false);
   const [showAllocationModal, setShowAllocationModal] = useState(false);
   const [showSubscribersModal, setShowSubscribersModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [sharePackage, setSharePackage] = useState<PackageRow | null>(null);
   const [showImport, setShowImport] = useState(false);
+  // Detail drawer + impact-aware destruction (archive vs delete).
+  const [viewingPackage, setViewingPackage] = useState<PackageRow | null>(null);
+  const [impactPackage, setImpactPackage] = useState<PackageRow | null>(null);
 
   // Group-based package filters used by the package list UI
   const [franchiseGroups, setFranchiseGroups] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
@@ -238,13 +242,19 @@ export default function PackagesPage() {
   );
 
   const { data: stats, mutate: mutateStats } = useSWR<Stats>(token ? `${API}/packages/stats` : null, fetcher);
+  // Real revenue per package — the reports analytics packageMix (same numbers
+  // the Reports page shows). ISP sees it on the stat band.
+  const { data: revenueMix, mutate: mutateRevenue } = useSWR<{ rows: any[]; totals: { subscribers: number; monthlyRevenue: number; arpu: number } }>(
+    token && isIsp ? `${API}/reports/analytics/packages` : null,
+    fetcher
+  );
   const { data: pools } = useSWR<Array<{ id: number; name: string }>>(token ? `${API}/ip-pools` : null, fetcher);
   const { data: options, mutate: mutateOptions } = useSWR<{ taxes: Tax[]; policies: Policy[]; allocations: Allocation[] }>(
     token ? `${API}/packages/options` : null,
     fetcher
   );
 
-  const { data: packageSubscribers, mutate: mutateSubscribers } = useSWR<any[]>(
+  const { data: packageSubscribers, mutate: mutateSubscribers } = useSWR<{ subscribers: any[]; total: number }>(
     token && selectedPackage && showSubscribersModal ? `${API}/packages/${selectedPackage.id}/subscribers` : null,
     fetcher
   );
@@ -330,6 +340,25 @@ export default function PackagesPage() {
     if (!packageForm.name.trim()) return showToast("Name is required", "err");
     if (!packageForm.price.trim()) return showToast("Price is required", "err");
 
+    // Editing a plan that subscribers are on changes what those customers are
+    // running — require the "who will this affect?" confirmation first. The
+    // impact modal fetches real counts, then calls submitPackage again via
+    // onConfirmEdit.
+    if (editingPackage && editingPackage._count?.subscribers && editingPackage._count.subscribers > 0) {
+      setSelectedPackage(editingPackage);
+      setImpactPackage(editingPackage);
+      setImpactIntent("edit");
+      return;
+    }
+    await doSubmitPackage();
+  };
+
+  const doSubmitPackage = async () => {
+    if (!packageForm.name.trim()) return showToast("Name is required", "err");
+    if (!packageForm.price.trim()) return showToast("Price is required", "err");
+    setSelectedPackage(null);
+    setImpactPackage(null);
+
     const payload = {
       name: packageForm.name,
       description: packageForm.description,
@@ -403,7 +432,16 @@ export default function PackagesPage() {
 
       setShowPackageModal(false);
       await Promise.all([mutatePackages(), mutateStats()]);
-      showToast(editingPackage ? "✅ Package updated" : "✅ Package created", "ok");
+      // Backend returns FUP-sanity warnings (e.g. throttle faster than plan
+      // speed, FUP speeds without quota). Show them — the plan saved, but the
+      // config has a real problem the operator should fix.
+      const body: any = await res.json().catch(() => null);
+      const warnings: string[] = Array.isArray(body?.warnings) ? body.warnings : [];
+      if (warnings.length) {
+        showToast(`${editingPackage ? "Package updated" : "Package created"} — ⚠ ${warnings[0]}`, "warn");
+      } else {
+        showToast(editingPackage ? "✅ Package updated" : "✅ Package created", "ok");
+      }
     } catch (error: any) {
       if (!error?.__handled) showToast(error?.message || "Failed to save package", "err");
       throw error;
@@ -411,6 +449,15 @@ export default function PackagesPage() {
   };
 
   const togglePackageStatus = async (pkg: PackageRow) => {
+    // Disabling an active plan affects the people on it — route through the
+    // impact confirmation (same "who will this affect?" rule as archive).
+    // Re-enabling is safe and direct.
+    if (pkg.isActive) {
+      setSelectedPackage(pkg);
+      setImpactPackage(pkg);
+      setImpactIntent("archive");
+      return;
+    }
     try {
       const res = await fetch(`${API}/packages/${pkg.id}/toggle`, {
         method: "PATCH",
@@ -419,11 +466,11 @@ export default function PackagesPage() {
           Authorization: `Bearer ${token || ""}`,
         },
       });
-      if (!res.ok) return showToast("Failed to toggle status", "err");
+      if (!res.ok) return showToast("Failed to enable package", "err");
       await Promise.all([mutatePackages(), mutateStats()]);
-      showToast("Status updated", "ok");
+      showToast("Package enabled", "ok");
     } catch (error) {
-      showToast("Failed to toggle status", "err");
+      showToast("Failed to enable package", "err");
     }
   };
 
@@ -444,24 +491,24 @@ export default function PackagesPage() {
     }
   };
 
-  const deletePackage = async () => {
-    if (!selectedPackage) return;
-    try {
-      const res = await fetch(`${API}/packages/${selectedPackage.id}`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token || ""}`,
-        },
-      });
-      if (!res.ok) return showToast("Delete failed", "err");
-      setShowDeleteModal(false);
-      setSelectedPackage(null);
-      await Promise.all([mutatePackages(), mutateStats()]);
-      showToast("Package deleted", "ok");
-    } catch (error) {
-      showToast("Delete failed", "err");
-    }
+  // Impact-aware destruction: the modal fetches real subscriber/reseller/group
+  // counts from the overview endpoint, then archives (subscribers present) or
+  // deletes (only when the backend will accept it). No generic "Delete failed".
+  const openDestruction = (pkg: PackageRow) => {
+    setSelectedPackage(pkg);
+    setImpactPackage(pkg);
+    setImpactIntent("delete");
+  };
+
+  // Disabling an active plan = archive intent: always offer Archive even with
+  // zero subscribers (it is not a delete request).
+  const [impactIntent, setImpactIntent] = useState<"delete" | "archive" | "edit">("delete");
+
+  const afterDestroyed = async (msg: string) => {
+    setSelectedPackage(null);
+    setImpactPackage(null);
+    await Promise.all([mutatePackages(), mutateStats(), mutateRevenue()]);
+    showToast(msg, "ok");
   };
 
   const createTax = async () => {
@@ -576,6 +623,10 @@ export default function PackagesPage() {
           { label: "Active Packages", value: stats?.active ?? 0, color: "#10B981" },
           { label: "Inactive Packages", value: stats?.inactive ?? 0, color: "#ff7070" },
           { label: "Subscribers on Packages", value: stats?.totalSubscribers ?? 0, color: "#f0a500" },
+          ...(isIsp && revenueMix ? [
+            { label: "Monthly Revenue (active)", value: money(revenueMix.totals?.monthlyRevenue), color: "#6C3CE1" },
+            { label: "ARPU", value: money(revenueMix.totals?.arpu), color: "#0ea5e9" },
+          ] : []),
         ].map((s) => (
           <div
             key={s.label}
@@ -876,9 +927,10 @@ export default function PackagesPage() {
             rows={pagedPackages}
             isIsp={isIsp}
             money={money}
+            onView={(pkg) => setViewingPackage(pkg)}
             onEdit={openEditPackage}
             onToggle={togglePackageStatus}
-            onDelete={(pkg) => { setSelectedPackage(pkg); setShowDeleteModal(true); }}
+            onDelete={openDestruction}
             onPrice={() => { window.location.href = "/pricing"; }}
             onViewSubs={(pkg) => { setSelectedPackage(pkg); setShowSubscribersModal(true); mutateSubscribers(); }}
             onDuplicate={duplicatePackage}
@@ -1369,15 +1421,25 @@ export default function PackagesPage() {
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontFamily: "monospace", textTransform: "uppercase", color: "rgba(255,255,255,0.3)" }}>Name</th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontFamily: "monospace", textTransform: "uppercase", color: "rgba(255,255,255,0.3)" }}>Username</th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontFamily: "monospace", textTransform: "uppercase", color: "rgba(255,255,255,0.3)" }}>Phone</th>
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontFamily: "monospace", textTransform: "uppercase", color: "rgba(255,255,255,0.3)" }}>Sell price</th>
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontFamily: "monospace", textTransform: "uppercase", color: "rgba(255,255,255,0.3)" }}>Expiry</th>
                     <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontFamily: "monospace", textTransform: "uppercase", color: "rgba(255,255,255,0.3)" }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(packageSubscribers || []).map((s) => (
+                  {(packageSubscribers?.subscribers || []).map((s) => (
                     <tr key={s.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
                       <td style={{ padding: "12px 16px", fontSize: "13px" }}>{s.fullName}</td>
                       <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.5)" }}>{s.username}</td>
                       <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.5)" }}>{s.phone}</td>
+                      <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.6)", fontVariantNumeric: "tabular-nums" }}>
+                        {s.sellPrice != null ? money(s.sellPrice) : "—"}
+                      </td>
+                      <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.5)" }}>
+                        {s.serviceSettings?.expiryDate
+                          ? new Date(s.serviceSettings.expiryDate).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" })
+                          : "—"}
+                      </td>
                       <td style={{ padding: "12px 16px", fontSize: "13px" }}>
                         <span style={{
                           padding: "2px 12px",
@@ -1392,9 +1454,9 @@ export default function PackagesPage() {
                       </td>
                     </tr>
                   ))}
-                  {(packageSubscribers || []).length === 0 && (
+                  {(packageSubscribers?.subscribers || []).length === 0 && (
                     <tr>
-                      <td colSpan={4} style={{ padding: "24px", textAlign: "center", color: "rgba(255,255,255,0.3)" }}>
+                      <td colSpan={6} style={{ padding: "24px", textAlign: "center", color: "rgba(255,255,255,0.3)" }}>
                         No subscribers on this package
                       </td>
                     </tr>
@@ -1402,29 +1464,38 @@ export default function PackagesPage() {
                 </tbody>
               </table>
             </div>
+            <div style={{ textAlign: "right", fontSize: "12px", color: "rgba(255,255,255,0.35)", marginTop: "10px" }}>
+              {packageSubscribers?.total ?? 0} subscriber(s) on this plan
+            </div>
           </div>
         </div></Portal>
       )}
 
       {/* ============================================================ */}
-      {/* DELETE CONFIRMATION MODAL */}
+      {/* DESTRUCTION MODAL (impact-aware archive/delete) */}
       {/* ============================================================ */}
-      {showDeleteModal && selectedPackage && (
-        <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowDeleteModal(false)}>
-          <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "450px", width: "100%" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "48px", marginBottom: "12px" }}>🗑️</div>
-              <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff", marginBottom: "8px" }}>Delete Package</h2>
-              <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.4)" }}>
-                Are you sure you want to delete <strong style={{ color: "#fff" }}>{selectedPackage.name}</strong>? This action cannot be undone.
-              </p>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "20px", paddingTop: "16px", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-              <button style={{ padding: "10px 24px", borderRadius: "10px", fontSize: "13px", fontWeight: "600", border: "1px solid rgba(255,255,255,0.06)", cursor: "pointer", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.4)" }} onClick={() => setShowDeleteModal(false)}>Cancel</button>
-              <button style={{ padding: "10px 24px", borderRadius: "10px", fontSize: "13px", fontWeight: "600", border: "none", cursor: "pointer", background: "rgba(127,29,29,0.8)", color: "#fecaca" }} onClick={deletePackage}>Delete Forever</button>
-            </div>
-          </div>
-        </div></Portal>
+      {impactPackage && (
+        <PackageImpactModal
+          pkg={impactPackage}
+          token={token}
+          intent={impactIntent}
+          onClose={() => { setImpactPackage(null); setSelectedPackage(null); }}
+          onConfirmEdit={() => doSubmitPackage()}
+          onArchived={() => afterDestroyed(impactIntent === "archive" ? "Package disabled — existing customers keep running" : "Package archived — existing customers keep running")}
+          onDeleted={() => afterDestroyed("Package deleted")}
+        />
+      )}
+
+      {/* ============================================================ */}
+      {/* DETAIL DRAWER */}
+      {/* ============================================================ */}
+      {viewingPackage && (
+        <PackageDetailDrawer
+          id={viewingPackage.id}
+          token={token}
+          onClose={() => setViewingPackage(null)}
+          onChanged={() => { mutatePackages(); mutateStats(); }}
+        />
       )}
 
       {/* ============================================================ */}

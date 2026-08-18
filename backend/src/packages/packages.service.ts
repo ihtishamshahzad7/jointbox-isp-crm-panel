@@ -98,6 +98,125 @@ export class PackagesService {
     void this.cache.delPrefix('packages:');
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // AUDIT  — every package mutation lands in ActivityLog so the
+  // detail drawer can show a real change history.
+  // ─────────────────────────────────────────────────────────────
+  private async audit(action: string, packageId: number, details: any, actor?: Actor) {
+    try {
+      await this.prisma.activityLog.create({
+        data: {
+          userId: actor ? this.scope.actorId(actor) : null,
+          action,
+          entity: 'Package',
+          entityId: packageId,
+          details: details ? JSON.stringify(details) : null,
+        },
+      });
+    } catch (e) {
+      console.error('Package audit log failed:', (e as Error)?.message || e);
+    }
+  }
+
+  /**
+   * Shared numeric validation for create/update. Throws BadRequestException on
+   * unparseable, empty-required, or negative values; returns human-readable
+   * warnings like "FUP speed is higher than the package speed" so the UI can
+   * surface them without ever faking success.
+   *
+   * Semantics per key:
+   *   - undefined            → untouched (update) / falls back to defaults (create)
+   *   - null / ''            → clears a nullable field; ERROR for required fields
+   *   - number / numeric str → validated and returned
+   */
+  private validateNumbers(
+    data: any,
+    existing?: any,
+  ): { warnings: string[]; numbers: { [k: string]: number | null | undefined } } {
+    const warnings: string[] = [];
+    const required = new Set(['price', 'duration', 'downloadSpeed', 'uploadSpeed']);
+    const keys = [
+      'price', 'duration', 'downloadSpeed', 'uploadSpeed',
+      'burstDownload', 'burstUpload', 'burstThreshold', 'burstTime',
+      'dataQuotaGb', 'fupDownloadSpeed', 'fupUploadSpeed',
+    ];
+
+    const numbers: { [k: string]: number | null | undefined } = {};
+    for (const key of keys) {
+      const v = data[key];
+      if (v === undefined) { numbers[key] = undefined; continue; }
+      if (v === null || v === '') {
+        if (required.has(key)) {
+          throw new BadRequestException(`${key} cannot be empty`);
+        }
+        numbers[key] = null;
+        continue;
+      }
+      const n = Number(v);
+      if (!Number.isFinite(n)) {
+        throw new BadRequestException(`${key} must be a valid number, got "${v}"`);
+      }
+      numbers[key] = n;
+    }
+
+    const isNum = (v: any): v is number => typeof v === 'number';
+    if (isNum(numbers.price) && numbers.price < 0) throw new BadRequestException('Price cannot be negative');
+    if (isNum(numbers.downloadSpeed) && numbers.downloadSpeed <= 0) throw new BadRequestException('Download speed must be greater than 0');
+    if (isNum(numbers.uploadSpeed) && numbers.uploadSpeed <= 0) throw new BadRequestException('Upload speed must be greater than 0');
+    if (isNum(numbers.duration) && numbers.duration <= 0) throw new BadRequestException('Duration must be greater than 0');
+    if (isNum(numbers.dataQuotaGb) && numbers.dataQuotaGb < 0) throw new BadRequestException('Data quota cannot be negative');
+
+    // FUP sanity — throttling faster than the plan speed would never engage,
+    // and a throttle with no quota would never trigger. Surface as warnings;
+    // the editor shows them and still allows saving an explicit choice.
+    const pick = (k: string): number | undefined =>
+      isNum(numbers[k]) ? numbers[k]! : (existing ? existing[k] ?? undefined : undefined);
+    const dl = pick('downloadSpeed');
+    const ul = pick('uploadSpeed');
+    const quota = pick('dataQuotaGb');
+    const fupDl = pick('fupDownloadSpeed');
+    const fupUl = pick('fupUploadSpeed');
+    if (quota && fupDl && dl && fupDl > dl) {
+      warnings.push(`FUP download speed (${fupDl} Mbps) is faster than the package speed (${dl} Mbps) — the throttle would never engage.`);
+    }
+    if (quota && fupUl && ul && fupUl > ul) {
+      warnings.push(`FUP upload speed (${fupUl} Mbps) is faster than the package speed (${ul} Mbps) — the throttle would never engage.`);
+    }
+    if ((fupDl || fupUl) && !quota) {
+      warnings.push('FUP speeds are set but there is no data quota — the throttle would never trigger.');
+    }
+    return { warnings, numbers };
+  }
+
+  /** Humanized FUP semantics; null quota = unlimited, quota without FUP speeds = not enforced (sweep only throttles packages with FUP speeds: fup.service filters package fupDownloadSpeed not null). */
+  private fupInfo(pkg: any) {
+    const quota = pkg.dataQuotaGb;
+    const dl = pkg.fupDownloadSpeed;
+    const ul = pkg.fupUploadSpeed;
+    if (!quota) return { quotaGb: null, mode: 'UNLIMITED', download: null, upload: null, label: 'Unlimited (no quota)' };
+    if (!dl && !ul) return { quotaGb: quota, mode: 'NO_THROTTLE', download: null, upload: null, label: `${quota} GB quota, no FUP speeds — not enforced by the sweep` };
+    return { quotaGb: quota, mode: 'THROTTLE', download: dl, upload: ul, label: `${quota} GB then ↓${dl ?? '—'} ↑${ul ?? '—'} Mbps` };
+  }
+
+  /** Derive health/configuration checks from real package data. */
+  private healthChecks(pkg: any, detail: { subscribers: number; resellers: number; hasPool: boolean }): any[] {
+    const checks: any[] = [];
+    if (!pkg.isActive) checks.push({ level: 'warn', code: 'INACTIVE', message: 'Package is deactivated — new sign-ups are blocked.' });
+    if (detail.subscribers === 0) checks.push({ level: 'info', code: 'NO_SUBSCRIBERS', message: 'No subscribers are currently on this package.' });
+    if (!detail.hasPool) checks.push({ level: 'warn', code: 'NO_POOL', message: 'No IP pool assigned — dynamic address assignment may fall back to the NAS default.' });
+    if (!pkg.dataQuotaGb) checks.push({ level: 'info', code: 'NO_QUOTA', message: 'No data quota — usage is unlimited.' });
+    const quota = pkg.dataQuotaGb;
+    const dl = pkg.fupDownloadSpeed;
+    const ul = pkg.fupUploadSpeed;
+    if (quota && ((dl && dl > pkg.downloadSpeed) || (ul && ul > pkg.uploadSpeed))) {
+      checks.push({ level: 'warn', code: 'FUP_ABOVE_PACKAGE', message: 'FUP speed is faster than the package speed — the throttle would never engage.' });
+    }
+    if ((dl || ul) && !quota) checks.push({ level: 'warn', code: 'FUP_NO_QUOTA', message: 'FUP speeds set without a data quota — the throttle would never trigger.' });
+    if (!(pkg.settings?.policyIds?.length)) checks.push({ level: 'info', code: 'NO_POLICIES', message: 'No RADIUS policies linked — standard rate limit only.' });
+    if (detail.resellers === 0) checks.push({ level: 'info', code: 'NO_RESELLERS', message: 'No reseller price assignments yet.' });
+    return checks;
+  }
+
   private defaultStore(): PackagesStore {
     return {
       packageSettings: [],
@@ -343,8 +462,11 @@ export class PackagesService {
     return { total: rows.length, success, failed, errors };
   }
 
-  async create(data: any) {
+  async create(data: any, actor?: Actor) {
     const poolId = data.poolId ? parseInt(data.poolId) : null;
+
+    // ── Numeric validation before anything hits the DB
+    const { warnings, numbers } = this.validateNumbers(data);
 
     // ── One-pool-per-package check
     if (poolId) {
@@ -352,29 +474,39 @@ export class PackagesService {
       // throws ConflictException if the pool is already taken
     }
 
+    // Duplicate-name check — warn, don't hard-block, but make it visible.
+    const nameClash = await this.prisma.package.findFirst({
+      where: { name: { equals: data.name, mode: 'insensitive' } },
+      select: { id: true, name: true },
+    });
+    if (nameClash) {
+      warnings.push(`A package named "${nameClash.name}" already exists (id ${nameClash.id}). Duplicate names confuse subscribers being assigned plans.`);
+    }
+
     const created = await this.prisma.package.create({
       data: {
         name:           data.name,
-        price:          parseFloat(data.price),
+        price:          numbers.price !== undefined && numbers.price !== null ? numbers.price
+                          : (() => { throw new BadRequestException('Price is required'); })(),
         description:    data.description   || null,
-        duration:       data.duration      ? parseInt(data.duration)      : 30,
+        duration:       numbers.duration ?? 30,
         isActive:       data.isActive !== undefined ? data.isActive : true,
 
         // Speed fields (Mbps)
-        downloadSpeed:  data.downloadSpeed  ? parseInt(data.downloadSpeed)  : 10,
-        uploadSpeed:    data.uploadSpeed    ? parseInt(data.uploadSpeed)    : 5,
-        burstDownload:  data.burstDownload  ? parseInt(data.burstDownload)  : null,
-        burstUpload:    data.burstUpload    ? parseInt(data.burstUpload)    : null,
-        burstThreshold: data.burstThreshold ? parseInt(data.burstThreshold) : null,
-        burstTime:      data.burstTime      ? parseInt(data.burstTime)      : null,
+        downloadSpeed:  numbers.downloadSpeed ?? 10,
+        uploadSpeed:    numbers.uploadSpeed ?? 5,
+        burstDownload:  numbers.burstDownload ?? null,
+        burstUpload:    numbers.burstUpload ?? null,
+        burstThreshold: numbers.burstThreshold ?? null,
+        burstTime:      numbers.burstTime ?? null,
 
         // FUP: allowance and the reduced speed applied once it is used up.
         // These live on the Package table (not just the settings store)
         // because the hourly enforcement sweep reads them straight from the
         // database — a value only in settings would never be enforced.
-        dataQuotaGb:      data.dataQuotaGb      ? parseInt(data.dataQuotaGb)      : null,
-        fupDownloadSpeed: data.fupDownloadSpeed ? parseInt(data.fupDownloadSpeed) : null,
-        fupUploadSpeed:   data.fupUploadSpeed   ? parseInt(data.fupUploadSpeed)   : null,
+        dataQuotaGb:      numbers.dataQuotaGb ?? null,
+        fupDownloadSpeed: numbers.fupDownloadSpeed ?? null,
+        fupUploadSpeed:   numbers.fupUploadSpeed ?? null,
 
         // Pool relation
         poolId,
@@ -414,6 +546,11 @@ export class PackagesService {
     });
 
     this.invalidateCache();
+    await this.audit('PACKAGE_CREATE', created.id, {
+      name: created.name, price: created.price, downloadSpeed: created.downloadSpeed,
+      uploadSpeed: created.uploadSpeed, dataQuotaGb: created.dataQuotaGb, poolId,
+      ...(warnings.length ? { warnings } : {}),
+    }, actor);
     return {
       ...created,
       serviceType: settings.serviceType,
@@ -421,6 +558,7 @@ export class PackagesService {
       invoiceDescription: settings.invoiceDescription,
       dataQuotaGb: created.dataQuotaGb ?? settings.dataQuotaGb,
       settings,
+      warnings,
     };
   }
 
@@ -428,9 +566,12 @@ export class PackagesService {
   // UPDATE
   // If poolId changes, check the new pool is not taken by another package
   // ─────────────────────────────────────────────────────────────
-  async update(id: number, data: any) {
+  async update(id: number, data: any, actor?: Actor) {
     const existing = await this.prisma.package.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Package not found');
+
+    // ── Numeric validation — undefined keys keep their current value
+    const { warnings, numbers } = this.validateNumbers(data, existing);
 
     // Determine the new poolId (undefined = don't change, null = remove, number = assign)
     let poolId: number | null | undefined = undefined;
@@ -448,23 +589,25 @@ export class PackagesService {
       where: { id },
       data: {
         name:           data.name,
-        price:          data.price          !== undefined ? parseFloat(data.price)          : undefined,
+        // Required, non-nullable fields: null was already rejected by
+        // validateNumbers, so ?undefined here just satisfies TS.
+        price:          numbers.price ?? undefined,
         description:    data.description,
-        duration:       data.duration       !== undefined ? parseInt(data.duration)         : undefined,
+        duration:       numbers.duration ?? undefined,
         isActive:       data.isActive,
 
         // Speed fields
-        downloadSpeed:  data.downloadSpeed  !== undefined ? parseInt(data.downloadSpeed)  : undefined,
-        uploadSpeed:    data.uploadSpeed    !== undefined ? parseInt(data.uploadSpeed)    : undefined,
-        burstDownload:  data.burstDownload  !== undefined ? (data.burstDownload ? parseInt(data.burstDownload) : null) : undefined,
-        burstUpload:    data.burstUpload    !== undefined ? (data.burstUpload   ? parseInt(data.burstUpload)   : null) : undefined,
-        burstThreshold: data.burstThreshold !== undefined ? (data.burstThreshold ? parseInt(data.burstThreshold) : null) : undefined,
-        burstTime:      data.burstTime      !== undefined ? (data.burstTime      ? parseInt(data.burstTime)      : null) : undefined,
+        downloadSpeed:  numbers.downloadSpeed ?? undefined,
+        uploadSpeed:    numbers.uploadSpeed ?? undefined,
+        burstDownload:  numbers.burstDownload ?? undefined,
+        burstUpload:    numbers.burstUpload ?? undefined,
+        burstThreshold: numbers.burstThreshold ?? undefined,
+        burstTime:      numbers.burstTime ?? undefined,
 
         // FUP — see create(). Mirrored onto the table so the sweep can read it.
-        dataQuotaGb:      data.dataQuotaGb      !== undefined ? (data.dataQuotaGb      ? parseInt(data.dataQuotaGb)      : null) : undefined,
-        fupDownloadSpeed: data.fupDownloadSpeed !== undefined ? (data.fupDownloadSpeed ? parseInt(data.fupDownloadSpeed) : null) : undefined,
-        fupUploadSpeed:   data.fupUploadSpeed   !== undefined ? (data.fupUploadSpeed   ? parseInt(data.fupUploadSpeed)   : null) : undefined,
+        dataQuotaGb:      numbers.dataQuotaGb ?? undefined,
+        fupDownloadSpeed: numbers.fupDownloadSpeed ?? undefined,
+        fupUploadSpeed:   numbers.fupUploadSpeed ?? undefined,
 
         // Pool relation
         ...(poolId !== undefined && { poolId }),
@@ -514,6 +657,11 @@ export class PackagesService {
     });
 
     this.invalidateCache();
+    await this.audit('PACKAGE_UPDATE', id, {
+      name: updated.name,
+      changed: Object.keys(data).filter((k) => data[k] !== undefined),
+      ...(warnings.length ? { warnings } : {}),
+    }, actor);
     return {
       ...updated,
       serviceType: settings.serviceType,
@@ -521,6 +669,7 @@ export class PackagesService {
       invoiceDescription: settings.invoiceDescription,
       dataQuotaGb: updated.dataQuotaGb ?? settings.dataQuotaGb,
       settings,
+      warnings,
     };
   }
 
@@ -569,17 +718,17 @@ export class PackagesService {
     store.packageSettings = store.packageSettings.filter((s) => s.packageId !== id);
     this.writeStore(store);
     this.invalidateCache();
+    await this.audit('PACKAGE_DELETE', id, { name: deleted.name, price: deleted.price }, actor);
     return deleted;
   }
 
   // ─────────────────────────────────────────────────────────────
   // TOGGLE STATUS
   // ─────────────────────────────────────────────────────────────
-  async toggleStatus(id: number) {
+  async toggleStatus(id: number, actor?: Actor) {
     const pkg = await this.prisma.package.findUnique({ where: { id } });
     if (!pkg) throw new NotFoundException('Package not found');
-    this.invalidateCache();
-    return this.prisma.package.update({
+    const next = await this.prisma.package.update({
       where: { id },
       data:  { isActive: !pkg.isActive },
       include: {
@@ -587,12 +736,41 @@ export class PackagesService {
         _count: { select: { subscribers: true } },
       },
     });
+    this.invalidateCache();
+    await this.audit(next.isActive ? 'PACKAGE_ACTIVATE' : 'PACKAGE_ARCHIVE', id,
+      { name: pkg.name, from: pkg.isActive, to: next.isActive }, actor);
+    return next;
   }
 
-  async duplicate(id: number) {
+  /**
+   * Explicit archive: deactivates so existing subscribers keep running but no
+   * new sign-ups are possible. The spec prefers Archive over permanent delete
+   * for packages that are still in use; the UI disables delete in that case.
+   */
+  async archive(id: number, actor?: Actor) {
+    const pkg = await this.prisma.package.findUnique({ where: { id } });
+    if (!pkg) throw new NotFoundException('Package not found');
+    const updated = await this.prisma.package.update({
+      where: { id },
+      data:  { isActive: false },
+      include: {
+        pool:   true,
+        _count: { select: { subscribers: true } },
+      },
+    });
+    this.invalidateCache();
+    await this.audit('PACKAGE_ARCHIVE', id, { name: pkg.name, subscribers: updated._count.subscribers }, actor);
+    return updated;
+  }
+
+  async duplicate(id: number, actor?: Actor) {
     const original = await this.findOne(id);
+    const nameClash = await this.prisma.package.findFirst({
+      where: { name: { equals: `${original.name} (Copy)`, mode: 'insensitive' } },
+      select: { id: true },
+    });
     const copy = await this.create({
-      name: `${original.name} (Copy)`,
+      name: nameClash ? `${original.name} (Copy ${Date.now().toString().slice(-4)})` : `${original.name} (Copy)`,
       price: original.price,
       description: original.description,
       duration: original.duration,
@@ -608,25 +786,39 @@ export class PackagesService {
       burstTime: original.burstTime,
       poolId: original.poolId,
       ...(original as any).settings,
-    });
+    }, actor);
+    await this.audit('PACKAGE_DUPLICATE', copy.id,
+      { fromPackageId: id, name: copy.name }, actor);
     return copy;
   }
 
-  async subscribersByPackage(id: number) {
+  async subscribersByPackage(id: number, actor?: Actor) {
     const pkg = await this.prisma.package.findUnique({ where: { id } });
     if (!pkg) throw new NotFoundException('Package not found');
-    return this.prisma.subscriber.findMany({
-      where: { packageId: id },
-      select: {
-        id: true,
-        fullName: true,
-        username: true,
-        phone: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    // Scope to the caller's own customers (same rule as the table + stats).
+    const where: any = { packageId: id };
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const own = await this.scope.descendantIds(await this.scope.rootId(actor));
+      where.userId = { in: own };
+    }
+    const [subs, total] = await Promise.all([
+      this.prisma.subscriber.findMany({
+        where,
+        select: {
+          id: true,
+          fullName: true,
+          username: true,
+          phone: true,
+          status: true,
+          sellPrice: true,
+          createdAt: true,
+          serviceSettings: { select: { expiryDate: true, ipAddress: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.subscriber.count({ where }),
+    ]);
+    return { subscribers: subs, total };
   }
 
   getTaxes() {
@@ -778,6 +970,170 @@ export class PackagesService {
       taxes: store.taxes,
       policies: store.policies,
       allocations: store.allocations,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // OVERVIEW  — one real-data response for the package detail
+  // screen: base plan + pricing chain + revenue + impact + audit.
+  // No fabricated numbers: every figure is a DB or store query.
+  // ─────────────────────────────────────────────────────────────
+  async overview(id: number, actor?: Actor) {
+    const pkg = await this.findOne(id);
+    const settings: any = pkg.settings || {};
+    const store = this.readStore();
+
+    // Visibility: a non-admin may only open the drawer for a package they can
+    // actually see/sell — same rule as the list (owns it or has a direct price
+    // row). This stops a reseller from guessing ids to read other accounts'
+    // reseller prices and revenue.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const visible = await this.scopeToActor([{ id }], actor);
+      if (!visible.length) throw new NotFoundException('Package not found');
+    }
+
+    // Scope everything to the caller's own organisation (same as stats).
+    const own = actor && !this.scope.isAdmin(actor.role)
+      ? await this.scope.descendantIds(await this.scope.rootId(actor))
+      : null;
+    const subWhere: any = { packageId: id };
+    if (own) subWhere.userId = { in: own };
+
+    // ── Real revenue: what ACTIVE subscribers actually pay (sellPrice is the
+    // per-subscriber price; list price is only a fallback — same rule as the
+    // analytics packageMix so the product page can never disagree with reports).
+    const revenueSubs = await this.prisma.subscriber.findMany({
+      where: subWhere,
+      select: { status: true, sellPrice: true },
+    });
+    const active = revenueSubs.filter((s) => s.status === 'ACTIVE');
+    const monthlyRevenue = Math.round(
+      active.reduce((sum, s) => sum + Number(s.sellPrice ?? pkg.price ?? 0), 0),
+    );
+
+    // ── Expiring-soon count (7-day window) from real service settings.
+    const now = new Date();
+    const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const [statusBreakdown, expiringSoon, resellerPrices, audit, impact] = await Promise.all([
+      this.prisma.subscriber.groupBy({
+        by: ['status'], where: subWhere, _count: { _all: true },
+      }),
+      this.prisma.subscriber.count({
+        where: { ...subWhere, serviceSettings: { expiryDate: { gte: now, lte: soon } } },
+      }),
+      this.prisma.resellerPackagePrice.findMany({
+        where: { packageId: id },
+        select: {
+          id: true, price: true, retailPrice: true, subresellerProfit: true,
+          subscriberProfit: true, createdAt: true,
+          user: { select: { id: true, name: true, email: true, role: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.activityLog.findMany({
+        where: { entity: 'Package', entityId: id },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true, action: true, details: true, createdAt: true,
+          user: { select: { id: true, name: true, email: true, role: true } },
+        },
+      }),
+      (async () => {
+        const [subscribers, resellers, groups] = await Promise.all([
+          this.prisma.subscriber.count({ where: subWhere }),
+          this.prisma.resellerPackagePrice.count({ where: { packageId: id } }),
+          this.prisma.accessGroupPackage.count({ where: { packageId: id } }),
+        ]);
+        return { subscribers, resellers, groups };
+      })(),
+    ]);
+
+    // ── Pricing chain from real data: base (list) + linked taxes/fees.
+    const taxRows = (settings.taxIds || [])
+      .map((tid: number) => store.taxes.find((t) => t.id === tid))
+      .filter((t: any) => t && t.isActive);
+    const basePrice = Number(pkg.price) || 0;
+    let taxTotal = 0;
+    const taxDetail = taxRows.map((t: any) => {
+      let amount = 0;
+      if (t.type === 'FIXED') amount = Number(t.value) || 0;
+      else if (t.type === 'PERCENTAGE') amount = Math.round(basePrice * ((Number(t.value) || 0) / 100) * 100) / 100;
+      taxTotal += amount;
+      return { ...t, appliedAmount: amount };
+    });
+    const finalWithTax = Math.round((basePrice + taxTotal) * 100) / 100;
+
+    const linkedPolicies = (settings.policyIds || [])
+      .map((pid: number) => store.policies.find((p) => p.id === pid))
+      .filter(Boolean);
+    const linkedAllocations = (settings.allocationIds || [])
+      .map((aid: number) => store.allocations.find((a) => a.id === aid))
+      .filter(Boolean);
+
+    // ── IP pool capacity is honest: subnet math gives capacity; "used" is the
+    // subscriber count, which is an ESTIMATE of consumption (subscribers may
+    // hold static IPs from elsewhere) — labelled as such.
+    let pool: any = null;
+    if (pkg.pool) {
+      const subnet = Number(pkg.pool.subnet) || 24;
+      pool = {
+        ...pkg.pool,
+        capacity: Math.pow(2, 32 - subnet) - 2,
+        estimatedUsed: impact.subscribers,
+        utilizationPct: impact.subscribers > 0
+          ? Math.min(100, Math.round((impact.subscribers / (Math.pow(2, 32 - subnet) - 2)) * 1000) / 10)
+          : 0,
+        note: 'Used = subscribers on this package (estimate; static holders excluded).',
+      };
+    }
+
+    // ── RADIUS preview mirrors the real sync: same rate-limit string the
+    // radius-sync service writes (burst-aware), plus linked policy attributes.
+    const dl = pkg.downloadSpeed; const ul = pkg.uploadSpeed;
+    let rateLimit = `${dl}M/${ul}M`;
+    if (pkg.burstDownload && pkg.burstUpload) {
+      const bDl = pkg.burstDownload;
+      const bUl = pkg.burstUpload;
+      const bThr = pkg.burstThreshold ?? Math.floor(dl * 0.5);
+      const bT = pkg.burstTime ?? 10;
+      rateLimit = `${dl}M/${ul}M ${bDl}M/${bUl}M ${bThr}M/${bThr}M ${bT}`;
+    }
+    const radius = {
+      rateLimit,
+      poolName: pkg.pool?.name || null,
+      policyAttributes: linkedPolicies.map((p: any) => ({
+        attribute: p.attributeName, op: p.attributeOp, value: p.attributeValue,
+      })),
+      note: 'Preview: exactly what radius-sync writes on activation. Live enforcement is verified on the NAS, not assumed.',
+    };
+
+    const subStatus: any = { total: impact.subscribers };
+    for (const row of statusBreakdown) subStatus[row.status] = row._count._all;
+
+    const health = this.healthChecks(pkg, {
+      subscribers: impact.subscribers, resellers: impact.resellers, hasPool: !!pkg.pool,
+    });
+
+    return {
+      package: pkg,
+      pricing: {
+        basePrice, taxDetail, taxTotal: Math.round(taxTotal * 100) / 100,
+        finalWithTax, resellerPrices, note: 'Reseller rows are buy/wholesale prices set per account; profit is theirs, not wallet credit.',
+      },
+      revenue: {
+        monthlyRevenue, arpu: active.length ? Math.round(monthlyRevenue / active.length) : 0,
+        active: active.length, note: 'ACTIVE subscribers × their actual sellPrice (fallback: list price).',
+      },
+      fup: this.fupInfo(pkg),
+      pool,
+      radius,
+      impact: { ...impact, subStatus, expiringSoon, note: 'Who this package affects — shown before archive/delete.' },
+      policies: linkedPolicies,
+      allocations: linkedAllocations,
+      audit,
+      health,
+      warnings: health.filter((c) => c.level === 'warn'),
     };
   }
 }

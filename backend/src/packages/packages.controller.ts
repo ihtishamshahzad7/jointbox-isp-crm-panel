@@ -89,13 +89,24 @@ export class PackagesController {
   }
 
   @Get(':id/subscribers')
-  subscribersByPackage(@Param('id') id: string): any {
-    return this.packagesService.subscribersByPackage(+id);
+  subscribersByPackage(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.subscribersByPackage(+id, req.user);
+  }
+
+  @Get(':id/overview')
+  overview(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.overview(+id, req.user);
+  }
+
+  /** Archive (deactivate) — keeps existing subscribers running, blocks new sign-ups. */
+  @Post(':id/archive')
+  archive(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.archive(+id, req.user);
   }
 
   @Post(':id/duplicate')
-  duplicate(@Param('id') id: string): any {
-    return this.packagesService.duplicate(+id);
+  duplicate(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.duplicate(+id, req.user);
   }
 
   @Get(':id')
@@ -104,8 +115,8 @@ export class PackagesController {
   }
 
   @Post()
-  create(@Body() body: any): any {
-    return this.packagesService.create(body);
+  create(@Body() body: any, @Req() req: any): any {
+    return this.packagesService.create(body, req.user);
   }
 
   /** Bulk import packages from a file (used by the Import dialog). */
@@ -115,13 +126,13 @@ export class PackagesController {
   }
 
   @Put(':id')
-  update(@Param('id') id: string, @Body() body: any): any {
-    return this.packagesService.update(+id, body);
+  update(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
+    return this.packagesService.update(+id, body, req.user);
   }
 
   @Patch(':id/toggle')
-  toggleStatus(@Param('id') id: string): any {
-    return this.packagesService.toggleStatus(+id);
+  toggleStatus(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.toggleStatus(+id, req.user);
   }
 
   @Delete(':id')

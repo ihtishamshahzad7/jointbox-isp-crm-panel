@@ -289,9 +289,10 @@ export function PoolTable({
    PACKAGES
    ═══════════════════════════════════════════════════════════════════ */
 export function PackageTable({
-  rows, isIsp, money, onEdit, onToggle, onDelete, onPrice, onViewSubs, onDuplicate, onShare,
+  rows, isIsp, money, onView, onEdit, onToggle, onDelete, onPrice, onViewSubs, onDuplicate, onShare,
 }: {
   rows: Row[]; isIsp: boolean; money: (n: any) => string;
+  onView?: (r: Row) => void;
   onEdit: (r: Row) => void; onToggle: (r: Row) => void; onDelete: (r: Row) => void;
   onPrice: () => void; onViewSubs: (r: Row) => void; onDuplicate?: (r: Row) => void;
   onShare?: (r: Row) => void;
@@ -317,7 +318,9 @@ export function PackageTable({
             const subs = p._count?.subscribers ?? 0;
             return (
               <tr key={p.id}
+                onClick={() => onView ? onView(p) : undefined}
                 onContextMenu={(e) => ctx.open(e, [
+                  { label: "Details…", onClick: () => onView ? onView(p) : undefined },
                   { label: "Edit…", onClick: () => onEdit(p) },
                   { label: p.isActive ? "Disable" : "Enable", onClick: () => onToggle(p) },
                   ...(onDuplicate ? [{ label: "Duplicate", onClick: () => onDuplicate(p) }] : []),
@@ -346,12 +349,16 @@ export function PackageTable({
                   {p.pool?.name && <div className="sub">pool <code>{p.pool.name}</code></div>}
                 </td>
 
-                {/* Unlimited is the common case, and saying so is clearer than
-                    a dash the reader has to interpret. */}
+                {/* Quota/FUP. The enforcement sweep only throttles packages
+                    WITH fup speeds set (fup.service filters fupDownloadSpeed
+                    not null), so "quota, no FUP speeds" means the quota is NOT
+                    enforced — showing "then blocked" was misleading. */}
                 <td>
                   {p.dataQuotaGb
                     ? <><div className="nm sm">{p.dataQuotaGb} <span className="unit">GB</span></div>
-                        <div className="sub">{p.fupDownloadSpeed ? `then ${p.fupDownloadSpeed} Mbps` : "then blocked"}</div></>
+                        <div className="sub">{p.fupDownloadSpeed
+                          ? `then ↓${p.fupDownloadSpeed} ↑${p.fupUploadSpeed ?? "—"} Mbps`
+                          : "no FUP speeds — not enforced"}</div></>
                     : <span className="sub">unlimited</span>}
                 </td>
 
@@ -361,6 +368,7 @@ export function PackageTable({
                 </td>
 
                 <td className="act">
+                  {onView && <button onClick={() => onView(p)}>Details</button>}
                   <button onClick={() => onViewSubs(p)}>Subs</button>
                   {isIsp ? (
                     <>
