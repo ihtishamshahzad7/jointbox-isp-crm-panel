@@ -136,6 +136,8 @@ export default function SubscriberProfilePage() {
   // Static public IP sold as a monthly add-on. Routing lives on the MikroTik;
   // this is the record, the price and the renewal.
   const [staticIp, setStaticIp] = useState<any>(null);
+  // DB assignment vs RADIUS radreply vs the router's live session (spec health check).
+  const [staticHealth, setStaticHealth] = useState<any>(null);
   const [ipForm, setIpForm] = useState({ ipAddress: "", monthlyPrice: "", gateway: "" });
   const [ipBusy, setIpBusy] = useState(false);
   // What the router itself said, plus the panel's reading of it.
@@ -192,6 +194,9 @@ export default function SubscriberProfilePage() {
         monthlyPrice: ip?.monthlyPrice != null ? String(ip.monthlyPrice) : "",
         gateway: ip?.gateway || "",
       });
+      // Health check travels with the assignment — DB vs RADIUS vs router.
+      const h = await fetch(`${API}/static-ips/subscriber/${id}/health`, { headers });
+      if (h.ok) setStaticHealth(await h.json());
     } catch { /* the panel just shows empty */ }
     setLoading(false);
   }, [id]);
@@ -264,8 +269,35 @@ export default function SubscriberProfilePage() {
       if (!r.ok) throw new Error("Could not remove the address");
       showToast("Address returned to the pool — monthly charge stopped","ok");
       setStaticIp(null);
+      setStaticHealth(null);
       setIpForm({ ipAddress: "", monthlyPrice: "", gateway: "" });
       loadSub();
+    } catch (e:any) { showToast(e.message,"err"); } finally { setIpBusy(false); }
+  }
+
+  /**
+   * SYNC RADIUS — push the subscriber's CURRENT profile (package speed, pool
+   * OR static IP, MAC lock, session flags) to FreeRADIUS right now, then
+   * re-verify. Backend writes it atomically (radcheck/radreply are cleared and
+   * rebuilt), so after this the radreply either carries Framed-IP-Address =
+   * the static address or Framed-Pool — never both.
+   */
+  async function syncRadiusNow() {
+    if (!id) return;
+    setIpBusy(true);
+    try {
+      const r = await fetch(`${API}/subscribers/${id}/sync-to-radius`, { method: "POST", headers });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.message || "RADIUS sync failed");
+      showToast(
+        data.addressing
+          ? `RADIUS synchronized — ${data.addressing}`
+          : "RADIUS synchronized",
+        "ok",
+      );
+      // Re-run the health check so the badge reflects what RADIUS now says.
+      const h = await fetch(`${API}/static-ips/subscriber/${id}/health`, { headers });
+      if (h.ok) setStaticHealth(await h.json());
     } catch (e:any) { showToast(e.message,"err"); } finally { setIpBusy(false); }
   }
 
@@ -930,6 +962,61 @@ export default function SubscriberProfilePage() {
                     </div>
                   );
                 })()}
+
+                {/* ══ STATIC-IP HEALTH — DB vs RADIUS vs router, never hidden ══
+                    The three places that must agree; each row is what its source
+                    actually says right now, not what the panel wishes were true. */}
+                {staticHealth && (
+                  <div style={{
+                    marginTop:12, paddingTop:12, borderTop:`1px solid ${t.cardBorder}`,
+                  }}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <span style={{fontSize:10.5,fontWeight:700,color:t.textMuted,letterSpacing:".04em"}}>
+                        STATIC IP HEALTH
+                      </span>
+                      {(() => {
+                        const s = staticHealth.status;
+                        const c = s === "HEALTHY" ? t.green : s === "MISMATCH" ? t.red : s === "NOT_ONLINE" ? t.amber : t.textMuted;
+                        return (
+                          <span style={{
+                            fontSize:10.5,fontWeight:800,letterSpacing:".05em",color:c,
+                            border:`1px solid ${c}`,borderRadius:99,padding:"2px 9px",
+                          }}>
+                            {s === "HEALTHY" ? "✓ HEALTHY" : s === "MISMATCH" ? "⚠ MISMATCH" : s === "NOT_ONLINE" ? "NOT ONLINE" : "DYNAMIC"}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                      {[
+                        ["DATABASE", staticHealth.database.ok, staticHealth.database.ip || "—"],
+                        ["RADIUS", staticHealth.radius.ok, staticHealth.radius.ip || "—"],
+                        ["SESSION", staticHealth.session.online ? staticHealth.session.ok : null, staticHealth.session.ip || "offline"],
+                      ].map(([label, ok, val]) => (
+                        <div key={label as string} style={{
+                          background:d?"rgba(255,255,255,.03)":"#f8fafc",
+                          border:`1px solid ${t.cardBorder}`,borderRadius:8,padding:"7px 9px",fontSize:10.5,
+                        }}>
+                          <div style={{color:t.textMuted,fontWeight:700,letterSpacing:".04em"}}>{label}</div>
+                          <div style={{marginTop:3,display:"flex",alignItems:"center",gap:5}}>
+                            <span style={{color: ok === null ? t.amber : ok ? t.green : t.red,fontWeight:800}}>
+                              {ok === null ? "—" : ok ? "✓" : "✗"}
+                            </span>
+                            <span style={{fontFamily:"ui-monospace,monospace",color:t.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" as const}}>
+                              {val}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {staticHealth.status === "MISMATCH" && (
+                      <div style={{fontSize:11,color:t.red,marginTop:8,lineHeight:1.5}}>
+                        Sources disagree on the address. Use <b>Sync RADIUS</b> to push the profile,
+                        then disconnect so the customer re-dials onto the configured address.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{fontSize:12,color:t.textMuted,marginBottom:12}}>
@@ -970,6 +1057,14 @@ export default function SubscriberProfilePage() {
                   padding:"8px 18px",fontSize:12.5,fontWeight:600,cursor:"pointer",opacity:ipBusy?.6:1}}>
                 {staticIp ? "Update address" : "Set static IP"}
               </button>
+              {staticIp && (
+                <button onClick={syncRadiusNow} disabled={ipBusy}
+                  title="Push the current profile (pool/static IP/MAC/speed) to FreeRADIUS right now"
+                  style={{background:"transparent",color:t.accent,border:`1px solid ${t.accent}`,borderRadius:8,
+                    padding:"8px 18px",fontSize:12.5,fontWeight:600,cursor:"pointer",opacity:ipBusy?.6:1}}>
+                  Sync RADIUS
+                </button>
+              )}
               {staticIp && (
                 <button onClick={removeStaticIp} disabled={ipBusy}
                   style={{background:"transparent",color:t.red,border:`1px solid ${t.red}`,borderRadius:8,
@@ -1224,6 +1319,10 @@ export default function SubscriberProfilePage() {
               {liveSession ? (
                 <>
                   <InfoRow label="Leased IP"       value={liveSession.framedipaddress} mono/>
+                  {/* Configured vs actual, side by side — a mismatch is visible
+                      the moment it happens, not when someone compares cards. */}
+                  {staticIp && <InfoRow label="Configured IP" value={staticIp.ipAddress} mono/>}
+                  {staticIp && serviceSettings?.ipType === "STATIC" && <InfoRow label="IP Type" value="STATIC"/>}
                   <InfoRow label="MAC Address"     value={liveSession.callingstationid} mono/>
                   <InfoRow label="NAS IP"          value={liveSession.nasipaddress} mono/>
                   <InfoRow label="NAS Port"        value={liveSession.nasportid}/>

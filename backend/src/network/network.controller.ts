@@ -46,7 +46,8 @@ export class NetworkController {
   @Post('disconnect/:username')
   async disconnect(@Param('username') username: string, @Req() req: any) {
     await this.assertOwns(req.user, { username });
-    return this.network.disconnect(username);
+    // actor → logged as the disconnect's requester in the session action log.
+    return this.network.disconnect(username, req.user);
   }
 
   /** Cut EVERY open session for one username — duplicate-login takedown. */

@@ -24,6 +24,9 @@ describe('RenewalService.quote (billing period)', () => {
       subscriber: { findUnique: jest.fn().mockResolvedValue(sub) },
       package: { findUnique: jest.fn().mockResolvedValue(sub.package) },
       resellerPackagePrice: { findUnique: jest.fn().mockResolvedValue(null) },
+      // quote() asks who the owner pays (cost ladder) — top-of-tree owner buys
+      // from no one, so parentId: null keeps cost at 0 (cost is not asserted).
+      user: { findUnique: jest.fn().mockResolvedValue({ parentId: null }) },
     };
     return new RenewalService(prisma, {} as any, {} as any, {} as any);
   }
@@ -108,7 +111,8 @@ describe('RenewalService.quote (billing period)', () => {
   it("uses the subscriber's own agreed price over the package list price", async () => {
     const svc = makeService({
       id: 6, status: 'INACTIVE', userId: 5, sellPrice: 250, balance: 0,
-      package: pkg, serviceSettings: { expiryDate: null },
+      packageId: 3, // the same package the price was agreed for — required by the
+      package: pkg, serviceSettings: { expiryDate: null }, // stale-price guard
     });
 
     const q: any = await svc.quote(6, { mode: 'FULL' });

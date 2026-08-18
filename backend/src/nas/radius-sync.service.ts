@@ -291,6 +291,30 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       // a `Simultaneous-Use` check in radcheck: any value >= 1 means "reject if
       // this many sessions are already open", so `:= 1` blocks the second
       // device outright. Accounts opted into multi-session get no check row.
+      // CRITICAL BUG FIX — this statement used to carry
+      //   ON CONFLICT (username, attribute) DO UPDATE SET value = '1'
+      // which requires a UNIQUE index on radcheck(username, attribute). The
+      // stock FreeRADIUS schema does NOT have one, so on a default install
+      // Postgres raised
+      //   "there is no unique or exclusion constraint matching the
+      //    ON CONFLICT specification"
+      // and aborted syncSubscriberProfile RIGHT HERE — after the password had
+      // been inserted, but BEFORE Acct-Interim-Interval, Session-Timeout, the
+      // rate limit and (crucially) the Framed-IP-Address / Framed-Pool
+      // addressing were written.
+      //
+      // The symptom was maddening to diagnose because authentication still
+      // worked perfectly: radcheck held a valid Cleartext-Password, so the
+      // customer logged in fine. But radreply was left completely EMPTY, so
+      // the NAS received no addressing instruction at all and fell back to the
+      // router's own local PPP profile pool — handing a static-IP customer a
+      // different dynamic address on every single reconnect, while the panel
+      // correctly showed the static IP it had faithfully saved to its own DB.
+      //
+      // ON CONFLICT was never needed here: the DELETE at the top of this
+      // method has already removed every radcheck row for this username, so a
+      // plain INSERT cannot collide. Removing it makes the sync work on a
+      // stock schema instead of depending on an index that isn't there.
       const multi = opts?.allowMultipleSessions;
       if (multi) {
         await this.pgClient.query(
@@ -300,8 +324,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       } else {
         await this.pgClient.query(
           `INSERT INTO radcheck (username, attribute, op, value)
-           VALUES ($1, 'Simultaneous-Use', ':=', '1')
-           ON CONFLICT (username, attribute) DO UPDATE SET value = '1'`,
+           VALUES ($1, 'Simultaneous-Use', ':=', '1')`,
           [username],
         );
       }

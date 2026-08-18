@@ -104,7 +104,7 @@ export class NetworkService {
    * straight at the MikroTik API and remove /ppp/active, and we only report
    * success when something actually cut the session.
    */
-  async disconnect(username: string) {
+  async disconnect(username: string, actor?: any) {
     const rows = await this.prisma.$queryRaw<Array<any>>`
       SELECT acctsessionid, nasipaddress, framedipaddress
       FROM radacct WHERE username = ${username} AND acctstoptime IS NULL
@@ -226,8 +226,40 @@ export class NetworkService {
         WHERE acctsessionid = ${session.acctsessionid} AND acctstoptime IS NULL`;
     }
 
+    // ── SESSION ACTION LOG (spec): every attempt, in order, with the outcome.
+    //    Written as structured systemLog metadata (queryable) and as an
+    //    activityLog row (the activity feed). Failures are logged, never hidden.
+    const actorId = actor?.id ?? actor?.userId ?? null;
+    const meta = {
+      action: cut ? 'DISCONNECT_SUCCESS' : 'DISCONNECT_FAILED',
+      actorId,
+      username,
+      subscriberId: sub?.id ?? null,
+      nas: nas?.nasname ?? nas?.nasIp ?? null,
+      nasIp: nas?.nasIp ?? session?.nasipaddress ?? null,
+      acctSessionId: session?.acctsessionid ?? null,
+      framedIp: session?.framedipaddress ?? null,
+      method: cut ? method : null,
+      verified: verified === null ? null : verified,
+      attempts: trail,
+      timestamp: new Date().toISOString(),
+    };
+    await this.prisma.systemLog.create({
+      data: {
+        level: cut ? 'INFO' : 'ERROR',
+        source: 'disconnect',
+        message:
+          `${cut ? 'Disconnect successful' : 'DISCONNECT FAILED'}: "${username}" ` +
+          `@ ${nas?.nasname ?? nas?.nasIp ?? 'unknown NAS'}` +
+          (session?.acctsessionid ? ` (session ${session.acctsessionid})` : '') +
+          ` — ${trail.join(' → ')}`,
+        metadata: JSON.stringify(meta),
+      },
+    }).catch(() => null);
+
     await this.prisma.activityLog.create({
       data: {
+        userId: actorId ?? undefined,
         action: cut ? 'DISCONNECT' : 'DISCONNECT_FAILED',
         entity: 'Session',
         entityId: sub?.id ?? null,

@@ -35,9 +35,16 @@ export class ThrottleService {
     const sub = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { username: true } });
     if (sub?.username) {
       const rateLimit = `${dlSpeed}M/${ulSpeed}M`;
+      // Delete-then-insert, NOT `ON CONFLICT (username, attribute)`: that
+      // requires a UNIQUE index on radcheck(username, attribute) which the
+      // stock FreeRADIUS schema does not create, so it throws on a default
+      // install and the throttle is never actually applied.
       await this.prisma.$executeRawUnsafe(
-        `INSERT INTO radcheck (username, attribute, op, value) VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)
-         ON CONFLICT (username, attribute) DO UPDATE SET value = $2`,
+        `DELETE FROM radcheck WHERE username = $1 AND attribute = 'MikroTik-Rate-Limit'`,
+        sub.username,
+      );
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO radcheck (username, attribute, op, value) VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)`,
         sub.username, rateLimit,
       );
       this.logger.log(`⚡ Throttled ${sub.username} → ${rateLimit} (${reason})`);
@@ -57,9 +64,15 @@ export class ThrottleService {
     const sub = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { username: true, package: { select: { downloadSpeed: true, uploadSpeed: true } } } });
     if (sub?.username && sub.package) {
       const rateLimit = `${sub.package.downloadSpeed}M/${sub.package.uploadSpeed}M`;
+      // See applyThrottle above — ON CONFLICT needs an index the stock
+      // FreeRADIUS schema lacks, and its failure here would leave the customer
+      // throttled with no way back to full speed.
       await this.prisma.$executeRawUnsafe(
-        `INSERT INTO radcheck (username, attribute, op, value) VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)
-         ON CONFLICT (username, attribute) DO UPDATE SET value = $2`,
+        `DELETE FROM radcheck WHERE username = $1 AND attribute = 'MikroTik-Rate-Limit'`,
+        sub.username,
+      );
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO radcheck (username, attribute, op, value) VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)`,
         sub.username, rateLimit,
       );
       this.logger.log(`⚡ Un-throttled ${sub.username} → ${rateLimit}`);

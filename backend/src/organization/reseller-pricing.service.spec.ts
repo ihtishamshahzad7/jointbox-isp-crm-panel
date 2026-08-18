@@ -26,6 +26,11 @@ describe('ResellerPricingService.reverseActivation', () => {
         userBalanceTransaction: {
           create: jest.fn(),
         },
+        // The reversal mirrors the profit ledger with negative entries.
+        profitEntry: {
+          findMany: jest.fn().mockResolvedValue([]),
+          create: jest.fn(),
+        },
       })),
     };
 

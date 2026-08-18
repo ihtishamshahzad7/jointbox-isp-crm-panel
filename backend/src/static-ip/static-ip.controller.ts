@@ -34,6 +34,15 @@ export class StaticIpController {
     return this.staticIps.forSubscriber(+id, req.user);
   }
 
+  /**
+   * Static-IP health check: database assignment vs RADIUS radreply vs the
+   * router's live session. Feeds the health badge on the subscriber page.
+   */
+  @Get('subscriber/:subscriberId/health')
+  health(@Param('subscriberId') id: string, @Req() req: any) {
+    return this.staticIps.staticIpHealth(+id, req.user);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.staticIps.findOne(+id, req.user);

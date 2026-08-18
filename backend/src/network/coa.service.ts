@@ -188,6 +188,7 @@ export class CoaService {
       this.logger.error(`⛔ Simultaneous-Use: "${username}" online ${count}× — disconnecting all sessions.`);
 
       const nasCreds = new Map<string, any>();
+      const cutByCoa = new Set<string>();
       for (const s of sessions) {
         // Per-session RADIUS CoA Disconnect (vendor-agnostic).
         let nas = nasCreds.get(s.nasipaddress);
@@ -214,17 +215,21 @@ export class CoaService {
             code: RadiusCode.DisconnectRequest,
             attributes: sessionAttributes(session),
           }).catch(() => ({ ok: false } as any));
-          if (res.ok) sessionsCut++;
+          if (res.ok) {
+            sessionsCut++;
+            cutByCoa.add(s.acctsessionid);
+          }
         }
       }
 
       // MikroTik API fallback: removes ALL active PPP sessions matching the name
       // in one call, covering any the CoA did not acknowledge.
-      const anyNas = [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword);
+      const remaining = sessions.filter((s) => !cutByCoa.has(s.acctsessionid));
+      const anyNas = remaining.length ? [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword) : null;
       let verifiedGone: boolean | null = null;
-      if (anyNas) {
+      if (anyNas && remaining.length) {
         try {
-          await this.mikrotik.disconnectPppoeUser(
+          const r = await this.mikrotik.disconnectPppoeUser(
             anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username,
           );
           await sleep(1200);
@@ -232,30 +237,51 @@ export class CoaService {
             .isSessionActive(anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username)
             .catch(() => null);
           verifiedGone = stillActive === null ? null : !stillActive;
+          // Only treat the fallback as a cut when the router agrees (or there
+          // was never a session to begin with). A remove that didn't land and
+          // could not be verified leaves the rows OPEN + flags the operator.
+          if (r.found === false || r.removed || verifiedGone === true) {
+            sessionsCut += remaining.length;
+            remaining.forEach((s) => cutByCoa.add(s.acctsessionid));
+          }
         } catch (e: any) {
           this.logger.warn(`Simultaneous-Use: MikroTik API kick for "${username}" failed: ${e?.message || e}`);
         }
-      }
-      if (verifiedGone === false) {
-        // The router still shows this user active after CoA + API kick. Do not
-        // pretend they are offline — surface it loudly so an operator follows up.
-        this.logger.error(`⛔ Simultaneous-Use: "${username}" is STILL ACTIVE on ${anyNas?.nasIp} after disconnect attempts.`);
+      } else if (remaining.length && !anyNas) {
         await this.prisma.systemLog.create({
           data: {
             level: 'ERROR', source: 'simultaneous-use',
-            message: `"${username}" could not be fully disconnected — still active on ${anyNas?.nasIp} after CoA + MikroTik API kick.`,
+            message: `"${username}": ${remaining.length} duplicate session(s) could not be confirmed cut — no CoA ack and no NAS API credentials for verification.`,
+            metadata: JSON.stringify({ username, unconfirmedSessions: remaining.map((s) => s.acctsessionid), timestamp: new Date().toISOString() }),
+          },
+        }).catch(() => null);
+      }
+      const stillOpen = remaining.filter((s) => !cutByCoa.has(s.acctsessionid));
+      if (stillOpen.length) {
+        // The router verifiably (or at least unverifiably) still has the user.
+        // Do not pretend they are offline — surface it loudly so an operator
+        // follows up, and keep the accounting rows OPEN so the UI shows online.
+        this.logger.error(`⛔ Simultaneous-Use: "${username}" is STILL ACTIVE on ${anyNas?.nasIp ?? 'unknown NAS'} after disconnect attempts.`);
+        await this.prisma.systemLog.create({
+          data: {
+            level: 'ERROR', source: 'simultaneous-use',
+            message: `"${username}" could not be fully disconnected — session(s) ${stillOpen.map((s) => s.acctsessionid).join(', ')} still open on ${anyNas?.nasIp ?? 'unknown NAS'} after CoA + MikroTik API kick.`,
+            metadata: JSON.stringify({ username, nasIp: anyNas?.nasIp ?? null, stillActiveSessions: stillOpen.map((s) => ({ acctsessionid: s.acctsessionid, nas: s.nasipaddress })), timestamp: new Date().toISOString() }),
           },
         }).catch(() => null);
       }
 
-      // Close the accounting rows. Even when the live PPP session could not be
-      // confirmed gone, the radacct row must reflect that the panel considers
-      // this dial-in ended — otherwise it keeps counting as "online" forever in
-      // every report while the systemLog above already flags the router-side
-      // mismatch for an operator to chase down.
-      await this.prisma.$executeRaw`
-        UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
-        WHERE username = ${username} AND acctstoptime IS NULL`;
+      // Close ONLY the accounting rows whose sessions were actually terminated.
+      // Closing them for a session the router still has is what made the panel
+      // lie about offline before; the open rows here now correctly keep showing
+      // "online" until the NAS itself drops the connection.
+      for (const s of sessions) {
+        if (cutByCoa.has(s.acctsessionid)) {
+          await this.prisma.$executeRaw`
+            UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
+            WHERE acctsessionid = ${s.acctsessionid} AND acctstoptime IS NULL`.catch(() => null);
+        }
+      }
     }
 
     if (dupes.length) {
@@ -277,11 +303,20 @@ export class CoaService {
     const rate = `${downloadSpeed}M/${uploadSpeed}M`;
 
     // Persist for the next authentication (works on every vendor via RADIUS).
+    //
+    // Same fix as radius-sync.service.ts: this used to rely on
+    // `ON CONFLICT (username, attribute)`, which needs a UNIQUE index on
+    // radcheck(username, attribute) that the stock FreeRADIUS schema does not
+    // have — so on a default install this threw and the rate change was never
+    // persisted. Delete-then-insert is equivalent and works on any schema.
     try {
       await this.prisma.$executeRawUnsafe(
+        `DELETE FROM radcheck WHERE username = $1 AND attribute = 'MikroTik-Rate-Limit'`,
+        sub.username,
+      );
+      await this.prisma.$executeRawUnsafe(
         `INSERT INTO radcheck (username, attribute, op, value)
-         VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)
-         ON CONFLICT (username, attribute) DO UPDATE SET value = $2`,
+         VALUES ($1, 'MikroTik-Rate-Limit', ':=', $2)`,
         sub.username, rate,
       );
     } catch (e: any) {
@@ -371,6 +406,7 @@ export class CoaService {
       FROM radacct WHERE username = ${username} AND acctstoptime IS NULL`;
 
     let sessionsCut = 0;
+    const cutByCoa = new Set<string>();
     const nasCreds = new Map<string, any>();
     for (const s of sessions) {
       let nas = nasCreds.get(s.nasipaddress);
@@ -397,43 +433,74 @@ export class CoaService {
           code: RadiusCode.DisconnectRequest,
           attributes: sessionAttributes(session),
         }).catch(() => ({ ok: false } as any));
-        if (res.ok) sessionsCut++;
+        if (res.ok) {
+          sessionsCut++;
+          cutByCoa.add(s.acctsessionid);
+        }
       }
     }
 
     // MikroTik API fallback: one call removes ALL active PPP sessions for the name.
-    const anyNas = [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword);
-    let stillActive: boolean | null = null;
-    if (anyNas) {
+    // Even when a session is removed we keep the accounting row OPEN until the
+    // router actually confirms the user is gone — closing it first is exactly
+    // the "panel says offline while the router still forwards traffic" lie.
+    const remaining = sessions.filter((s) => !cutByCoa.has(s.acctsessionid));
+    const anyNas = remaining.length ? [...nasCreds.values()].find((n) => n?.apiUsername && n?.apiPassword) : null;
+    if (anyNas && remaining.length) {
       try {
-        await this.mikrotik.disconnectPppoeUser(
+        const r = await this.mikrotik.disconnectPppoeUser(
           anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username,
         );
         await sleep(1200);
-        stillActive = await this.mikrotik
+        const stillActive = await this.mikrotik
           .isSessionActive(anyNas.nasIp, anyNas.apiPort ?? 8728, anyNas.apiUsername, anyNas.apiPassword, username)
           .catch(() => null);
+        // Session is only "cut" when the router agrees it is gone. A remove
+        // that did not land AND could not be verified is NOT a success.
+        if (r.found === false || r.removed || stillActive === false) {
+          sessionsCut += remaining.length;
+          remaining.forEach((s) => cutByCoa.add(s.acctsessionid));
+        } else {
+          this.logger.error(`⛔ Cut-all for "${username}": STILL ACTIVE on ${anyNas?.nasIp} after CoA + MikroTik API kick.`);
+          await this.prisma.systemLog.create({
+            data: {
+              level: 'ERROR', source: 'network',
+              message: `Cut-all for "${username}" could not confirm the session was removed from ${anyNas?.nasIp}.`,
+              metadata: JSON.stringify({ username, nasIp: anyNas?.nasIp, stillActive, removeResult: r, timestamp: new Date().toISOString() }),
+            },
+          }).catch(() => null);
+        }
       } catch (e: any) {
         this.logger.warn(`Cut-all for "${username}": MikroTik API kick failed: ${e?.message || e}`);
       }
-    }
-    if (stillActive === true) {
-      this.logger.error(`⛔ Cut-all for "${username}": STILL ACTIVE on ${anyNas?.nasIp} after CoA + MikroTik API kick.`);
+    } else if (remaining.length && !anyNas) {
+      // No CoA ack, no API creds — the router may still have the user online.
+      // Keep the rows open and say so loudly rather than pretending.
       await this.prisma.systemLog.create({
         data: {
           level: 'ERROR', source: 'network',
-          message: `Cut-all for "${username}" could not confirm the session was removed from ${anyNas?.nasIp}.`,
+          message: `Cut-all for "${username}": ${remaining.length} session(s) could not be confirmed cut — no CoA ack and no NAS API credentials.`,
+          metadata: JSON.stringify({ username, unconfirmedSessions: remaining.map((s) => s.acctsessionid), timestamp: new Date().toISOString() }),
         },
       }).catch(() => null);
     }
 
-    // Close the ghost rows so nothing keeps showing them online in billing.
-    // (Router-side mismatch, if any, is already flagged above.)
-    const closed = await this.prisma.$executeRaw`
-      UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
-      WHERE username = ${username} AND acctstoptime IS NULL`;
+    // Close ONLY the rows whose sessions were actually terminated. Anything
+    // still open stays open — the UI keeps showing the customer online, which
+    // is the truth until the router itself lets go.
+    let closed = 0;
+    for (const s of sessions) {
+      if (cutByCoa.has(s.acctsessionid)) {
+        try {
+          const res = await this.prisma.$executeRaw`
+            UPDATE radacct SET acctstoptime = NOW(), acctterminatecause = 'Admin-Reset'
+            WHERE acctsessionid = ${s.acctsessionid} AND acctstoptime IS NULL`;
+          closed += Number(res);
+        } catch { /* row may already be closed */ }
+      }
+    }
 
-    return { sessionsCut, closed: Number(closed), users: [username] };
+    return { sessionsCut, closed, users: [username] };
   }
 }
 

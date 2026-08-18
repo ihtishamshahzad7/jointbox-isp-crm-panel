@@ -96,6 +96,60 @@ fi
 # scripts/db-deploy.sh and MIGRATIONS.md.
 npm run db:deploy
 
+# -----------------------------------------------------------------------------
+# RADIUS hygiene: stop duplicate radcheck attribute rows accumulating.
+#
+# The FreeRADIUS tables are NOT managed by Prisma (FreeRADIUS owns that schema
+# and reads it directly), so this cannot live in a Prisma migration — it has to
+# be applied here, on every client, on every update. Everything below is
+# idempotent and NEVER fatal: a failure here must not block a deploy, because a
+# missing hygiene index is far less serious than an ISP left un-updated.
+#
+# WHY IT MATTERS: duplicate (username, attribute) rows in radcheck make
+# FreeRADIUS behaviour non-deterministic — it may pick either row, so a
+# subscriber can intermittently get an old password or a stale rate limit with
+# nothing in the logs to explain it.
+#
+# IMPORTANT — Calling-Station-Id is DELIBERATELY EXCLUDED. MAC binding stores
+# ONE ROW PER BOUND MAC (a subscriber may legitimately have several devices
+# bound). A blanket UNIQUE (username, attribute) would make binding a second
+# MAC fail outright, so the index is PARTIAL and skips that attribute.
+#
+# NOTE: the application code does NOT depend on this index. It uses
+# delete-then-insert everywhere precisely because ON CONFLICT requires an index
+# the stock FreeRADIUS schema does not ship (that assumption previously aborted
+# every profile sync). This is defence in depth, not a dependency.
+# -----------------------------------------------------------------------------
+if [ -f "$REPO/backend/.env" ] && command -v psql >/dev/null 2>&1; then
+  # Strip a trailing CR (a .env saved on Windows) and any surrounding quotes.
+  # Kept as separate, individually obvious sed expressions rather than a clever
+  # one-liner — a mangled connection string here would silently skip the step.
+  RADIUS_URL="$(grep -E '^RADIUS_DATABASE_URL=' "$REPO/backend/.env" \
+    | head -1 | cut -d= -f2- \
+    | sed -e 's/\r$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")"
+  if [ -n "$RADIUS_URL" ]; then
+    echo "🧬 Checking RADIUS attribute hygiene..."
+
+    # 1. Collapse any existing duplicates FIRST — CREATE UNIQUE INDEX fails if
+    #    any remain. Keep the lowest id of each group (the original row) and
+    #    delete the later copies. Skips Calling-Station-Id for the reason above.
+    DUPES="$(psql "$RADIUS_URL" -tAc "SELECT COUNT(*) FROM (SELECT username, attribute FROM radcheck WHERE attribute <> 'Calling-Station-Id' GROUP BY 1,2 HAVING COUNT(*) > 1) d;" 2>/dev/null || echo "")"
+    if [ -n "$DUPES" ] && [ "$DUPES" != "0" ]; then
+      echo "   ⚠ $DUPES duplicated radcheck attribute(s) found — collapsing to the earliest row of each..."
+      psql "$RADIUS_URL" -c "DELETE FROM radcheck a USING radcheck b WHERE a.username = b.username AND a.attribute = b.attribute AND a.attribute <> 'Calling-Station-Id' AND a.id > b.id;" >/dev/null 2>&1 \
+        && echo "   ✓ duplicates removed" \
+        || echo "   ⚠ could not remove duplicates — index will be skipped this run"
+    fi
+
+    # 2. Create the guard. CONCURRENTLY keeps the RADIUS table writable during
+    #    the build, so an in-flight authentication is never blocked. It cannot
+    #    run inside a transaction, which is why it is its own psql -c call.
+    psql "$RADIUS_URL" -c "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS radcheck_username_attribute_uniq ON radcheck (username, attribute) WHERE attribute <> 'Calling-Station-Id';" >/dev/null 2>&1 \
+      && echo "   ✓ radcheck uniqueness guard in place" \
+      || echo "   ⚠ radcheck uniqueness guard not applied (harmless — the app does not rely on it)"
+  fi
+fi
+
 echo "🔧 Building backend..."
 # A failed build must be UNMISSABLE. Previously `set -e` just ended the script
 # mid-scroll, so the last thing on screen was a compiler message and it looked

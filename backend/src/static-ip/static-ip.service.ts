@@ -250,6 +250,30 @@ export class StaticIpService {
     }
     if (actor) await this.scope.assertSubscriber(actor, Number(body.subscriberId));
 
+    // ── NETWORK VALIDATION — before ANY row is written ─────────────
+    // The address must be routable on the subscriber's NAS, the gateway must
+    // be sane, and no OTHER subscriber may already be configured with this
+    // exact address. Rejecting here (instead of after the row is saved) means
+    // a bad allocation never half-happens: no register entry, no radreply,
+    // no session cut that was never needed.
+    const target = Number(body.subscriberId);
+    const oldSettings = await this.prisma.serviceSettings.findUnique({
+      where: { subscriberId: target },
+      select: { ipAddress: true, ipType: true },
+    });
+    const oldStatic = oldSettings?.ipType === 'STATIC' ? (oldSettings.ipAddress ?? null) : null;
+    const nasLabel = await this.validateIpForNas(ip.ipAddress, target, ip.gateway);
+    const other = await this.prisma.serviceSettings.findFirst({
+      where: { ipType: 'STATIC', ipAddress: ip.ipAddress, subscriberId: { not: target } },
+      select: { subscriberId: true },
+    });
+    if (other) {
+      throw new ConflictException(
+        `${ip.ipAddress} is already configured as the static address of another subscriber (#${other.subscriberId}). ` +
+          `Release it there first — two customers on one address will not work.`,
+      );
+    }
+
     const updated = await this.prisma.staticIp.update({
       where: { id },
       data: {
@@ -326,13 +350,43 @@ export class StaticIpService {
       updated.ipAddress,
     );
 
+    // AUDIT (spec: actor / subscriber / old / new / NAS / timestamp / result / error).
+    // The register row is duplicated here into the log even on failure — a
+    // change that did not fully apply must be just as visible as one that did.
+    await this.audit(
+      oldStatic && oldStatic !== updated.ipAddress ? 'STATIC_IP_CHANGED' : 'STATIC_IP_ASSIGNED',
+      {
+        subscriberId: target,
+        username: updated.subscriber!.username,
+        oldValue: oldStatic,
+        newValue: updated.ipAddress,
+        nas: nasLabel ?? release.nasLabel ?? null,
+        actor,
+        result: syncOk
+          ? release.reconnected
+            ? release.applied === true
+              ? 'verified-live'
+              : release.applied === false
+                ? 'mismatch'
+                : 'disconnected-unverified'
+            : 'applies-on-next-connect'
+          : 'radius-sync-failed',
+        error: !syncOk ? syncError ?? 'RADIUS sync failed' : (release.warning ?? null),
+        extra: {
+          radiusSync: syncOk ? 'ok' : 'failed',
+          pinnedOnRouter: release.pinnedOnRouter ?? null,
+          verifiedAddress: release.verifiedAddress ?? null,
+        },
+      },
+    );
+
     this.logger.log(
       `Static IP ${updated.ipAddress} → ${updated.subscriber?.username}` +
         (release.reconnected
           ? ` (pool address ${release.releasedAddress ?? 'n/a'} released, live now)`
           : ' (applies on next connection)'),
     );
-    return { ...updated, ...release };
+    return { ...updated, ...release, nasLabel };
   }
 
   /**
@@ -368,6 +422,7 @@ export class StaticIpService {
       select: { nas: true },
     });
     const nas = sub?.nas;
+    const nasLabel = nas ? (nas.nasname ?? nas.nasIp ?? null) : null;
 
     const hasApi = !!(nas?.nasIp && nas.apiUsername && nas.apiPassword);
 
@@ -382,7 +437,8 @@ export class StaticIpService {
     let pinnedOnRouter = false;
     if (hasApi) {
       pinnedOnRouter = await this.mikrotik.setSecretRemoteAddress(
-        nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username, newIp,
+        // hasApi above guarantees nasIp/apiUsername/apiPassword are set.
+        nas.nasIp!, nas.apiPort ?? 8728, nas.apiUsername!, nas.apiPassword!, username, newIp,
       ).catch(() => false);
     }
 
@@ -408,13 +464,31 @@ export class StaticIpService {
     if (hasApi && reconnected) {
       await new Promise((r) => setTimeout(r, 4000)); // let them redial
       verifiedAddress = await this.mikrotik.getActiveAddress(
-        nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username,
+        nas.nasIp!, nas.apiPort ?? 8728, nas.apiUsername!, nas.apiPassword!, username,
       );
       if (verifiedAddress && verifiedAddress !== newIp) {
+        // IP MISMATCH DETECTED — durable, not just a log line. The panel must
+        // never silently believe a static IP took effect when the router is
+        // handing out something else.
         this.logger.warn(
           `${username} reconnected on ${verifiedAddress}, not ${newIp}. ` +
             `Check that the PPP profile does not force a remote-address pool.`,
         );
+        await this.prisma.systemLog.create({
+          data: {
+            level: 'ERROR',
+            source: 'static-ip',
+            message:
+              `IP MISMATCH: "${username}" reconnected on ${verifiedAddress}, expected static ${newIp} on ${nasLabel ?? nas?.nasIp ?? 'unknown NAS'}.`,
+            metadata: JSON.stringify({
+              username, subscriberId,
+              expected: newIp, actual: verifiedAddress,
+              nas: nasLabel ?? nas?.nasIp ?? null,
+              pinnedOnRouter,
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        }).catch(() => null);
       }
     }
 
@@ -434,6 +508,7 @@ export class StaticIpService {
       method,
       pinnedOnRouter,
       verifiedAddress,
+      nasLabel,
       // Only claim the address is live when the router says so.
       applied: verifiedAddress ? verifiedAddress === newIp : null,
       warning:
@@ -558,25 +633,47 @@ export class StaticIpService {
     // live session is still on the static address. Without a kick the customer
     // keeps an address the panel has already marked AVAILABLE — and it could
     // be handed to somebody else, putting two customers on one IP.
+    const holder = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: { username: true, nas: true },
+    }).catch(() => null) as any;
+    const nas = holder?.nas;
+    const nasLabel = nas ? (nas.nasname ?? nas.nasIp ?? null) : null;
+
+    let disconnectResult: string | null = null;
     try {
-      const sub = await this.prisma.subscriber.findUnique({
-        where: { id: subscriberId },
-        select: { username: true, nas: true },
-      });
-      // Un-pin the router first. A secret still carrying remote-address =
-      // the released IP would keep handing it out no matter what RADIUS says,
-      // and the address is now marked AVAILABLE for someone else — two
-      // customers on one IP.
-      const nas = sub?.nas as any;
-      if (sub?.username && nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+      if (holder?.username && nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+        // Un-pin the router first. A secret still carrying remote-address =
+        // the released IP would keep handing it out no matter what RADIUS says,
+        // and the address is now marked AVAILABLE for someone else — two
+        // customers on one IP.
         await this.mikrotik.clearSecretRemoteAddress(
-          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
+          nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, holder.username,
         ).catch(() => null);
       }
-      if (sub?.username) await this.network.disconnect(sub.username);
-    } catch {
-      // Offline — they will pick up a pool address when they next dial in.
+      if (holder?.username) {
+        await this.network.disconnect(holder.username);
+        disconnectResult = 'session-cut'; // disconnect() only returns once verified
+      }
+    } catch (e: any) {
+      // Either they were offline (fine — they pick up a pool address when they
+      // next dial in) or the cut is still in flight. Either way the DB + RADIUS
+      // state is already DYNAMIC; the audit entry records what actually happened.
+      disconnectResult = `session-not-cut: ${e?.message || e}`;
     }
+
+    // AUDIT: removal is the mirror image of assignment — old address, new
+    // (none), who did it, and what the network actually did in response.
+    await this.audit('STATIC_IP_REMOVED', {
+      subscriberId,
+      username: holder?.username ?? null,
+      oldValue: ip.ipAddress,
+      newValue: null,
+      nas: nasLabel,
+      actor,
+      result: disconnectResult ?? 'unknown',
+      error: null,
+    });
 
     return updated;
   }
@@ -765,6 +862,259 @@ export class StaticIpService {
   }
 
   // ── helpers ──────────────────────────────────────────────────
+
+  /**
+   * NETWORK VALIDATION (spec: "A static IP must belong to a network/subnet
+   * compatible with the subscriber's NAS/service").
+   *
+   * This is where the panel stops an allocation the network could never hand
+   * out, instead of recording it in the database and pretending. Three layers:
+   *
+   *   1. Format — valid, routable public/private IPv4 (not loopback, multicast,
+   *      network-zero, broadcast).
+   *   2. Not the NAS itself — the router's own IP can never be a customer's.
+   *   3. Compatibility — the address must be inside one of the NAS's registered
+   *      IP pools (the routable customer space) OR share the NAS's own /24
+   *      (PPPoE service subnets are frequently not registered as pools; if the
+   *      router lives at 192.168.88.17, 192.168.88.151 is local to it even
+   *      when no pool row exists). Anything else is rejected with the exact
+   *      failure an operator can act on, rather than a silently-routed-mismatch.
+   *
+   * Returns the NAS label (for audit logs), or throws on an invalid address.
+   */
+  private async validateIpForNas(
+    ip: string,
+    subscriberId: number,
+    gateway?: string | null,
+  ): Promise<string | null> {
+    if (!this.isIpv4(ip)) {
+      throw new BadRequestException(`"${ip}" is not a valid IPv4 address.`);
+    }
+    const n = this.ipToInt(ip)!;
+    const first = n >>> 24;
+    if (first === 0 || first === 127 || (first >= 224 && first <= 255)) {
+      throw new BadRequestException(
+        `"${ip}" is not a routable customer address — network-zero, loopback, multicast and broadcast ranges are reserved.`,
+      );
+    }
+
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: {
+        nas: {
+          select: {
+            nasIp: true, nasname: true,
+            ipPools: { select: { network: true, subnet: true } },
+          },
+        },
+      },
+    }).catch(() => null) as any;
+    const nas = sub?.nas as any;
+    if (!nas?.nasIp) return null; // no NAS — nothing to validate against
+
+    const nasLabel = nas.nasname ?? nas.nasIp;
+    if (ip === nas.nasIp) {
+      throw new BadRequestException(
+        `"${ip}" is the NAS's own address (${nas.nasIp}) — pick a customer address.`,
+      );
+    }
+
+    const pools = (nas.ipPools || []).filter((p: any) => p?.network);
+    const inPool = pools.some((p: any) => this.ipInCidr(ip, p.network, p.subnet));
+    const inNas24 = this.sameSubnet24(ip, nas.nasIp);
+    if (!inPool && !inNas24) {
+      throw new BadRequestException(
+        `Static IP is not valid for this NAS/network. ${ip} is not within ` +
+          (pools.length
+            ? `any of the NAS pools (${pools.map((p: any) => `${p.network}/${p.subnet}`).join(', ')})`
+            : `the ${nasLabel} subnet`) +
+          ` — addresses must be routable on NAS ${nasLabel} (${nas.nasIp}).`,
+      );
+    }
+
+    // Gateway: local to the same network as the assigned address, never the
+    // address itself. The gateway is NOT pushed to RADIUS (PPPoE derives the
+    // default route from the PPP profile) — it only has to be a plausible hop.
+    if (gateway) {
+      if (!this.isIpv4(gateway)) {
+        throw new BadRequestException(`"${gateway}" is not a valid gateway address.`);
+      }
+      if (gateway === ip) {
+        throw new BadRequestException('The gateway cannot be the same address as the static IP.');
+      }
+      if (!this.sameSubnet24(ip, gateway)) {
+        throw new BadRequestException(
+          `Gateway ${gateway} is not on the same subnet as ${ip} — the customer could not reach it.`,
+        );
+      }
+    }
+
+    return nasLabel;
+  }
+
+  /** True when `ip` falls inside network/prefix (subnet = CIDR prefix, e.g. "24"). */
+  private ipInCidr(ip: string, network: string, prefix: string | number): boolean {
+    const ipN = this.ipToInt(ip);
+    const netN = this.ipToInt(network);
+    if (ipN === null || netN === null) return false;
+    const bits = parseInt(String(prefix), 10);
+    if (isNaN(bits) || bits < 0 || bits > 32) return false;
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return (ipN & mask) === (netN & mask);
+  }
+
+  /** True when both addresses share the first 24 bits (same /24). */
+  private sameSubnet24(a: string, b: string): boolean {
+    const x = this.ipToInt(a);
+    const y = this.ipToInt(b);
+    if (x === null || y === null) return false;
+    return (x >>> 8) === (y >>> 8);
+  }
+
+  /**
+   * AUDIT LOG (spec: actor / subscriber / old / new / NAS / timestamp /
+   * result / error) for every static-IP state change. Written to systemLog
+   * (structured, queryable metadata) and activityLog (the activity feed).
+   */
+  private async audit(
+    action: string,
+    data: {
+      subscriberId?: number;
+      username?: string | null;
+      oldValue?: string | null;
+      newValue?: string | null;
+      nas?: string | null;
+      actor?: Actor;
+      result?: string;
+      error?: string | null;
+      extra?: Record<string, any>;
+    },
+  ) {
+    const actorId = data.actor ? this.scope.actorId(data.actor) : null;
+    const meta = {
+      action,
+      actorId,
+      subscriberId: data.subscriberId ?? null,
+      username: data.username ?? null,
+      oldValue: data.oldValue ?? null,
+      newValue: data.newValue ?? null,
+      nas: data.nas ?? null,
+      result: data.result ?? null,
+      error: data.error ?? null,
+      timestamp: new Date().toISOString(),
+      ...(data.extra ?? {}),
+    };
+    await this.prisma.systemLog.create({
+      data: {
+        level: data.error ? 'ERROR' : 'INFO',
+        source: 'static-ip',
+        message: `${action}: ${data.username ?? data.subscriberId ?? '?'} ${data.oldValue ?? '—'} → ${data.newValue ?? '—'}`,
+        metadata: JSON.stringify(meta),
+      },
+    }).catch(() => null);
+    await this.prisma.activityLog.create({
+      data: {
+        userId: actorId ?? undefined,
+        action,
+        entity: 'StaticIp',
+        entityId: data.subscriberId ?? null,
+        details:
+          `${data.username ?? '?'}: ${data.oldValue ?? '—'} → ${data.newValue ?? '—'}` +
+          ` @ ${data.nas ?? 'unknown NAS'} — ${data.error ? `ERROR ${data.error}` : (data.result ?? 'ok')}`,
+      },
+    }).catch(() => null);
+  }
+
+  /**
+   * STATIC-IP HEALTH CHECK (spec): database assignment vs RADIUS radreply vs
+   * the router's actual live session. Reports what agrees and what does not —
+   * the panel never hides a mismatch.
+   */
+  async staticIpHealth(subscriberId: number, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriber(actor, subscriberId);
+
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: {
+        id: true,
+        username: true,
+        authMethod: true,
+        serviceSettings: true,
+        nas: {
+          select: { nasname: true, nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+        },
+      },
+    }) as any;
+    if (!sub) throw new NotFoundException(`Subscriber ${subscriberId} not found`);
+
+    const ss = sub?.serviceSettings;
+    const wantsStatic = sub?.authMethod === 'STATIC' || ss?.ipType === 'STATIC';
+    const configuredIp: string | null = wantsStatic ? (ss?.ipAddress ?? null) : null;
+
+    // 1. DATABASE — the assignment the panel believes in.
+    const register = await this.prisma.staticIp.findFirst({
+      where: { subscriberId, status: { in: ['ASSIGNED', 'EXPIRED'] } },
+      select: { id: true, ipAddress: true, status: true, nasId: true },
+    });
+
+    // 2. RADIUS — the Framed-IP-Address FreeRADIUS will actually return.
+    let radiusIp: string | null = null;
+    if (sub?.username) {
+      const rr = await this.prisma.radReply.findFirst({
+        where: { username: sub.username, attribute: 'Framed-IP-Address' },
+        select: { value: true },
+      });
+      radiusIp = rr?.value ?? null;
+    }
+
+    // 3. SESSION — what the customer is holding RIGHT NOW. The router API is
+    //    the authority when credentials exist; otherwise radacct's freshest
+    //    open row. undefined = could not ask the router.
+    const rows = await this.prisma.$queryRaw<Array<any>>`
+      SELECT framedipaddress FROM radacct
+       WHERE username = ${sub.username} AND acctstoptime IS NULL
+         AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'
+       ORDER BY acctstarttime DESC LIMIT 1`.catch(() => [] as any);
+    const acctIp: string | null = rows[0]?.framedipaddress ?? null;
+
+    const nas = sub?.nas as any;
+    let routerIp: string | null | undefined;
+    if (nas?.nasIp && nas.apiUsername && nas.apiPassword && sub?.username) {
+      routerIp = await this.mikrotik.getActiveAddress(
+        nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
+      ).catch(() => undefined); // undefined = unreachable, null = offline
+    }
+    const sessionIp: string | null =
+      routerIp !== undefined ? routerIp : acctIp;
+    const online = !!sessionIp;
+
+    const databaseOk = wantsStatic ? !!configuredIp : true;
+    const radiusOk = !wantsStatic
+      ? (radiusIp === null ? true : false) // dynamic expects NO Framed-IP-Address
+      : radiusIp === configuredIp;
+    const sessionOk = online ? sessionIp === configuredIp : null;
+
+    let status: 'HEALTHY' | 'MISMATCH' | 'NOT_ONLINE' | 'DYNAMIC';
+    if (!wantsStatic) status = 'DYNAMIC';
+    else if (!online) status = 'NOT_ONLINE';
+    else if (databaseOk && radiusOk && sessionOk) status = 'HEALTHY';
+    else status = 'MISMATCH';
+
+    return {
+      subscriberId,
+      username: sub.username,
+      ipType: ss?.ipType ?? 'DYNAMIC',
+      wantsStatic,
+      configuredIp,
+      register,
+      nas: nas ? (nas.nasname ?? nas.nasIp ?? null) : null,
+      database: { ok: databaseOk, ip: configuredIp },
+      radius: { ok: radiusOk, ip: radiusIp, note: !wantsStatic && radiusIp ? 'Framed-IP-Address present on a DYNAMIC subscriber — stale' : null },
+      session: { online, ip: sessionIp, ok: sessionOk, source: routerIp !== undefined ? 'router-api' : (acctIp ? 'radacct' : null) },
+      status,
+    };
+  }
+
   private isIpv4(v: string) {
     const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
     return !!m && m.slice(1).every((o) => +o >= 0 && +o <= 255);

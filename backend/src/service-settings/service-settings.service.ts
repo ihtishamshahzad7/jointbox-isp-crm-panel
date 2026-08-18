@@ -1,10 +1,50 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { allocateIpv6, ipv6AutoConfig } from '../nas/ipv6-alloc';
+import { SubscribersService } from '../subscribers/subscribers.service';
 
 @Injectable()
 export class ServiceSettingsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(ServiceSettingsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    // Needed so a change to ipType/ipAddress/macAddress actually reaches
+    // RADIUS — see syncAfterWrite() below.
+    private subscribers: SubscribersService,
+  ) {}
+
+  /**
+   * Push the subscriber's profile to RADIUS after a settings write.
+   *
+   * THE BUG THIS FIXES: this service wrote ipType/ipAddress/macAddress
+   * straight to ServiceSettings and stopped there. Nothing re-synced RADIUS,
+   * so setting a customer to STATIC with an address through the Service
+   * Settings form updated the panel's own database and NOTHING ELSE — no
+   * Framed-IP-Address in radreply, no MAC binding. The panel then displayed
+   * the static IP it had faithfully saved while the NAS, which had never been
+   * told, kept handing out a pool address on every reconnect.
+   *
+   * syncToRadius() rewrites the whole profile from current settings, so it
+   * covers all three directions: DYNAMIC→STATIC writes Framed-IP-Address,
+   * STATIC→DYNAMIC drops it and restores the package's Framed-Pool, and
+   * changing the address just replaces the value.
+   *
+   * Deliberately non-fatal: a RADIUS hiccup must not make saving the form
+   * fail and lose the operator's other edits. It is logged loudly, and the
+   * nightly integrity sweep re-syncs anything that drifted.
+   */
+  private async syncAfterWrite(subscriberId: number) {
+    try {
+      await this.subscribers.syncToRadius(subscriberId);
+    } catch (e: any) {
+      this.logger.error(
+        `Service settings saved for subscriber #${subscriberId}, but the RADIUS ` +
+          `re-sync failed (${e?.message || e}). The addressing change will NOT ` +
+          `apply until the profile is synced — use "Sync to RADIUS" on the subscriber.`,
+      );
+    }
+  }
 
   async findBySubscriber(subscriberId: number) {
     return this.prisma.serviceSettings.findUnique({ where: { subscriberId } });
@@ -37,7 +77,7 @@ export class ServiceSettingsService {
   }
 
   async create(subscriberId: number, data: any) {
-    return this.prisma.serviceSettings.create({
+    const created = await this.prisma.serviceSettings.create({
       data: {
         subscriberId,
         ipAddress:      data.ipAddress,
@@ -70,10 +110,12 @@ export class ServiceSettingsService {
         isBlocked:      data.isBlocked   === 'true' || data.isBlocked   === true,
       },
     });
+    await this.syncAfterWrite(subscriberId);
+    return created;
   }
 
   async update(subscriberId: number, data: any) {
-    return this.prisma.serviceSettings.update({
+    const updated = await this.prisma.serviceSettings.update({
       where: { subscriberId },
       data: {
         ipAddress:      data.ipAddress,
@@ -106,6 +148,8 @@ export class ServiceSettingsService {
         isBlocked:      data.isBlocked   === 'true' || data.isBlocked   === true,
       },
     });
+    await this.syncAfterWrite(subscriberId);
+    return updated;
   }
 
   async upsert(subscriberId: number, data: any) {

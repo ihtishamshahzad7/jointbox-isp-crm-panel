@@ -18,7 +18,17 @@ describe('SubscribersService.activateRenewal', () => {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
       },
+      user: {
+        // activateRenewal resolves the acting reseller (ownership claim) —
+        // absent from the old mock, so every actorId-bearing test crashed.
+        findUnique: jest.fn().mockResolvedValue({ id: 7, role: 'RESELLER', branchId: 5 }),
+      },
       package: { findUnique: jest.fn() },
+      resellerPackagePrice: {
+        // Retail-price resolution for the activation path — a null row falls
+        // back to the package base price.
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       serviceSettings: {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
@@ -56,7 +66,12 @@ describe('SubscribersService.activateRenewal', () => {
       {} as any,      // queue
       accounting,
       notifications,
-      {} as any,      // scope
+      {
+        // Scope previously empty — activateRenewal's reseller-claim step calls
+        // isAdmin()/descendantIds() once prisma.user resolves.
+        isAdmin: jest.fn().mockReturnValue(false),
+        descendantIds: jest.fn().mockResolvedValue([7, 9]), // reseller 7 owns subscriber's user 9
+      } as any,      // scope
       pricing,
       {} as any,      // invoices
       {} as any,      // security
