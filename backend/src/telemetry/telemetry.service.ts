@@ -58,7 +58,9 @@ export class TelemetryService {
   async subscriberPath(subscriberId: number) {
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
-      select: { id: true, username: true, name: true, nasId: true },
+      // `fullName`, not `name` — Subscriber has no `name` column, so this
+      // threw PrismaClientValidationError and the whole endpoint 500'd.
+      select: { id: true, username: true, fullName: true, nasId: true },
     });
     if (!sub) return { found: false };
 
@@ -102,7 +104,8 @@ export class TelemetryService {
 
     return {
       found: true,
-      subscriber: { id: sub.id, username: sub.username, name: sub.name },
+      // Keep the response key `name` so the frontend contract is unchanged.
+      subscriber: { id: sub.id, username: sub.username, name: sub.fullName },
       online: !!session,
       session: session
         ? {
