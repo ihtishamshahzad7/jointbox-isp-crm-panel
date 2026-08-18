@@ -18,7 +18,7 @@ import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { SubscriberDetailProvider, useSubscriberDetail } from "./context";
 import { SubDetailStyles, RefreshControl, StatusChip, Btn, accountLevel } from "./ui";
-import { connLevel, fmtDateTime } from "./lib";
+import { connLevel, apiSend, fmtDateTime, fmtDuration } from "./lib";
 import BoostButton from "./boost-button";
 
 // Heavy tabs load lazily — opening the page never pulls every graph at once.
@@ -77,13 +77,38 @@ function DeviceShell() {
   const {
     sub, loading, sessionChecked, liveSession,
     openSessions, staticHealth, mode, setMode, liveConnected, lastUpdate,
-    refreshLive, loadBundle,
+    refreshLive, loadBundle, showToast, setBusy, busies,
   } = useSubscriberDetail();
   const router = useRouter();
   const subscriberId = useSubscriberId();
 
   const [tab, setTab] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Verified disconnect — the backend does the full chain (CoA/API → NAS →
+  // re-check real active session) and reports what ACTUALLY happened.
+  const disconnectNow = async () => {
+    if (!sub?.username) return;
+    if (!confirm(`Disconnect ${sub.fullName}'s active session? They will be forced offline immediately.`)) return;
+    setBusy("kill", true);
+    try {
+      const r = await apiSend<any>(`/network/disconnect/${encodeURIComponent(sub.username)}`, "POST");
+      if (r?.verified === false) {
+        showToast(r.message || "Disconnect reported errors — session may still be live. Check the Connection tab.", "warn");
+      } else if (r?.ok || r?.sessionsKilled) {
+        showToast(r.message || "Disconnected — session verified gone", "ok");
+      } else if (r?.message) {
+        showToast(r.message, "err");
+      } else {
+        showToast("Disconnect failed — no session to cut (subscriber already offline)", "warn");
+      }
+      await refreshLive();
+    } catch (e: any) {
+      showToast(e?.message || "Disconnect failed", "err");
+    } finally {
+      setBusy("kill", false);
+    }
+  };
 
   // Remember the last tab per subscriber (session storage).
   useEffect(() => {
@@ -155,15 +180,23 @@ function DeviceShell() {
             <code>{sub.username}</code>
           </h1>
           <div className="sd-meta">
-            <span>{sub.connectionType} · {sub.authMethod}</span>
+            <span>{sub.connectionType} • {sub.authMethod}</span>
             {sub.phone && <span>☎ {sub.phone}</span>}
-            {sub.package?.name && <span>📦 {sub.package.name}</span>}
-            {sub.nas?.nasname && <span>▤ {sub.nas.nasname}</span>}
+            {sub.email && <span>✉ {sub.email}</span>}
+            <span style={{ color: "var(--muted)" }}>since {sub.installationDate ? fmtDateTime(sub.installationDate).split(",")[0] : "—"}</span>
+          </div>
+          <div className="sd-meta" style={{ color: "var(--muted)" }}>
+            {sub.package?.name && <span>📦 <b style={{ color: "var(--text)" }}>{sub.package.name}</b></span>}
+            {sub.nas?.nasname && <span>▤ NAS: <b style={{ color: "var(--text)" }}>{sub.nas.nasname}</b></span>}
+            <span>IP: <b style={{ color: liveSession?.framedipaddress ? "var(--text)" : "var(--muted)" }}>{liveSession?.framedipaddress || "—"}</b></span>
             {sub.area?.name && <span>📍 {sub.area.name}</span>}
-            {sub.installationDate && <span>since {fmtDateTime(sub.installationDate)}</span>}
           </div>
           <div className="sd-status-row">
             <StatusChip level={conn.level === "online" ? "ok" : conn.level === "offline" ? "off" : "unknown"} text={conn.text} dotPulse={conn.level === "online"} />
+            {/* Live uptime — only when the active radacct session proves it */}
+            {conn.level === "online" && liveSession?.duration_seconds
+              ? <span className="sd-chip" style={{ color: "#219653", background: "rgba(33,150,83,.10)" }}>Live • {fmtDuration(liveSession.duration_seconds)}</span>
+              : null}
             <StatusChip level={acct.level} text={acct.text} detail={acct.detail} dotPulse={false} />
             {staticHealth?.status === "HEALTHY" && <StatusChip level="ok" text={`Static ${staticHealth.configuredIp}`} dotPulse={false} />}
             {staticHealth?.status === "MISMATCH" && <StatusChip level="bad" text="Static IP mismatch" dotPulse={false} />}
@@ -176,6 +209,9 @@ function DeviceShell() {
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <Btn size="sm" variant="default" onClick={() => { void refreshLive(); }} title="Re-query the live endpoints now">
               ⟳ Refresh
+            </Btn>
+            <Btn size="sm" variant="danger" onClick={() => { void disconnectNow(); }} disabled={busies.kill} title="Forces the subscriber offline — backend verifies the session actually terminated">
+              {busies.kill ? "Disconnecting…" : "⏻ Disconnect"}
             </Btn>
             <Btn size="sm" variant="default" onClick={() => { void loadBundle(); }} title="Reload profile + invoices/payments/tickets">
               ⇅ Profile
