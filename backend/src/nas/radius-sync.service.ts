@@ -191,6 +191,30 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     return this.connected ? this.pgClient : null;
   }
 
+  /**
+   * RADIUS DB connectivity — lets the UI show an honest connected/offline
+   * state instead of pretending a preview means the router can be reached.
+   */
+  isRadiusConnected(): boolean {
+    return this.connected;
+  }
+
+  /**
+   * Public rate-limit preview — the EXACT string a real sync will write, built
+   * by the same private builder the sync paths use, so a preview can never
+   * drift from what actually lands in radreply.
+   */
+  previewRateLimit(pkg: {
+    downloadSpeed: number;
+    uploadSpeed: number;
+    burstDownload?: number | null;
+    burstUpload?: number | null;
+    burstThreshold?: number | null;
+    burstTime?: number | null;
+  }): string {
+    return this.buildRateLimit(pkg);
+  }
+
   private ensureConnected() {
     if (!this.connected || !this.pgClient) {
       throw new Error(
@@ -213,17 +237,32 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     const dl = pkg.downloadSpeed;
     const ul = pkg.uploadSpeed;
 
-    // If any burst field is set, build full burst string
+    // ORDER IS rx/tx — UPLOAD FIRST, THEN DOWNLOAD.
+    //
+    // Mikrotik-Rate-Limit is documented as:
+    //   rx-rate[/tx-rate] [rx-burst-rate[/tx-burst-rate] ...]
+    // and rx/tx are from the ROUTER's point of view, so:
+    //   rx = traffic the router RECEIVES from the client = customer UPLOAD
+    //   tx = traffic the router TRANSMITS to the client  = customer DOWNLOAD
+    //
+    // THE BUG THIS FIXES: this emitted `${dl}M/${ul}M` — download first — so
+    // every value was applied to the wrong direction. A 10 Mbps down / 2 Mbps
+    // up package was written as "10M/2M", which the router read as 10 Mbps
+    // UPLOAD and 2 Mbps DOWNLOAD: the customer paid for 10 down and got 2,
+    // while being handed upload they were never sold. Symmetric packages
+    // (dl === ul) were unaffected, which is why it survived so long.
+    //
+    // Burst fields follow the same rx/tx order, so the burst pair is
+    // upload-burst/download-burst too.
     if (pkg.burstDownload && pkg.burstUpload) {
       const bDl = pkg.burstDownload;
       const bUl = pkg.burstUpload;
       const bThr = pkg.burstThreshold ?? Math.floor(dl * 0.5);
       const bT = pkg.burstTime ?? 10;
-      return `${dl}M/${ul}M ${bDl}M/${bUl}M ${bThr}M/${bThr}M ${bT}`;
+      return `${ul}M/${dl}M ${bUl}M/${bDl}M ${bThr}M/${bThr}M ${bT}`;
     }
 
-    // Simple no-burst rate limit
-    return `${dl}M/${ul}M`;
+    return `${ul}M/${dl}M`;
   }
 
   /**

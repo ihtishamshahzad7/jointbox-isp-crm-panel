@@ -142,8 +142,27 @@ export interface OverviewResponse {
     createdAt: string;
     user: { id: number; name: string; email: string | null; role: string } | null;
   }>;
-  health: Array<{ level: "info" | "warn"; code: string; message: string }>;
-  warnings: Array<{ level: "info" | "warn"; code: string; message: string }>;
+  health: HealthCheck[];
+  /** Blocking problems only — a non-empty list means new activations are refused. */
+  errors?: HealthCheck[];
+  warnings: HealthCheck[];
+  healthStatus?: {
+    status: "HEALTHY" | "WARNING" | "ERROR";
+    errors: number;
+    warnings: number;
+    canActivateNewSubscribers: boolean;
+    summary: string;
+  };
+}
+
+export type HealthLevel = "error" | "warn" | "ok" | "info";
+
+export interface HealthCheck {
+  level: HealthLevel;
+  code: string;
+  message: string;
+  /** Optional hint for a remediation action, e.g. "FIX_FUP". */
+  fix?: string;
 }
 
 /** Correct FUP semantics from the fields the enforcement sweep actually reads.
@@ -178,10 +197,21 @@ export function serviceTypeLabel(s: ServiceType | undefined): string {
 }
 
 /** Health badge tone mapping for the overview's check list. */
-export function healthTone(level: "info" | "warn"): { color: string; bg: string } {
-  return level === "warn"
-    ? { color: "#F59E0B", bg: "rgba(245,158,11,.10)" }
-    : { color: "var(--muted)", bg: "rgba(148,163,184,.08)" };
+/**
+ * Four distinct levels, deliberately. Collapsing `error` into `warn` is what
+ * made an impossible FUP configuration look like a housekeeping note.
+ *   error — cannot work as configured; blocks new activations
+ *   warn  — works, but needs a look
+ *   ok    — verified good
+ *   info  — neutral fact
+ */
+export function healthTone(level: HealthLevel): { color: string; bg: string; icon: string } {
+  switch (level) {
+    case "error": return { color: "#ff7070", bg: "rgba(255,112,112,.12)", icon: "✕" };
+    case "warn":  return { color: "#F59E0B", bg: "rgba(245,158,11,.10)", icon: "⚠" };
+    case "ok":    return { color: "#10B981", bg: "rgba(16,185,129,.10)", icon: "✓" };
+    default:      return { color: "var(--muted)", bg: "rgba(148,163,184,.08)", icon: "•" };
+  }
 }
 
 export function fmtDate(iso: string | null | undefined): string {

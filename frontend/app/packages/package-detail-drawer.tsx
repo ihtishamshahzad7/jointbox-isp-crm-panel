@@ -23,12 +23,13 @@ import {
   healthTone, fmtDate,
 } from "./lib";
 
-type Tab = "overview" | "pricing" | "revenue" | "pool" | "audit";
+type Tab = "overview" | "pricing" | "revenue" | "fup" | "pool" | "audit";
 
 const TAB_LABEL: Record<Tab, string> = {
   overview: "Overview",
   pricing: "Pricing & Profit",
   revenue: "Revenue",
+  fup: "Quota & FUP",
   pool: "Pool & RADIUS",
   audit: "Audit",
 };
@@ -62,6 +63,10 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
 
   const pkg = data?.package;
   const fup = data?.fup;
+  // An ERROR and a WARNING are not the same thing. The header used to show a
+  // single amber "⚠ config issue" for both, so a package that can never behave
+  // as sold looked identical to a minor note.
+  const hasError = (data?.health || []).some((h) => h.level === "error");
   const hasWarn = (data?.health || []).some((h) => h.level === "warn");
 
   return (
@@ -87,9 +92,16 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
                 }}>
                   {pkg?.isActive ? "Active" : "Archived"}
                 </span>
-                {hasWarn && (
+                {hasError ? (
+                  <span title="This package cannot be activated for new subscribers until it is fixed."
+                    style={{ padding: "3px 10px", borderRadius: "999px", fontSize: "10px", fontWeight: "700",
+                      background: "rgba(255,112,112,.14)", color: "#ff7070" }}>✕ Configuration error</span>
+                ) : hasWarn ? (
                   <span style={{ padding: "3px 10px", borderRadius: "999px", fontSize: "10px", fontWeight: "700",
-                    background: "rgba(245,158,11,.12)", color: "#F59E0B" }}>⚠ config issue</span>
+                    background: "rgba(245,158,11,.12)", color: "#F59E0B" }}>⚠ Warning</span>
+                ) : (
+                  <span style={{ padding: "3px 10px", borderRadius: "999px", fontSize: "10px", fontWeight: "700",
+                    background: "rgba(16,185,129,.12)", color: "#10B981" }}>✓ Healthy</span>
                 )}
               </div>
               {pkg?.description && (
@@ -131,6 +143,7 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
                 {tab === "overview" && <OverviewTab data={data} onRefresh={mutate} />}
                 {tab === "pricing" && <PricingTab data={data} />}
                 {tab === "revenue" && <RevenueTab data={data} />}
+                {tab === "fup" && <FupTab data={data} />}
                 {tab === "pool" && <PoolTab data={data} />}
                 {tab === "audit" && <AuditTab data={data} />}
               </>
@@ -172,22 +185,46 @@ function OverviewTab({ data, onRefresh }: { data: OverviewResponse; onRefresh: (
         {specs.map((s) => <Field key={s.label} label={s.label}>{s.value}</Field>)}
       </div>
 
-      {/* Health checks — derived from real data server-side. */}
+      {/* Health checks — derived from real data server-side.
+          Ordered error → warn → ok → info so a blocking problem can never be
+          buried under a list of neutral facts. */}
       <section>
-        <h3 style={{ fontSize: "12px", fontWeight: "800", letterSpacing: ".06em", textTransform: "uppercase", color: "var(--muted)", margin: "0 0 10px" }}>Configuration checks</h3>
+        <h3 style={{ fontSize: "12px", fontWeight: "800", letterSpacing: ".06em", textTransform: "uppercase", color: "var(--muted)", margin: "0 0 10px" }}>Configuration health</h3>
+        {data.healthStatus && (
+          <div style={{
+            padding: "10px 14px", borderRadius: 10, marginBottom: 10, fontSize: 12.5, lineHeight: 1.6,
+            fontWeight: 600,
+            border: `1px solid ${healthTone(
+              data.healthStatus.status === "ERROR" ? "error" : data.healthStatus.status === "WARNING" ? "warn" : "ok").color}`,
+            background: healthTone(
+              data.healthStatus.status === "ERROR" ? "error" : data.healthStatus.status === "WARNING" ? "warn" : "ok").bg,
+            color: healthTone(
+              data.healthStatus.status === "ERROR" ? "error" : data.healthStatus.status === "WARNING" ? "warn" : "ok").color,
+          }}>
+            {data.healthStatus.summary}
+          </div>
+        )}
         {(data.health || []).length === 0 && <div style={{ fontSize: "13px", color: "var(--muted)" }}>No checks.</div>}
         <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          {(data.health || []).map((h, i) => {
-            const t = healthTone(h.level);
-            return (
-              <div key={i} style={{
-                padding: "10px 14px", borderRadius: "10px", border: "1px solid var(--border)",
-                background: t.bg, fontSize: "12.5px", color: h.level === "warn" ? "#F59E0B" : "var(--muted)", lineHeight: 1.5,
-              }}>
-                {h.message}
-              </div>
-            );
-          })}
+          {[...(data.health || [])]
+            .sort((a, b) => {
+              const rank: Record<string, number> = { error: 0, warn: 1, ok: 2, info: 3 };
+              return (rank[a.level] ?? 9) - (rank[b.level] ?? 9);
+            })
+            .map((h, i) => {
+              const t = healthTone(h.level);
+              return (
+                <div key={i} style={{
+                  padding: "10px 14px", borderRadius: "10px",
+                  border: `1px solid ${h.level === "error" ? t.color : "var(--border)"}`,
+                  background: t.bg, fontSize: "12.5px", color: t.color, lineHeight: 1.5,
+                  display: "flex", gap: 8, alignItems: "flex-start",
+                }}>
+                  <span style={{ fontWeight: 800 }}>{t.icon}</span>
+                  <span>{h.message}</span>
+                </div>
+              );
+            })}
         </div>
       </section>
 
@@ -287,6 +324,124 @@ function RevenueTab({ data }: { data: OverviewResponse }) {
       <div style={{ fontSize: "12.5px", color: "var(--muted)", lineHeight: 1.7 }}>
         Revenue is what ACTIVE subscribers actually pay (their sellPrice, which can differ per reseller).
         This matches the Reports → Analytics package mix so this drawer can never disagree with the reports page.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Quota & FUP — make the throttle behaviour obvious instead of leaving the
+ * operator to infer it from two loose numbers.
+ *
+ * Renders the actual before/after the subscriber experiences, and states
+ * plainly when the configuration cannot work (FUP above plan speed, only one
+ * of the two speeds set, or a quota with nothing enforcing it) rather than
+ * showing a tidy summary of a broken setup.
+ */
+function FupTab({ data }: { data: OverviewResponse }) {
+  const p: any = data.package || {};
+  const dl = Number(p.downloadSpeed) || 0;
+  const ul = Number(p.uploadSpeed) || 0;
+  const quota = p.dataQuotaGb ?? null;
+  const fDl = p.fupDownloadSpeed ?? null;
+  const fUl = p.fupUploadSpeed ?? null;
+
+  const aboveDl = fDl != null && dl > 0 && fDl > dl;
+  const aboveUl = fUl != null && ul > 0 && fUl > ul;
+  const halfSet = (fDl != null) !== (fUl != null);
+  const invalid = aboveDl || aboveUl || halfSet;
+  const noEnforcement = quota != null && fDl == null && fUl == null;
+
+  const box = (bg: string, bd: string) => ({
+    background: bg, border: `1px solid ${bd}`, borderRadius: 10, padding: "12px 14px",
+  });
+  const label = { fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase" as const,
+    color: "var(--muted)", fontWeight: 700, marginBottom: 6 };
+  const speed = { fontSize: 17, fontWeight: 800, fontFamily: "monospace" };
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      {/* Normal speed */}
+      <div style={box("var(--surface-2, rgba(255,255,255,.03))", "var(--border)")}>
+        <div style={label}>Normal speed</div>
+        <div style={{ display: "flex", gap: 26 }}>
+          <div><div style={{ ...speed, color: "#38bdf8" }}>↓ {dl} Mbps</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Download</div></div>
+          <div><div style={{ ...speed, color: "#a78bfa" }}>↑ {ul} Mbps</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Upload</div></div>
+        </div>
+      </div>
+
+      {/* Allowance */}
+      <div style={box("var(--surface-2, rgba(255,255,255,.03))", "var(--border)")}>
+        <div style={label}>Data allowance</div>
+        <div style={{ ...speed, color: "var(--text)" }}>
+          {quota != null ? `${quota} GB` : "Unlimited"}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+          {quota != null
+            ? "Measured over the subscriber's own billing cycle (expiry − duration)."
+            : "No quota set — usage is not capped, so no FUP can trigger."}
+        </div>
+      </div>
+
+      {/* When quota is exhausted */}
+      <div style={box(
+        invalid ? "rgba(255,112,112,.07)" : "var(--surface-2, rgba(255,255,255,.03))",
+        invalid ? "#ff7070" : "var(--border)")}>
+        <div style={label}>When the allowance is used up</div>
+
+        {invalid ? (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#ff7070", marginBottom: 6 }}>
+              ✕ Invalid FUP configuration — nothing will be enforced
+            </div>
+            <ul style={{ margin: "0 0 8px 16px", padding: 0, fontSize: 12, color: "var(--text)", lineHeight: 1.75 }}>
+              {aboveDl && <li>FUP download <b>{fDl} Mbps</b> exceeds the package download speed of <b>{dl} Mbps</b>. A throttle must be lower than the plan speed.</li>}
+              {aboveUl && <li>FUP upload <b>{fUl} Mbps</b> exceeds the package upload speed of <b>{ul} Mbps</b>.</li>}
+              {halfSet && <li>Only the FUP <b>{fDl != null ? "download" : "upload"}</b> speed is set. A half-configured throttle writes an invalid rate limit that the router rejects — set both, or neither.</li>}
+            </ul>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.7 }}>
+              The nightly sweep skips these subscribers and logs an error rather than breaking their
+              session, so <b>they keep full speed past the quota</b>. Edit the package to set a valid
+              throttle — a common choice is 1&nbsp;Mbps / 1&nbsp;Mbps. If you meant to <i>increase</i>{" "}
+              speed, that is Temporary Boost, not FUP.
+            </div>
+          </>
+        ) : noEnforcement ? (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#F59E0B", marginBottom: 6 }}>
+              ⚠ Measured but not enforced
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.7 }}>
+              Usage is tracked and shown against the {quota} GB allowance, but no FUP speeds are set,
+              so nothing happens when it is exceeded.
+            </div>
+          </>
+        ) : fDl != null && fUl != null ? (
+          <>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>Action: <b style={{ color: "var(--text)" }}>Throttle</b></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 2 }}>BEFORE</div>
+                <div style={{ fontSize: 13, fontFamily: "monospace", color: "var(--text)" }}>↓ {dl} · ↑ {ul} Mbps</div>
+              </div>
+              <div style={{ fontSize: 18, color: "var(--muted)" }}>→</div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 2 }}>AFTER {quota} GB</div>
+                <div style={{ fontSize: 13, fontFamily: "monospace", color: "#F59E0B" }}>↓ {fDl} · ↑ {fUl} Mbps</div>
+              </div>
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.7 }}>
+              Applied by rewriting <code>Mikrotik-Rate-Limit</code> and reconnecting the session, so it
+              takes effect immediately rather than on next login. Speed is restored on renewal.
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
+            No FUP configured — subscribers keep full speed regardless of usage.
+          </div>
+        )}
       </div>
     </div>
   );

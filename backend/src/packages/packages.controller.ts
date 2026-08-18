@@ -114,6 +114,36 @@ export class PackagesController {
     return this.packagesService.findOne(+id);
   }
 
+  /**
+   * Rate-limit audit — shows, per package, the Mikrotik-Rate-Limit string
+   * written before vs after the rx/tx order fix, and how many subscribers each
+   * package affects. Read-only; re-sync nothing until this has been reviewed.
+   */
+  @Get('rate-limit/audit')
+  rateLimitAudit(): any {
+    return this.packagesService.rateLimitAudit();
+  }
+
+  /**
+   * Test Package — run the real validation against live data and report what
+   * would actually happen, including the exact RADIUS attributes that would be
+   * written. Read-only: changes nothing, touches no subscriber.
+   */
+  @Get(':id/test')
+  testPackage(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.testPackage(+id, req.user);
+  }
+
+  /**
+   * Apply the package's current config to subscribers (scopes: new / renewals
+   * / existing). 'existing' rewrites live RADIUS profiles and is admin-gated;
+   * sessions are only kicked when kick=true is explicitly sent.
+   */
+  @Post(':id/apply')
+  applyToSubscribers(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
+    return this.packagesService.applyToSubscribers(+id, body, req.user);
+  }
+
   @Post()
   create(@Body() body: any, @Req() req: any): any {
     return this.packagesService.create(body, req.user);

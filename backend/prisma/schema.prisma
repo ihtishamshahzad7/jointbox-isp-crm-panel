@@ -1159,6 +1159,16 @@ model Package {
   // standard practice locally. Null = no FUP, quota simply isn't enforced.
   fupDownloadSpeed Int?
   fupUploadSpeed   Int?
+  /**
+   * What happens when the data quota is exhausted:
+   *   THROTTLE — reduce to fupDownloadSpeed/fupUploadSpeed (default).
+   *   BLOCK    — suspend the connection until the cycle restarts / quota tops up.
+   *   NONE     — measure and report usage, take no action.
+   * Null = follow the global FUP_MODE env (legacy behaviour). Kept nullable so
+   * existing packages keep working exactly as they do today until an operator
+   * explicitly picks an action in the editor.
+   */
+  fupAction        String?
   // Data allowance in GB for one billing period. Null = unlimited, which is
   // what most local packages are — FUP only bites where a quota is set.
   // A per-subscriber ServiceSettings.quota overrides this.

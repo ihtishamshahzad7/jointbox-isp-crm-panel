@@ -186,15 +186,18 @@ export class FupService {
   async enforce() {
     if (process.env.FUP_ENABLED === 'false') return;
     try {
-      // In THROTTLE mode a reduced speed is required (nothing to slow to
-      // otherwise). In BLOCK mode we cut net entirely, so no package speed is
-      // needed — any active subscriber with a resolvable quota qualifies.
-      const block = this.mode === 'BLOCK';
+      // Per-package action, resolved per subscriber:
+      //   THROTTLE — reduce to the package FUP speeds (needs both, else skip).
+      //   BLOCK    — cut the connection entirely; no FUP speeds required.
+      //   NONE     — measure and report, take no action.
+      // A package with no explicit fupAction follows the global FUP_MODE env
+      // (legacy behaviour). The old code filtered candidates by whether FUP
+      // speeds existed, then applied the SAME mode to every package — a
+      // package-level choice was impossible.
       const candidates = await this.prisma.subscriber.findMany({
         where: {
           status: 'ACTIVE',
           fupApplied: false,
-          ...(block ? {} : { package: { is: { fupDownloadSpeed: { not: null } } } }),
         },
         include: { package: { include: { pool: true } }, serviceSettings: true },
         take: 500,
@@ -208,16 +211,24 @@ export class FupService {
         const quotaGb = this.quotaGb(sub.serviceSettings?.quota, pkg?.dataQuotaGb, bonus);
         if (!quotaGb) continue;
 
-        const since = this.cycleStart(sub.serviceSettings?.expiryDate, sub.serviceSettings?.duration, (sub.package as any)?.duration);
+        const action = (pkg?.fupAction || '').toUpperCase() || this.mode;
+        // "No Action" is a deliberate choice — measure, do not touch.
+        if (action === 'NONE') continue;
+        // Throttle needs a concrete target; without both speeds it would write
+        // a malformed rate limit ("1000M/nullM"). Skip — the package's health
+        // check surfaces this as a configuration error for the operator.
+        if (action !== 'BLOCK' && (!pkg?.fupDownloadSpeed || !pkg?.fupUploadSpeed)) continue;
+
+        const since = this.cycleStart(sub.serviceSettings?.expiryDate, sub.serviceSettings?.duration, pkg?.duration);
         const usedGb = (await this.usageBytes(sub.username, since)) / 1024 ** 3;
         if (usedGb < quotaGb) continue;
 
-        if (block) await this.applyBlock(sub, usedGb, quotaGb);
+        if (action === 'BLOCK') await this.applyBlock(sub, usedGb, quotaGb);
         else await this.applyThrottle(sub, usedGb, quotaGb);
         acted++;
       }
 
-      if (acted) this.logger.log(`FUP: ${block ? 'blocked' : 'throttled'} ${acted} subscriber(s) over quota`);
+      if (acted) this.logger.log(`FUP: ${acted} subscriber(s) over quota — actioned per their package setting`);
     } catch (e: any) {
       this.logger.warn(`FUP sweep failed: ${e?.message || e}`);
     }
@@ -246,6 +257,47 @@ export class FupService {
   private async applyThrottle(sub: any, usedGb: number, quotaGb: number) {
     const pkg = sub.package;
     try {
+      // GUARD — refuse to write an incoherent throttle.
+      //
+      // The rate limit below is built as `${downloadSpeed}M/${uploadSpeed}M`.
+      // With fupUploadSpeed NULL (which the package editor used to allow) that
+      // renders the literal string "1000M/nullM", a malformed
+      // Mikrotik-Rate-Limit the router rejects — so the customer either keeps
+      // full speed or loses the session entirely, and nothing says why.
+      //
+      // A FUP speed above the plan speed is equally incoherent: it would RAISE
+      // the customer's speed as a punishment for exceeding quota.
+      const fupDl = pkg?.fupDownloadSpeed;
+      const fupUl = pkg?.fupUploadSpeed;
+      const invalid: string[] = [];
+      if (!(fupDl > 0)) invalid.push('FUP download speed is not set');
+      if (!(fupUl > 0)) invalid.push('FUP upload speed is not set');
+      if (fupDl > 0 && pkg?.downloadSpeed > 0 && fupDl > pkg.downloadSpeed) {
+        invalid.push(`FUP download ${fupDl} Mbps exceeds the package speed ${pkg.downloadSpeed} Mbps`);
+      }
+      if (fupUl > 0 && pkg?.uploadSpeed > 0 && fupUl > pkg.uploadSpeed) {
+        invalid.push(`FUP upload ${fupUl} Mbps exceeds the package speed ${pkg.uploadSpeed} Mbps`);
+      }
+      if (invalid.length) {
+        this.logger.error(
+          `FUP NOT applied to ${sub.username} (used ${usedGb.toFixed(1)}/${quotaGb} GB): ` +
+            `package "${pkg?.name ?? pkg?.id}" has an invalid FUP configuration — ${invalid.join('; ')}. ` +
+            `The customer keeps full speed until the package is corrected.`,
+        );
+        await this.prisma.systemLog.create({
+          data: {
+            level: 'ERROR', source: 'fup',
+            message: `Package "${pkg?.name ?? pkg?.id}" has an invalid FUP configuration; ${sub.username} was NOT throttled. ${invalid.join('; ')}.`,
+            metadata: JSON.stringify({
+              subscriberId: sub.id, username: sub.username, packageId: pkg?.id,
+              packageSpeed: `${pkg?.downloadSpeed}/${pkg?.uploadSpeed}`,
+              fupSpeed: `${fupDl ?? 'null'}/${fupUl ?? 'null'}`,
+              usedGb: Math.round(usedGb * 10) / 10, quotaGb,
+            }),
+          },
+        }).catch(() => null);
+        return; // leave the customer alone rather than break their session
+      }
       // Push the reduced speed, then kick the session so it takes effect now
       // rather than whenever the customer next reconnects.
       const subForOpts = await this.prisma.subscriber.findUnique({

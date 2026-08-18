@@ -1,9 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { IpPoolService } from '../ip-pool/ip-pool.service';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { SecurityService } from '../security/security.service';
+import { RadiusSyncService } from '../nas/radius-sync.service';
+import { NetworkService } from '../network/network.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -84,6 +86,7 @@ interface PackagesStore {
 @Injectable()
 export class PackagesService {
   private readonly storeFilePath = path.join(process.cwd(), 'data', 'packages-management.json');
+  private readonly logger = new Logger('Packages');
 
   constructor(
     private prisma: PrismaService,
@@ -91,6 +94,8 @@ export class PackagesService {
     private cache: CacheService,
     private scope: ScopeService,
     private security: SecurityService,
+    private radiusSync: RadiusSyncService,
+    private network: NetworkService,
   ) {}
 
   /** ⚡ Phase 0: drop cached package list after any mutation */
@@ -132,7 +137,11 @@ export class PackagesService {
   private validateNumbers(
     data: any,
     existing?: any,
-  ): { warnings: string[]; numbers: { [k: string]: number | null | undefined } } {
+  ): {
+    warnings: string[];
+    numbers: { [k: string]: number | null | undefined };
+    fupAction?: string | null;
+  } {
     const warnings: string[] = [];
     const required = new Set(['price', 'duration', 'downloadSpeed', 'uploadSpeed']);
     const keys = [
@@ -166,9 +175,18 @@ export class PackagesService {
     if (isNum(numbers.duration) && numbers.duration <= 0) throw new BadRequestException('Duration must be greater than 0');
     if (isNum(numbers.dataQuotaGb) && numbers.dataQuotaGb < 0) throw new BadRequestException('Data quota cannot be negative');
 
-    // FUP sanity — throttling faster than the plan speed would never engage,
-    // and a throttle with no quota would never trigger. Surface as warnings;
-    // the editor shows them and still allows saving an explicit choice.
+    // ── FUP validation ────────────────────────────────────────────────────
+    //
+    // THIS USED TO BE A WARNING AND STILL SAVED. That is how the "4mb" package
+    // ended up with a 4 Mbps plan speed and a 1000 Mbps FUP speed: somebody
+    // almost certainly typed 1000 meaning Kbps, the editor said "the throttle
+    // would never engage", and saved it anyway.
+    //
+    // A throttle that is FASTER than the plan is not a throttle — it is a
+    // speed increase, which is a different feature entirely (Temporary Boost /
+    // per-subscriber Bandwidth Override). Silently storing it as FUP produces a
+    // package whose advertised behaviour can never happen, so it is now a HARD
+    // ERROR, server-side, on both create and update.
     const pick = (k: string): number | undefined =>
       isNum(numbers[k]) ? numbers[k]! : (existing ? existing[k] ?? undefined : undefined);
     const dl = pick('downloadSpeed');
@@ -176,45 +194,389 @@ export class PackagesService {
     const quota = pick('dataQuotaGb');
     const fupDl = pick('fupDownloadSpeed');
     const fupUl = pick('fupUploadSpeed');
-    if (quota && fupDl && dl && fupDl > dl) {
-      warnings.push(`FUP download speed (${fupDl} Mbps) is faster than the package speed (${dl} Mbps) — the throttle would never engage.`);
+
+    const violations: Array<{ field: string; message: string }> = [];
+
+    if (isNum(fupDl) && fupDl <= 0) {
+      violations.push({
+        field: 'fupDownloadSpeed',
+        message: 'FUP download speed must be greater than 0. Leave it empty for "no throttle".',
+      });
     }
-    if (quota && fupUl && ul && fupUl > ul) {
-      warnings.push(`FUP upload speed (${fupUl} Mbps) is faster than the package speed (${ul} Mbps) — the throttle would never engage.`);
+    if (isNum(fupUl) && fupUl <= 0) {
+      violations.push({
+        field: 'fupUploadSpeed',
+        message: 'FUP upload speed must be greater than 0. Leave it empty for "no throttle".',
+      });
     }
+    if (isNum(fupDl) && isNum(dl) && fupDl > dl) {
+      violations.push({
+        field: 'fupDownloadSpeed',
+        message: `FUP download speed ${fupDl} Mbps cannot exceed the package download speed of ${dl} Mbps. ` +
+                 `A FUP speed must be lower than or equal to the plan speed — if you meant to INCREASE speed, use Temporary Boost instead.`,
+      });
+    }
+    if (isNum(fupUl) && isNum(ul) && fupUl > ul) {
+      violations.push({
+        field: 'fupUploadSpeed',
+        message: `FUP upload speed ${fupUl} Mbps cannot exceed the package upload speed of ${ul} Mbps. ` +
+                 `A FUP speed must be lower than or equal to the plan speed — if you meant to INCREASE speed, use Temporary Boost instead.`,
+      });
+    }
+
+    // HALF-CONFIGURED THROTTLE — the other real defect on this package.
+    // fupDownloadSpeed was set and fupUploadSpeed left NULL. fup.service builds
+    // the throttled rate limit as `${fupDownloadSpeed}M/${fupUploadSpeed}M`,
+    // which with a null upload produces the literal string "1000M/nullM" — a
+    // malformed Mikrotik-Rate-Limit the router rejects outright. Both halves
+    // must be present, or neither.
+    if (isNum(fupDl) !== isNum(fupUl) && (isNum(fupDl) || isNum(fupUl))) {
+      violations.push({
+        field: isNum(fupDl) ? 'fupUploadSpeed' : 'fupDownloadSpeed',
+        message: 'Set BOTH FUP download and upload speeds, or neither. ' +
+                 'A half-configured throttle writes an invalid rate limit that the router rejects.',
+      });
+    }
+
+    // ── Per-package FUP action ─────────────────────────────────────────────
+    // THROTTLE / BLOCK / NONE. Anything else is a typo that would be stored,
+    // then match no branch in the sweep and silently do nothing — reject it.
+    // Undefined keeps the current value (update) or stays null (create = follow
+    // the global FUP_MODE env, legacy behaviour). Normalized to upper case.
+    let fupAction: string | null | undefined = undefined;
+    if (data.fupAction !== undefined) {
+      if (data.fupAction === null || data.fupAction === '') {
+        fupAction = null;
+      } else {
+        const norm = String(data.fupAction).toUpperCase();
+        if (!['THROTTLE', 'BLOCK', 'NONE'].includes(norm)) {
+          throw new BadRequestException(
+            `fupAction must be THROTTLE, BLOCK or NONE (got "${data.fupAction}").`,
+          );
+        }
+        fupAction = norm;
+        // THROTTLE is not a config option, it is a promise: the customer WILL
+        // be slowed to the FUP speeds after the quota. Without speeds there is
+        // nothing to honour — catch it here with the structured error so the
+        // editor can offer Fix FUP instead of silently saving a no-op package.
+        if (norm === 'THROTTLE' && (!isNum(fupDl) || !isNum(fupUl))) {
+          violations.push({
+            field: isNum(fupDl) ? 'fupUploadSpeed' : 'fupDownloadSpeed',
+            message: `FUP action is Throttle but ${!isNum(fupDl) ? 'no FUP download speed' : 'no FUP upload speed'} is set — ` +
+                     'Throttle needs both FUP speeds. Set them, or choose Suspend (cut the connection) / No Action.',
+          });
+        }
+      }
+    }
+
+    if (violations.length) {
+      throw new BadRequestException({
+        error: 'INVALID_FUP_CONFIGURATION',
+        message: violations.map((v) => v.message).join(' '),
+        violations,
+        // Echoed back so the editor can pre-fill the Fix FUP form with the
+        // real current values instead of guessing.
+        current: { downloadSpeed: dl ?? null, uploadSpeed: ul ?? null,
+                   fupDownloadSpeed: fupDl ?? null, fupUploadSpeed: fupUl ?? null,
+                   dataQuotaGb: quota ?? null },
+      });
+    }
+
+    // Still only warnings: these are odd but not incoherent, and an operator
+    // may be mid-way through configuring the package.
     if ((fupDl || fupUl) && !quota) {
       warnings.push('FUP speeds are set but there is no data quota — the throttle would never trigger.');
     }
-    return { warnings, numbers };
+    if (quota && !fupDl && !fupUl) {
+      warnings.push(`A ${quota} GB quota is set but no FUP speeds — usage is measured and shown, but nothing is enforced.`);
+    }
+    return { warnings, numbers, fupAction };
   }
 
-  /** Humanized FUP semantics; null quota = unlimited, quota without FUP speeds = not enforced (sweep only throttles packages with FUP speeds: fup.service filters package fupDownloadSpeed not null). */
+  /** Resolved FUP action for a package: explicit column wins, else FUP_MODE env (legacy), else THROTTLE. */
+  private fupActionOf(pkg: any): string {
+    const explicit = pkg?.fupAction?.toUpperCase();
+    if (explicit && ['THROTTLE', 'BLOCK', 'NONE'].includes(explicit)) return explicit;
+    const env = (process.env.FUP_MODE || '').toUpperCase();
+    if (env === 'BLOCK' || env === 'THROTTLE') return env;
+    return 'THROTTLE';
+  }
+
+  /** Humanized FUP semantics; reflects the resolved action, not just the speeds. */
   private fupInfo(pkg: any) {
     const quota = pkg.dataQuotaGb;
     const dl = pkg.fupDownloadSpeed;
     const ul = pkg.fupUploadSpeed;
-    if (!quota) return { quotaGb: null, mode: 'UNLIMITED', download: null, upload: null, label: 'Unlimited (no quota)' };
-    if (!dl && !ul) return { quotaGb: quota, mode: 'NO_THROTTLE', download: null, upload: null, label: `${quota} GB quota, no FUP speeds — not enforced by the sweep` };
-    return { quotaGb: quota, mode: 'THROTTLE', download: dl, upload: ul, label: `${quota} GB then ↓${dl ?? '—'} ↑${ul ?? '—'} Mbps` };
+    const action = this.fupActionOf(pkg);
+    if (!quota) return { quotaGb: null, mode: 'UNLIMITED', action, download: null, upload: null, label: 'Unlimited (no quota)' };
+    if (!dl && !ul) return { quotaGb: quota, mode: 'NO_THROTTLE', action, download: null, upload: null, label: `${quota} GB quota, no FUP speeds — not enforced by the sweep` };
+    if (action === 'BLOCK') return { quotaGb: quota, mode: 'BLOCK', action, download: dl, upload: ul, label: `${quota} GB then connection suspended until renewal or quota top-up` };
+    if (action === 'NONE') return { quotaGb: quota, mode: 'NONE', action, download: dl, upload: ul, label: `${quota} GB then no action (speeds set but action is No Action)` };
+    return { quotaGb: quota, mode: 'THROTTLE', action, download: dl, upload: ul, label: `${quota} GB then ↓${dl ?? '—'} ↑${ul ?? '—'} Mbps` };
   }
 
-  /** Derive health/configuration checks from real package data. */
+  /**
+   * Derive health/configuration checks from real package data.
+   *
+   * Levels are meaningful and must not be conflated — the old version marked
+   * an impossible FUP configuration as 'warn', identical in weight to "no
+   * resellers assigned yet", so a package that could never behave as sold
+   * looked like a minor note:
+   *
+   *   error — the package cannot work as configured. Blocks new activations.
+   *   warn  — works, but an operator should look at it.
+   *   info  — neutral fact, no action implied.
+   *   ok    — explicitly verified good (so the panel can show what IS right,
+   *           not only what is wrong).
+   */
   private healthChecks(pkg: any, detail: { subscribers: number; resellers: number; hasPool: boolean }): any[] {
     const checks: any[] = [];
-    if (!pkg.isActive) checks.push({ level: 'warn', code: 'INACTIVE', message: 'Package is deactivated — new sign-ups are blocked.' });
-    if (detail.subscribers === 0) checks.push({ level: 'info', code: 'NO_SUBSCRIBERS', message: 'No subscribers are currently on this package.' });
-    if (!detail.hasPool) checks.push({ level: 'warn', code: 'NO_POOL', message: 'No IP pool assigned — dynamic address assignment may fall back to the NAS default.' });
-    if (!pkg.dataQuotaGb) checks.push({ level: 'info', code: 'NO_QUOTA', message: 'No data quota — usage is unlimited.' });
     const quota = pkg.dataQuotaGb;
     const dl = pkg.fupDownloadSpeed;
     const ul = pkg.fupUploadSpeed;
-    if (quota && ((dl && dl > pkg.downloadSpeed) || (ul && ul > pkg.uploadSpeed))) {
-      checks.push({ level: 'warn', code: 'FUP_ABOVE_PACKAGE', message: 'FUP speed is faster than the package speed — the throttle would never engage.' });
+
+    // ── ERRORS — configuration that cannot do what it claims ──────────────
+    if (dl && dl > pkg.downloadSpeed) {
+      checks.push({ level: 'error', code: 'FUP_ABOVE_PACKAGE',
+        message: `FUP download speed ${dl} Mbps exceeds the package download speed of ${pkg.downloadSpeed} Mbps — this is not a throttle and can never engage.`,
+        fix: 'FIX_FUP' });
     }
+    if (ul && ul > pkg.uploadSpeed) {
+      checks.push({ level: 'error', code: 'FUP_UL_ABOVE_PACKAGE',
+        message: `FUP upload speed ${ul} Mbps exceeds the package upload speed of ${pkg.uploadSpeed} Mbps — this is not a throttle and can never engage.`,
+        fix: 'FIX_FUP' });
+    }
+    // Half-configured throttle → malformed Mikrotik-Rate-Limit at throttle time.
+    if ((dl && !ul) || (ul && !dl)) {
+      checks.push({ level: 'error', code: 'FUP_INCOMPLETE',
+        message: `Only the FUP ${dl ? 'download' : 'upload'} speed is set. When the throttle fires it writes an invalid rate limit that the router rejects — set both, or neither.`,
+        fix: 'FIX_FUP' });
+    }
+    // Explicit Throttle with NO speeds at all — a promise with nothing behind it.
+    // (Resolved-from-env THROTTLE keeps the legacy warn below: existing packages
+    // with a quota and no speeds are "measured, not enforced" by design.)
+    const explicitAction = (pkg.fupAction || '').toUpperCase();
+    if (explicitAction === 'THROTTLE' && !dl && !ul) {
+      checks.push({ level: 'error', code: 'FUP_ACTION_NO_SPEEDS',
+        message: 'FUP action is Throttle but no FUP speeds are set — the throttle has nothing to reduce to. Set both speeds, or choose Suspend / No Action.',
+        fix: 'FIX_FUP' });
+    }
+
+    // ── WARNINGS ──────────────────────────────────────────────────────────
+    if (!pkg.isActive) checks.push({ level: 'warn', code: 'INACTIVE', message: 'Package is deactivated — new sign-ups are blocked.' });
+    if (!detail.hasPool) checks.push({ level: 'warn', code: 'NO_POOL', message: 'No IP pool assigned — addressing falls back to the NAS default.' });
     if ((dl || ul) && !quota) checks.push({ level: 'warn', code: 'FUP_NO_QUOTA', message: 'FUP speeds set without a data quota — the throttle would never trigger.' });
-    if (!(pkg.settings?.policyIds?.length)) checks.push({ level: 'info', code: 'NO_POLICIES', message: 'No RADIUS policies linked — standard rate limit only.' });
+    if (quota && !dl && !ul && explicitAction !== 'NONE') {
+      checks.push({ level: 'warn', code: 'QUOTA_NOT_ENFORCED', message: `${quota} GB quota is measured and displayed, but no FUP speeds are set — nothing is enforced when it is exhausted.` });
+    }
+    // Explicit BLOCK with speeds present — the speeds are ignored; say so.
+    if (explicitAction === 'BLOCK' && (dl || ul)) {
+      checks.push({ level: 'info', code: 'FUP_BLOCK_IGNORES_SPEEDS',
+        message: 'FUP speeds are set but the action is Suspend — the connection is cut at the quota; the speeds are ignored.' });
+    }
+
+    // ── OK — verified-good facts ──────────────────────────────────────────
+    if (pkg.downloadSpeed > 0 && pkg.uploadSpeed > 0) {
+      checks.push({ level: 'ok', code: 'SPEED_OK', message: `Package speed configured — ${pkg.downloadSpeed} Mbps down / ${pkg.uploadSpeed} Mbps up.` });
+    }
+    if (quota) checks.push({ level: 'ok', code: 'QUOTA_OK', message: `Data allowance configured — ${quota} GB per cycle.` });
+    if (dl && ul && dl <= pkg.downloadSpeed && ul <= pkg.uploadSpeed) {
+      checks.push({ level: 'ok', code: 'FUP_OK', message: `FUP throttle valid — drops to ${dl} Mbps down / ${ul} Mbps up after the quota.` });
+    }
+    if (quota && explicitAction === 'NONE') {
+      checks.push({ level: 'ok', code: 'FUP_NONE_OK', message: `${quota} GB quota is measured; action is No Action — usage is reported but nothing is enforced.` });
+    }
+    if (quota && explicitAction === 'BLOCK') {
+      checks.push({ level: 'ok', code: 'FUP_BLOCK_OK', message: `${quota} GB quota then the connection is suspended until renewal or quota top-up.` });
+    }
+    if (detail.hasPool) checks.push({ level: 'ok', code: 'POOL_OK', message: `IP pool assigned — ${pkg.pool?.name ?? 'pool'}.` });
+    if (pkg.price > 0) checks.push({ level: 'ok', code: 'PRICE_OK', message: `Price configured — ${pkg.price} per ${pkg.duration} days.` });
+    if (pkg.duration > 0) checks.push({ level: 'ok', code: 'DURATION_OK', message: `Billing period configured — ${pkg.duration} days.` });
+
+    // ── INFO — neutral facts, never a defect ──────────────────────────────
+    if (!quota) checks.push({ level: 'info', code: 'NO_QUOTA', message: 'No data quota — usage is unlimited.' });
+    if (detail.subscribers === 0) checks.push({ level: 'info', code: 'NO_SUBSCRIBERS', message: 'No subscribers are currently on this package.' });
+    else checks.push({ level: 'info', code: 'SUBSCRIBERS', message: `${detail.subscribers} subscriber(s) on this package.` });
+    // NOT a defect: the rate limit is generated FROM the package. A linked
+    // policy is only needed for extra/vendor-specific attributes.
+    if (!(pkg.settings?.policyIds?.length)) {
+      checks.push({ level: 'info', code: 'NO_POLICIES',
+        message: 'No explicit RADIUS policy linked — attributes are generated from this package configuration (Mikrotik-Rate-Limit + Framed-Pool). This is the normal setup.' });
+    }
     if (detail.resellers === 0) checks.push({ level: 'info', code: 'NO_RESELLERS', message: 'No reseller price assignments yet.' });
+    else checks.push({ level: 'info', code: 'RESELLERS', message: `${detail.resellers} reseller price assignment(s).` });
     return checks;
+  }
+
+  /**
+   * RATE-LIMIT AUDIT — what the rx/tx order fix actually changes, per package.
+   *
+   * Mikrotik-Rate-Limit is `rx/tx` = upload/download. The builder used to emit
+   * download/upload, so every asymmetric package had its two speeds applied to
+   * the wrong directions. Correcting the builder changes what subscribers get
+   * the next time their profile is written — which is exactly the kind of
+   * silent, wide-blast-radius change that must be REVIEWED before it is
+   * applied, not discovered by customers.
+   *
+   * Read-only. Lists every package, the string written before and after, and
+   * how many subscribers each one affects.
+   *
+   * IMPORTANT INTERPRETATION NOTE: if an operator previously worked around the
+   * bug by entering the speeds swapped in the package form (typing 4/5 to get
+   * 5 down / 4 up), then this fix will flip those packages to the WRONG values
+   * until the package fields are corrected too. That is why nothing is
+   * re-synced automatically.
+   */
+  async rateLimitAudit() {
+    const packages = await this.prisma.package.findMany({
+      include: { _count: { select: { subscribers: true } } },
+      orderBy: { name: 'asc' },
+    });
+
+    const legacy = (dl: number, ul: number, p: any) => {
+      if (p.burstDownload && p.burstUpload) {
+        const bThr = p.burstThreshold ?? Math.floor(dl * 0.5);
+        const bT = p.burstTime ?? 10;
+        return `${dl}M/${ul}M ${p.burstDownload}M/${p.burstUpload}M ${bThr}M/${bThr}M ${bT}`;
+      }
+      return `${dl}M/${ul}M`;
+    };
+
+    const rows = packages.map((p) => {
+      const before = legacy(p.downloadSpeed, p.uploadSpeed, p);
+      const after = this.radiusSync.previewRateLimit(p);
+      return {
+        id: p.id,
+        name: p.name,
+        downloadSpeed: p.downloadSpeed,
+        uploadSpeed: p.uploadSpeed,
+        subscribers: p._count.subscribers,
+        before,
+        after,
+        changes: before !== after,
+        effect: before === after
+          ? 'No change — package speeds are symmetric.'
+          : `Was delivering ${p.downloadSpeed} Mbps upload / ${p.uploadSpeed} Mbps download; ` +
+            `will now correctly deliver ${p.downloadSpeed} Mbps download / ${p.uploadSpeed} Mbps upload.`,
+      };
+    });
+
+    const affected = rows.filter((r) => r.changes);
+    return {
+      totalPackages: rows.length,
+      packagesAffected: affected.length,
+      subscribersAffected: affected.reduce((s, r) => s + r.subscribers, 0),
+      rows,
+      appliesWhen: 'On each subscriber\'s next activation, renewal, or explicit Sync to RADIUS. ' +
+                   'Nothing changes for a live session until then.',
+      warning: 'If any package was configured with its speeds deliberately swapped to work around ' +
+               'the old behaviour, correct the package fields BEFORE re-syncing those subscribers.',
+    };
+  }
+
+  /**
+   * TEST PACKAGE — simulate, do not mutate.
+   *
+   * Runs the same health checks the detail page uses and shows the EXACT
+   * RADIUS attribute set that syncSubscriberProfile would write for a
+   * subscriber on this package, both at normal speed and after the quota is
+   * exhausted. It builds the rate-limit string with the same logic the sync
+   * service uses, so the preview cannot drift from reality.
+   *
+   * Read-only. It never writes radcheck/radreply and never touches a session.
+   */
+  async testPackage(id: number, actor?: any) {
+    const pkg = await this.prisma.package.findUnique({
+      where: { id },
+      include: { pool: true, _count: { select: { subscribers: true } } },
+    });
+    if (!pkg) throw new NotFoundException('Package not found');
+
+    const settings = this.getPackageSettingById(id);
+    const resellers = await this.prisma.resellerPackagePrice.count({ where: { packageId: id } });
+    const merged: any = { ...pkg, settings };
+    const checks = this.healthChecks(merged, {
+      subscribers: pkg._count.subscribers, resellers, hasPool: !!pkg.pool,
+    });
+    const status = this.healthStatus(checks);
+
+    // Same construction as the real sync — delegated to the radius-sync
+    // service's public preview so the display can never drift from radreply.
+    const rate = (dl: number, ul: number) =>
+      this.radiusSync.previewRateLimit({
+        downloadSpeed: dl, uploadSpeed: ul,
+        burstDownload: pkg.burstDownload, burstUpload: pkg.burstUpload,
+        burstThreshold: pkg.burstThreshold, burstTime: pkg.burstTime,
+      });
+
+    const normalAttrs: Array<{ attribute: string; op: string; value: string; source: string }> = [
+      { attribute: 'Mikrotik-Rate-Limit', op: ':=', value: rate(pkg.downloadSpeed, pkg.uploadSpeed), source: 'package speed' },
+    ];
+    if (pkg.pool?.name) {
+      normalAttrs.push({ attribute: 'Framed-Pool', op: ':=', value: pkg.pool.name, source: 'package IP pool' });
+    }
+    normalAttrs.push(
+      { attribute: 'Acct-Interim-Interval', op: ':=', value: String(Number(process.env.RADIUS_INTERIM_INTERVAL || 60)), source: 'server setting' },
+    );
+    const sessionTimeout = Number(process.env.RADIUS_SESSION_TIMEOUT ?? 86400);
+    if (sessionTimeout > 0) {
+      normalAttrs.push({ attribute: 'Session-Timeout', op: ':=', value: String(sessionTimeout), source: 'server setting' });
+    }
+
+    // Throttled state — only meaningful when the FUP config is valid.
+    const fupDl = pkg.fupDownloadSpeed;
+    const fupUl = pkg.fupUploadSpeed;
+    const fupValid = !!(fupDl && fupUl && fupDl <= pkg.downloadSpeed && fupUl <= pkg.uploadSpeed);
+    const throttled = fupValid
+      ? { willApply: true, afterQuotaGb: pkg.dataQuotaGb,
+          attributes: [{ attribute: 'Mikrotik-Rate-Limit', op: ':=', value: rate(fupDl!, fupUl!), source: 'package FUP speed' }] }
+      : { willApply: false, afterQuotaGb: pkg.dataQuotaGb,
+          reason: !fupDl && !fupUl
+            ? 'No FUP speeds set — quota is measured but nothing is enforced.'
+            : 'FUP configuration is invalid; the throttle sweep will skip these subscribers and log an error.',
+          attributes: [] };
+
+    return {
+      package: { id: pkg.id, name: pkg.name, downloadSpeed: pkg.downloadSpeed,
+                 uploadSpeed: pkg.uploadSpeed, dataQuotaGb: pkg.dataQuotaGb,
+                 fupDownloadSpeed: fupDl, fupUploadSpeed: fupUl,
+                 fupAction: pkg.fupAction ?? null,
+                 pool: pkg.pool?.name ?? null, subscribers: pkg._count.subscribers },
+      status,
+      checks,
+      radius: {
+        // Honest connectivity: is RADIUS even reachable for a live sync?
+        connected: this.radiusSync.isRadiusConnected(),
+        source: settings?.policyIds?.length
+          ? 'Package configuration + linked RADIUS policy attributes'
+          : 'Generated from package configuration (no separate policy record required)',
+        normal: normalAttrs,
+        throttled,
+      },
+      note: 'Simulation only — nothing was written to RADIUS and no subscriber was modified. ' +
+            'Existing subscribers keep their current RADIUS profile until their next activation, renewal or explicit re-sync.',
+    };
+  }
+
+  /**
+   * Roll the checks up into one status the header can show honestly.
+   * HEALTHY / WARNING / ERROR — an ERROR package must not be sold to new
+   * subscribers until it is fixed.
+   */
+  private healthStatus(checks: any[]) {
+    const errors = checks.filter((c) => c.level === 'error');
+    const warns = checks.filter((c) => c.level === 'warn');
+    return {
+      status: errors.length ? 'ERROR' : warns.length ? 'WARNING' : 'HEALTHY',
+      errors: errors.length,
+      warnings: warns.length,
+      canActivateNewSubscribers: errors.length === 0,
+      summary: errors.length
+        ? `${errors.length} configuration error(s) — this package cannot be activated for new subscribers until fixed.`
+        : warns.length
+          ? `${warns.length} warning(s) — the package works but should be reviewed.`
+          : 'All configuration checks passed.',
+    };
   }
 
   private defaultStore(): PackagesStore {
@@ -308,6 +670,14 @@ export class PackagesService {
 
     const store = this.readStore();
 
+    // Reseller-assignment counts for every package in one query (not N+1), so
+    // each row's health checks use the real number.
+    const resellerRows = await this.prisma.resellerPackagePrice.groupBy({
+      by: ['packageId'],
+      _count: { _all: true },
+    });
+    const resellersByPkg = new Map(resellerRows.map((r) => [r.packageId, r._count._all]));
+
     // Scope: a reseller sees packages it OWNS, plus every package sellable
     // anywhere UP its chain — once an ancestor is priced a package, the whole
     // subtree beneath can sell it. The buy price shown is the reseller's own
@@ -323,6 +693,13 @@ export class PackagesService {
     return visible
       .map((pkg) => {
         const settings = store.packageSettings.find((s) => s.packageId === pkg.id);
+        // Per-row health so the table can show a real status badge — same
+        // checks the detail drawer uses, from the same fields.
+        const health = this.healthChecks(pkg, {
+          subscribers: pkg._count?.subscribers ?? 0,
+          resellers: resellersByPkg.get(pkg.id) ?? 0,
+          hasPool: !!pkg.pool,
+        });
         return {
           ...pkg,
           serviceType: settings?.serviceType || 'RESIDENTIAL',
@@ -333,6 +710,8 @@ export class PackagesService {
           // the column existed.
           dataQuotaGb: pkg.dataQuotaGb ?? settings?.dataQuotaGb ?? null,
           settings,
+          health,
+          healthStatus: this.healthStatus(health),
         };
       })
       .filter((pkg) => {
@@ -466,7 +845,7 @@ export class PackagesService {
     const poolId = data.poolId ? parseInt(data.poolId) : null;
 
     // ── Numeric validation before anything hits the DB
-    const { warnings, numbers } = this.validateNumbers(data);
+    const { warnings, numbers, fupAction } = this.validateNumbers(data);
 
     // ── One-pool-per-package check
     if (poolId) {
@@ -507,6 +886,9 @@ export class PackagesService {
         dataQuotaGb:      numbers.dataQuotaGb ?? null,
         fupDownloadSpeed: numbers.fupDownloadSpeed ?? null,
         fupUploadSpeed:   numbers.fupUploadSpeed ?? null,
+        // null = follow the global FUP_MODE env (legacy). An explicit value is
+        // already normalized + validated above.
+        fupAction:        fupAction ?? null,
 
         // Pool relation
         poolId,
@@ -571,7 +953,7 @@ export class PackagesService {
     if (!existing) throw new NotFoundException('Package not found');
 
     // ── Numeric validation — undefined keys keep their current value
-    const { warnings, numbers } = this.validateNumbers(data, existing);
+    const { warnings, numbers, fupAction } = this.validateNumbers(data, existing);
 
     // Determine the new poolId (undefined = don't change, null = remove, number = assign)
     let poolId: number | null | undefined = undefined;
@@ -608,6 +990,9 @@ export class PackagesService {
         dataQuotaGb:      numbers.dataQuotaGb ?? undefined,
         fupDownloadSpeed: numbers.fupDownloadSpeed ?? undefined,
         fupUploadSpeed:   numbers.fupUploadSpeed ?? undefined,
+        // undefined = untouched (keep current), null = clear (back to env-driven),
+        // value = explicit, already normalized + validated.
+        ...(fupAction !== undefined && { fupAction }),
 
         // Pool relation
         ...(poolId !== undefined && { poolId }),
@@ -780,6 +1165,7 @@ export class PackagesService {
       dataQuotaGb: original.dataQuotaGb,
       fupDownloadSpeed: original.fupDownloadSpeed,
       fupUploadSpeed: original.fupUploadSpeed,
+      fupAction: (original as any).fupAction ?? undefined,
       burstDownload: original.burstDownload,
       burstUpload: original.burstUpload,
       burstThreshold: original.burstThreshold,
@@ -1090,21 +1476,18 @@ export class PackagesService {
 
     // ── RADIUS preview mirrors the real sync: same rate-limit string the
     // radius-sync service writes (burst-aware), plus linked policy attributes.
-    const dl = pkg.downloadSpeed; const ul = pkg.uploadSpeed;
-    let rateLimit = `${dl}M/${ul}M`;
-    if (pkg.burstDownload && pkg.burstUpload) {
-      const bDl = pkg.burstDownload;
-      const bUl = pkg.burstUpload;
-      const bThr = pkg.burstThreshold ?? Math.floor(dl * 0.5);
-      const bT = pkg.burstTime ?? 10;
-      rateLimit = `${dl}M/${ul}M ${bDl}M/${bUl}M ${bThr}M/${bThr}M ${bT}`;
-    }
+    // Delegate to the SAME builder the sync service uses. This block used to
+    // re-implement the rate-limit string by hand, which meant the preview kept
+    // showing the old (wrong) download/upload order after the real builder was
+    // corrected — a preview that lies is worse than no preview.
+    const rateLimit = this.radiusSync.previewRateLimit(pkg);
     const radius = {
       rateLimit,
       poolName: pkg.pool?.name || null,
       policyAttributes: linkedPolicies.map((p: any) => ({
         attribute: p.attributeName, op: p.attributeOp, value: p.attributeValue,
       })),
+      connected: this.radiusSync.isRadiusConnected(),
       note: 'Preview: exactly what radius-sync writes on activation. Live enforcement is verified on the NAS, not assumed.',
     };
 
@@ -1114,6 +1497,7 @@ export class PackagesService {
     const health = this.healthChecks(pkg, {
       subscribers: impact.subscribers, resellers: impact.resellers, hasPool: !!pkg.pool,
     });
+    const healthStatus = this.healthStatus(health);
 
     return {
       package: pkg,
@@ -1133,7 +1517,123 @@ export class PackagesService {
       allocations: linkedAllocations,
       audit,
       health,
+      // Rolled-up verdict for the page header. `errors` are blocking.
+      healthStatus,
+      errors: health.filter((c) => c.level === 'error'),
       warnings: health.filter((c) => c.level === 'warn'),
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // APPLY PACKAGE TO SUBSCRIBERS — the "Apply to:" scopes offered after
+  // saving a package. Nothing happens implicitly:
+  //   new      — no action (activations already sync the full profile)
+  //   renewals — no action (renewal already re-syncs the profile)
+  //   existing — rewrites live RADIUS profiles NOW; admin-gated, and sessions
+  //              are never kicked unless explicitly requested (kick: true).
+  // ─────────────────────────────────────────────────────────────
+  /** The exact package object a RADIUS sync receives: pool + linked policy attributes (same resolution getPackageForRadius performs in SubscribersService). */
+  private async resolveRadiusPackage(packageId: number): Promise<any> {
+    const pkg = await this.prisma.package.findUnique({
+      where: { id: packageId },
+      include: { pool: true },
+    });
+    if (!pkg) return null;
+    const policyIds: number[] = this.getPackageSettingById(packageId)?.policyIds ?? [];
+    const policyAttributes = policyIds.length
+      ? this.readStore().policies
+          .filter((p) => policyIds.includes(p.id))
+          .map((p) => ({ attribute: p.attributeName, op: p.attributeOp, value: p.attributeValue }))
+      : undefined;
+    return policyAttributes && policyAttributes.length ? { ...pkg, policyAttributes } : pkg;
+  }
+
+  async applyToSubscribers(
+    id: number,
+    body: { scope?: 'new' | 'renewals' | 'existing'; kick?: boolean },
+    actor?: Actor,
+  ) {
+    const pkg = await this.findOne(id);
+    if (!pkg) throw new NotFoundException('Package not found');
+
+    const scope = body?.scope ?? 'new';
+    if (!['new', 'renewals', 'existing'].includes(scope)) {
+      throw new BadRequestException(`scope must be new, renewals or existing (got "${scope}").`);
+    }
+    const kick = body?.kick === true;
+
+    // 'new' and 'renewals' need no work here: activation and renewal already
+    // rebuild the subscriber's full RADIUS profile from the package, so the
+    // current config is picked up automatically. Report that honestly.
+    if (scope === 'new' || scope === 'renewals') {
+      return {
+        scope, appliedNow: 0, kicked: 0, matched: 0, synced: 0, failed: 0,
+        note: scope === 'new'
+          ? 'New activations pick this package up automatically — no profiles were changed now.'
+          : 'Renewals re-sync each subscriber profile automatically — no profiles were changed now.',
+      };
+    }
+
+    // 'existing' rewrites live subscriber profiles — a mutating action on
+    // running service. Administrator only.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      throw new ForbiddenException('Only administrators can apply a package change to existing subscribers.');
+    }
+
+    const subs = await this.prisma.subscriber.findMany({
+      where: { packageId: id, status: 'ACTIVE' },
+      select: {
+        id: true, username: true, password: true, authMethod: true,
+        serviceSettings: true,
+      },
+    });
+
+    const resolved = await this.resolveRadiusPackage(id);
+    let synced = 0, failed = 0, kicked = 0;
+    for (const sub of subs) {
+      const ss: any = sub.serviceSettings;
+      try {
+        const wantsStatic = sub.authMethod === 'STATIC' || ss?.ipType === 'STATIC';
+        await this.radiusSync.syncSubscriberProfile(
+          sub.username!,
+          sub.password,
+          resolved,
+          {
+            serviceType: sub.authMethod as any,
+            staticIp: wantsStatic ? ss?.ipAddress ?? null : null,
+            macAddress: ss?.macAddress ?? null,
+            sessionTimeout: Number(process.env.HOTSPOT_SESSION_TIMEOUT || 0) || null,
+            idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+            allowMultipleSessions: ss?.allowMultipleSessions ?? false,
+          },
+        );
+        synced++;
+        if (kick) {
+          try {
+            await this.network.disconnect(sub.username!);
+            kicked++;
+          } catch {
+            // Session may simply be offline — the rewritten profile already
+            // applies at the next authentication.
+          }
+        }
+      } catch (e: any) {
+        failed++;
+        this.logger.warn(`Package apply failed for ${sub.username}: ${e?.message || e}`);
+      }
+    }
+
+    await this.audit('PACKAGE_APPLY', id, {
+      scope, kick, matched: subs.length, synced, failed, kicked,
+      name: pkg.name,
+    }, actor);
+
+    return {
+      scope, kick, matched: subs.length, synced, failed, kicked,
+      note: `${synced} of ${subs.length} live profile(s) re-synced to the current package config` +
+            (kick ? `; ${kicked} active session(s) kicked so the speeds apply immediately.` 
+                 : ' — existing sessions keep their current speed until they reconnect.'),
+      warning: failed > 0 ? `${failed} subscriber(s) failed to sync; see backend logs.` : undefined,
     };
   }
 }
