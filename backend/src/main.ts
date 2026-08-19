@@ -12,6 +12,14 @@ import { existsSync, mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 
+// SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
+// BigInt. JSON.stringify throws on BigInt, so ANY endpoint returning them —
+// interface discovery, port lists, traffic history — 500s with "Internal
+// server error" unless serialized. Strings keep the digits exact (a Number
+// would lose precision past 2^53), and the frontend types already declare
+// these fields as `string | null`. Must run before any response is written.
+(BigInt.prototype as any).toJSON = function () { return String(this); };
+
 // First-boot bootstrap: create the default super-admin if the DB has no users.
 // Runs on every startup but is idempotent — only fires on a brand-new database
 // (e.g. right after `prisma migrate deploy` on a fresh Ubuntu install).

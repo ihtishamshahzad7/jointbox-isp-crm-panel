@@ -187,6 +187,8 @@ export class NdmSnmpService {
    * by the poller for the first seed of a device.
    */
   async readInterfaceTable(device: { id: number; ip: string; snmpVersion: string; snmpPort: number; snmpTimeoutMs?: number; snmpRetries?: number; vendor?: string; _creds?: any }) {
+    const t0 = Date.now();
+    this.log.log(`[SNMP DISCOVERY] Starting device=${device.ip} version=${device.snmpVersion} port=${device.snmpPort || 161}`);
     const session = await this.sessionFor(device);
     try {
       const reads = [
@@ -219,6 +221,7 @@ export class NdmSnmpService {
              speed, alias, mac, duplex, crc] = await Promise.all<any>(reads);
 
       const idxs = new Set<number>([...oper.keys(), ...hcName.keys(), ...descr.keys()]);
+      this.log.log(`[SNMP DISCOVERY] IF-MIB walked oid=1.3.6.1.2.1.2.2 (${idxs.size} interface indexes)`);
       const rows = [...idxs].sort((a, b) => a - b).map((ifIndex) => {
         // Prefer HC counters; fall back to 32-bit when absent.
         const octs = hcIn.has(ifIndex) ? hcIn : inOct;
@@ -246,6 +249,7 @@ export class NdmSnmpService {
           mac: this.mac(mac.get(ifIndex)),
         };
       }).filter((r) => r.operStatus != null || r.name !== `if${r.ifIndex}`);
+      this.log.log(`[SNMP DISCOVERY] Completed interfaces=${rows.length} duration=${Date.now() - t0}ms`);
       return {
         ok: true,
         interfaces: rows,
@@ -255,6 +259,7 @@ export class NdmSnmpService {
         sysUpTicks: this.big(sys.get(NDM_IF.sysUpTime)),
       };
     } catch (e: any) {
+      this.log.warn(`[SNMP DISCOVERY] ERROR device=${device.ip} duration=${Date.now() - t0}ms error=${e?.message || e}`);
       return { ok: false, interfaces: [], reachable: false, error: e?.message || 'SNMP read failed.' };
     } finally {
       try { session.close(); } catch { /* ignore */ }

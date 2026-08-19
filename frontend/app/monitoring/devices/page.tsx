@@ -188,7 +188,7 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
     setTesting(true); setErr("");
     try {
       const r = await ndm.discover(testBody());
-      if (!r.ok || !r.interfaces) setTestRes({ ok: false, error: r.error || "Discovery failed — no SNMP response." });
+      if (!r.ok || !r.interfaces) setErr(r.error || "Discovery failed — no SNMP response.");
       else { setDiscovered(r.interfaces); setStep(3); }
     } catch (e: any) { setErr(e?.message || "Discovery failed"); }
     finally { setTesting(false); }
@@ -332,10 +332,16 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             <button className="ndm-btn" onClick={() => setStep(1)}>← Back</button>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="ndm-btn" onClick={() => setStep(1)}>Skip discovery</button>
+              <button className="ndm-btn" onClick={() => setStep(3)}>Skip discovery</button>
               <button className="ndm-btn pri" disabled={!testRes?.ok || testing || !f.ip.trim()} onClick={discover}>{testing ? "Discovering…" : "Discover interfaces →"}</button>
             </div>
           </div>
+          {err && (
+            <div className="ndm-err" style={{ marginTop: 10 }}>
+              <b>Interface discovery failed:</b> {err}
+              <div className="ndm-hint" style={{ marginTop: 4 }}>You can retry discovery, or skip it — saving the device still works and the first poll will pick up the interfaces automatically.</div>
+            </div>
+          )}
         </>
       )}
 

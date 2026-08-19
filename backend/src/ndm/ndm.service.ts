@@ -133,19 +133,31 @@ export class NdmService {
   async discover(body: NdmTestBody) {
     const ip = String(body.ip || '').trim();
     if (!ip) throw new BadRequestException('Device IP is required.');
-    const res = await this.snmp.readInterfaceTable({
-      id: -1, ip, snmpVersion: String(body.snmpVersion || 'V2C').toUpperCase(),
-      snmpPort: Number(body.snmpPort) || 161,
-      snmpTimeoutMs: Number(body.snmpTimeoutMs) || 5000, snmpRetries: Number(body.snmpRetries) ?? 1,
-      _creds: {
-        community: body.community || '',
-        v3Username: body.v3Username || null,
-        v3AuthProto: body.v3AuthProto || null,
-        v3AuthKey: body.v3AuthKey || null,
-        v3PrivProto: body.v3PrivProto || null,
-        v3PrivKey: body.v3PrivKey || null,
-      },
-    });
+    // Hard overall cap (well above the per-walk 15s cap in snmp.service): a
+    // misbehaving/bricked agent must never leave the wizard in "Discovering…".
+    let timer: NodeJS.Timeout | undefined;
+    const res = await Promise.race([
+      this.snmp.readInterfaceTable({
+        id: -1, ip, snmpVersion: String(body.snmpVersion || 'V2C').toUpperCase(),
+        snmpPort: Number(body.snmpPort) || 161,
+        snmpTimeoutMs: Number(body.snmpTimeoutMs) || 5000, snmpRetries: Number(body.snmpRetries) ?? 1,
+        _creds: {
+          community: body.community || '',
+          v3Username: body.v3Username || null,
+          v3AuthProto: body.v3AuthProto || null,
+          v3AuthKey: body.v3AuthKey || null,
+          v3PrivProto: body.v3PrivProto || null,
+          v3PrivKey: body.v3PrivKey || null,
+        },
+      }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve({
+          ok: false, interfaces: [], reachable: false,
+          error: 'SNMP interface discovery timed out after 30 seconds.',
+        }), 30_000);
+      }),
+    ]);
+    clearTimeout(timer);
     return res;
   }
 
