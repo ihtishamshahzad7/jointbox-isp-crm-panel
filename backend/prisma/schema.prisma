@@ -626,6 +626,7 @@ model User {
   branch   Branch? @relation("BranchUsers", fields: [branchId], references: [id])
   walletTxs UserBalanceTransaction[] @relation("UserBalanceTxs")
   monitorTargets MonitorTarget[] @relation("UserMonitorTargets")
+  networkDevices NetworkDevice[] @relation("UserNetworkDevices")
   profitEntries  ProfitEntry[]   @relation("UserProfitEntries")
 
   ownedSubscribers Subscriber[]  @relation("UserSubscribers")
@@ -3046,4 +3047,373 @@ model InterfaceMetric {
   @@index([nasId, ifIndex, ts])
   @@index([ts])
   @@map("interface_metric")
+}
+
+/// ────────────────────────────────────────────────────────────────────────
+/// NETWORK DEVICE MONITORING (switches / routers / BNGs via SNMP + Syslog)
+/// ────────────────────────────────────────────────────────────────────────
+/// A switch/router/tower added from the Network Monitoring page. Separately
+/// scoped like MonitorTarget: ownerId points into the reseller tree, so a
+/// child account only ever sees devices (and therefore ports, syslogs and
+/// alerts) inside its own subtree — enforced in the API, never only in the UI.
+/// SNMP credentials live in SnmpConfiguration, encrypted at rest, and are
+/// never returned to the browser.
+model NetworkDevice {
+  id            Int      @id @default(autoincrement())
+  ownerId       Int?
+  name          String   @db.VarChar(120)
+  ip            String   @db.VarChar(64)
+  /// CISCO | MIKROTIK | HUAWEI | JUNIPER | OTHER
+  vendor        String   @db.VarChar(24) @default("OTHER")
+  /// Free-text "Cisco Switch" / "MikroTik CCR" — used for the vendor health profile.
+  deviceType    String?  @db.VarChar(80)
+  groupName     String?  @db.VarChar(80)
+  location      String?  @db.VarChar(160)
+  description   String?  @db.VarChar(500)
+  enabled       Boolean  @default(true)
+  /// V2C | V3
+  snmpVersion   String   @db.VarChar(8) @default("V2C")
+  snmpPort      Int      @default(161)
+  pollIntervalSec Int    @default(30) // 10 | 30 | 60 | 300
+  snmpTimeoutMs Int      @default(5000)
+  snmpRetries   Int      @default(1)
+
+  /// Reachability + health as of the last poll (cached for the dashboard).
+  isReachable   Boolean?
+  cpu           Float?
+  memory        Float?
+  temperature   Float?
+  uptimeSec     BigInt?
+  lastSnmpPollAt DateTime?
+  lastSyslogAt  DateTime?
+  lastError     String?  @db.VarChar(500)
+  /// Cached counts for the dashboard (interface count, up/down ports).
+  interfaceCount Int     @default(0)
+  upPorts       Int      @default(0)
+  downPorts     Int      @default(0)
+
+  /// Syslog collection for THIS device (points its boxes at the panel).
+  syslogEnabled Boolean  @default(false)
+  syslogProtocol String  @db.VarChar(8) @default("UDP")
+  syslogPort    Int      @default(514)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  owner User? @relation("UserNetworkDevices", fields: [ownerId], references: [id], onDelete: SetNull)
+  snmpConfig  SnmpConfiguration?
+  interfaces  NetworkInterface[]
+  statusHistory InterfaceStatusHistory[]
+  trafficHistory InterfaceTrafficHistory[]
+  syslogEvents  SyslogEvent[]
+  networkEvents NetworkEvent[]
+  alerts        Alert[]
+  healthMetrics DeviceHealthMetric[]
+
+  @@index([ownerId])
+  @@index([enabled])
+  @@index([ip])
+  @@map("network_device")
+}
+
+/// SNMP credentials — encrypted at rest (AES-256-GCM via SecretsService),
+/// one row per device. Never serialized to the frontend.
+model SnmpConfiguration {
+  id        Int    @id @default(autoincrement())
+  deviceId  Int    @unique
+  /// v2c community (encrypted).
+  communityEnc String? @db.Text
+  /// v3 (encrypted values; auth/priv keys only).
+  v3Username   String? @db.VarChar(64)
+  v3AuthProto  String? @db.VarChar(16)  // SHA | MD5
+  v3AuthKeyEnc String? @db.Text
+  v3PrivProto  String? @db.VarChar(16)  // AES | DES
+  v3PrivKeyEnc String? @db.Text
+  hasCommunity Boolean @default(false)
+  hasAuthKey   Boolean @default(false)
+  hasPrivKey   Boolean @default(false)
+  updatedAt    DateTime @updatedAt
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@map("snmp_configuration")
+}
+
+/// One discovered interface of a network device. `operStatus` is the last
+/// polled operational state; every poll also lands a row in
+/// InterfaceTrafficHistory so the graphs have a real series.
+model NetworkInterface {
+  id          Int    @id @default(autoincrement())
+  deviceId    Int
+  ifIndex     Int
+  /// ifName (Gi1/0/1, ether1, xe-0/0/0…)
+  name        String @db.VarChar(96)
+  description String? @db.VarChar(240) // ifAlias — operator's label
+  /// 1=up 2=down (IF-MIB unless adminStatus), 0=unknown
+  adminStatus Int    @default(1)
+  /// 1=up 2=down
+  operStatus  Int    @default(2)
+  speedMbps   Int?
+  duplex      String? @db.VarChar(16)
+  /// Last polled IF-MIB counters (monotonic; deltas below are persisted).
+  inOctets    BigInt? @db.BigInt
+  outOctets   BigInt? @db.BigInt
+  inUcastPkts BigInt? @db.BigInt
+  outUcastPkts BigInt? @db.BigInt
+  inErrors    BigInt? @db.BigInt
+  outErrors   BigInt? @db.BigInt
+  inDiscards  BigInt? @db.BigInt
+  outDiscards BigInt? @db.BigInt
+  crcErrors   BigInt? @db.BigInt
+  /// Last polled RATES (derived from counter deltas).
+  rxRateBps   Float   @default(0)
+  txRateBps   Float   @default(0)
+  rxPps       Float   @default(0)
+  txPps       Float   @default(0)
+  errorRatePerMin Float @default(0)
+  mac         String? @db.VarChar(40)
+  ifLastChangeTicks BigInt? @db.BigInt
+  lastStateChangeAt DateTime?
+  firstSeen   DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  lastPollAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  statusHistory InterfaceStatusHistory[]
+  trafficHistory InterfaceTrafficHistory[]
+  events NetworkEvent[]
+  alerts Alert[]
+
+  @@unique([deviceId, ifIndex])
+  @@index([deviceId])
+  @@index([operStatus])
+  @@index([deviceId, operStatus])
+  @@map("network_interface")
+}
+
+/// Every operational-state TRANSITION of an interface (UP↔DOWN) — the raw
+/// material for availability % ("what fraction of the range was it down").
+model InterfaceStatusHistory {
+  id          Int      @id @default(autoincrement())
+  deviceId    Int
+  interfaceId Int
+  /// "UP" | "DOWN" — the state this row moves the interface INTO.
+  toStatus    String   @db.VarChar(8)
+  /// How long the PREVIOUS state lasted (seconds), when known.
+  durationSec Int?
+  at          DateTime @default(now())
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  interface NetworkInterface @relation(fields: [interfaceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, at])
+  @@index([interfaceId, at])
+  @@index([deviceId, interfaceId])
+  @@map("interface_status_history")
+}
+
+/// Per-poll interface sample — rates (derived) + counters. One row per
+/// interface per poll (bounded by retention; pruned nightly).
+model InterfaceTrafficHistory {
+  id          Int      @id @default(autoincrement())
+  deviceId    Int
+  interfaceId Int
+  at          DateTime @default(now())
+  rxRateBps   Float    @default(0)
+  txRateBps   Float    @default(0)
+  rxPps       Float    @default(0)
+  txPps       Float    @default(0)
+  errorRatePerMin Float @default(0)
+  up          Boolean  @default(true)
+  speedMbps   Int?
+  inOctets    BigInt?  @db.BigInt
+  outOctets   BigInt?  @db.BigInt
+  inErrors    BigInt?  @db.BigInt
+  outErrors   BigInt?  @db.BigInt
+  inDiscards  BigInt?  @db.BigInt
+  outDiscards BigInt?  @db.BigInt
+  crcErrors   BigInt?  @db.BigInt
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  interface NetworkInterface @relation(fields: [interfaceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, at])
+  @@index([interfaceId, at])
+  @@index([deviceId, interfaceId, at])
+  @@map("interface_traffic_history")
+}
+
+/// Raw syslog messages received by the built-in syslog server. deviceId is
+/// null when the source IP is not (yet) a monitored network device — raw
+/// lines are still kept, but only permitted devices' rows are surfaced.
+model SyslogEvent {
+  id           Int      @id @default(autoincrement())
+  deviceId     Int?
+  sourceIp     String   @db.VarChar(64)
+  hostname     String?  @db.VarChar(120)
+  facility     Int?
+  facilityName String?  @db.VarChar(32)
+  /// 0 Emergency … 7 Debug
+  severity     Int?
+  severityName String   @db.VarChar(16) @default("INFO")
+  tag          String?  @db.VarChar(64)
+  message      String   @db.Text
+  /// Smart-parsed: PORT_DOWN, PORT_UP, BGP_DOWN, AUTH_FAILURE, CPU_HIGH…
+  eventType    String?  @db.VarChar(48)
+  /// OPEN | IGNORED — OPEN when it produced a network event/alert.
+  status       String   @db.VarChar(16) @default("OPEN")
+  raw          String?  @db.Text
+  receivedAt   DateTime @default(now())
+
+  device NetworkDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([deviceId, receivedAt])
+  @@index([sourceIp, receivedAt])
+  @@index([severity, receivedAt])
+  @@index([eventType])
+  @@index([status])
+  @@index([receivedAt])
+  @@map("syslog_event")
+}
+
+/// A smart-parsed, human-readable network event (port down/up, BGP down/up,
+/// OSPF adjacency, STP change, auth failure, reboot…). The alert engine
+/// evaluates AlertRules against these.
+model NetworkEvent {
+  id            Int      @id @default(autoincrement())
+  deviceId      Int?
+  sourceIp      String?  @db.VarChar(64)
+  interfaceId   Int?
+  interfaceName String?  @db.VarChar(96)
+  eventType     String   @db.VarChar(48) // PORT_DOWN, BGP_DOWN, …
+  severity      String   @db.VarChar(16) // critical | error | warning | notice | info | debug
+  message       String   @db.Text
+  /// OPEN | RECOVERED — PORT_DOWN opens, PORT_UP on the same port recovers it.
+  status        String   @db.VarChar(16) @default("OPEN")
+  count         Int      @default(1)     // flap counter within a window
+  createdAt     DateTime @default(now())
+  resolvedAt    DateTime?
+
+  device NetworkDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  interface NetworkInterface? @relation(fields: [interfaceId], references: [id], onDelete: SetNull)
+
+  @@index([deviceId, createdAt])
+  @@index([interfaceId, createdAt])
+  @@index([eventType, status])
+  @@index([severity])
+  @@index([status])
+  @@index([createdAt])
+  @@map("network_event")
+}
+
+/// Administrator-defined alert conditions (Settings → Alert Rules).
+/// `condition` is a compact DSL evaluated by the alert engine:
+///   - "DURATION:120"    → alert stays OPEN; notify again when sustained > 120s
+///   - "FLAP:5:600"      → 5+ occurrences of eventType within 600s → critical
+///   - "THRESHOLD:90:CPU"→ metric crosses a threshold (CPU %, memory, temperature)
+///   - "SYSLOG_SILENCE:300" → device sent no syslog for 300s → warning
+/// Empty condition matches every event of `eventType`.
+model AlertRule {
+  id             Int      @id @default(autoincrement())
+  ownerId        Int?     // rules are tenant scoped; SUPER_ADMIN sees all
+  name           String   @db.VarChar(120)
+  eventType      String   @db.VarChar(48)
+  condition      String?  @db.VarChar(120)
+  severity       String   @db.VarChar(16) @default("WARNING")
+  enabled        Boolean  @default(true)
+  /// {"sound":true,"desktop":true,"email":false,"discord":true,"whatsapp":false}
+  channels       Json     @default("{}")
+  description    String?  @db.VarChar(500)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  alerts Alert[]
+
+  @@index([ownerId])
+  @@index([eventType, enabled])
+  @@map("alert_rule")
+}
+
+/// One OPEN/resolved alert. `key` dedupes: only ONE open alert per
+/// eventType+device+interface, so a port that stays down never re-alerts
+/// every polling cycle; it re-alerts only on transition (or when a DURATION
+/// rule escalates it / the downtime crosses the configured threshold).
+model Alert {
+  id            Int      @id @default(autoincrement())
+  ruleId        Int?
+  deviceId      Int?
+  interfaceId   Int?
+  interfaceName String?  @db.VarChar(96)
+  eventType     String   @db.VarChar(48)
+  title         String   @db.VarChar(240)
+  message       String   @db.Text
+  severity      String   @db.VarChar(16) @default("WARNING")
+  key           String   @db.VarChar(160)
+  /// OPEN | RESOLVED | ACKNOWLEDGED
+  status        String   @db.VarChar(16) @default("OPEN")
+  openedAt      DateTime @default(now())
+  resolvedAt    DateTime?
+  acknowledgedAt DateTime?
+  acknowledgedBy Int?
+  /// Number of times this alert was re-fired (DURATION escalation).
+  fireCount     Int      @default(1)
+
+  rule AlertRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  device NetworkDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  interface NetworkInterface? @relation(fields: [interfaceId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+
+  @@index([status, openedAt])
+  @@index([deviceId, status])
+  @@index([interfaceId, status])
+  @@index([key, status])
+  @@index([eventType])
+  @@map("alert")
+}
+
+/// Delivery log for every notification a rule produced (sound/SSE pushes are
+/// recorded here too, so a repeated "did the alarm go off?" has an answer).
+model Notification {
+  id        Int      @id @default(autoincrement())
+  alertId   Int?
+  channel   String   @db.VarChar(32) // SOUND | DESKTOP | EMAIL | DISCORD | WHATSAPP
+  title     String   @db.VarChar(240)
+  message   String   @db.Text
+  status    String   @db.VarChar(16) @default("SENT") // SENT | FAILED | SKIPPED
+  error     String?  @db.VarChar(500)
+  sentAt    DateTime @default(now())
+
+  alert Alert? @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@index([alertId])
+  @@index([channel, sentAt])
+  @@map("notification")
+}
+
+/// Built-in syslog server listener configuration. One row per protocol.
+model SyslogServerSetting {
+  id        Int      @id @default(autoincrement())
+  protocol  String   @db.VarChar(8) @unique // UDP | TCP | TLS
+  enabled   Boolean  @default(false)
+  port      Int      @default(514)
+  tlsCertPath String? @db.VarChar(500)
+  tlsKeyPath  String? @db.VarChar(500)
+  updatedAt DateTime @updatedAt
+  @@map("syslog_server_setting")
+}
+
+/// CPU/memory/temperature series per network device (the Overview graphs).
+model DeviceHealthMetric {
+  id       Int      @id @default(autoincrement())
+  deviceId Int
+  ts       DateTime @default(now())
+  metric   String   @db.VarChar(24) // cpu | memory | temperature
+  value    Float
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, metric, ts])
+  @@index([deviceId, ts])
+  @@map("device_health_metric")
 }

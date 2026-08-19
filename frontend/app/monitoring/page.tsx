@@ -3,6 +3,7 @@
 import React from "react";
 import API from "../components/api";
 import { useSSE } from "../components/use-sse";
+import { ndm as ndmApi } from "./ndm";
 
 /**
  * Network Monitoring — each account adds hosts (IP/hostname), grouped, pinged
@@ -52,6 +53,7 @@ export default function MonitoringPage() {
   const H = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
   const [targets, setTargets] = React.useState<Target[]>([]);
+  const [ndmStats, setNdmStats] = React.useState<any>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [muted, setMuted] = React.useState(false);
@@ -84,6 +86,12 @@ export default function MonitoringPage() {
   }, []);
 
   React.useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+
+  // Network-device stats (SNMP switches) — same rhythm, one extra call.
+  const loadNdm = React.useCallback(async () => {
+    ndmApi.stats().then(setNdmStats).catch(() => {});
+  }, []);
+  React.useEffect(() => { loadNdm(); const t = setInterval(loadNdm, 30000); return () => clearInterval(t); }, [loadNdm]);
 
   // Instant refresh on a down/up transition pushed from the server.
   useSSE({ onEvent: (type) => { if (type === "monitor") load(); } });
@@ -267,6 +275,34 @@ export default function MonitoringPage() {
       )}
 
       {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={importRows} knownGroups={knownGroups} />}
+
+      {/* NETWORK DEVICES (SNMP + syslog) — sits on top; Ping stays untouched below. */}
+      <div className="mon-ndm">
+        <div className="mon-ndm-h">
+          <div>
+            <b>Network Devices</b>
+            <span>SNMP switches &amp; routers — live ports, traffic, syslog events and alerts.</span>
+          </div>
+          <div className="mon-ndm-actions">
+            <a href="/monitoring/alerts" className="mon-ndm-link">Alerts &amp; Rules</a>
+            <a href="/monitoring/ports" className="mon-ndm-link">Ports</a>
+            <a href="/monitoring/devices" className="mon-ndm-link pri">Manage devices</a>
+          </div>
+        </div>
+        {ndmStats ? (
+          <div className="mon-ndm-stats">
+            <div className="t"><b>{ndmStats.devices.total}</b><span>devices</span></div>
+            <div className="t"><b style={{ color: "#219653" }}>{ndmStats.devices.reachable}</b><span>reachable</span></div>
+            <div className={`t ${ndmStats.devices.down ? "bad" : ""}`}><b style={ndmStats.devices.down ? { color: "#D34053" } : undefined}>{ndmStats.devices.down}</b><span>down</span></div>
+            <div className="t"><b>{`${ndmStats.devices.upPorts} / ${ndmStats.devices.ports}`}</b><span>ports up</span></div>
+            <div className={`t ${ndmStats.alerts.open ? "bad" : ""}`}><b style={ndmStats.alerts.open ? { color: "#D34053" } : undefined}>{ndmStats.alerts.open}</b><span>open alerts</span></div>
+            <div className="t"><b>{ndmStats.events.last24h}</b><span>events / 24h</span></div>
+            <div className="t"><b>{ndmStats.syslog.last24h}</b><span>syslog / 24h</span></div>
+          </div>
+        ) : (
+          <div className="mon-ndm-empty">Check out the SNMP device monitor — add your switches to get live port status.</div>
+        )}
+      </div>
 
       {/* SEARCH + STATUS FILTER */}
       <div className="mon-filter">
@@ -660,6 +696,20 @@ function timeAgo(iso: string) {
 
 const CSS = `
 .mon{max-width:1100px;color:var(--text)}
+.mon-ndm{background:var(--surface,#fff);border:1px solid var(--border,#E2E8F0);border-radius:12px;padding:12px 14px;margin-bottom:16px}
+.mon-ndm-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.mon-ndm-h b{font-size:14px;display:block}
+.mon-ndm-h span{font-size:11.5px;color:#94A3B8}
+.mon-ndm-actions{display:flex;gap:6px;flex-wrap:wrap}
+.mon-ndm-link{font-size:12px;font-weight:600;color:#3C50E0;border:1px solid rgba(60,80,224,.35);border-radius:999px;padding:4px 12px;text-decoration:none}
+.mon-ndm-link:hover{background:rgba(60,80,224,.06)}
+.mon-ndm-link.pri{background:#3C50E0;color:#fff;border-color:transparent}
+.mon-ndm-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.mon-ndm-stats .t{background:var(--bg,#F1F5F9);border:1px solid var(--border,#E2E8F0);border-radius:9px;padding:8px 10px}
+.mon-ndm-stats .t b{font-size:16px;display:block}
+.mon-ndm-stats .t span{font-size:10.5px;color:#94A3B8}
+.mon-ndm-stats .t.bad{background:rgba(176,42,55,.06);border-color:rgba(176,42,55,.35)}
+.mon-ndm-empty{font-size:12.5px;color:#94A3B8;text-align:center;padding:6px}
 .mon-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .mon-head h1{font-size:20px;font-weight:800;margin:0}
 .mon-head p{font-size:12.5px;color:var(--muted);margin:4px 0 0}

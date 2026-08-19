@@ -1,0 +1,217 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { EventsService } from '../common/events.service';
+import { parseCondition, EVENT_LABELS, type NdmEventType } from './ndm.constants';
+
+/**
+ * Alert engine — evaluates AlertRules against recorded events and owns the
+ * OPEN → RESOLVED lifecycle of Alert rows.
+ *
+ * The "no duplicate alerts" property comes from alert keys. Events that are
+ * really one incident share a key no matter which source raised them:
+ *   - PORT_DOWN / LINK_DOWN / LINK_FLAP / PORT_ERROR on the same port
+ *   - BGP_DOWN / OSPF_DOWN on the same neighbor view (device)
+ *   - CPU_HIGH / MEMORY_HIGH / SYSLOG_STOPPED / DEVICE_DOWN per device
+ * A repeated occurrence increments fireCount (visible in the UI) but never
+ * opens a second open alert for the same key.
+ *
+ * Rules are evaluated rate-limited: the poll/syslog paths run at a high
+ * frequency, so identical evaluates on the SAME event id in the same tick
+ * are ignored (evaluate() is idempotent per event row).
+ */
+@Injectable()
+export class NdmAlertEngine {
+  private readonly log = new Logger('NdmAlerts');
+  private lastEvaluated = new Map<number, string>(); // eventId → dedup token
+
+  constructor(private prisma: PrismaService, private events: EventsService) {}
+
+  // ── Event → alert family mapping ───────────────────────────────
+  private static readonly FAMILY: Record<string, string> = {
+    PORT_DOWN: 'PORT', LINK_DOWN: 'PORT', LINK_UP: 'PORT', LINK_FLAP: 'PORT', PORT_ERROR: 'PORT',
+    PORT_UP: 'PORT',
+    BGP_DOWN: 'NEIGHBOR', BGP_UP: 'NEIGHBOR', OSPF_DOWN: 'NEIGHBOR', OSPF_UP: 'NEIGHBOR',
+    CPU_HIGH: 'RESOURCE', MEMORY_HIGH: 'RESOURCE',
+    DEVICE_DOWN: 'DEVICE', DEVICE_UP: 'DEVICE', DEVICE_REBOOT: 'DEVICE',
+    POWER_FAILURE: 'DEVICE', SYSLOG_STOPPED: 'DEVICE',
+    AUTH_FAILURE: 'SECURITY', CONFIG_CHANGE: 'SECURITY',
+    SYSLOG: 'SYSLOG',
+  };
+  private familyOf(t: string): string {
+    return NdmAlertEngine.FAMILY[t] || 'SYSLOG';
+  }
+
+  /** Closed-loop family — recovery event types that close a family. */
+
+  /**
+   * Evaluate an event against the enabled rules. Returns the affected Alert
+   * (or null if no rule matched / already resolved / rate-limited).
+   */
+  async evaluate(input: {
+    eventId: number;
+    eventType: NdmEventType;
+    message: string;
+    severity: string;
+    count?: number;
+    device?: { id: number; name: string; ownerId?: number | null } | null;
+    interface?: { id: number; name: string } | null;
+  }) {
+    const { eventId, eventType, message, severity, device, interface: intf } = input;
+    const count = input.count || 1;
+    const family = this.familyOf(eventType);
+
+    // Rules that could fire for this event: exact eventType match (so a
+    // LINK_DOWN-only rule works) OR a rule on the family head (PORT_DOWN
+    // rules catch LINK_DOWN/FLAP/PORT_ERROR too) OR a SYSLOG catch-all.
+    const ruleTypes = [eventType, family === 'SYSLOG' ? 'SYSLOG' : this.head(family)];
+    const rules = await this.prisma.alertRule.findMany({
+      where: { enabled: true, eventType: { in: ruleTypes } },
+    });
+    if (!rules.length) return null;
+
+    for (const rule of rules) {
+      // Rate-limit: one evaluate per event id per rule.
+      const token = `${eventId}:${rule.id}`;
+      if (this.lastEvaluated.get(rule.id) === token) continue;
+      this.lastEvaluated.set(rule.id, token);
+
+      const cond = parseCondition(rule.condition);
+      if (cond.kind === 'FLAP' && count < cond.count) continue;
+
+      const key = `${family}:${rule.id}:${device?.id ?? 0}:${intf?.id ?? 0}`;
+      const existing = await this.prisma.alert.findFirst({ where: { key, status: { in: ['OPEN', 'ACKNOWLEDGED'] } } });
+      const now = new Date();
+
+      let alert;
+      if (existing) {
+        const du = cond.kind === 'DURATION' ? cond.seconds : 0;
+        const fireCount = existing.fireCount;
+        const sustained = du > 0 && now.getTime() - existing.openedAt.getTime() >= du * fireCount;
+        if (!sustained || cond.kind !== 'DURATION') {
+          // Repeated occurrence → bump live counters, no new alert row.
+          alert = await this.prisma.alert.update({
+            where: { id: existing.id },
+            data: {
+              message, fireCount: { increment: 1 },
+              title: this.title(rule.name, eventType, intf?.name || null),
+            },
+            include: { rule: true },
+          });
+          this.broadcast(alert, 'upgrade');
+          continue;
+        }
+        // DURATION rule and threshold crossed → re-fire (escalate).
+        alert = await this.prisma.alert.update({
+          where: { id: existing.id },
+          data: { fireCount: { increment: 1 }, message },
+          include: { rule: true },
+        });
+        this.broadcast(alert, 'upgrade');
+        continue;
+      }
+
+      // Fresh incident → open the alert.
+      const sev = cond.kind === 'FLAP' && count >= cond.count ? 'CRITICAL' : (rule.severity || 'WARNING');
+      alert = await this.prisma.alert.create({
+        data: {
+          ruleId: rule.id,
+          deviceId: device?.id ?? null,
+          interfaceId: intf?.id ?? null,
+          interfaceName: intf?.name ?? null,
+          eventType,
+          title: this.title(rule.name, eventType, intf?.name || null),
+          message,
+          severity: sev,
+          key,
+          status: 'OPEN',
+          fireCount: 1,
+        },
+        include: { rule: true },
+      });
+      this.broadcast(alert, 'open');
+    }
+    return null;
+  }
+
+  /** Resolve OPEN/ACKNOWLEDGED alerts for a family on a device/port. */
+  async resolveFamily(input: { deviceId?: number | null; interfaceId?: number | null; family: string; deviceName?: string }) {
+    const { family, deviceId, interfaceId, deviceName } = input;
+    const where: any = {
+      status: { in: ['OPEN', 'ACKNOWLEDGED'] },
+      key: { startsWith: `${family}:` },
+      ...(deviceId != null ? { deviceId } : {}),
+      ...(interfaceId != null ? { interfaceId } : {}),
+    };
+    const rows = await this.prisma.alert.findMany({ where, include: { rule: true } });
+    if (!rows.length) return;
+    await this.prisma.alert.updateMany({ where, data: { status: 'RESOLVED', resolvedAt: new Date() } });
+    for (const a of rows) {
+      this.broadcast({ ...a, status: 'RESOLVED', resolvedAt: new Date() }, 'resolve');
+      // Recovery notifications are sent via a dedicated call (see controller).
+    }
+    if (deviceName && rows.length) this.log.log(`Resolved ${rows.length} ${family} alert(s) on ${deviceName}`);
+  }
+
+  /** Called by the poller/syslog receiver when a recovery event was recorded. */
+  async onRecovery(input: {
+    eventType: NdmEventType;
+    deviceId?: number | null;
+    interfaceId?: number | null;
+    deviceName?: string;
+  }) {
+    // PORT_UP / LINK_UP / BGP_UP etc. close their family.
+    const family = this.familyOf(input.eventType);
+    if (family === 'SYSLOG') return;
+    await this.resolveFamily({
+      deviceId: input.deviceId,
+      interfaceId: input.interfaceId,
+      family,
+      deviceName: input.deviceName,
+    });
+  }
+
+  /** Acknowledge an open alert (marks it, leaves it open — stops re-fire noise). */
+  async acknowledge(alertId: number, byUserId: number) {
+    const alert = await this.prisma.alert.findFirst({ where: { id: alertId } });
+    if (!alert) throw new Error('Alert not found');
+    const ack = await this.prisma.alert.update({
+      where: { id: alertId },
+      data: { acknowledgedAt: new Date(), acknowledgedBy: byUserId },
+    });
+    this.broadcast(ack, 'ack');
+    return ack;
+  }
+
+  private head(family: string): string {
+    for (const [t, f] of Object.entries(NdmAlertEngine.FAMILY)) if (f === family) return t;
+    return 'SYSLOG';
+  }
+
+  private title(ruleName: string, eventType: NdmEventType, port: string | null): string {
+    const label = EVENT_LABELS[eventType] || eventType;
+    return port ? `${label} — ${port}` : label;
+  }
+
+  private broadcast(alert: any, action: string) {
+    try {
+      // Include recovery-family info so the frontend can decorate resolve rows.
+      const row = {
+        id: alert.id,
+        status: alert.status,
+        action,
+        eventType: alert.eventType,
+        title: alert.title,
+        message: alert.message,
+        severity: alert.severity,
+        key: alert.key,
+        fireCount: alert.fireCount,
+        deviceId: alert.deviceId ?? null,
+        interfaceId: alert.interfaceId ?? null,
+        interfaceName: alert.interfaceName ?? null,
+        openedAt: alert.openedAt || new Date().toISOString(),
+        resolvedAt: alert.resolvedAt || null,
+      };
+      this.events.broadcast('ndm:alert', row);
+    } catch { /* never break the pipeline */ }
+  }
+}
