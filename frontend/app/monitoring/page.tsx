@@ -60,6 +60,9 @@ export default function MonitoringPage() {
   const [alerts, setAlerts] = React.useState<AlertSettings>(ALERT_DEFAULTS);
   const [showSettings, setShowSettings] = React.useState(false);
   const [showImport, setShowImport] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const [status, setStatus] = React.useState<"all" | "down" | "up" | "paused">("all");
+  const searchRef = React.useRef<HTMLInputElement | null>(null);
 
   // Read persisted settings after mount (server render has no localStorage).
   React.useEffect(() => { setAlerts(loadAlertSettings()); }, []);
@@ -162,6 +165,20 @@ export default function MonitoringPage() {
     setTimeout(() => beep("up"), 900);
   }, [beep, speak, alerts.speak]);
 
+  // "/" focuses search, the convention operators expect from every NOC tool.
+  // Ignored while typing in a field so it never eats a literal slash.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // ── Actions ──────────────────────────────────────────────────
   const add = async () => {
     if (!form.host.trim()) return;
@@ -192,10 +209,33 @@ export default function MonitoringPage() {
     return d as ImportResult;
   };
 
-  // Group targets.
+  /**
+   * SEARCH + STATUS FILTER.
+   *
+   * With 40+ monitors across half a dozen groups, scrolling to find one tower
+   * is the slowest thing on this page — and during an outage the only rows
+   * anyone wants are the down ones.
+   *
+   * Search matches label, host AND group name, so typing "adyala" finds the
+   * host, and typing "KT-SW" narrows to a whole group. Multiple words all have
+   * to match (AND), which is how people actually search: "c60 backup".
+   */
+  const filtered = React.useMemo(() => {
+    const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return targets.filter((t) => {
+      if (status === "down" && !(t.enabled && t.isUp === false)) return false;
+      if (status === "up" && !(t.enabled && t.isUp === true)) return false;
+      if (status === "paused" && t.enabled) return false;
+      if (!terms.length) return true;
+      const hay = `${t.name || ""} ${t.host} ${t.groupName || ""}`.toLowerCase();
+      return terms.every((w) => hay.includes(w));
+    });
+  }, [targets, q, status]);
+
+  // Group the FILTERED set, so empty groups disappear while searching.
   const groups = React.useMemo(() => {
     const m = new Map<string, Target[]>();
-    for (const t of targets) { const k = t.groupName || "Ungrouped"; (m.get(k) || m.set(k, []).get(k)!).push(t); }
+    for (const t of filtered) { const k = t.groupName || "Ungrouped"; (m.get(k) || m.set(k, []).get(k)!).push(t); }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [targets]);
   const knownGroups = [...new Set(targets.map((t) => t.groupName).filter(Boolean) as string[])];
@@ -228,6 +268,40 @@ export default function MonitoringPage() {
 
       {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={importRows} knownGroups={knownGroups} />}
 
+      {/* SEARCH + STATUS FILTER */}
+      <div className="mon-filter">
+        <div className="mon-search">
+          <span>🔍</span>
+          <input
+            ref={searchRef}
+            placeholder="Search device, IP or group…   (press / to focus)"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }}
+          />
+          {q && <button className="clr" onClick={() => setQ("")} title="Clear search">✕</button>}
+        </div>
+        <div className="mon-chips">
+          {([
+            ["all", `All ${targets.length}`],
+            ["down", `Down ${targets.filter((t) => t.enabled && t.isUp === false).length}`],
+            ["up", `Up ${targets.filter((t) => t.enabled && t.isUp === true).length}`],
+            ["paused", `Paused ${targets.filter((t) => !t.enabled).length}`],
+          ] as const).map(([k, label]) => (
+            <button key={k} className={`chip ${status === k ? "on" : ""} ${k}`}
+              onClick={() => setStatus(k as any)}>{label}</button>
+          ))}
+        </div>
+      </div>
+      {(q || status !== "all") && (
+        <div className="mon-filter-note">
+          Showing <b>{filtered.length}</b> of {targets.length}
+          {q && <> matching “<b>{q}</b>”</>}
+          {status !== "all" && <> · {status}</>}
+          <button onClick={() => { setQ(""); setStatus("all"); }}>Clear filters</button>
+        </div>
+      )}
+
       {/* DOWN ALERT BANNER */}
       {down.length > 0 && (
         <div className="mon-alert">
@@ -254,6 +328,12 @@ export default function MonitoringPage() {
 
       {!loaded ? <div className="mon-empty">Loading…</div> :
         targets.length === 0 ? <div className="mon-empty">No monitors yet. Add a host above to start pinging it.</div> :
+        filtered.length === 0 ? (
+          <div className="mon-empty">
+            No device matches {q ? <>“<b>{q}</b>”</> : "this filter"}.
+            <button className="mon-linkbtn" onClick={() => { setQ(""); setStatus("all"); }}>Clear filters</button>
+          </div>
+        ) :
         groups.map(([g, list]) => (
           <div key={g} className="mon-group">
             <div className="mon-group-h">{g} <span>{list.length}</span></div>
@@ -621,6 +701,32 @@ const CSS = `
 .mon-card-actions .details:hover{background:#3C50E0;color:#fff}
 .mon-card-actions button.del{color:#B02A37;border-color:rgba(176,42,55,.3)}
 @media (max-width:640px){ .mon-grid{grid-template-columns:1fr 1fr} .mon-add input,.mon-add button{flex:1 1 100%} }
+
+/* ── Search + status filter ── */
+.mon-filter{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.mon-search{position:relative;display:flex;align-items:center;flex:1;min-width:260px;
+  border:1px solid var(--border);background:var(--surface-2);border-radius:10px;padding:0 10px}
+.mon-search span{opacity:.6;font-size:13px}
+.mon-search input{flex:1;border:none;background:none;outline:none;color:var(--text);
+  padding:9px 8px;font-size:13.5px}
+.mon-search .clr{border:none;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:4px 6px}
+.mon-search .clr:hover{color:#B02A37}
+.mon-search:focus-within{border-color:#3C50E0;box-shadow:0 0 0 3px rgba(60,80,224,.12)}
+.mon-chips{display:flex;gap:6px;flex-wrap:wrap}
+.mon-chips .chip{border:1px solid var(--border);background:var(--surface-2);color:var(--muted);
+  border-radius:999px;padding:6px 13px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.mon-chips .chip:hover{border-color:#3C50E0;color:#3C50E0}
+.mon-chips .chip.on{background:#3C50E0;border-color:#3C50E0;color:#fff}
+.mon-chips .chip.down.on{background:#B02A37;border-color:#B02A37}
+.mon-chips .chip.up.on{background:#157F43;border-color:#157F43}
+.mon-filter-note{font-size:12px;color:var(--muted);margin:-4px 0 12px;display:flex;align-items:center;gap:8px}
+.mon-filter-note button{border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:999px;padding:3px 11px;font-size:11.5px;font-weight:600;cursor:pointer}
+.mon-filter-note button:hover{border-color:#3C50E0;color:#3C50E0}
+.mon-linkbtn{margin-left:10px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.mon-linkbtn:hover{border-color:#3C50E0;color:#3C50E0}
+@media (max-width:640px){ .mon-search{min-width:100%} }
 
 /* ── Header buttons ── */
 .mon-hbtn{border:1px solid var(--border);background:var(--surface-2);color:var(--text);
