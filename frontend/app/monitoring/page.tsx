@@ -18,6 +18,35 @@ type Target = {
   intervalSec: number; history: Sample[];
 };
 
+/**
+ * Alert preferences. Persisted per browser — an operator on the NOC screen and
+ * one working from a laptop want different volumes and repeat rates, and this
+ * is a per-person preference rather than shared configuration.
+ */
+type AlertSettings = {
+  enabled: boolean;        // master switch
+  downSound: boolean;      // beep when a host goes down
+  upSound: boolean;        // beep when a host recovers
+  speak: boolean;          // speak "<host> is down"
+  repeatSec: number;       // 0 = announce once, no repeat
+  volume: number;          // 0..1
+  maxSpoken: number;       // cap names read aloud per announcement
+};
+
+const ALERT_DEFAULTS: AlertSettings = {
+  enabled: true, downSound: true, upSound: true, speak: true,
+  repeatSec: 12, volume: 0.6, maxSpoken: 3,
+};
+const ALERT_KEY = "jb.monitoring.alerts";
+
+function loadAlertSettings(): AlertSettings {
+  if (typeof window === "undefined") return ALERT_DEFAULTS;
+  try {
+    const raw = localStorage.getItem(ALERT_KEY);
+    return raw ? { ...ALERT_DEFAULTS, ...JSON.parse(raw) } : ALERT_DEFAULTS;
+  } catch { return ALERT_DEFAULTS; }
+}
+
 export default function MonitoringPage() {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const H = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -28,6 +57,19 @@ export default function MonitoringPage() {
   const [muted, setMuted] = React.useState(false);
   const [form, setForm] = React.useState({ name: "", host: "", groupName: "" });
   const [adding, setAdding] = React.useState(false);
+  const [alerts, setAlerts] = React.useState<AlertSettings>(ALERT_DEFAULTS);
+  const [showSettings, setShowSettings] = React.useState(false);
+  const [showImport, setShowImport] = React.useState(false);
+
+  // Read persisted settings after mount (server render has no localStorage).
+  React.useEffect(() => { setAlerts(loadAlertSettings()); }, []);
+  const saveAlerts = React.useCallback((next: Partial<AlertSettings>) => {
+    setAlerts((prev) => {
+      const merged = { ...prev, ...next };
+      try { localStorage.setItem(ALERT_KEY, JSON.stringify(merged)); } catch { /* private mode */ }
+      return merged;
+    });
+  }, []);
 
   const load = React.useCallback(async () => {
     try {
@@ -45,39 +87,80 @@ export default function MonitoringPage() {
 
   const down = targets.filter((t) => t.isUp === false && t.enabled);
 
-  // ── Alerting: beep + repeating spoken "<host> is down" while anything's down ──
+  // ── Alerting ───────────────────────────────────────────────────────────────
   const audioRef = React.useRef<AudioContext | null>(null);
-  const beep = React.useCallback(() => {
+  /** Two-tone: falling for DOWN (urgent), rising for UP (resolved). */
+  const beep = React.useCallback((kind: "down" | "up" = "down") => {
     try {
       const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (!AC) return;
       const ctx = audioRef.current || (audioRef.current = new AC());
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = "square"; o.frequency.value = 880;
-      g.gain.value = 0.06; o.connect(g); g.connect(ctx.destination);
-      o.start(); o.stop(ctx.currentTime + 0.18);
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const notes = kind === "down" ? [880, 620] : [620, 880];
+      notes.forEach((freq, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "square"; o.frequency.value = freq;
+        const t0 = ctx.currentTime + i * 0.16;
+        // Clamped so a slider at 100% cannot produce a painful level.
+        g.gain.setValueAtTime(Math.min(Math.max(alerts.volume, 0), 1) * 0.12, t0);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t0); o.stop(t0 + 0.15);
+      });
     } catch { /* audio blocked until first interaction */ }
-  }, []);
+  }, [alerts.volume]);
+
   const speak = React.useCallback((text: string) => {
     try {
       const s = window.speechSynthesis;
       if (!s) return;
       const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1; u.pitch = 1; s.speak(u);
+      u.rate = 1; u.pitch = 1; u.volume = Math.min(Math.max(alerts.volume, 0), 1);
+      s.speak(u);
     } catch { /* ignore */ }
-  }, []);
+  }, [alerts.volume]);
 
+  const soundOn = alerts.enabled && !muted;
+
+  // RECOVERY CHIME — fires once when a host that was down comes back.
+  // Tracked against the previous render's down-set, so it announces the
+  // transition rather than the state (which would chime on every poll).
+  const prevDownRef = React.useRef<Set<number>>(new Set());
   React.useEffect(() => {
-    if (muted || down.length === 0) return;
+    const nowDown = new Set(down.map((d) => d.id));
+    const recovered = [...prevDownRef.current].filter((id) => !nowDown.has(id));
+    if (recovered.length && soundOn && alerts.upSound) {
+      beep("up");
+      if (alerts.speak) {
+        const t = targets.find((x) => x.id === recovered[0]);
+        if (t) speak(`${t.name || t.host} is back up`);
+      }
+    }
+    prevDownRef.current = nowDown;
+  }, [down.map((d) => d.id).join(","), soundOn, alerts.upSound, alerts.speak, beep, speak, targets]);
+
+  // DOWN ALERT — announce immediately, then repeat on the configured interval.
+  // repeatSec = 0 means "tell me once", which is what people want overnight.
+  React.useEffect(() => {
+    if (!soundOn || down.length === 0) return;
     const announce = () => {
-      beep();
-      // Speak up to 3 names so it isn't endless.
-      down.slice(0, 3).forEach((t) => speak(`${t.name || t.host} is down`));
+      if (alerts.downSound) beep("down");
+      if (alerts.speak) {
+        down.slice(0, Math.max(1, alerts.maxSpoken)).forEach((t) => speak(`${t.name || t.host} is down`));
+      }
     };
     announce();
-    const id = setInterval(announce, 12000); // repeat every 12s until resolved/muted
+    if (!alerts.repeatSec) return;                       // announce once only
+    const id = setInterval(announce, alerts.repeatSec * 1000);
     return () => clearInterval(id);
-  }, [down.map((d) => d.id).join(","), muted, beep, speak]);
+  }, [down.map((d) => d.id).join(","), soundOn, alerts.downSound, alerts.speak,
+      alerts.repeatSec, alerts.maxSpoken, beep, speak]);
+
+  /** Play both tones so the operator can set the volume without waiting for an outage. */
+  const testSound = React.useCallback(() => {
+    beep("down");
+    if (alerts.speak) speak("Test alert. A host is down.");
+    setTimeout(() => beep("up"), 900);
+  }, [beep, speak, alerts.speak]);
 
   // ── Actions ──────────────────────────────────────────────────
   const add = async () => {
@@ -98,6 +181,15 @@ export default function MonitoringPage() {
   };
   const toggle = async (t: Target) => {
     await fetch(`${API}/monitoring/targets/${t.id}`, { method: "PUT", headers: H, body: JSON.stringify({ enabled: !t.enabled }) }); load();
+  };
+  const importRows = async (rows: ImportRow[]) => {
+    const r = await fetch(`${API}/monitoring/targets/import`, {
+      method: "POST", headers: H, body: JSON.stringify({ rows }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d?.message || "Import failed");
+    await load();
+    return d as ImportResult;
   };
 
   // Group targets.
@@ -120,8 +212,21 @@ export default function MonitoringPage() {
         <div className="mon-head-stats">
           <span className="ok">{targets.filter((t) => t.isUp).length} up</span>
           <span className={down.length ? "bad" : "muted"}>{down.length} down</span>
+          <button className="mon-hbtn" onClick={() => setShowImport(true)} title="Import monitors from Excel or CSV">⬆ Import</button>
+          <button className="mon-hbtn" onClick={() => setShowSettings((s) => !s)} title="Alert sound settings">
+            {alerts.enabled && !muted ? "🔔" : "🔕"} Alerts
+          </button>
         </div>
       </div>
+
+      {showSettings && (
+        <AlertSettingsPanel
+          s={alerts} onChange={saveAlerts} onTest={testSound}
+          muted={muted} onMute={setMuted} onClose={() => setShowSettings(false)}
+        />
+      )}
+
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={importRows} knownGroups={knownGroups} />}
 
       {/* DOWN ALERT BANNER */}
       {down.length > 0 && (
@@ -157,6 +262,228 @@ export default function MonitoringPage() {
             </div>
           </div>
         ))}
+    </div>
+  );
+}
+
+/** Alert sound preferences. Every control takes effect immediately. */
+function AlertSettingsPanel({ s, onChange, onTest, muted, onMute, onClose }: {
+  s: AlertSettings; onChange: (p: Partial<AlertSettings>) => void; onTest: () => void;
+  muted: boolean; onMute: (m: boolean) => void; onClose: () => void;
+}) {
+  const REPEATS = [
+    { v: 0, l: "Once only" }, { v: 12, l: "12 s" }, { v: 30, l: "30 s" },
+    { v: 60, l: "1 min" }, { v: 300, l: "5 min" }, { v: 900, l: "15 min" },
+  ];
+  return (
+    <div className="mon-settings">
+      <div className="mon-settings-h">
+        <b>Alert sounds</b>
+        <button onClick={onClose}>✕</button>
+      </div>
+      <div className="mon-settings-body">
+        <label className="ck"><input type="checkbox" checked={s.enabled}
+          onChange={(e) => onChange({ enabled: e.target.checked })} /> Enable alert sounds</label>
+        <label className="ck"><input type="checkbox" checked={s.downSound} disabled={!s.enabled}
+          onChange={(e) => onChange({ downSound: e.target.checked })} /> Beep when a host goes <b>down</b></label>
+        <label className="ck"><input type="checkbox" checked={s.upSound} disabled={!s.enabled}
+          onChange={(e) => onChange({ upSound: e.target.checked })} /> Chime when a host <b>recovers</b></label>
+        <label className="ck"><input type="checkbox" checked={s.speak} disabled={!s.enabled}
+          onChange={(e) => onChange({ speak: e.target.checked })} /> Speak the host name aloud</label>
+
+        <div className="fld">
+          <span>Repeat while down</span>
+          <select value={s.repeatSec} disabled={!s.enabled}
+            onChange={(e) => onChange({ repeatSec: Number(e.target.value) })}>
+            {REPEATS.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}
+          </select>
+        </div>
+
+        <div className="fld">
+          <span>Volume</span>
+          <input type="range" min={0} max={1} step={0.05} value={s.volume} disabled={!s.enabled}
+            onChange={(e) => onChange({ volume: Number(e.target.value) })} />
+          <em>{Math.round(s.volume * 100)}%</em>
+        </div>
+
+        <div className="fld">
+          <span>Names spoken per alert</span>
+          <select value={s.maxSpoken} disabled={!s.enabled || !s.speak}
+            onChange={(e) => onChange({ maxSpoken: Number(e.target.value) })}>
+            {[1, 3, 5, 10].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+
+        <div className="mon-settings-actions">
+          <button onClick={onTest} disabled={!s.enabled}>▶ Test sound</button>
+          <button onClick={() => onMute(!muted)}>{muted ? "🔔 Unmute now" : "🔕 Mute until reload"}</button>
+        </div>
+        <p className="hint">
+          Browsers block audio until you interact with the page — click <b>Test sound</b> once
+          per session so alerts can play. Settings are saved in this browser only.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+type ImportRow = { host: string; name?: string; group?: string };
+type ImportResult = {
+  total: number; added: number; skipped: number; failed: number;
+  results: Array<{ row: number; host: string; status: string; reason?: string }>;
+};
+
+/**
+ * Import monitors from a spreadsheet.
+ *
+ * Parsing happens in the browser (SheetJS is already a dependency, and this is
+ * the same pattern the subscriber import uses), so .xlsx, .xls and .csv all
+ * work without adding a server-side parser.
+ *
+ * Column names are matched loosely — real operator files say "IP", "ip address",
+ * "Host", "Name", "Label", "Group", "Zone" — and a headerless file is accepted
+ * positionally as host, label, group.
+ */
+function ImportModal({ onClose, onImport, knownGroups }: {
+  onClose: () => void; onImport: (rows: ImportRow[]) => Promise<ImportResult>; knownGroups: string[];
+}) {
+  const [rows, setRows] = React.useState<ImportRow[]>([]);
+  const [fileName, setFileName] = React.useState("");
+  const [parseErr, setParseErr] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [result, setResult] = React.useState<ImportResult | null>(null);
+  const [fallbackGroup, setFallbackGroup] = React.useState("");
+
+  const pick = (obj: any, keys: string[]): string => {
+    for (const k of Object.keys(obj || {})) {
+      const norm = k.toLowerCase().replace(/[^a-z]/g, "");
+      if (keys.includes(norm)) {
+        const v = obj[k];
+        if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
+      }
+    }
+    return "";
+  };
+
+  const onFile = async (f: File) => {
+    setParseErr(""); setResult(null); setFileName(f.name);
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if (!sheet) throw new Error("The file has no readable sheet.");
+      const json: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      let parsed: ImportRow[] = json.map((r) => ({
+        host: pick(r, ["host", "ip", "ipaddress", "address", "hostname", "target"]),
+        name: pick(r, ["label", "name", "title", "description"]),
+        group: pick(r, ["group", "groupname", "zone", "area", "category"]),
+      })).filter((r) => r.host);
+
+      // Headerless file → treat columns positionally.
+      if (parsed.length === 0) {
+        const raw: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+        parsed = raw
+          .map((c) => ({ host: String(c[0] ?? "").trim(), name: String(c[1] ?? "").trim(), group: String(c[2] ?? "").trim() }))
+          .filter((r) => r.host && !/^(host|ip|ip address|address|hostname)$/i.test(r.host));
+      }
+
+      if (parsed.length === 0) throw new Error("No usable rows found. The first column should contain a host or IP.");
+      setRows(parsed);
+    } catch (e: any) {
+      setRows([]); setParseErr(e?.message || "Could not read that file.");
+    }
+  };
+
+  const run = async () => {
+    setBusy(true); setParseErr("");
+    try {
+      const payload = fallbackGroup.trim()
+        ? rows.map((r) => ({ ...r, group: r.group || fallbackGroup.trim() }))
+        : rows;
+      setResult(await onImport(payload));
+    } catch (e: any) { setParseErr(e?.message || "Import failed"); }
+    finally { setBusy(false); }
+  };
+
+  const failures = result?.results.filter((r) => r.status === "failed") || [];
+
+  return (
+    <div className="mon-modal-bg" onClick={onClose}>
+      <div className="mon-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="mon-modal-h"><b>Import monitors</b><button onClick={onClose}>✕</button></div>
+
+        {!result ? (
+          <div className="mon-modal-b">
+            <p className="hint">
+              Excel (.xlsx/.xls) or CSV with three columns — <b>host or IP</b> (required),
+              <b> label</b>, <b>group</b>. Column headings are matched automatically
+              (<code>ip</code>, <code>host</code>, <code>address</code>, <code>name</code>,
+              <code>label</code>, <code>group</code>, <code>zone</code>…). A file with no
+              header row is read as host, label, group in that order.
+            </p>
+
+            <input type="file" accept=".xlsx,.xls,.csv"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+
+            {fileName && !parseErr && (
+              <div className="mon-imp-ok">✓ {fileName} — <b>{rows.length}</b> row(s) ready</div>
+            )}
+            {parseErr && <div className="mon-err">{parseErr}</div>}
+
+            {rows.length > 0 && (
+              <>
+                <div className="fld">
+                  <span>Group for rows with none</span>
+                  <input list="mon-imp-groups" value={fallbackGroup} placeholder="(leave blank for Ungrouped)"
+                    onChange={(e) => setFallbackGroup(e.target.value)} />
+                  <datalist id="mon-imp-groups">{knownGroups.map((g) => <option key={g} value={g} />)}</datalist>
+                </div>
+                <table className="mon-imp-tbl">
+                  <thead><tr><th>#</th><th>Host / IP</th><th>Label</th><th>Group</th></tr></thead>
+                  <tbody>
+                    {rows.slice(0, 10).map((r, i) => (
+                      <tr key={i}><td>{i + 1}</td><td><code>{r.host}</code></td>
+                        <td>{r.name || <em className="muted">= host</em>}</td>
+                        <td>{r.group || fallbackGroup || <em className="muted">Ungrouped</em>}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                {rows.length > 10 && <div className="hint">…and {rows.length - 10} more.</div>}
+              </>
+            )}
+
+            <div className="mon-modal-actions">
+              <button onClick={onClose}>Cancel</button>
+              <button className="primary" onClick={run} disabled={busy || rows.length === 0}>
+                {busy ? "Importing…" : `Import ${rows.length || ""} monitor${rows.length === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mon-modal-b">
+            <div className="mon-imp-summary">
+              <span className="ok">{result.added} added</span>
+              <span className="muted">{result.skipped} already monitored</span>
+              <span className={result.failed ? "bad" : "muted"}>{result.failed} failed</span>
+            </div>
+            {failures.length > 0 && (
+              <table className="mon-imp-tbl">
+                <thead><tr><th>Row</th><th>Host</th><th>Why it failed</th></tr></thead>
+                <tbody>
+                  {failures.slice(0, 20).map((f, i) => (
+                    <tr key={i}><td>{f.row}</td><td><code>{f.host || "—"}</code></td><td>{f.reason}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="mon-modal-actions">
+              <button className="primary" onClick={onClose}>Done</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -294,4 +621,64 @@ const CSS = `
 .mon-card-actions .details:hover{background:#3C50E0;color:#fff}
 .mon-card-actions button.del{color:#B02A37;border-color:rgba(176,42,55,.3)}
 @media (max-width:640px){ .mon-grid{grid-template-columns:1fr 1fr} .mon-add input,.mon-add button{flex:1 1 100%} }
+
+/* ── Header buttons ── */
+.mon-hbtn{border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:999px;padding:4px 12px;font-size:12px;font-weight:700;cursor:pointer}
+.mon-hbtn:hover{border-color:#3C50E0;color:#3C50E0}
+
+/* ── Alert settings ── */
+.mon-settings{border:1px solid var(--border);background:var(--surface);border-radius:12px;
+  margin-bottom:14px;overflow:hidden}
+.mon-settings-h{display:flex;justify-content:space-between;align-items:center;
+  padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);font-size:13px}
+.mon-settings-h button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px}
+.mon-settings-body{padding:14px;display:flex;flex-direction:column;gap:10px}
+.mon-settings-body .ck{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.mon-settings-body .ck input{width:15px;height:15px;cursor:pointer}
+.mon-settings-body .fld{display:flex;align-items:center;gap:10px;font-size:13px}
+.mon-settings-body .fld>span{min-width:180px;color:var(--muted)}
+.mon-settings-body .fld select,.mon-settings-body .fld input[type=text],.mon-settings-body .fld input:not([type]){
+  border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:8px;padding:5px 9px;font-size:13px}
+.mon-settings-body .fld input[type=range]{flex:1;max-width:220px}
+.mon-settings-body .fld em{font-style:normal;color:var(--muted);font-size:12px;min-width:38px}
+.mon-settings-actions{display:flex;gap:8px;margin-top:2px}
+.mon-settings-actions button{border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:8px;padding:6px 14px;font-size:12.5px;font-weight:600;cursor:pointer}
+.mon-settings-actions button:hover:not(:disabled){border-color:#3C50E0;color:#3C50E0}
+.mon-settings-actions button:disabled{opacity:.5;cursor:not-allowed}
+.hint{font-size:11.5px;color:var(--muted);line-height:1.65;margin:2px 0 0}
+.hint code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin:0 2px}
+
+/* ── Import modal ── */
+.mon-modal-bg{position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.45);
+  backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px}
+.mon-modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  width:min(640px,96vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+.mon-modal-h{display:flex;justify-content:space-between;align-items:center;
+  padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px}
+.mon-modal-h button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px}
+.mon-modal-b{padding:16px 18px;overflow:auto;display:flex;flex-direction:column;gap:12px}
+.mon-modal-b input[type=file]{font-size:13px}
+.mon-modal-b .fld{display:flex;align-items:center;gap:10px;font-size:13px}
+.mon-modal-b .fld>span{min-width:180px;color:var(--muted)}
+.mon-modal-b .fld input{flex:1;border:1px solid var(--border);background:var(--surface-2);
+  color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px}
+.mon-modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+.mon-modal-actions button{border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:8px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer}
+.mon-modal-actions button.primary{background:#3C50E0;border-color:#3C50E0;color:#fff}
+.mon-modal-actions button:disabled{opacity:.5;cursor:not-allowed}
+.mon-imp-ok{font-size:12.5px;color:#157F43;font-weight:600}
+.mon-imp-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.mon-imp-tbl th{text-align:left;color:var(--muted);font-weight:700;padding:6px 8px;
+  border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.mon-imp-tbl td{padding:6px 8px;border-bottom:1px solid var(--border)}
+.mon-imp-tbl code{font-size:11.5px}
+.mon-imp-tbl .muted{color:var(--muted)}
+.mon-imp-summary{display:flex;gap:8px;font-size:12.5px;font-weight:700}
+.mon-imp-summary .ok{color:#157F43;background:rgba(21,127,67,.12);border-radius:999px;padding:4px 12px}
+.mon-imp-summary .bad{color:#B02A37;background:rgba(176,42,55,.12);border-radius:999px;padding:4px 12px}
+.mon-imp-summary .muted{color:#94A3B8;background:var(--surface-2);border-radius:999px;padding:4px 12px}
 `;

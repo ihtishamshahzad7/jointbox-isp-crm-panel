@@ -1,0 +1,8 @@
+host,label,group
+192.168.88.1,Core Router,Core
+192.168.88.17,BNG / NAS,Core
+8.8.8.8,Google DNS,Upstream
+1.1.1.1,Cloudflare DNS,Upstream
+192.168.10.5,Tower A - Sector 1,Towers
+192.168.10.6,Tower A - Sector 2,Towers
+192.168.20.2,OLT Main,Fiber

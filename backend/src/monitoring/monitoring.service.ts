@@ -68,6 +68,97 @@ export class MonitoringService {
     });
   }
 
+  /**
+   * BULK IMPORT — add many monitors from a spreadsheet in one call.
+   *
+   * Accepts rows of { host, name, group }. Only `host` is mandatory; a missing
+   * label falls back to the host itself, which is what an operator means when
+   * they paste a bare list of IPs.
+   *
+   * Design decisions worth knowing:
+   *
+   *  • PER-ROW RESULTS, NOT ALL-OR-NOTHING. A 200-row sheet with three bad
+   *    addresses should import 197 monitors and tell you about the three, not
+   *    reject the lot. Every row comes back with its own outcome so the UI can
+   *    show exactly which line failed and why.
+   *
+   *  • DUPLICATES ARE SKIPPED, NOT DUPLICATED. Re-importing the same sheet is a
+   *    normal operator action (someone adds ten rows and re-uploads). Matching
+   *    is on host within the caller's own scope, so two dealers may each
+   *    monitor 192.168.88.1 without colliding.
+   *
+   *  • The row's own index is echoed back so the UI can point at the exact
+   *    spreadsheet line rather than saying "some rows failed".
+   */
+  async importTargets(
+    rows: Array<{ host?: string; name?: string; label?: string; group?: string; groupName?: string; intervalSec?: number }>,
+    actor?: Actor,
+  ) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new BadRequestException('No rows to import. The file appears to be empty.');
+    }
+    if (rows.length > 2000) {
+      throw new BadRequestException(`Too many rows (${rows.length}). Import at most 2000 monitors at a time.`);
+    }
+
+    const ownerId = actor ? this.scope.actorId(actor) : null;
+
+    // Existing hosts in THIS caller's scope, so a re-import is a no-op rather
+    // than a second copy of every monitor.
+    const ids = await this.ownedIds(actor);
+    const existing = await this.prisma.monitorTarget.findMany({
+      where: ids ? { ownerId: { in: ids.length ? ids : [-1] } } : {},
+      select: { host: true },
+    });
+    const seen = new Set(existing.map((e) => e.host.toLowerCase()));
+
+    const results: Array<{ row: number; host: string; status: 'added' | 'skipped' | 'failed'; reason?: string }> = [];
+    let added = 0, skipped = 0, failed = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || {};
+      // Accept either naming convention — spreadsheets in the wild use both.
+      const host = String(r.host ?? '').trim();
+      const label = String(r.name ?? r.label ?? '').trim();
+      const group = String(r.group ?? r.groupName ?? '').trim();
+      const rowNo = i + 1;
+
+      if (!host) {
+        results.push({ row: rowNo, host: '', status: 'failed', reason: 'No host or IP in this row.' });
+        failed++; continue;
+      }
+      if (!/^[a-zA-Z0-9._:-]{1,255}$/.test(host)) {
+        results.push({ row: rowNo, host, status: 'failed', reason: 'Not a valid IP address or hostname.' });
+        failed++; continue;
+      }
+      if (seen.has(host.toLowerCase())) {
+        results.push({ row: rowNo, host, status: 'skipped', reason: 'Already monitored.' });
+        skipped++; continue;
+      }
+
+      try {
+        await this.prisma.monitorTarget.create({
+          data: {
+            name: (label || host).slice(0, 120),
+            host,
+            groupName: group ? group.slice(0, 80) : null,
+            intervalSec: Math.min(Math.max(Number(r.intervalSec) || 30, 10), 3600),
+            ownerId,
+          },
+        });
+        seen.add(host.toLowerCase()); // guards duplicates WITHIN the same file
+        results.push({ row: rowNo, host, status: 'added' });
+        added++;
+      } catch (e: any) {
+        results.push({ row: rowNo, host, status: 'failed', reason: e?.message || 'Database error.' });
+        failed++;
+      }
+    }
+
+    this.logger.log(`Monitor import: ${added} added, ${skipped} skipped, ${failed} failed (${rows.length} rows)`);
+    return { total: rows.length, added, skipped, failed, results };
+  }
+
   async update(id: number, data: any, actor?: Actor) {
     await this.assertOwns(id, actor);
     const patch: any = {};

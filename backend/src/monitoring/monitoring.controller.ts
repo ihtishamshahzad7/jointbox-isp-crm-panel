@@ -47,6 +47,17 @@ export class MonitoringController {
     return this.monitoring.create(body, req.user);
   }
 
+  /**
+   * Bulk import monitors from a spreadsheet. The file is parsed in the browser
+   * (the frontend already ships SheetJS, and the same pattern is used by the
+   * subscriber import), so this receives plain rows and stays format-agnostic.
+   * Returns a per-row outcome so the UI can report the exact failing line.
+   */
+  @Post('targets/import')
+  importTargets(@Body() body: { rows: any[] }, @Req() req: any) {
+    return this.monitoring.importTargets(body?.rows || [], req.user);
+  }
+
   @Put('targets/:id')
   update(@Param('id') id: string, @Body() body: any, @Req() req: any) {
     return this.monitoring.update(+id, body, req.user);
