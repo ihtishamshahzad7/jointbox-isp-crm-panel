@@ -228,7 +228,7 @@ function SettingsPanel({ settings, onSaved }: { settings: any; onSaved: () => vo
   const [f, setF] = React.useState<any>(null);
   const [saving, setSaving] = React.useState(false);
   const [err, setErr] = React.useState("");
-  React.useEffect(() => { if (settings) setF((prev) => prev ?? { listeners: settings.listeners.map((l: any) => ({ ...l })) }); }, [settings]);
+  React.useEffect(() => { if (settings) setF((prev: any) => prev ?? { listeners: settings.listeners.map((l: any) => ({ ...l })) }); }, [settings]);
 
   if (!settings) return <div className="ndm-empty">Only a Super Admin can change server-wide listener settings.</div>;
 
@@ -250,12 +250,12 @@ function SettingsPanel({ settings, onSaved }: { settings: any; onSaved: () => vo
             {f.listeners.map((l: any, i: number) => (
               <tr key={l.protocol}>
                 <td><b>{l.protocol}</b></td>
-                <td><input type="checkbox" checked={l.enabled} onChange={(e) => setF((p) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], enabled: e.target.checked }; return { ...p, listeners: ls }; })} /></td>
-                <td><input type="number" style={{ width: 80, border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "4px 6px" }} value={l.port} onChange={(e) => setF((p) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], port: e.target.value }; return { ...p, listeners: ls }; })} /></td>
+                <td><input type="checkbox" checked={l.enabled} onChange={(e) => setF((p: any) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], enabled: e.target.checked }; return { ...p, listeners: ls }; })} /></td>
+                <td><input type="number" style={{ width: 80, border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "4px 6px" }} value={l.port} onChange={(e) => setF((p: any) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], port: e.target.value }; return { ...p, listeners: ls }; })} /></td>
                 <td>{l.protocol === "TLS" ? (
                   <div style={{ display: "flex", gap: 6, flexDirection: "column" }}>
-                    <input placeholder="cert path" value={l.tlsCertPath || ""} onChange={(e) => setF((p) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], tlsCertPath: e.target.value }; return { ...p, listeners: ls }; })} />
-                    <input placeholder="key path" value={l.tlsKeyPath || ""} onChange={(e) => setF((p) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], tlsKeyPath: e.target.value }; return { ...p, listeners: ls }; })} />
+                    <input placeholder="cert path" value={l.tlsCertPath || ""} onChange={(e) => setF((p: any) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], tlsCertPath: e.target.value }; return { ...p, listeners: ls }; })} />
+                    <input placeholder="key path" value={l.tlsKeyPath || ""} onChange={(e) => setF((p: any) => { const ls = [...p.listeners]; ls[i] = { ...ls[i], tlsKeyPath: e.target.value }; return { ...p, listeners: ls }; })} />
                   </div>) : "—"}</td>
               </tr>
             ))}

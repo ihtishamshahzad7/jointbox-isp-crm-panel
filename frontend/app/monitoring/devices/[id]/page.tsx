@@ -2,8 +2,8 @@
 
 import React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ndm, fmtBits, fmtPps, fmtUptime, fmtTime, isUp, sevColor, type NdmPort, type NdmEvent, type NdmAlert, type SyslogRow } from "../ndm";
-import { NDMCSS, NdmModal, PortTile, TrafficChart, UpStrip, SeverityBadge, useNdmRefresh } from "../ndm-ui";
+import { ndm, fmtBits, fmtPps, fmtUptime, fmtTime, isUp, sevColor, type NdmPort, type NdmEvent, type NdmAlert, type SyslogRow } from "../../ndm";
+import { NDMCSS, NdmModal, PortTile, TrafficChart, UpStrip, SeverityBadge, useNdmRefresh } from "../../ndm-ui";
 import { useSSE } from "../../../components/use-sse";
 
 const RANGES = ["5m", "1h", "6h", "24h", "7d", "30d"] as const;

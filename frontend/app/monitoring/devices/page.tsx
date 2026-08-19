@@ -18,7 +18,7 @@ export default function DevicesPage() {
   const [wizard, setWizard] = React.useState(false);
 
   const load = React.useCallback(async () => {
-    try { setDevices(await ndm.devices()); } catch (e: any) { setErr(e?.message || "Could not load devices"); }
+    try { return await ndm.devices(); } catch (e: any) { setErr(e?.message || "Could not load devices"); return []; }
   }, []);
   const loadStats = React.useCallback(async () => {
     try { setStats(await ndm.stats()); } catch { /* fine */ }
