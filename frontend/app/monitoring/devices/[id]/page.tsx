@@ -62,7 +62,7 @@ export default function DeviceDetail() {
   const label = { off: "Paused", wait: "First check…", up: "Reachable", down: "DOWN" }[state];
   const upPorts = ports.filter((p) => isUp(p)).length;
 
-  const togglePort = async (p: NdmPort, b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) => {
+  const togglePort = async (p: NdmPort, b: { monitoringEnabled?: boolean; soundEnabled?: boolean; soundUpEnabled?: boolean }) => {
     try { await ndm.setPort(deviceId, p.id, b); void loadAll(); } catch { /* keep */ }
   };
 
@@ -127,7 +127,9 @@ export default function DeviceDetail() {
         <div className="ndm-ports">
           {ports.map((p) => <PortTile key={p.id} port={p} onClick={() => setPortSel(p)}
             onToggleSound={() => togglePort(p, { soundEnabled: p.soundEnabled !== false ? false : true })}
-            onToggleMonitor={() => togglePort(p, { monitoringEnabled: p.monitoringEnabled === false ? true : false })} />)}
+            onToggleUpSound={() => togglePort(p, { soundUpEnabled: p.soundUpEnabled !== false ? false : true })}
+            onToggleMonitor={() => togglePort(p, { monitoringEnabled: p.monitoringEnabled === false ? true : false })}
+            onTest={(dir) => ndm.testPortAlert(deviceId, p.id, dir).catch((e: any) => alert(e?.message || "Test failed"))} />)}
           {!ports.length && <div className="ndm-empty">No ports discovered yet — run "Check now" or wait for the first poll.</div>}
         </div>
       )}
@@ -150,7 +152,7 @@ function Stat({ label, value, color }: { label: string; value: any; color?: stri
 }
 
 // ── Port detail modal with traffic graph + status history ──────────
-function PortDetail({ deviceId, deviceName, port, onClose, onToggle }: { deviceId: number; deviceName: string; port: NdmPort; onClose: () => void; onToggle?: (b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) => void }) {
+function PortDetail({ deviceId, deviceName, port, onClose, onToggle }: { deviceId: number; deviceName: string; port: NdmPort; onClose: () => void; onToggle?: (b: { monitoringEnabled?: boolean; soundEnabled?: boolean; soundUpEnabled?: boolean }) => void }) {
   const [range, setRange] = React.useState<(typeof RANGES)[number]>("24h");
   const [data, setData] = React.useState<any>(null);
   React.useEffect(() => {
@@ -172,7 +174,7 @@ function PortDetail({ deviceId, deviceName, port, onClose, onToggle }: { deviceI
       <div className="ndm-page-h" style={{ marginTop: 0 }}>
         <div className="ndm-card-sub">{port.description || "no description"}{port.mac ? ` · ${port.mac}` : ""}</div>
         <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {port.monitoringEnabled === false && <span className="ndm-pill" title={`${catLabel(port.interfaceCategory)} — excluded from alerts/traffic`} style={{ color: "var(--muted)" }}>{catLabel(port.interfaceCategory)} · off</span>}
+          {port.monitoringEnabled === false && <span className="ndm-pill" title={`${catLabel(port.interfaceCategory)} — ${port.excludedReason || "excluded from alerts/traffic"}`} style={{ color: "var(--muted)" }}>{catLabel(port.interfaceCategory)} · off</span>}
           {port.monitoringEnabled !== false && <span className="ndm-pill">{catLabel(port.interfaceCategory)} · monitored</span>}
           <span style={{ fontWeight: 700, color, border: `1px solid ${color}55`, borderRadius: 999, padding: "2px 10px", fontSize: 12 }}>{state}</span>
         </span>
@@ -207,8 +209,21 @@ function PortDetail({ deviceId, deviceName, port, onClose, onToggle }: { deviceI
 
       {onToggle && (
         <div className="ndm-row-actions" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+          {port.monitoringEnabled !== false && (
+            <>
+              <button className="ndm-btn" title="Drives a REAL alert: event → rule → SSE → browser sound (next SNMP poll corrects it)">
+                🧪 <span onClick={() => ndm.testPortAlert(deviceId, port.id, "down").catch((e: any) => alert(e?.message || "Test failed"))}>Test DOWN alert</span>
+              </button>
+              <button className="ndm-btn" title="Drives a REAL recovery chime through the pipeline (next SNMP poll corrects it)">
+                🧪 <span onClick={() => ndm.testPortAlert(deviceId, port.id, "up").catch((e: any) => alert(e?.message || "Test failed"))}>Test UP chime</span>
+              </button>
+            </>
+          )}
           <button className="ndm-btn" onClick={() => onToggle({ soundEnabled: port.soundEnabled !== false ? false : true })}>
             {port.soundEnabled !== false ? "🔔 Mute this port's sound" : "🔕 Enable sound for this port"}
+          </button>
+          <button className="ndm-btn" onClick={() => onToggle({ soundUpEnabled: port.soundUpEnabled !== false ? false : true })} title="Whether the PORT UP / recovery chime plays for this port (independent of the DOWN beep)">
+            {port.soundUpEnabled !== false ? "🔔▲ UP chime on" : "🔕▲ UP chime off"}
           </button>
           {port.monitoringEnabled === false
             ? <button className="ndm-btn pri" onClick={() => onToggle({ monitoringEnabled: true })}>◉ Start monitoring this port</button>
@@ -302,6 +317,7 @@ function ConfigForm({ device, onSaved, onClose, modal }: { device: any; onSaved:
     pollIntervalSec: String(device.pollIntervalSec), snmpTimeoutMs: String(device.snmpTimeoutMs), snmpRetries: String(device.snmpRetries),
     syslogEnabled: device.syslogEnabled, syslogProtocol: device.syslogProtocol, syslogPort: String(device.syslogPort),
     soundEnabled: device.soundEnabled !== false,
+    soundUpEnabled: device.soundUpEnabled !== false,
   });
   const [saving, setSaving] = React.useState(false);
   const [err, setErr] = React.useState("");
@@ -316,6 +332,7 @@ function ConfigForm({ device, onSaved, onClose, modal }: { device: any; onSaved:
       snmpTimeoutMs: Number(f.snmpTimeoutMs) || 5000, snmpRetries: Number(f.snmpRetries) || 1,
       syslogEnabled: f.syslogEnabled, syslogProtocol: f.syslogProtocol, syslogPort: Number(f.syslogPort) || 514,
       soundEnabled: f.soundEnabled,
+      soundUpEnabled: f.soundUpEnabled,
     };
     if (f.snmpVersion === "V2C") { if (f.community.trim()) b.community = f.community.trim(); }
     else { b.v3Username = f.v3Username.trim() || undefined; b.v3AuthProto = f.v3AuthProto; if (f.v3AuthKey) b.v3AuthKey = f.v3AuthKey; b.v3PrivProto = f.v3PrivProto; if (f.v3PrivKey) b.v3PrivKey = f.v3PrivKey; }
@@ -373,6 +390,10 @@ function ConfigForm({ device, onSaved, onClose, modal }: { device: any; onSaved:
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={f.soundEnabled} onChange={(e) => setF((p) => ({ ...p, soundEnabled: e.target.checked }))} />
         🔔 Play sound for this device's alerts <span className="ndm-hint">(overrides the global "sound by severity" default; individual ports can mute themselves too)</span>
+      </label>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+        <input type="checkbox" checked={f.soundUpEnabled} onChange={(e) => setF((p) => ({ ...p, soundUpEnabled: e.target.checked }))} />
+        🔔▲ Play sound when this device RECOVERS (port UP chime) <span className="ndm-hint">(independent of the DOWN beep; ports/port-rules can override)</span>
       </label>
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={f.syslogEnabled} onChange={(e) => setF((p) => ({ ...p, syslogEnabled: e.target.checked }))} />

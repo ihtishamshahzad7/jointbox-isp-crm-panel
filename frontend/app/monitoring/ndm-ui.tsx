@@ -100,7 +100,14 @@ export function SeverityBadge({ s }: { s: string }) {
   return <span className="sev" style={{ background: c }}>{String(s || "INFO").toUpperCase()}</span>;
 }
 
-export function PortTile({ port, onToggleSound, onToggleMonitor, onClick }: { port: any; onToggleSound?: (e: React.MouseEvent) => void; onToggleMonitor?: (e: React.MouseEvent) => void; onClick?: () => void }) {
+export function PortTile({ port, onToggleSound, onToggleUpSound, onToggleMonitor, onTest, onClick }: {
+  port: any;
+  onToggleSound?: (e: React.MouseEvent) => void;
+  onToggleUpSound?: (e: React.MouseEvent) => void;
+  onToggleMonitor?: (e: React.MouseEvent) => void;
+  onTest?: (dir: "down" | "up") => void;
+  onClick?: () => void;
+}) {
   const state = portState(port);
   const monitored = port.monitoringEnabled !== false;
   const cat = catLabel(port.interfaceCategory);
@@ -108,10 +115,27 @@ export function PortTile({ port, onToggleSound, onToggleMonitor, onClick }: { po
   const tx = port.txRateBps != null ? fmtBits(port.txRateBps) : "—";
   return (
     <div className={`ndm-p ${state}${monitored ? "" : " excluded"}`} onClick={onClick}
-      title={`${port.name} · ${cat}${monitored ? "" : " — NOT MONITORED (excluded)"} · ${rx} ↓ / ${tx} ↑`}>
+      title={`${port.name} · ${cat}${monitored ? "" : ` — NOT MONITORED (${port.excludedReason || "excluded"})`} · ${rx} ↓ / ${tx} ↑`}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
         <div className="pname">{port.name}</div>
         <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {onTest && monitored && (
+            <button onClick={(e) => { e.stopPropagation(); void onTest("down"); }}
+              title="TEST: drive a real PORT DOWN alert through the pipeline (event → rule → sound)"
+              style={{ border: 0, background: "none", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: 1, color: "var(--danger)" }}>▼</button>
+          )}
+          {onTest && monitored && (
+            <button onClick={(e) => { e.stopPropagation(); void onTest("up"); }}
+              title="TEST: drive a real PORT UP / recovery chime through the pipeline"
+              style={{ border: 0, background: "none", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: 1, color: "var(--online)" }}>▲</button>
+          )}
+          {onToggleUpSound && (
+            <button onClick={(e) => { e.stopPropagation(); onToggleUpSound(e); }}
+              title={port.soundUpEnabled !== false ? "Recovery sound ON (port UP chimes) — click to mute" : "Recovery sound OFF — click to enable UP chime"}
+              style={{ border: 0, background: "none", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: 1, color: port.soundUpEnabled !== false ? "var(--online)" : "var(--muted)" }}>
+              {port.soundUpEnabled !== false ? "▲🔔" : "▲🔕"}
+            </button>
+          )}
           {onToggleSound && (
             <button onClick={(e) => { e.stopPropagation(); onToggleSound(e); }}
               title={port.soundEnabled !== false ? "Sound ON — click to mute this port" : "Sound OFF — click to enable"}
@@ -129,7 +153,7 @@ export function PortTile({ port, onToggleSound, onToggleMonitor, onClick }: { po
         </span>
       </div>
       <div className="prate">↓ {rx} · ↑ {tx}</div>
-      {!monitored && <div className="prate" style={{ color: "var(--muted)" }}>{cat} · not monitored</div>}
+      {!monitored && <div className="prate" style={{ color: "var(--muted)" }}>{cat} · not monitored{port.excludedReason ? ` (${port.excludedReason})` : ""}</div>}
       {monitored && <div className="prate">{cat}</div>}
       {port.errorRatePerMin != null && port.errorRatePerMin > 0 && <div className="prate" style={{ color: "var(--danger)" }}>{Math.round(port.errorRatePerMin)} err/min</div>}
     </div>

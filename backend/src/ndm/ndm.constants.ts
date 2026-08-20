@@ -179,31 +179,41 @@ const IANA_IF_TYPE_CATEGORY: Record<number, InterfaceCategory> = {
  * Decide what an interface IS. RouterOS names are the primary signal
  * (ifName is reliable; proprietary ifType values are not), ifType is the
  * fallback, then UNKNOWN.
+ *
+ * MikroTik PPPoE session interfaces look like `<pppoe-o>` / `pppoe-out1`
+ * (angle brackets, no digits) — the classifiers MUST treat any name
+ * containing "pppoe" as a session, not just the `pppoe-`+digit shapes.
  */
 export function classifyInterface(ifType: number | null | undefined, name: string | null | undefined): InterfaceCategory {
-  const nm = String(name || '').toLowerCase().trim();
+  // Strip Winbox-style brackets BEFORE matching; `<>` is how RouterOS names
+  // dynamic tunnel/session interfaces.
+  const nm = String(name || '').toLowerCase().trim().replace(/^<+/, '').replace(/>+$/, '');
   // Name signals first — they are what operators actually see in Winbox.
-  if (/^pppoe-/i.test(nm) || (/pppoe/i.test(nm) && /\d/.test(nm))) return 'PPPOE_SESSION';
-  if (/^vlan[\d.:-]*$/i.test(nm)) return 'VLAN';
+  if (/pppoe/.test(nm)) return 'PPPOE_SESSION';          // <pppoe-o>, pppoe-out1, pppoe …
+  if (/^vlan[\d.:-]*$/i.test(nm) || /\.\d+$/i.test(nm) && /^v/i.test(nm)) return 'VLAN'; // vlan99, vlan100.1
   if (/^(lo|loopback[\d.:-]*)$/i.test(nm)) return 'LOOPBACK';
   if (/^bridge[\d.:-]*$/i.test(nm)) return 'BRIDGE';
   if (/^bond[\d.:-]*$/i.test(nm)) return 'BOND';
   if (/^(gre|gre6|eoip|vxlan|ipip|eip|wireguard|tun[\d.:-]*)$/i.test(nm)) return 'TUNNEL';
   if (/^(ppp|l2tp|sstp|ovpn)[\d.:-]*$/i.test(nm)) return 'PPP';
+  if (/^eoip|l2tp|l2tp-client/i.test(nm)) return 'TUNNEL';
   if (/^dynamic/i.test(nm)) return 'DYNAMIC';
   // ifType fallback (works even when a vendor mangles names).
   const t = ifType != null ? Number(ifType) : null;
-  if (t != null && IANA_IF_TYPE_CATEGORY[t]) {
-    if (t === 23) return /pppoe/i.test(nm) ? 'PPPOE_SESSION' : 'PPP';
-    return IANA_IF_TYPE_CATEGORY[t];
-  }
+  if (t === 23 || t === 28) return /pppoe/i.test(nm) ? 'PPPOE_SESSION' : 'PPP'; // ppp / pppoe
+  if (t != null && IANA_IF_TYPE_CATEGORY[t]) return IANA_IF_TYPE_CATEGORY[t];
   return 'UNKNOWN';
 }
 
-/** Default monitoring policy per category — PPPoE/dynamic links excluded. */
+/**
+ * Default monitoring policy — STRICT ALLOWLIST: only real physical Ethernet
+ * and VLAN interfaces are monitored by default. Everything else (PPPoE
+ * sessions, PPP, dynamic subscriber links, tunnels, loopbacks, bridges,
+ * bonds, …) is discovered + stored but excluded: no alerts, no traffic
+ * history, not counted in port totals.
+ */
 export function defaultMonitored(category: InterfaceCategory): boolean {
-  return category === 'PHYSICAL' || category === 'VLAN' || category === 'LOOPBACK'
-    || category === 'BRIDGE' || category === 'BOND';
+  return category === 'PHYSICAL' || category === 'VLAN';
 }
 
 /** Human label for the category (used by the UI + wizard). */
@@ -221,6 +231,30 @@ export const CATEGORY_LABELS: Record<InterfaceCategory, string> = {
 export function severityDefaultSound(severity: string | null | undefined): boolean {
   const s = String(severity || '').toUpperCase();
   return s === 'CRITICAL' || s === 'HIGH';
+}
+
+/**
+ * Event types that are RECOVERIES — they close existing alerts, they never
+ * open new ones (and therefore never auto-sound as a fresh incident).
+ */
+const RECOVERY_EVENT_TYPES = new Set<string>(['PORT_UP', 'LINK_UP', 'BGP_UP', 'OSPF_UP', 'DEVICE_UP']);
+export function isRecoveryEventType(type: string | null | undefined): boolean {
+  return RECOVERY_EVENT_TYPES.has(String(type || '').toUpperCase());
+}
+
+/**
+ * Default OPEN-incident sound policy, keyed on the EVENT TYPE (the alert
+ * engine knows which type created the alert, so the default follows the
+ * incident, not the rule severity). Genuine outages sound by default; quiet
+ * or informational types (recoveries, plain syslog, syslog-silence, config
+ * changes, STP moves) stay silent unless a rule explicitly enables sound.
+ *
+ * Rules that carry an explicit channels.sound still win over this default.
+ */
+export function eventOpenSound(eventType: string | null | undefined): boolean {
+  const t = String(eventType || '').toUpperCase();
+  return ['PORT_DOWN', 'LINK_DOWN', 'LINK_FLAP', 'PORT_ERROR', 'DEVICE_DOWN',
+    'BGP_DOWN', 'OSPF_DOWN', 'CPU_HIGH', 'MEMORY_HIGH', 'AUTH_FAILURE', 'POWER_FAILURE'].includes(t);
 }
 
 // ── Polling intervals the UI offers (seconds) ───────────────────────────

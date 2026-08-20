@@ -109,6 +109,10 @@ function DeviceCard({ d, onOpen, onRefresh }: { d: NdmDevice; onOpen: () => void
     e.stopPropagation();
     await ndm.update(d.id, { soundEnabled: d.soundEnabled !== false ? false : true }); onRefresh();
   };
+  const toggleUpSound = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await ndm.update(d.id, { soundUpEnabled: d.soundUpEnabled !== false ? false : true }); onRefresh();
+  };
   const remove = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Disable "${d.name}"? It keeps its history but stops polling and alerts. You can re-enable it any time.`)) return;
@@ -130,8 +134,11 @@ function DeviceCard({ d, onOpen, onRefresh }: { d: NdmDevice; onOpen: () => void
       {d.lastError && <div className="ndm-err" style={{ fontSize: 11 }} title={d.lastError}>{d.lastError.slice(0, 90)}</div>}
       <div className="ndm-row-actions" style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
         <button className="ndm-btn" onClick={check} disabled={busy}>{busy ? "Polling…" : "Check now"}</button>
-        <button className="ndm-btn" onClick={toggleSound} title={d.soundEnabled !== false ? "Port alerts sound ON — click to mute this device" : "Sound OFF — click to enable"}>
+        <button className="ndm-btn" onClick={toggleSound} title={d.soundEnabled !== false ? "Port alert sound ON — click to mute this device" : "Sound OFF — click to enable"}>
           {d.soundEnabled !== false ? "🔔" : "🔕"}
+        </button>
+        <button className="ndm-btn" onClick={toggleUpSound} title={d.soundUpEnabled !== false ? "Recovery (PORT UP) chime ON — click to mute" : "Recovery chime OFF — click to enable"}>
+          {d.soundUpEnabled !== false ? "▲🔔" : "▲🔕"}
         </button>
         <button className="ndm-btn" onClick={toggle}>{d.enabled ? "Pause" : "Enable"}</button>
         <button className="ndm-btn danger" onClick={remove}>Disable…</button>

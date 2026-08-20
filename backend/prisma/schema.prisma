@@ -3100,6 +3100,10 @@ model NetworkDevice {
   /// Device-level sound override: false mutes every alert this device raises
   /// (even CRITICAL ones) regardless of rule channels.
   soundEnabled  Boolean  @default(true)
+  /// Recovery-sound master: gates the "port/device is back UP" chime.
+  /// Independent of soundEnabled so an operator can silence DOWN beeps
+  /// without killing recovery chimes (or vice versa).
+  soundUpEnabled Boolean @default(true)
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -3185,9 +3189,19 @@ model NetworkInterface {
   interfaceCategory String? @db.VarChar(24)
   /// Gates alerts + traffic history + port totals for this port. PPPoE
   /// session links start disabled; operators can re-enable per-port.
+  /// NOTE: the poller re-applies the policy default every poll UNLESS the
+  /// operator overrode it (monitoringExplicit = true), so legacy PPPoE rows
+  /// get excluded even after an upgrade.
   monitoringEnabled Boolean @default(true)
+  /// True once an operator edited this port's monitoring flag by hand —
+  /// the poller then stops re-applying the classification default.
+  monitoringExplicit Boolean @default(false)
+  /// Human reason why an interface is excluded ("PPPoE session", "Tunnel"…).
+  excludedReason String? @db.VarChar(120)
   /// Per-port sound override (device → port → rule hierarchy).
   soundEnabled Boolean @default(true)
+  /// Per-port recovery-chime override (device → port → rule hierarchy).
+  soundUpEnabled Boolean @default(true)
 
   lastStateChangeAt DateTime?
   firstSeen   DateTime @default(now())

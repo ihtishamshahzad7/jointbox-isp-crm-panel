@@ -63,6 +63,16 @@ export class NdmController {
     return this.ndm.portHistory(+id, +portId, range || '1h', req.user);
   }
 
+  /**
+   * Dev-test: drive a synthetic PORT DOWN / PORT UP through the REAL pipeline
+   * (event → rule → alert → notify → SSE → browser sound). The next SNMP poll
+   * corrects the forced state, so it never leaves a fake outage behind.
+   */
+  @Post('ndm/devices/:id/ports/:portId/test')
+  testPortAlert(@Param('id') id: string, @Param('portId') portId: string, @Body() body: any, @Req() req: any) {
+    return this.ndm.testPortAlert(+id, +portId, body?.direction === 'up' ? 'up' : 'down', req.user);
+  }
+
   @Get('ndm/devices/:id/stream')
   deviceStream(@Param('id') id: string, @Query('range') range: string, @Req() req: any) {
     return this.ndm.deviceStream(+id, range || '24h', req.user);

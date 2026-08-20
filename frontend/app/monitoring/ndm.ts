@@ -26,7 +26,7 @@ export type NdmDevice = {
   enabled: boolean; isReachable: boolean | null; uptimeSec: string | null;
   interfaceCount: number; upPorts: number; downPorts: number;
   lastSnmpPollAt: string | null; lastSyslogAt: string | null; lastError: string | null;
-  soundEnabled: boolean;
+  soundEnabled: boolean; soundUpEnabled: boolean;
   openAlerts: number; portCount: number; createdAt: string;
 };
 
@@ -37,7 +37,8 @@ export type NdmPort = {
   mac: string | null; ifLastChangeTicks: string | null; lastStateChangeAt: string | null;
   firstSeen: string | null; lastSeen: string | null;
   ifType: number | null; interfaceCategory: string | null;
-  monitoringEnabled: boolean; soundEnabled: boolean;
+  monitoringEnabled: boolean; monitoringExplicit: boolean; excludedReason: string | null;
+  soundEnabled: boolean; soundUpEnabled: boolean;
   inOctets: string | null; outOctets: string | null; inErrors: string | null; outErrors: string | null; crcErrors: string | null;
 };
 
@@ -97,8 +98,10 @@ export const ndm = {
   check: (id: number) => req<any>(`/monitoring/ndm/devices/${id}/check`, { method: "POST", body: "{}" }),
   discoverDevice: (id: number) => req<any>(`/monitoring/ndm/devices/${id}/discover`, { method: "POST", body: "{}" }),
   ports: (id: number) => req<NdmPort[]>(`/monitoring/ndm/devices/${id}/ports`),
-  setPort: (deviceId: number, portId: number, b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) =>
+  setPort: (deviceId: number, portId: number, b: { monitoringEnabled?: boolean; soundEnabled?: boolean; soundUpEnabled?: boolean }) =>
     req<NdmPort>(`/monitoring/ndm/devices/${deviceId}/ports/${portId}`, { method: "PUT", body: JSON.stringify(b) }),
+  testPortAlert: (deviceId: number, portId: number, direction: "down" | "up") =>
+    req<{ ok: boolean; eventType: string; eventId: number; message: string }>(`/monitoring/ndm/devices/${deviceId}/ports/${portId}/test`, { method: "POST", body: JSON.stringify({ direction }) }),
   portHistory: (deviceId: number, portId: number, range: string) =>
     req<any>(`/monitoring/ndm/devices/${deviceId}/ports/${portId}/history?range=${range}`),
   deviceStream: (id: number, range: string) => req<any>(`/monitoring/ndm/devices/${id}/stream?range=${range}`),

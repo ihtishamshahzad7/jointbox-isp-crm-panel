@@ -6,7 +6,7 @@ import { NdmSnmpService } from './snmp.service';
 import { NdmEventEngine } from './event-engine.service';
 import { NdmAlertEngine } from './alert-engine.service';
 import { NdmNotificationEngine } from './notification-engine.service';
-import { counterDelta, parseCondition, type NdmEventType } from './ndm.constants';
+import { counterDelta, defaultMonitored, CATEGORY_LABELS, isRecoveryEventType, eventOpenSound, parseCondition, type InterfaceCategory, type NdmEventType } from './ndm.constants';
 
 /**
  * Port polling service — the SNMP heart: walks the interface table of every
@@ -58,33 +58,50 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     this.timer.unref?.();
   }
 
+  /** How many interfaces are (not) monitored — cached for export/debug. */
+  private monitoredCounts = { total: 0, excluded: 0 };
+
   /** Idempotent: only touches rows whose category is still NULL. */
   private async backfillLegacyRows() {
     try {
       const n = await this.prisma.$executeRawUnsafe(`
         UPDATE "network_interface" SET
           "interfaceCategory" = CASE
-            WHEN LOWER("name") LIKE 'pppoe-%' OR (LOWER("name") LIKE '%pppoe%' AND "name" ~ '[0-9]') THEN 'PPPOE_SESSION'
-            WHEN LOWER("name") ~ '^vlan[0-9.:-]*$' THEN 'VLAN'
-            WHEN LOWER("name") ~ '^(lo|loopback[0-9.:-]*)$' THEN 'LOOPBACK'
-            WHEN LOWER("name") ~ '^bridge[0-9.:-]*$' THEN 'BRIDGE'
-            WHEN LOWER("name") ~ '^bond[0-9.:-]*$' THEN 'BOND'
-            WHEN LOWER("name") ~ '^(gre|gre6|eoip|vxlan|ipip|eip|wireguard|tun[0-9.:-]*)$' THEN 'TUNNEL'
-            WHEN LOWER("name") ~ '^(ppp|l2tp|sstp|ovpn)[0-9.:-]*$' THEN 'PPP'
-            WHEN LOWER("name") ~ '^dynamic' THEN 'DYNAMIC'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) LIKE '%pppoe%' THEN 'PPPOE_SESSION'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) ~ '^vlan[0-9.:-]*$' THEN 'VLAN'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) ~ '^(lo|loopback[0-9.:-]*)$' THEN 'LOOPBACK'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) ~ '^bridge[0-9.:-]*$' THEN 'BRIDGE'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) ~ '^bond[0-9.:-]*$' THEN 'BOND'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) ~ '^(gre|gre6|eoip|vxlan|ipip|eip|wireguard|tun[0-9.:-]*)$' THEN 'TUNNEL'
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) ~ '^(ppp|l2tp|sstp|ovpn)[0-9.:-]*$' THEN 'PPP'
             ELSE 'UNKNOWN'
           END,
+          "excludedReason" = CASE
+            WHEN LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) LIKE '%pppoe%' THEN 'PPPoE session'
+            ELSE "excludedReason"
+          END,
           "monitoringEnabled" = CASE
-            WHEN LOWER("name") LIKE 'pppoe-%' OR (LOWER("name") LIKE '%pppoe%' AND "name" ~ '[0-9]') THEN false
-            WHEN LOWER("name") ~ '^dynamic' THEN false
+            WHEN "monitoringExplicit" = false AND LOWER(REPLACE(REPLACE("name", '<', ''), '>', '')) LIKE '%pppoe%' THEN false
             ELSE "monitoringEnabled"
           END
         WHERE "interfaceCategory" IS NULL;
       `);
-      if (n) this.log.log(`Backfilled classification of ${n} legacy interface row(s) (PPPoE excluded by default)`);
+      // Strict allowlist pass over rows classified before this deploy (their
+      // monitoringEnabled may predate the PHYSICAL/VLAN-only policy).
+      const m = await this.prisma.$executeRawUnsafe(`
+        UPDATE "network_interface" SET
+          "monitoringEnabled" = false,
+          "excludedReason" = CASE "interfaceCategory"
+            WHEN 'LOOPBACK' THEN 'Loopback' WHEN 'BRIDGE' THEN 'Bridge' WHEN 'BOND' THEN 'Bond'
+            WHEN 'TUNNEL' THEN 'Tunnel' WHEN 'PPP' THEN 'PPP link' WHEN 'PPPOE_SESSION' THEN 'PPPoE session'
+            WHEN 'DYNAMIC' THEN 'Dynamic subscriber link' ELSE 'Not a physical/VLAN port' END
+        WHERE "monitoringExplicit" = false AND "monitoringEnabled" = true
+          AND "interfaceCategory" IS NOT NULL AND "interfaceCategory" NOT IN ('PHYSICAL', 'VLAN');
+      `);
+      if (n || m) this.log.log(`[BOOT] Reclassified ${n || 0} legacy row(s); excluded ${m || 0} non-physical/VLAN row(s) (PPPoE clean)`);
     } catch (e: any) {
       // Column may not exist yet on a DB that wasn't pushed — retry next boot.
-      this.log.warn(`Legacy classification backfill skipped: ${e?.message || e}`);
+      this.log.warn(`[BOOT] Legacy classification backfill skipped: ${e?.message || e}`);
     }
   }
 
@@ -218,7 +235,7 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           operStatus: row.operStatus ?? 2, speedMbps: row.speedMbps, duplex: row.duplex,
           mac: row.mac, ifLastChangeTicks: row.ifLastChangeTicks,
           // Classification FACTS refresh every poll; monitoringEnabled is
-          // deliberately NOT touched here so a manual per-port toggle sticks.
+          // re-applied BELOW from the policy unless manually overridden.
           ifType: row.ifType, interfaceCategory: row.interfaceCategory,
           inOctets: row.inOctets, outOctets: row.outOctets,
           inUcastPkts: row.inUcastPkts, outUcastPkts: row.outUcastPkts,
@@ -233,6 +250,7 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           ifLastChangeTicks: row.ifLastChangeTicks,
           ifType: row.ifType, interfaceCategory: row.interfaceCategory,
           monitoringEnabled: row.monitoringEnabled !== false, // classification default
+          excludedReason: row.monitoringEnabled === false ? (CATEGORY_LABELS[(row.interfaceCategory as InterfaceCategory) || 'UNKNOWN'] ?? 'Not a physical/VLAN port') : null,
           inOctets: row.inOctets, outOctets: row.outOctets,
           inUcastPkts: row.inUcastPkts, outUcastPkts: row.outUcastPkts,
           inErrors: row.inErrors, outErrors: row.outErrors,
@@ -240,6 +258,24 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           lastPollAt: now, lastSeen: now,
         },
       });
+      // Enforce the STRICT ALLOWLIST on every poll: an interface that is not
+      // PHYSICAL/VLAN is excluded unless an operator explicitly overrode it.
+      // This is what removes already-discovered `<pppoe-*>` sessions — the
+      // policy default wins until the operator says otherwise.
+      if (!upserted.monitoringExplicit) {
+        const cat = (upserted.interfaceCategory || row.interfaceCategory || 'UNKNOWN') as InterfaceCategory;
+        const wantMon = defaultMonitored(cat);
+        if (upserted.monitoringEnabled !== wantMon) {
+          await this.prisma.networkInterface.update({
+            where: { id: upserted.id },
+            data: {
+              monitoringEnabled: wantMon,
+              excludedReason: wantMon ? null : (CATEGORY_LABELS[cat] ?? 'Not a physical/VLAN port'),
+            },
+          }).catch(() => {});
+          upserted.monitoringEnabled = wantMon;
+        }
+      }
       idMap.set(row.ifIndex, upserted.id);
       names.set(row.ifIndex, row.name);
       mon.set(row.ifIndex, upserted.monitoringEnabled !== false);
@@ -346,17 +382,7 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     for (const evt of eventsToRaise) {
       const dbId = idMap.get(evt.ifIndex)!;
       const intf = { id: dbId, name: names.get(evt.ifIndex)! };
-      const ev = await this.eventEngine.record({
-        eventType: evt.eventType, source: 'POLL', device: dev, interface: intf, message: evt.message,
-      });
-      await this.alerts.evaluate({
-        eventId: ev.id, eventType: ev.eventType, message: ev.message, severity: ev.severity,
-        device: devOwner, interface: intf, count: ev.count,
-      });
-      if (evt.eventType === 'PORT_UP' || evt.eventType === 'LINK_UP') {
-        await this.alerts.onRecovery({ eventType: evt.eventType, deviceId: device.id, interfaceId: dbId, deviceName: device.name });
-      }
-      this.broadcastTransition(device.name, intf.name, evt.eventType.endsWith('_UP') ? 'up' : 'down');
+      await this.raiseTransition(device, devOwner, intf, evt.eventType, evt.message);
     }
 
     // ── Phase 3b: append rate history (bounded batches) ──────────
@@ -409,21 +435,68 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           data: { fireCount: { increment: 1 } },
           include: { rule: true },
         });
+        const snd = typeof (rule.channels as any)?.sound === 'boolean' ? (rule.channels as any).sound : eventOpenSound(a.eventType);
         await this.notify.notify({
           alertId: a.id,
           title: `ESCALATED: ${a.title}`,
           message: `${device.name}: ${a.message} (still failing after ${Math.round(sustainSec / 60)} min)`,
           severity: a.severity,
-          channels: (rule.channels as any) || {},
+          channels: { ...((rule.channels as any) || {}), sound: snd },
           ownerId: device.ownerId, deviceName: device.name, deviceIp: device.ip,
           event: 'UPGRADE',
         });
-        this.broadcastAlert(updated);
+        this.broadcastAlert(updated, snd);
       }
     }
   }
 
   // ── SSE ────────────────────────────────────────────────────────
+  /**
+   * The ONE transition writer: a real state change (poll) or a synthetic one
+   * (dev-test button) flows through the exact same event → alert → notify →
+   * SSE pipeline, so a triggered "Test DOWN alert" reproduces a genuine
+   * cable-pull end to end.
+   */
+  private async raiseTransition(device: any, devOwner: { id: number; name: string; ownerId?: number | null }, intf: { id: number; name: string }, eventType: NdmEventType, message: string) {
+    const ev = await this.eventEngine.record({
+      eventType, source: 'POLL', device: { id: device.id, name: device.name }, interface: intf, message,
+    });
+    this.log.log(`[EVENT] ${eventType} ${device.name} port=${intf.name} eventId=${ev.id} sev=${ev.severity}${ev.count > 1 ? ` count=${ev.count}` : ''}`);
+    if (ev.eventType === 'PORT_UP' || ev.eventType === 'LINK_UP') {
+      // RECOVERY FIRST: close + notify the DOWN alert through the recovery
+      // rules' sound setting. Evaluating an UP event as a fresh incident would
+      // bump the still-open DOWN alert and re-sound it on the recovery poll.
+      await this.alerts.onRecovery({ eventType: ev.eventType, deviceId: device.id, interfaceId: intf.id, deviceName: device.name });
+    } else if (!isRecoveryEventType(ev.eventType)) {
+      await this.alerts.evaluate({
+        eventId: ev.id, eventType: ev.eventType, message: ev.message, severity: ev.severity,
+        device: devOwner, interface: intf, count: ev.count,
+      });
+    }
+    this.broadcastTransition(device.name, intf.name, String(eventType).endsWith('_UP') ? 'up' : 'down');
+    return ev;
+  }
+
+  /**
+   * Admin/dev-test: force a port DOWN or UP transition through the REAL
+   * pipeline (event → rule → alert → notify → SSE → browser sound). The next
+   * real SNMP poll immediately corrects the forced state, so this is safe.
+   */
+  async testPortAlert(deviceId: number, portId: number, direction: 'down' | 'up') {
+    const device = await this.prisma.networkDevice.findUnique({ where: { id: deviceId } });
+    if (!device) throw new Error('Device not found');
+    const port = await this.prisma.networkInterface.findFirst({ where: { id: portId, deviceId } });
+    if (!port) throw new Error('Port not found on this device');
+    if (port.monitoringEnabled === false) throw new Error(`Port "${port.name}" is excluded from monitoring (${port.excludedReason || 'not physical/VLAN'}) — enable it first`);
+    const dbId = port.id;
+    const forcedOper = direction === 'down' ? 2 : 1;
+    await this.prisma.networkInterface.update({ where: { id: dbId }, data: { operStatus: forcedOper } }).catch(() => {});
+    const eventType = (device.syslogEnabled ? (direction === 'down' ? 'LINK_DOWN' : 'LINK_UP') : (direction === 'down' ? 'PORT_DOWN' : 'PORT_UP')) as NdmEventType;
+    const ev = await this.raiseTransition(device, { id: device.id, name: device.name, ownerId: device.ownerId }, { id: dbId, name: port.name }, eventType,
+      `Test: Port "${port.name}" went ${direction === 'down' ? 'DOWN' : 'UP'} (synthetic) — real SNMP will correct this`);
+    return { ok: true, eventType, eventId: ev.id, message: ev.message };
+  }
+
   private broadcastTransition(deviceName: string, portName: string, direction: 'up' | 'down') {
     try {
       this.eventsEmitter.broadcast('ndm:port', {
@@ -438,12 +511,12 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     } catch { /* best-effort */ }
   }
 
-  private broadcastAlert(alert: any) {
+  private broadcastAlert(alert: any, sound = false) {
     try {
       this.eventsEmitter.broadcast('ndm:alert', {
         id: alert.id, status: alert.status, eventType: alert.eventType, title: alert.title,
         severity: alert.severity, fireCount: alert.fireCount, deviceId: alert.deviceId,
-        interfaceName: alert.interfaceName, openedAt: alert.openedAt, resolvedAt: null,
+        interfaceName: alert.interfaceName, openedAt: alert.openedAt, resolvedAt: null, sound,
       });
     } catch { /* best-effort */ }
   }

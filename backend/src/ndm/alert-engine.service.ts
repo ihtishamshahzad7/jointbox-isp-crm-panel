@@ -1,8 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsService } from '../common/events.service';
 import { NdmNotificationEngine } from './notification-engine.service';
-import { parseCondition, EVENT_LABELS, severityDefaultSound, type NdmEventType } from './ndm.constants';
+import { parseCondition, EVENT_LABELS, eventOpenSound, isRecoveryEventType, type NdmEventType } from './ndm.constants';
 
 /**
  * Alert engine — evaluates AlertRules against recorded events and owns the
@@ -16,12 +16,18 @@ import { parseCondition, EVENT_LABELS, severityDefaultSound, type NdmEventType }
  * A repeated occurrence increments fireCount (visible in the UI) but never
  * opens a second open alert for the same key.
  *
- * Rules are evaluated rate-limited: the poll/syslog paths run at a high
- * frequency, so identical evaluates on the SAME event id in the same tick
- * are ignored (evaluate() is idempotent per event row).
+ * RECOVERY EVENTS (PORT_UP/LINK_UP/DEVICE_UP/…) never open alerts — they
+ * only close the open ones (see resolveFamily). This is the Event ≠ Alert
+ * distinction the UI depends on: an UP event on a port with an open DOWN
+ * alert resolves it (and can chime the recovery sound), it never creates a
+ * second incident.
+ *
+ * With zero configured rules nothing would ever alert, so on first boot the
+ * engine seeds a sensible default rule set (PORT_DOWN/UP, DEVICE_DOWN/UP,
+ * CPU/MEMORY, syslog-silence) that operators can edit or delete.
  */
 @Injectable()
-export class NdmAlertEngine {
+export class NdmAlertEngine implements OnModuleInit {
   private readonly log = new Logger('NdmAlerts');
   private lastEvaluated = new Map<number, string>(); // eventId → dedup token
 
@@ -30,6 +36,38 @@ export class NdmAlertEngine {
     private events: EventsService,
     private notify: NdmNotificationEngine,
   ) {}
+
+  async onModuleInit() {
+    await this.seedDefaultRules();
+  }
+
+  /**
+   * First-boot defaults: only when the rules table is EMPTY, so a configured
+   * install is never overwritten. Sound follows the pipeline policy: genuine
+   * outages + their recoveries chime; quiet types stay silent by default.
+   */
+  private async seedDefaultRules() {
+    try {
+      const n = await this.prisma.alertRule.count();
+      if (n > 0) return;
+      const defaults: Array<{ name: string; eventType: string; severity: string; channels: any; description?: string }> = [
+        { name: 'Port DOWN', eventType: 'PORT_DOWN', severity: 'CRITICAL', channels: { sound: true, desktop: true }, description: 'Auto-seeded default: any monitored port going DOWN is alerted + sounds. Edit or delete freely.' },
+        { name: 'Port UP / recovery', eventType: 'PORT_UP', severity: 'INFO', channels: { sound: true, desktop: true }, description: 'Auto-seeded default: chimes when a port comes back UP. Mute per device/port in the port settings.' },
+        { name: 'Link DOWN (SNMP)', eventType: 'LINK_DOWN', severity: 'WARNING', channels: { sound: true, desktop: true }, description: 'Auto-seeded default for syslog devices.' },
+        { name: 'Link UP (SNMP)', eventType: 'LINK_UP', severity: 'INFO', channels: { sound: true }, description: 'Auto-seeded default: recovery chime for syslog devices.' },
+        { name: 'Device DOWN', eventType: 'DEVICE_DOWN', severity: 'CRITICAL', channels: { sound: true, desktop: true }, description: 'Auto-seeded default: SNMP unreachable.' },
+        { name: 'Device UP / recovery', eventType: 'DEVICE_UP', severity: 'INFO', channels: { sound: true }, description: 'Auto-seeded default: device responds again.' },
+        { name: 'High CPU', eventType: 'CPU_HIGH', severity: 'WARNING', channels: { sound: true, desktop: true }, description: 'Auto-seeded default.' },
+        { name: 'High memory', eventType: 'MEMORY_HIGH', severity: 'WARNING', channels: { sound: true, desktop: true }, description: 'Auto-seeded default.' },
+        { name: 'Syslog silent', eventType: 'SYSLOG_STOPPED', severity: 'WARNING', channels: { sound: false, desktop: true }, description: 'Auto-seeded default: no syslog for the configured window. Sound left off on purpose.' },
+        { name: 'Any syslog', eventType: 'SYSLOG', severity: 'INFO', channels: { sound: false }, description: 'Auto-seeded default: records every syslog line; audit only, no beeps.' },
+      ];
+      await this.prisma.alertRule.createMany({ data: defaults.map((d) => ({ ...d, condition: null })) });
+      this.log.log(`[ALERT] Seeded ${defaults.length} default alert rules (first boot)`);
+    } catch (e: any) {
+      this.log.warn(`[ALERT] Default rule seeding skipped: ${e?.message || e}`);
+    }
+  }
 
   // ── Event → alert family mapping ───────────────────────────────
   private static readonly FAMILY: Record<string, string> = {
@@ -64,6 +102,12 @@ export class NdmAlertEngine {
     const { eventId, eventType, message, severity, device, interface: intf } = input;
     const count = input.count || 1;
     const family = this.familyOf(eventType);
+
+    // Recovery events never open incidents — they are handled by onRecovery()
+    // (resolve + recovery notification + recovery chime). Evaluating PORT_UP
+    // against a PORT_DOWN rule here would bump the still-open DOWN alert and
+    // re-sound it on the very poll the port came back.
+    if (isRecoveryEventType(eventType)) return null;
 
     // Rules that could fire for this event: exact eventType match (so a
     // LINK_DOWN-only rule works) OR a rule on the family head (PORT_DOWN
@@ -102,7 +146,7 @@ export class NdmAlertEngine {
             },
             include: { rule: true },
           });
-          this.broadcast(alert, 'upgrade', await this.soundFlag(rule, device?.id, intf?.id, alert.severity));
+          this.broadcast(alert, 'upgrade', await this.soundFlag(rule, device?.id, intf?.id, eventType));
           continue;
         }
         // DURATION rule and threshold crossed → re-fire (escalate).
@@ -111,7 +155,7 @@ export class NdmAlertEngine {
           data: { fireCount: { increment: 1 }, message },
           include: { rule: true },
         });
-        this.broadcast(alert, 'upgrade', await this.soundFlag(rule, device?.id, intf?.id, alert.severity));
+        this.broadcast(alert, 'upgrade', await this.soundFlag(rule, device?.id, intf?.id, eventType));
         continue;
       }
 
@@ -134,9 +178,9 @@ export class NdmAlertEngine {
         include: { rule: true },
       });
       // Deliver the incident NOW: channels from the rule, sound per the
-      // hierarchy (severity/rule → device → port). This was the missing half
+      // hierarchy (rule → event type → device → port). This was the missing half
       // of the alert pipeline — before, a fresh alert only wrote a row.
-      const snd = await this.soundAllowed(rule, device?.id, intf?.id, sev);
+      const snd = await this.soundAllowed(rule, device?.id, intf?.id, eventType);
       const channels = { ...((rule.channels as any) || {}), sound: snd.sound };
       await this.notify.notify({
         alertId: alert.id,
@@ -154,8 +198,8 @@ export class NdmAlertEngine {
   }
 
   /** Resolve OPEN/ACKNOWLEDGED alerts for a family on a device/port. */
-  async resolveFamily(input: { deviceId?: number | null; interfaceId?: number | null; family: string; deviceName?: string }) {
-    const { family, deviceId, interfaceId, deviceName } = input;
+  async resolveFamily(input: { deviceId?: number | null; interfaceId?: number | null; family: string; deviceName?: string; recoveryType?: NdmEventType | null }) {
+    const { family, deviceId, interfaceId, deviceName, recoveryType } = input;
     const where: any = {
       status: { in: ['OPEN', 'ACKNOWLEDGED'] },
       key: { startsWith: `${family}:` },
@@ -165,14 +209,32 @@ export class NdmAlertEngine {
     const rows = await this.prisma.alert.findMany({ where, include: { rule: true } });
     if (!rows.length) return;
     await this.prisma.alert.updateMany({ where, data: { status: 'RESOLVED', resolvedAt: new Date() } });
+    // Recovery chime: explicit channels.sound on any rule targeting the RECOVERY
+    // event (e.g. the seeded "Port UP / recovery" rule) → else the resolving
+    // alert's own rule explicit sound. Never a severity default. Then the
+    // independent `soundUpEnabled` device/port gate (UP-sound ≠ DOWN-sound).
+    let recoverySound = false;
+    if (recoveryType) {
+      const recRules = await this.prisma.alertRule.findMany({ where: { enabled: true, eventType: recoveryType } });
+      recoverySound = recRules.some((r: any) => (r.channels as any)?.sound === true);
+    }
+    if (recoverySound) {
+      const [dRec, iRec] = await Promise.all([
+        deviceId != null ? this.prisma.networkDevice.findUnique({ where: { id: deviceId }, select: { soundUpEnabled: true } }) : Promise.resolve(null),
+        interfaceId != null ? this.prisma.networkInterface.findUnique({ where: { id: interfaceId }, select: { soundUpEnabled: true } }) : Promise.resolve(null),
+      ]);
+      if (dRec && dRec.soundUpEnabled === false) recoverySound = false;
+      if (iRec && iRec.soundUpEnabled === false) recoverySound = false;
+    }
     for (const a of rows) {
       const resolved = { ...a, status: 'RESOLVED', resolvedAt: new Date() };
-      // Recovery is an event too: notify through the rule's channels. Sound
-      // follows the rule's EXPLICIT channels.sound (never the severity
-      // default) so "Port UP" doesn't auto-chime — plus device/port flags.
       const rule = a.rule as any;
       const ch = (rule?.channels as any) || {};
-      const snd = await this.soundAllowed(rule, a.deviceId, a.interfaceId, a.severity, typeof ch.sound === 'boolean' ? ch.sound : false);
+      const snd = await this.soundAllowed(rule, a.deviceId, a.interfaceId, recoveryType ?? a.eventType, recoverySound);
+      // Recovery notifications still fire (the resolving rule decides desktop/
+      // mail via its own channels) — only the SOUND follows the recovery
+      // chime decision. Event status ≠ alert status: the resolve broadcast
+      // always goes out so the dashboard swaps 🔴 → 🟢 even when audio is off.
       const channels = { ...ch, sound: snd.sound };
       if (rule?.enabled !== false) {
         await this.notify.notify({
@@ -188,7 +250,7 @@ export class NdmAlertEngine {
       }
       this.broadcast(resolved, 'resolve', { sound: snd.sound, deviceName: snd.deviceName || deviceName || null, ruleId: rule?.id ?? null });
     }
-    if (deviceName && rows.length) this.log.log(`Resolved ${rows.length} ${family} alert(s) on ${deviceName}`);
+    if (deviceName && rows.length) this.log.log(`[ALERT] Resolved ${rows.length} ${family} alert(s) on ${deviceName}${recoverySound ? ' · recovery chime ON' : ''}`);
   }
 
   /** Called by the poller/syslog receiver when a recovery event was recorded. */
@@ -206,6 +268,7 @@ export class NdmAlertEngine {
       interfaceId: input.interfaceId,
       family,
       deviceName: input.deviceName,
+      recoveryType: input.eventType,
     });
   }
 
@@ -260,18 +323,19 @@ export class NdmAlertEngine {
   }
 
   /**
-   * Sound hierarchy: severity/rule default → device.soundEnabled →
-   * interface.soundEnabled. Most specific wins; anything explicit in
-   * rule.channels.sound overrides the severity default.
+   * Sound hierarchy: rule channels.sound → EVENT TYPE default (open events
+   * from eventOpenSound) → device.soundEnabled → interface.soundEnabled.
+   * RECOVERY paths pass a boolean (recovery chime decided in resolveFamily )
+   * and skip the DOWN-gates — the dedicated soundUpEnabled gates were already
+   * applied; recovery sound is explicit-only, never automatic.
    */
-  private async soundAllowed(rule: any, deviceId: number | null | undefined, interfaceId: number | null | undefined, severity: string, explicit?: boolean): Promise<{ sound: boolean; deviceName: string | null }> {
+  private async soundAllowed(rule: any, deviceId: number | null | undefined, interfaceId: number | null | undefined, eventType: string | null, explicit?: boolean): Promise<{ sound: boolean; deviceName: string | null }> {
     const ch = (rule?.channels as any) || {};
-    // explicit=false (resolution path) → only an explicit rule channels.sound
-    // may chime; severity defaults NEVER auto-sound a recovery. Otherwise the
-    // hierarchy is: explicit rule.sound → global severity default → device → port.
-    let want = typeof explicit === 'boolean' ? explicit : (typeof ch.sound === 'boolean' ? ch.sound : severityDefaultSound(severity));
+    let want = typeof explicit === 'boolean'
+      ? explicit
+      : (typeof ch.sound === 'boolean' ? ch.sound : eventOpenSound(eventType));
     let deviceName: string | null = null;
-    if (want) {
+    if (want && !isRecoveryEventType(eventType)) {
       const [d, i] = await Promise.all([
         deviceId != null ? this.prisma.networkDevice.findUnique({ where: { id: deviceId }, select: { soundEnabled: true, name: true } }) : Promise.resolve(null),
         interfaceId != null ? this.prisma.networkInterface.findUnique({ where: { id: interfaceId }, select: { soundEnabled: true } }) : Promise.resolve(null),
@@ -283,7 +347,7 @@ export class NdmAlertEngine {
   }
 
   /** Same helper minus the device-name payload (repeat/resolve broadcasts). */
-  private async soundFlag(rule: any, deviceId: number | null | undefined, interfaceId: number | null | undefined, severity: string) {
-    return this.soundAllowed(rule, deviceId, interfaceId, severity);
+  private async soundFlag(rule: any, deviceId: number | null | undefined, interfaceId: number | null | undefined, eventType: string | null) {
+    return this.soundAllowed(rule, deviceId, interfaceId, eventType);
   }
 }

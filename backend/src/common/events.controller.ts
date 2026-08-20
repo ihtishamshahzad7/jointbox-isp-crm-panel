@@ -37,12 +37,19 @@ export class EventsController {
   @Sse()
   stream(@Request() req: any): Observable<MessageEvent> {
     return new Observable<MessageEvent>((subscriber) => {
-      // Send initial connected event so the client knows the stream is live
-      subscriber.next({ data: { type: 'connected' } } as MessageEvent);
+      // Send initial connected event so the client knows the stream is live.
+      // This one IS a named frame on purpose — the frontend registers a
+      // dedicated 'connected' listener for it (use-sse.ts).
+      subscriber.next({ type: 'connected', data: { type: 'connected' } } as MessageEvent);
 
-      // Subscribe to all broadcasts
+      // Subscribe to all broadcasts. CRITICAL: the payload must NOT set the
+      // SSE frame's `event:` name — that would make every browser dispatch a
+      // NAMED event, and the frontend's EventSource catch-all (`onmessage`)
+      // only fires for unnamed frames. The event name rides INSIDE the data
+      // instead ({type, data}), which the frontend use-sse hook reads via its
+      // generic onmessage handler.
       const unsub = this.events.subscribe((event, payload) => {
-        subscriber.next({ type: event, data: payload } as MessageEvent);
+        subscriber.next({ data: { type: event, data: payload } } as MessageEvent);
       });
 
       // Heartbeat every 30s keeps proxies / load balancers from closing the

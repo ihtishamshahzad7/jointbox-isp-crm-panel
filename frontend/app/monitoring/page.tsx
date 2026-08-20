@@ -168,8 +168,58 @@ export default function MonitoringPage() {
   }, []);
   React.useEffect(() => { loadNdm(); const t = setInterval(loadNdm, 30000); return () => clearInterval(t); }, [loadNdm]);
 
-  // Instant refresh on a down/up transition pushed from the server.
-  useSSE({ onEvent: (type) => { if (type === "monitor") load(); } });
+  // Instant refresh on a down/up transition pushed from the server. NDM
+  // port alerts come through the SAME SSE channel — this is the fixed end of
+  // the pipeline that used to drop every `ndm:*` frame before the backend
+  // switch to unnamed frames.
+  type PortAlert = {
+    id: number; deviceId: number | null; deviceName: string | null;
+    interfaceId: number | null; interfaceName: string | null;
+    eventType: string; severity: string; title: string; message: string;
+    openedAt: string; resolvedAt: string | null; sound: boolean; muted: boolean;
+  };
+  const [portAlerts, setPortAlerts] = React.useState<PortAlert[]>([]);
+  const announcedRef = React.useRef<Set<number>>(new Set());
+
+  useSSE({
+    onEvent: (type, data) => {
+      if (type === "monitor") { load(); return; }
+      if (type !== "ndm:alert" || !data) return;
+      const a = data;
+      const now = Date.now();
+      setPortAlerts((prev) => {
+        let next = prev.filter(
+          (p) => p.interfaceId !== a.interfaceId || p.deviceId !== a.deviceId || !p.resolvedAt,
+        );
+        const card: PortAlert = {
+          id: a.id ?? 0, deviceId: a.deviceId ?? null, deviceName: a.deviceName ?? null,
+          interfaceId: a.interfaceId ?? null, interfaceName: a.interfaceName ?? null,
+          eventType: a.eventType ?? "PORT_DOWN", severity: a.severity ?? "WARNING",
+          title: a.title ?? "", message: a.message ?? "",
+          openedAt: a.openedAt ?? new Date().toISOString(),
+          resolvedAt: a.status === "RESOLVED" || a.action === "resolve" || a.action === "ack"
+            ? (a.resolvedAt ?? new Date().toISOString())
+            : null,
+          sound: !!a.sound, muted: false,
+        };
+        next = [card, ...next];
+        // Garbage-collect: resolved cards linger 20s so 🟢 is visible, stale
+        // open cards for missing devices drop after 10 min.
+        return next.filter((p) =>
+          p.resolvedAt
+            ? now - new Date(p.resolvedAt).getTime() < 20_000
+            : now - new Date(p.openedAt).getTime() < 10 * 60_000,
+        );
+      });
+      // Browser-audio gate: the server already decided `sound`; the operator
+      // can still mute globally (muted / alerts.enabled) or per card.
+      if (a.action === "open" && a.sound && soundOn && a.id != null && !announcedRef.current.has(a.id)) {
+        announcedRef.current.add(a.id);
+        beep("down");
+        if (alerts.speak) speak(`${a.deviceName || "Device"}${a.interfaceName ? ` ${a.interfaceName}` : ""} port down`);
+      }
+    },
+  });
 
   const down = targets.filter((t) => t.isUp === false && t.enabled);
 
@@ -394,6 +444,51 @@ export default function MonitoringPage() {
           </div>
         ) : (
           <div className="mon-ndm-empty">Check out the SNMP device monitor — add your switches to get live port status.</div>
+        )}
+
+        {/* LIVE PORT ALERTS — pushed over SSE, exercised by the real pipeline. */}
+        {portAlerts.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+            {portAlerts.map((al) => {
+              const open = !al.resolvedAt;
+              const dt = (open ? Date.now() : new Date(al.resolvedAt!).getTime()) - new Date(al.openedAt).getTime();
+              const mins = Math.max(0, Math.floor(dt / 60000));
+              const secs = Math.max(0, Math.floor((dt % 60000) / 1000));
+              return (
+                <div key={`${al.deviceId}:${al.interfaceId}:${al.id}`}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8,
+                    border: open ? "1px solid var(--danger, #D34053)" : "1px solid var(--online, #219653)",
+                    background: open ? "rgba(211,64,83,0.08)" : "rgba(33,150,83,0.08)",
+                  }}>
+                  <span style={{ fontSize: 16 }}>{open ? "🔴" : "🟢"}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>
+                      {open ? "PORT DOWN" : "PORT RECOVERED"}
+                      {al.interfaceName ? ` · ${al.interfaceName}` : ""}
+                      {al.deviceName ? ` on ${al.deviceName}` : ""}
+                    </div>
+                    <div style={{ opacity: 0.75, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {al.message || al.title} · {open ? "down for" : "was down"} {mins}m {secs}s
+                      {al.sound && !al.muted ? " · 🔊" : " · 🔇"}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {al.deviceId != null && <a className="mon-hbtn" href={`/monitoring/devices/${al.deviceId}`}>Open Device</a>}
+                    <button className="mon-hbtn" onClick={() =>
+                      setPortAlerts((prev) => prev.map((p) => p.id === al.id ? { ...p, muted: !p.muted } : p))}
+                      title="Stop this card's sound">{al.muted ? "🔇" : "🔊"}</button>
+                    {open && al.id > 0 && (
+                      <button className="mon-hbtn" onClick={async () => {
+                        try { await ndmApi.ackAlert(al.id); } catch { /* keep card */ }
+                        setPortAlerts((prev) => prev.map((p) => p.id === al.id ? { ...p, resolvedAt: new Date().toISOString() } : p));
+                      }}>Acknowledge</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 

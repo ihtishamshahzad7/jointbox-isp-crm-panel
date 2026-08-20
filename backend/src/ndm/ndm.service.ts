@@ -78,7 +78,7 @@ export class NdmService {
       groupName: r.groupName, location: r.location, enabled: r.enabled, isReachable: r.isReachable,
       uptimeSec: r.uptimeSec, interfaceCount: r.interfaceCount, upPorts: r.upPorts, downPorts: r.downPorts,
       lastSnmpPollAt: r.lastSnmpPollAt, lastSyslogAt: r.lastSyslogAt, lastError: r.lastError,
-      soundEnabled: r.soundEnabled,
+      soundEnabled: r.soundEnabled, soundUpEnabled: r.soundUpEnabled,
       openAlerts: r._count?.alerts ?? 0, portCount: r._count?.interfaces ?? 0,
       createdAt: r.createdAt,
     }));
@@ -100,7 +100,8 @@ export class NdmService {
         rxRateBps: p.rxRateBps, txRateBps: p.txRateBps, rxPps: p.rxPps, txPps: p.txPps,
         errorRatePerMin: p.errorRatePerMin, mac: p.mac, ifLastChangeTicks: p.ifLastChangeTicks,
         ifType: p.ifType, interfaceCategory: p.interfaceCategory,
-        monitoringEnabled: p.monitoringEnabled, soundEnabled: p.soundEnabled,
+        monitoringEnabled: p.monitoringEnabled, soundEnabled: p.soundEnabled, soundUpEnabled: p.soundUpEnabled,
+        monitoringExplicit: p.monitoringExplicit, excludedReason: p.excludedReason,
         lastStateChangeAt: p.lastStateChangeAt, firstSeen: p.firstSeen, lastSeen: p.lastSeen,
       })),
     };
@@ -252,8 +253,23 @@ export class NdmService {
     const data: any = {};
     if (body.monitoringEnabled !== undefined) data.monitoringEnabled = !!body.monitoringEnabled;
     if (body.soundEnabled !== undefined) data.soundEnabled = !!body.soundEnabled;
+    if (body.soundUpEnabled !== undefined) data.soundUpEnabled = !!body.soundUpEnabled;
+    // An operator hand-toggle makes the port explicit: the poller keeps
+    // enforcing policy only for rows nobody has consciously set.
+    if (body.monitoringEnabled !== undefined || body.soundEnabled !== undefined || body.soundUpEnabled !== undefined) {
+      data.monitoringExplicit = true;
+    }
     if (!Object.keys(data).length) return port;
-    return this.prisma.networkInterface.update({ where: { id: portId }, data });
+    const updated = await this.prisma.networkInterface.update({ where: { id: portId }, data });
+    // Next sweep applies the change immediately.
+    this.poller.checkNow(deviceId).catch(() => undefined);
+    return updated;
+  }
+
+  /** Dev-test: push a synthetic DOWN/UP transition through the REAL pipeline. */
+  async testPortAlert(deviceId: number, portId: number, direction: 'down' | 'up', actor?: Actor) {
+    await this.assertDevice(deviceId, actor);
+    return this.poller.testPortAlert(deviceId, portId, direction);
   }
 
   async checkNow(id: number, actor?: Actor) {
@@ -330,7 +346,9 @@ export class NdmService {
       rxPps: p.rxPps, txPps: p.txPps, errorRatePerMin: p.errorRatePerMin,
       mac: p.mac, ifLastChangeTicks: p.ifLastChangeTicks,
       ifType: p.ifType, interfaceCategory: p.interfaceCategory,
-      monitoringEnabled: p.monitoringEnabled !== false, soundEnabled: p.soundEnabled !== false,
+      monitoringEnabled: p.monitoringEnabled !== false, monitoringExplicit: p.monitoringExplicit !== false,
+      excludedReason: p.excludedReason,
+      soundEnabled: p.soundEnabled !== false, soundUpEnabled: p.soundUpEnabled !== false,
       inOctets: p.inOctets, outOctets: p.outOctets, inErrors: p.inErrors, outErrors: p.outErrors,
       crcErrors: p.crcErrors, lastStateChangeAt: p.lastStateChangeAt,
       firstSeen: p.firstSeen, lastSeen: p.lastSeen,
