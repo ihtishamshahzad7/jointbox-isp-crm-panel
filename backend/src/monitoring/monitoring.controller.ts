@@ -32,6 +32,16 @@ export class MonitoringController {
   @Post('diagnostics/http')
   dHttp(@Body() b: { url: string }) { return this.diag.httpCheck(b.url); }
 
+  /**
+   * Unified device list — ping monitors and SNMP devices correlated by address
+   * so one physical box is one row, with a summary for the dashboard header.
+   * This is what the main Network Monitoring page should render.
+   */
+  @Get('unified')
+  unified(@Req() req: any) {
+    return this.monitoring.unifiedList(req.user);
+  }
+
   @Get('targets')
   list(@Req() req: any) {
     return this.monitoring.list(req.user);

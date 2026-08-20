@@ -12,11 +12,42 @@ import { ndm as ndmApi } from "./ndm";
  * Everything is owner-scoped by the API, so a parent's targets stay private.
  */
 type Sample = { t: number; ms: number | null; up: boolean };
+
+/**
+ * ONE PHYSICAL DEVICE = ONE ROW.
+ *
+ * The backend (`GET /monitoring/unified`) correlates the ICMP record
+ * (MonitorTarget) with the SNMP record (NetworkDevice) by address, so a switch
+ * that is both pinged and SNMP-polled is a single card here instead of
+ * appearing twice on two different screens.
+ *
+ * The ping fields are kept FLAT and unchanged so every existing behaviour —
+ * latency graph, down alarm, search, status filter, pause, check-now — keeps
+ * working untouched. The SNMP half is additive and always optional: a
+ * ping-only monitor simply has `snmp: null` and renders exactly as before.
+ */
 type Target = {
   id: number; name: string; host: string; groupName: string | null;
   enabled: boolean; isUp: boolean | null; lastLatencyMs: number | null;
   lossPct: number | null; lastCheckedAt: string | null; downSince: string | null;
   intervalSec: number; history: Sample[];
+  // Unified additions (null when this device has no SNMP side).
+  monitorId?: number | null;
+  deviceId?: number | null;
+  location?: string | null;
+  snmp?: { reachable: boolean | null; cpu: number | null; memory: number | null;
+           temperature: number | null; uptimeSec: number | null;
+           lastPollAt: string | null; lastError: string | null; version?: string } | null;
+  ports?: { total: number; up: number; down: number } | null;
+  syslog?: { last24h: number; lastAt: string | null } | null;
+  alerts?: number;
+  capabilities?: string[];
+};
+
+type UnifiedSummary = {
+  total: number; up: number; down: number; paused: number;
+  portsUp: number; portsDown: number; openAlerts: number; syslog24h: number;
+  snmpDevices: number; pingMonitors: number; merged: number;
 };
 
 /**
@@ -53,6 +84,7 @@ export default function MonitoringPage() {
   const H = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
   const [targets, setTargets] = React.useState<Target[]>([]);
+  const [summary, setSummary] = React.useState<UnifiedSummary | null>(null);
   const [ndmStats, setNdmStats] = React.useState<any>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [err, setErr] = React.useState("");
@@ -76,11 +108,54 @@ export default function MonitoringPage() {
     });
   }, []);
 
+  /**
+   * Load the UNIFIED list (ping + SNMP correlated into one row per device).
+   *
+   * Falls back to the old ping-only endpoint if `/unified` isn't there — the
+   * frontend and backend are deployed by the same script, but a half-finished
+   * update must degrade to the previous behaviour rather than showing an empty
+   * dashboard to an operator watching for outages.
+   */
   const load = React.useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/monitoring/unified`, { headers: H });
+      if (r.status === 403) { setErr("You don't have permission to view monitoring."); setLoaded(true); return; }
+      if (r.ok) {
+        const d = await r.json();
+        // Flatten to the shape the existing cards/graphs/filters already use,
+        // carrying the SNMP half alongside rather than replacing anything.
+        setTargets((d.devices || []).map((x: any) => ({
+          // Negative ids for SNMP-only rows keep React keys unique without
+          // colliding with real MonitorTarget ids.
+          id: x.monitorId ?? -(x.deviceId ?? 0),
+          monitorId: x.monitorId ?? null,
+          deviceId: x.deviceId ?? null,
+          name: x.name, host: x.host, groupName: x.groupName ?? null,
+          location: x.location ?? null,
+          enabled: x.enabled,
+          // A device with no ICMP monitor still shows up/down — from SNMP.
+          isUp: x.ping ? x.ping.isUp : (x.snmp ? x.snmp.reachable : null),
+          lastLatencyMs: x.ping?.latencyMs ?? null,
+          lossPct: x.ping?.lossPct ?? null,
+          lastCheckedAt: x.ping?.lastCheckedAt ?? x.snmp?.lastPollAt ?? null,
+          downSince: x.ping?.downSince ?? null,
+          intervalSec: x.ping?.intervalSec ?? 30,
+          history: x.ping?.history ?? [],
+          snmp: x.snmp ?? null, ports: x.ports ?? null,
+          syslog: x.syslog ?? null, alerts: x.alerts ?? 0,
+          capabilities: x.capabilities ?? [],
+        })));
+        setSummary(d.summary ?? null);
+        setErr("");
+        setLoaded(true);
+        return;
+      }
+    } catch { /* fall through to legacy */ }
+
     try {
       const r = await fetch(`${API}/monitoring/targets`, { headers: H });
       if (r.status === 403) { setErr("You don't have permission to view monitoring."); setLoaded(true); return; }
-      if (r.ok) { setTargets(await r.json()); setErr(""); }
+      if (r.ok) { setTargets(await r.json()); setSummary(null); setErr(""); }
     } catch { /* keep last */ }
     setLoaded(true);
   }, []);
@@ -235,17 +310,21 @@ export default function MonitoringPage() {
       if (status === "up" && !(t.enabled && t.isUp === true)) return false;
       if (status === "paused" && t.enabled) return false;
       if (!terms.length) return true;
-      const hay = `${t.name || ""} ${t.host} ${t.groupName || ""}`.toLowerCase();
+      // Location and capability names are searchable too, so "snmp", "syslog"
+      // or a site name narrows the board without a separate filter control.
+      const hay = `${t.name || ""} ${t.host} ${t.groupName || ""} ${t.location || ""} ${(t.capabilities || []).join(" ")}`.toLowerCase();
       return terms.every((w) => hay.includes(w));
     });
   }, [targets, q, status]);
 
   // Group the FILTERED set, so empty groups disappear while searching.
+  // NOTE: depends on `filtered`, not `targets` — keyed on the wrong value this
+  // silently kept showing pre-search groups.
   const groups = React.useMemo(() => {
     const m = new Map<string, Target[]>();
     for (const t of filtered) { const k = t.groupName || "Ungrouped"; (m.get(k) || m.set(k, []).get(k)!).push(t); }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [targets]);
+  }, [filtered]);
   const knownGroups = [...new Set(targets.map((t) => t.groupName).filter(Boolean) as string[])];
 
   return (
@@ -255,11 +334,25 @@ export default function MonitoringPage() {
       <div className="mon-head">
         <div>
           <h1>Network Monitoring</h1>
-          <p>Ping your routers, towers and upstreams continuously. You'll hear an alert the moment one drops.</p>
+          <p>
+            One device, everything about it — ping, SNMP, ports, syslog and alerts.
+            {summary && summary.merged > 0 && (
+              <> <b>{summary.merged}</b> device{summary.merged === 1 ? "" : "s"} shown once instead of twice.</>
+            )}
+          </p>
         </div>
         <div className="mon-head-stats">
-          <span className="ok">{targets.filter((t) => t.isUp).length} up</span>
+          <span className="ok">{summary ? summary.up : targets.filter((t) => t.isUp).length} up</span>
           <span className={down.length ? "bad" : "muted"}>{down.length} down</span>
+          {summary && summary.snmpDevices > 0 && (
+            <>
+              <span className="muted" title="Interfaces up across all SNMP devices">
+                {summary.portsUp}/{summary.portsUp + summary.portsDown} ports
+              </span>
+              {summary.openAlerts > 0 && <span className="bad" title="Open alerts">⚠ {summary.openAlerts} alerts</span>}
+              {summary.syslog24h > 0 && <span className="muted" title="Syslog messages in the last 24h">{summary.syslog24h} syslog</span>}
+            </>
+          )}
           <button className="mon-hbtn" onClick={() => setShowImport(true)} title="Import monitors from Excel or CSV">⬆ Import</button>
           <button className="mon-hbtn" onClick={() => setShowSettings((s) => !s)} title="Alert sound settings">
             {alerts.enabled && !muted ? "🔔" : "🔕"} Alerts
@@ -623,13 +716,57 @@ function Card({ t, onDelete, onCheck, onToggle }: { t: Target; onDelete: () => v
         <span>{t.isUp && t.lastLatencyMs != null ? `${t.lastLatencyMs} ms` : t.lossPct != null ? `${Math.round(t.lossPct)}% loss` : "—"}</span>
         <span className="muted">{t.lastCheckedAt ? timeAgo(t.lastCheckedAt) : "never"}</span>
       </div>
+
+      {/*
+        CAPABILITY CHIPS — the visible result of the ping/SNMP merge.
+        Rendered ONLY for what this device actually has, so a ping-only monitor
+        (google.com, a DNS resolver) looks exactly as it always did and gains no
+        empty placeholders.
+      */}
+      {(t.snmp || t.ports || t.syslog || (t.alerts ?? 0) > 0) && (
+        <div className="mon-caps">
+          {t.snmp && (
+            <span className={`cap ${t.snmp.reachable === false ? "bad" : t.snmp.reachable ? "ok" : ""}`}
+              title={t.snmp.lastError || (t.snmp.reachable ? "SNMP reachable" : "SNMP not yet polled")}>
+              SNMP {t.snmp.reachable === false ? "✕" : t.snmp.reachable ? "✓" : "…"}
+              {t.snmp.cpu != null && <em>{Math.round(t.snmp.cpu)}% cpu</em>}
+            </span>
+          )}
+          {t.ports && t.ports.total > 0 && (
+            <span className={`cap ${t.ports.down > 0 ? "bad" : "ok"}`} title={`${t.ports.up} of ${t.ports.total} interfaces up`}>
+              Ports {t.ports.up}/{t.ports.total}
+              {t.ports.down > 0 && <em>{t.ports.down} down</em>}
+            </span>
+          )}
+          {t.syslog && (
+            <span className="cap" title={t.syslog.lastAt ? `last message ${timeAgo(t.syslog.lastAt)}` : "no messages yet"}>
+              Syslog <em>{t.syslog.last24h}</em>
+            </span>
+          )}
+          {(t.alerts ?? 0) > 0 && (
+            <span className="cap bad" title="Open alerts on this device">⚠ {t.alerts} alert{t.alerts === 1 ? "" : "s"}</span>
+          )}
+        </div>
+      )}
       {state === "down" && t.downSince && <div className="mon-down-since">down since {timeAgo(t.downSince)}</div>}
       <div className="mon-card-actions">
-        {/* Primary way into the per-host history + diagnostics page. */}
-        <a className="details" href={`/monitoring/${t.id}`}>📈 Details</a>
-        <button onClick={onCheck}>Check now</button>
-        <button onClick={onToggle}>{t.enabled ? "Pause" : "Resume"}</button>
-        <button className="del" onClick={onDelete}>Delete</button>
+        {/*
+          ONE "Details" ENTRY POINT. An SNMP-capable device opens the device
+          view (ports, traffic, syslog, events, alerts); a ping-only monitor
+          opens the ping history + diagnostics page. The operator clicks the
+          same button either way and never has to know which subsystem holds
+          the data — which is the whole point of the merge.
+        */}
+        <a className="details" href={t.deviceId ? `/monitoring/devices/${t.deviceId}` : `/monitoring/${t.id}`}>
+          📈 Details
+        </a>
+        {/* Ping-only actions are meaningless for an SNMP-only row. */}
+        {t.monitorId != null && <button onClick={onCheck}>Check now</button>}
+        {t.monitorId != null && <button onClick={onToggle}>{t.enabled ? "Pause" : "Resume"}</button>}
+        {t.monitorId != null && <button className="del" onClick={onDelete}>Delete</button>}
+        {t.monitorId == null && t.deviceId != null && (
+          <a className="details" href={`/monitoring/devices/${t.deviceId}`}>Manage device</a>
+        )}
       </div>
     </div>
   );
@@ -751,6 +888,15 @@ const CSS = `
 .mon-card-actions .details:hover{background:#3C50E0;color:#fff}
 .mon-card-actions button.del{color:#B02A37;border-color:rgba(176,42,55,.3)}
 @media (max-width:640px){ .mon-grid{grid-template-columns:1fr 1fr} .mon-add input,.mon-add button{flex:1 1 100%} }
+
+/* ── Capability chips on the merged card ── */
+.mon-caps{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;padding-top:7px;border-top:1px solid var(--border,#E2E8F0)}
+.mon-caps .cap{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;
+  color:#64748B;background:var(--bg,#F1F5F9);border:1px solid var(--border,#E2E8F0);
+  border-radius:999px;padding:2px 8px;white-space:nowrap}
+.mon-caps .cap em{font-style:normal;font-weight:600;opacity:.75}
+.mon-caps .cap.ok{color:#157F43;background:rgba(21,127,67,.08);border-color:rgba(21,127,67,.25)}
+.mon-caps .cap.bad{color:#B02A37;background:rgba(176,42,55,.08);border-color:rgba(176,42,55,.3)}
 
 /* ── Search + status filter ── */
 .mon-filter{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}

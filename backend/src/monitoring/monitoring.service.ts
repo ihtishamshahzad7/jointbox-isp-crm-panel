@@ -47,6 +47,159 @@ export class MonitoringService {
     return rows.map((r) => ({ ...r, history: this.parseHistory(r.history) }));
   }
 
+  /**
+   * UNIFIED DEVICE LIST — one physical box, one row.
+   *
+   * THE PROBLEM THIS SOLVES. The platform grew two independent monitoring
+   * records for the same hardware:
+   *
+   *   MonitorTarget  — ICMP/ping, added from the monitoring dashboard
+   *   NetworkDevice  — SNMP/ports/syslog/alerts, added from the devices page
+   *
+   * A switch that was both pinged and SNMP-polled therefore appeared TWICE,
+   * in two different screens, with no indication they were the same device.
+   * An operator had to know which page answered which question.
+   *
+   * CORRELATION IS BY ADDRESS, AT QUERY TIME — deliberately not a migration.
+   * `MonitorTarget.host` and `NetworkDevice.ip` are the same string for the
+   * same box (10.254.1.30), so they can be matched without altering either
+   * table, without a backfill, and without risking the existing ping data.
+   * Both subsystems keep polling exactly as they do today; only the
+   * PRESENTATION is unified. If the two records ever need to differ (a device
+   * pinged on a management IP but SNMP-polled on a loopback), the upgrade path
+   * is an explicit nullable `MonitorTarget.deviceId` link — a purely additive
+   * column that this same merge function would prefer over the IP match.
+   *
+   * Scoping is applied INDEPENDENTLY to each side using that subsystem's own
+   * rules, so this cannot widen visibility: a caller who may see the ping
+   * monitor but not the SNMP device gets the ping half only.
+   */
+  async unifiedList(actor?: Actor) {
+    const ids = await this.ownedIds(actor);
+
+    const [pings, devices] = await Promise.all([
+      this.prisma.monitorTarget.findMany({
+        where: ids ? { ownerId: { in: ids.length ? ids : [-1] } } : {},
+        orderBy: [{ groupName: 'asc' }, { name: 'asc' }],
+      }),
+      // Same scope rule the NDM module applies to its own list.
+      this.prisma.networkDevice.findMany({
+        where: ids ? { ownerId: { in: ids.length ? ids : [-1] } } : {},
+        select: {
+          id: true, name: true, ip: true, groupName: true, location: true,
+          enabled: true, isReachable: true, cpu: true, memory: true, temperature: true,
+          uptimeSec: true, lastSnmpPollAt: true, lastSyslogAt: true, lastError: true,
+          interfaceCount: true, upPorts: true, downPorts: true,
+          syslogEnabled: true, snmpVersion: true, vendor: true, deviceType: true,
+        },
+      }),
+    ]);
+
+    // Counts for the badges, fetched in bulk rather than per device.
+    const deviceIds = devices.map((d) => d.id);
+    const scoped = deviceIds.length ? { in: deviceIds } : { in: [-1] };
+    const dayAgo = new Date(Date.now() - 86400_000);
+    const [openAlerts, syslog24h] = await Promise.all([
+      this.prisma.alert.groupBy({
+        by: ['deviceId'], where: { status: 'OPEN', deviceId: scoped }, _count: { _all: true },
+      }).catch(() => [] as any[]),
+      this.prisma.syslogEvent.groupBy({
+        by: ['deviceId'], where: { deviceId: scoped, receivedAt: { gte: dayAgo } }, _count: { _all: true },
+      }).catch(() => [] as any[]),
+    ]);
+    const alertBy = new Map<number, number>(openAlerts.map((a: any) => [a.deviceId, a._count._all]));
+    const syslogBy = new Map<number, number>(syslog24h.map((s: any) => [s.deviceId, s._count._all]));
+
+    const byAddr = new Map<string, any>();
+    const key = (s: string) => s.trim().toLowerCase();
+
+    // 1. Ping monitors first — they are the existing, familiar records and
+    //    their name/group should win in the merged view.
+    for (const p of pings) {
+      byAddr.set(key(p.host), {
+        key: `p${p.id}`,
+        monitorId: p.id,
+        deviceId: null as number | null,
+        name: p.name || p.host,
+        host: p.host,
+        groupName: p.groupName,
+        enabled: p.enabled,
+        // ICMP
+        ping: {
+          enabled: true, isUp: p.isUp, latencyMs: p.lastLatencyMs, lossPct: p.lossPct,
+          lastCheckedAt: p.lastCheckedAt, downSince: p.downSince, intervalSec: p.intervalSec,
+          history: this.parseHistory(p.history),
+        },
+        snmp: null, ports: null, syslog: null, alerts: 0,
+        capabilities: ['PING'] as string[],
+      });
+    }
+
+    // 2. Fold SNMP devices onto the matching address, or add as their own row.
+    for (const d of devices) {
+      const k = key(d.ip);
+      const row = byAddr.get(k);
+      const snmp = {
+        enabled: true, reachable: d.isReachable, version: d.snmpVersion,
+        vendor: d.vendor, deviceType: d.deviceType,
+        cpu: d.cpu, memory: d.memory, temperature: d.temperature,
+        uptimeSec: d.uptimeSec != null ? Number(d.uptimeSec) : null,
+        lastPollAt: d.lastSnmpPollAt, lastError: d.lastError,
+      };
+      const ports = { total: d.interfaceCount, up: d.upPorts, down: d.downPorts };
+      const syslog = d.syslogEnabled
+        ? { enabled: true, last24h: syslogBy.get(d.id) ?? 0, lastAt: d.lastSyslogAt }
+        : null;
+
+      if (row) {
+        // SAME BOX — enrich the existing card instead of adding a second one.
+        row.deviceId = d.id;
+        row.location = d.location ?? null;
+        row.snmp = snmp;
+        row.ports = ports;
+        row.syslog = syslog;
+        row.alerts = alertBy.get(d.id) ?? 0;
+        row.capabilities.push('SNMP');
+        if (d.interfaceCount > 0) row.capabilities.push('PORTS');
+        if (syslog) row.capabilities.push('SYSLOG');
+        if (!row.groupName && d.groupName) row.groupName = d.groupName;
+      } else {
+        // SNMP-only device — still belongs on the same dashboard.
+        byAddr.set(k, {
+          key: `d${d.id}`,
+          monitorId: null, deviceId: d.id,
+          name: d.name || d.ip, host: d.ip, groupName: d.groupName,
+          location: d.location ?? null, enabled: d.enabled,
+          ping: null, snmp, ports, syslog,
+          alerts: alertBy.get(d.id) ?? 0,
+          capabilities: ['SNMP', ...(d.interfaceCount > 0 ? ['PORTS'] : []), ...(syslog ? ['SYSLOG'] : [])],
+        });
+      }
+    }
+
+    const rows = [...byAddr.values()].sort((a, b) =>
+      (a.groupName || 'zzz').localeCompare(b.groupName || 'zzz') || a.name.localeCompare(b.name));
+
+    // Dashboard totals — ports and alerts included, so the header can show the
+    // whole picture rather than ping-only counts.
+    const summary = {
+      total: rows.length,
+      up: rows.filter((r) => r.enabled && (r.ping ? r.ping.isUp === true : r.snmp?.reachable === true)).length,
+      down: rows.filter((r) => r.enabled && (r.ping ? r.ping.isUp === false : r.snmp?.reachable === false)).length,
+      paused: rows.filter((r) => !r.enabled).length,
+      portsUp: devices.reduce((s, d) => s + d.upPorts, 0),
+      portsDown: devices.reduce((s, d) => s + d.downPorts, 0),
+      openAlerts: [...alertBy.values()].reduce((s, n) => s + n, 0),
+      syslog24h: [...syslogBy.values()].reduce((s, n) => s + n, 0),
+      snmpDevices: devices.length,
+      pingMonitors: pings.length,
+      /** Boxes that had BOTH records and are now shown once. */
+      merged: rows.filter((r) => r.monitorId && r.deviceId).length,
+    };
+
+    return { summary, devices: rows };
+  }
+
   async getOne(id: number, actor?: Actor) {
     await this.assertOwns(id, actor);
     const t = await this.prisma.monitorTarget.findUnique({ where: { id } });
