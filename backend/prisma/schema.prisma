@@ -3097,6 +3097,10 @@ model NetworkDevice {
   syslogProtocol String  @db.VarChar(8) @default("UDP")
   syslogPort    Int      @default(514)
 
+  /// Device-level sound override: false mutes every alert this device raises
+  /// (even CRITICAL ones) regardless of rule channels.
+  soundEnabled  Boolean  @default(true)
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -3164,14 +3168,27 @@ model NetworkInterface {
   inDiscards  BigInt? @db.BigInt
   outDiscards BigInt? @db.BigInt
   crcErrors   BigInt? @db.BigInt
-  /// Last polled RATES (derived from counter deltas).
-  rxRateBps   Float   @default(0)
-  txRateBps   Float   @default(0)
-  rxPps       Float   @default(0)
-  txPps       Float   @default(0)
-  errorRatePerMin Float @default(0)
+  /// Last polled RATES (derived from counter deltas). NULL = no valid sample
+  /// yet (first poll / counter reset after reboot) — the UI shows "—", never
+  /// a fake 0 bps.
+  rxRateBps   Float?
+  txRateBps   Float?
+  rxPps       Float?
+  txPps       Float?
+  errorRatePerMin Float?
   mac         String? @db.VarChar(40)
   ifLastChangeTicks BigInt? @db.BigInt
+
+  /// Standard MIB-2 ifType (IANAifType) captured at discovery time.
+  ifType      Int?
+  /// PHYSICAL | VLAN | LOOPBACK | BRIDGE | BOND | TUNNEL | PPP | PPPOE_SESSION | DYNAMIC | UNKNOWN
+  interfaceCategory String? @db.VarChar(24)
+  /// Gates alerts + traffic history + port totals for this port. PPPoE
+  /// session links start disabled; operators can re-enable per-port.
+  monitoringEnabled Boolean @default(true)
+  /// Per-port sound override (device → port → rule hierarchy).
+  soundEnabled Boolean @default(true)
+
   lastStateChangeAt DateTime?
   firstSeen   DateTime @default(now())
   lastSeen    DateTime @default(now())

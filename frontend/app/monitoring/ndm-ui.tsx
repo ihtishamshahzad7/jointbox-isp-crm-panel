@@ -7,7 +7,7 @@
  * screens look native in both light and dark themes.
  */
 import React from "react";
-import { fmtBits, fmtTime, isUp, sevColor, portState } from "./ndm";
+import { fmtBits, fmtTime, isUp, sevColor, portState, catLabel } from "./ndm";
 
 export const NDMCSS = `
 .ndm { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
@@ -44,6 +44,7 @@ export const NDMCSS = `
 .ndm-p.up { border-left: 3px solid var(--online); }
 .ndm-p.down { border-left: 3px solid var(--danger); }
 .ndm-p.disabled { border-left: 3px solid var(--border); opacity: .55; }
+.ndm-p.excluded { border-left: 3px dashed var(--muted); opacity: .55; }
 .ndm-p .pname { font-size: 11.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ndm-p .prate { font-size: 10.5px; color: var(--muted); }
 .sev { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 999px; color: #fff; }
@@ -99,13 +100,38 @@ export function SeverityBadge({ s }: { s: string }) {
   return <span className="sev" style={{ background: c }}>{String(s || "INFO").toUpperCase()}</span>;
 }
 
-export function PortTile({ port, onClick }: { port: any; onClick?: () => void }) {
+export function PortTile({ port, onToggleSound, onToggleMonitor, onClick }: { port: any; onToggleSound?: (e: React.MouseEvent) => void; onToggleMonitor?: (e: React.MouseEvent) => void; onClick?: () => void }) {
   const state = portState(port);
+  const monitored = port.monitoringEnabled !== false;
+  const cat = catLabel(port.interfaceCategory);
+  const rx = port.rxRateBps != null ? fmtBits(port.rxRateBps) : "—";
+  const tx = port.txRateBps != null ? fmtBits(port.txRateBps) : "—";
   return (
-    <div className={`ndm-p ${state}`} onClick={onClick} title={`${port.name} · ${port.description || ""} · ${fmtBits(port.rxRateBps)} ↓ / ${fmtBits(port.txRateBps)} ↑`}>
-      <div className="pname">{port.name}</div>
-      <div className="prate">↓ {fmtBits(port.rxRateBps)} · ↑ {fmtBits(port.txRateBps)}</div>
-      {port.errorRatePerMin > 0 && <div className="prate" style={{ color: "var(--danger)" }}>{Math.round(port.errorRatePerMin)} err/min</div>}
+    <div className={`ndm-p ${state}${monitored ? "" : " excluded"}`} onClick={onClick}
+      title={`${port.name} · ${cat}${monitored ? "" : " — NOT MONITORED (excluded)"} · ${rx} ↓ / ${tx} ↑`}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+        <div className="pname">{port.name}</div>
+        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {onToggleSound && (
+            <button onClick={(e) => { e.stopPropagation(); onToggleSound(e); }}
+              title={port.soundEnabled !== false ? "Sound ON — click to mute this port" : "Sound OFF — click to enable"}
+              style={{ border: 0, background: "none", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: 1, color: port.soundEnabled !== false ? "var(--accent)" : "var(--muted)" }}>
+              {port.soundEnabled !== false ? "🔔" : "🔕"}
+            </button>
+          )}
+          {onToggleMonitor && (
+            <button onClick={(e) => { e.stopPropagation(); onToggleMonitor(e); }}
+              title={monitored ? "Monitored — click to exclude" : `Excluded (${cat}) — click to monitor`}
+              style={{ border: 0, background: "none", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: 1, color: monitored ? "var(--online)" : "var(--muted)" }}>
+              {monitored ? "◉" : "○"}
+            </button>
+          )}
+        </span>
+      </div>
+      <div className="prate">↓ {rx} · ↑ {tx}</div>
+      {!monitored && <div className="prate" style={{ color: "var(--muted)" }}>{cat} · not monitored</div>}
+      {monitored && <div className="prate">{cat}</div>}
+      {port.errorRatePerMin != null && port.errorRatePerMin > 0 && <div className="prate" style={{ color: "var(--danger)" }}>{Math.round(port.errorRatePerMin)} err/min</div>}
     </div>
   );
 }

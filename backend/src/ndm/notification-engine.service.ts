@@ -99,7 +99,9 @@ export class NdmNotificationEngine {
       await record(ch.sound ? 'SOUND' : 'DESKTOP', true);
     }
     if (!Object.keys(out).length) {
-      await record('SOUND', true); // at minimum, the live UI toast exists
+      // At minimum the live UI toast exists; record SOUND honestly so the
+      // alert history shows whether the alarm could have gone off.
+      await record('SOUND', !!ch.sound, ch.sound ? undefined : 'sound disabled for this alert (rule/device/port settings)');
     }
     return out;
   }

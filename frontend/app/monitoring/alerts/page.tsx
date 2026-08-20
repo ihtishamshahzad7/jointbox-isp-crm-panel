@@ -4,6 +4,7 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import { ndm, fmtTime, sevColor, type NdmAlert, type NdmRule } from "../ndm";
 import { NDMCSS, NdmModal, SeverityBadge, useNdmRefresh } from "../ndm-ui";
+import { NdmSoundBell } from "../../components/ndm-sound";
 import { useSSE } from "../../components/use-sse";
 
 export default function AlertsRulesPage() {
@@ -49,6 +50,7 @@ export default function AlertsRulesPage() {
           <p>Incidents opened by rules, and the rules themselves. Rules trigger on events from SNMP polling and syslog.</p>
         </div>
         <div className="ndm-row-actions">
+          <NdmSoundBell />
           <button className="ndm-btn" onClick={() => router.push("/monitoring/devices")}>Devices</button>
           <button className="ndm-btn" onClick={() => router.push("/monitoring/ports")}>Ports</button>
         </div>
@@ -72,7 +74,7 @@ export default function AlertsRulesPage() {
               <div className="ndm-empty">No {filter.toLowerCase() || ""} alerts. Create a rule below and the engine will open one the moment the matching event fires.</div>
             ) : (
               <table className="ndm-tbl">
-                <thead><tr><th>Opened</th><th>Title</th><th>Device</th><th>Severity</th><th>Fires</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Opened</th><th>Title</th><th>Device</th><th>Severity</th><th>Fires</th><th>Delivery</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {alerts.rows.map((a) => (
                     <tr key={a.id}>
@@ -81,6 +83,7 @@ export default function AlertsRulesPage() {
                       <td>{a.device ? <a style={{ color: "var(--accent)", cursor: "pointer" }} onClick={() => router.push(`/monitoring/devices/${a.deviceId}`)}>{a.device.name}</a> : "—"}</td>
                       <td><SeverityBadge s={a.severity} /></td>
                       <td>{a.fireCount}{a.fireCount > 1 ? "×" : ""}</td>
+                      <td><DeliveryBadge n={a.notifications || []} /></td>
                       <td>
                         {a.status === "OPEN" ? <b style={{ color: "var(--danger)" }}>OPEN</b> :
                          a.status === "ACKNOWLEDGED" ? <b style={{ color: "#8A6209" }}>ACK</b> :
@@ -144,11 +147,14 @@ export default function AlertsRulesPage() {
 // ── Rule editor ────────────────────────────────────────────────────
 function RuleEditor({ rule, onClose, onSaved }: { rule: NdmRule | null; onClose: () => void; onSaved: () => void }) {
   const [help, setHelp] = React.useState<any>(null);
+  const rch = (rule?.channels as any) || {};
   const [f, setF] = React.useState({
     name: rule?.name || "", eventType: rule?.eventType || "PORT_DOWN",
     condition: rule?.condition || "", severity: rule?.severity || "WARNING", enabled: rule?.enabled ?? true,
-    discord: !!(rule?.channels as any)?.discord, whatsapp: !!(rule?.channels as any)?.whatsapp,
-    sms: (rule?.channels as any)?.sms || "", email: (rule?.channels as any)?.email || "",
+    discord: !!rch.discord, whatsapp: !!rch.whatsapp,
+    sound: rch.sound != null ? !!rch.sound : (!rule || rule.severity === "CRITICAL" || rule.severity === "WARNING"),
+    desktop: !!rch.desktop,
+    sms: rch.sms || "", email: rch.email || "",
     description: rule?.description || "",
   });
   const [saving, setSaving] = React.useState(false);
@@ -158,7 +164,7 @@ function RuleEditor({ rule, onClose, onSaved }: { rule: NdmRule | null; onClose:
 
   const save = async () => {
     setSaving(true); setErr("");
-    const channels: any = { discord: f.discord, whatsapp: f.whatsapp };
+    const channels: any = { discord: f.discord, whatsapp: f.whatsapp, sound: f.sound, desktop: f.desktop };
     if (f.sms.trim()) channels.sms = f.sms.trim();
     if (f.email.trim()) channels.email = f.email.trim();
     try {
@@ -204,8 +210,10 @@ function RuleEditor({ rule, onClose, onSaved }: { rule: NdmRule | null; onClose:
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={f.enabled} onChange={(e) => setF((p) => ({ ...p, enabled: e.target.checked }))} /> Rule enabled
           </label>
-          <div className="ndm-hint" style={{ marginTop: 4 }}>Channels are sent only when this rule fires: Discord/WhatsApp use the system (and your own) webhooks; SMS/email need a recipient number/address here.</div>
+          <div className="ndm-hint" style={{ marginTop: 4 }}>Channels are sent only when this rule fires. <b>Sound</b> beeps the panel in real time (honors device/port mute); <b>Desktop</b> posts a visible UI banner. Discord/WhatsApp use the system (and your own) webhooks; SMS/email need a recipient number/address here. A specific rule setting like this overrides the global "sound by severity" default on both OPEN and resolve.</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5 }}><input type="checkbox" checked={f.sound} onChange={(e) => setF((p) => ({ ...p, sound: e.target.checked }))} /> 🔔 Sound</label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5 }}><input type="checkbox" checked={f.desktop} onChange={(e) => setF((p) => ({ ...p, desktop: e.target.checked }))} /> Desktop banner</label>
             <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5 }}><input type="checkbox" checked={f.discord} onChange={(e) => setF((p) => ({ ...p, discord: e.target.checked }))} /> Discord</label>
             <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5 }}><input type="checkbox" checked={f.whatsapp} onChange={(e) => setF((p) => ({ ...p, whatsapp: e.target.checked }))} /> WhatsApp</label>
             <div className="ndm-field" style={{ gridColumn: "1 / -1" }}><label>SMS recipient (optional)</label><input value={f.sms} onChange={(e) => setF((p) => ({ ...p, sms: e.target.value }))} placeholder="+34612345678" /></div>
@@ -285,9 +293,28 @@ function condLabel(c: string | null) {
 }
 function channelsLabel(ch: any) {
   const out: string[] = [];
+  if (ch?.sound) out.push("🔔 Sound");
+  if (ch?.desktop) out.push("Desktop");
   if (ch?.discord) out.push("Discord");
   if (ch?.whatsapp) out.push("WhatsApp");
   if (ch?.sms) out.push("SMS");
   if (ch?.email) out.push("Email");
   return out.join(", ");
+}
+function DeliveryBadge({ n }: { n: Array<{ channel: string; status: string; error?: string | null; sentAt?: string | null }> }) {
+  if (!n.length) return <span className="ndm-card-sub" title="No delivery rows recorded — alert may predate the delivery log">—</span>;
+  const icon: Record<string, string> = { SOUND: "🔔", DESKTOP: "🖥", DISCORD: "💬", WHATSAPP: "💬", SMS: "📱", EMAIL: "✉️" };
+  return (
+    <span style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+      {n.map((d, i) => {
+        const ok = d.status === "SENT";
+        return (
+          <span key={i} title={`${d.channel}: ${d.status}${d.error ? ` — ${d.error}` : ""}${d.sentAt ? ` (${fmtTime(d.sentAt)})` : ""}`}
+            style={{ fontSize: 12, padding: "0 6px", borderRadius: 10, border: "1px solid", borderColor: ok ? "var(--online)" : d.status === "SKIPPED" ? "var(--border)" : "var(--danger)", color: ok ? "var(--online)" : d.status === "SKIPPED" ? "var(--muted)" : "var(--danger)", opacity: d.status === "FAILED" ? .85 : 1 }}>
+            {icon[d.channel] || d.channel} {d.status === "SENT" ? "✓" : d.status === "PENDING" ? "…" : d.status}
+          </span>
+        );
+      })}
+    </span>
+  );
 }

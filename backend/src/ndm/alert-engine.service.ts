@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsService } from '../common/events.service';
-import { parseCondition, EVENT_LABELS, type NdmEventType } from './ndm.constants';
+import { NdmNotificationEngine } from './notification-engine.service';
+import { parseCondition, EVENT_LABELS, severityDefaultSound, type NdmEventType } from './ndm.constants';
 
 /**
  * Alert engine — evaluates AlertRules against recorded events and owns the
@@ -24,7 +25,11 @@ export class NdmAlertEngine {
   private readonly log = new Logger('NdmAlerts');
   private lastEvaluated = new Map<number, string>(); // eventId → dedup token
 
-  constructor(private prisma: PrismaService, private events: EventsService) {}
+  constructor(
+    private prisma: PrismaService,
+    private events: EventsService,
+    private notify: NdmNotificationEngine,
+  ) {}
 
   // ── Event → alert family mapping ───────────────────────────────
   private static readonly FAMILY: Record<string, string> = {
@@ -97,7 +102,7 @@ export class NdmAlertEngine {
             },
             include: { rule: true },
           });
-          this.broadcast(alert, 'upgrade');
+          this.broadcast(alert, 'upgrade', await this.soundFlag(rule, device?.id, intf?.id, alert.severity));
           continue;
         }
         // DURATION rule and threshold crossed → re-fire (escalate).
@@ -106,7 +111,7 @@ export class NdmAlertEngine {
           data: { fireCount: { increment: 1 }, message },
           include: { rule: true },
         });
-        this.broadcast(alert, 'upgrade');
+        this.broadcast(alert, 'upgrade', await this.soundFlag(rule, device?.id, intf?.id, alert.severity));
         continue;
       }
 
@@ -128,7 +133,22 @@ export class NdmAlertEngine {
         },
         include: { rule: true },
       });
-      this.broadcast(alert, 'open');
+      // Deliver the incident NOW: channels from the rule, sound per the
+      // hierarchy (severity/rule → device → port). This was the missing half
+      // of the alert pipeline — before, a fresh alert only wrote a row.
+      const snd = await this.soundAllowed(rule, device?.id, intf?.id, sev);
+      const channels = { ...((rule.channels as any) || {}), sound: snd.sound };
+      await this.notify.notify({
+        alertId: alert.id,
+        title: alert.title,
+        message: `${message}${intf?.name ? ` (${intf.name})` : ''}`,
+        severity: sev,
+        channels,
+        ownerId: device?.ownerId ?? null,
+        deviceName: snd.deviceName || device?.name || null,
+        event: 'OPEN',
+      });
+      this.broadcast(alert, 'open', { sound: snd.sound, deviceName: snd.deviceName || device?.name || null, ruleId: rule.id });
     }
     return null;
   }
@@ -146,8 +166,27 @@ export class NdmAlertEngine {
     if (!rows.length) return;
     await this.prisma.alert.updateMany({ where, data: { status: 'RESOLVED', resolvedAt: new Date() } });
     for (const a of rows) {
-      this.broadcast({ ...a, status: 'RESOLVED', resolvedAt: new Date() }, 'resolve');
-      // Recovery notifications are sent via a dedicated call (see controller).
+      const resolved = { ...a, status: 'RESOLVED', resolvedAt: new Date() };
+      // Recovery is an event too: notify through the rule's channels. Sound
+      // follows the rule's EXPLICIT channels.sound (never the severity
+      // default) so "Port UP" doesn't auto-chime — plus device/port flags.
+      const rule = a.rule as any;
+      const ch = (rule?.channels as any) || {};
+      const snd = await this.soundAllowed(rule, a.deviceId, a.interfaceId, a.severity, typeof ch.sound === 'boolean' ? ch.sound : false);
+      const channels = { ...ch, sound: snd.sound };
+      if (rule?.enabled !== false) {
+        await this.notify.notify({
+          alertId: a.id,
+          title: `✅ Resolved: ${a.title}`,
+          message: `${deviceName || 'Device'}${a.interfaceName ? ` (${a.interfaceName})` : ''} recovered.`,
+          severity: a.severity,
+          channels,
+          ownerId: null,
+          deviceName: snd.deviceName || deviceName || null,
+          event: 'RESOLVE',
+        });
+      }
+      this.broadcast(resolved, 'resolve', { sound: snd.sound, deviceName: snd.deviceName || deviceName || null, ruleId: rule?.id ?? null });
     }
     if (deviceName && rows.length) this.log.log(`Resolved ${rows.length} ${family} alert(s) on ${deviceName}`);
   }
@@ -192,9 +231,11 @@ export class NdmAlertEngine {
     return port ? `${label} — ${port}` : label;
   }
 
-  private broadcast(alert: any, action: string) {
+  private broadcast(alert: any, action: string, extra: Record<string, any> = {}) {
     try {
-      // Include recovery-family info so the frontend can decorate resolve rows.
+      // Include recovery-family info so the frontend can decorate resolve rows,
+      // plus the sound decision + device name so the frontend audio engine
+      // never has to re-derive the hierarchy (rule → severity → device → port).
       const row = {
         id: alert.id,
         status: alert.status,
@@ -206,12 +247,43 @@ export class NdmAlertEngine {
         key: alert.key,
         fireCount: alert.fireCount,
         deviceId: alert.deviceId ?? null,
+        deviceName: extra.deviceName ?? null,
         interfaceId: alert.interfaceId ?? null,
         interfaceName: alert.interfaceName ?? null,
+        ruleId: extra.ruleId ?? alert.ruleId ?? null,
+        sound: !!extra.sound,
         openedAt: alert.openedAt || new Date().toISOString(),
         resolvedAt: alert.resolvedAt || null,
       };
       this.events.broadcast('ndm:alert', row);
     } catch { /* never break the pipeline */ }
+  }
+
+  /**
+   * Sound hierarchy: severity/rule default → device.soundEnabled →
+   * interface.soundEnabled. Most specific wins; anything explicit in
+   * rule.channels.sound overrides the severity default.
+   */
+  private async soundAllowed(rule: any, deviceId: number | null | undefined, interfaceId: number | null | undefined, severity: string, explicit?: boolean): Promise<{ sound: boolean; deviceName: string | null }> {
+    const ch = (rule?.channels as any) || {};
+    // explicit=false (resolution path) → only an explicit rule channels.sound
+    // may chime; severity defaults NEVER auto-sound a recovery. Otherwise the
+    // hierarchy is: explicit rule.sound → global severity default → device → port.
+    let want = typeof explicit === 'boolean' ? explicit : (typeof ch.sound === 'boolean' ? ch.sound : severityDefaultSound(severity));
+    let deviceName: string | null = null;
+    if (want) {
+      const [d, i] = await Promise.all([
+        deviceId != null ? this.prisma.networkDevice.findUnique({ where: { id: deviceId }, select: { soundEnabled: true, name: true } }) : Promise.resolve(null),
+        interfaceId != null ? this.prisma.networkInterface.findUnique({ where: { id: interfaceId }, select: { soundEnabled: true } }) : Promise.resolve(null),
+      ]);
+      if (d) { deviceName = d.name || null; if (d.soundEnabled === false) want = false; }
+      if (i && i.soundEnabled === false) want = false;
+    }
+    return { sound: want, deviceName };
+  }
+
+  /** Same helper minus the device-name payload (repeat/resolve broadcasts). */
+  private async soundFlag(rule: any, deviceId: number | null | undefined, interfaceId: number | null | undefined, severity: string) {
+    return this.soundAllowed(rule, deviceId, interfaceId, severity);
   }
 }

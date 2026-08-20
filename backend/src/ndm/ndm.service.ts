@@ -78,6 +78,7 @@ export class NdmService {
       groupName: r.groupName, location: r.location, enabled: r.enabled, isReachable: r.isReachable,
       uptimeSec: r.uptimeSec, interfaceCount: r.interfaceCount, upPorts: r.upPorts, downPorts: r.downPorts,
       lastSnmpPollAt: r.lastSnmpPollAt, lastSyslogAt: r.lastSyslogAt, lastError: r.lastError,
+      soundEnabled: r.soundEnabled,
       openAlerts: r._count?.alerts ?? 0, portCount: r._count?.interfaces ?? 0,
       createdAt: r.createdAt,
     }));
@@ -98,6 +99,8 @@ export class NdmService {
         adminStatus: p.adminStatus, operStatus: p.operStatus, speedMbps: p.speedMbps, duplex: p.duplex,
         rxRateBps: p.rxRateBps, txRateBps: p.txRateBps, rxPps: p.rxPps, txPps: p.txPps,
         errorRatePerMin: p.errorRatePerMin, mac: p.mac, ifLastChangeTicks: p.ifLastChangeTicks,
+        ifType: p.ifType, interfaceCategory: p.interfaceCategory,
+        monitoringEnabled: p.monitoringEnabled, soundEnabled: p.soundEnabled,
         lastStateChangeAt: p.lastStateChangeAt, firstSeen: p.firstSeen, lastSeen: p.lastSeen,
       })),
     };
@@ -219,6 +222,7 @@ export class NdmService {
     if (body.syslogEnabled !== undefined) data.syslogEnabled = !!body.syslogEnabled;
     if (body.syslogProtocol !== undefined) data.syslogProtocol = String(body.syslogProtocol).toUpperCase();
     if (body.syslogPort !== undefined) data.syslogPort = Number(body.syslogPort) || 514;
+    if (body.soundEnabled !== undefined) data.soundEnabled = !!body.soundEnabled;
 
     const cred = this.stagedCreds(body);
     if (cred) {
@@ -240,6 +244,18 @@ export class NdmService {
     return { ok: true, id, disabled: true };
   }
 
+  /** Per-port settings: monitoring (PPPoE re-enable) and sound override. */
+  async setPortSettings(deviceId: number, portId: number, body: any, actor?: Actor) {
+    await this.assertDevice(deviceId, actor);
+    const port = await this.prisma.networkInterface.findFirst({ where: { id: portId, deviceId } });
+    if (!port) throw new NotFoundException('Port not found on this device');
+    const data: any = {};
+    if (body.monitoringEnabled !== undefined) data.monitoringEnabled = !!body.monitoringEnabled;
+    if (body.soundEnabled !== undefined) data.soundEnabled = !!body.soundEnabled;
+    if (!Object.keys(data).length) return port;
+    return this.prisma.networkInterface.update({ where: { id: portId }, data });
+  }
+
   async checkNow(id: number, actor?: Actor) {
     await this.assertDevice(id, actor);
     return this.poller.checkNow(id);
@@ -258,13 +274,18 @@ export class NdmService {
           update: {
             name: row.name, description: row.description, adminStatus: row.adminStatus ?? 1,
             operStatus: row.operStatus ?? 2, speedMbps: row.speedMbps, duplex: row.duplex,
-            mac: row.mac, ifLastChangeTicks: row.ifLastChangeTicks, lastPollAt: now, lastSeen: now, updatedAt: now,
+            mac: row.mac, ifLastChangeTicks: row.ifLastChangeTicks,
+            ifType: row.ifType, interfaceCategory: row.interfaceCategory,
+            lastPollAt: now, lastSeen: now, updatedAt: now,
           },
           create: {
             deviceId: id, ifIndex: row.ifIndex, name: row.name, description: row.description,
             adminStatus: row.adminStatus ?? 1, operStatus: row.operStatus ?? 2,
             speedMbps: row.speedMbps, duplex: row.duplex, mac: row.mac,
-            ifLastChangeTicks: row.ifLastChangeTicks, lastPollAt: now, lastSeen: now,
+            ifLastChangeTicks: row.ifLastChangeTicks,
+            ifType: row.ifType, interfaceCategory: row.interfaceCategory,
+            monitoringEnabled: row.monitoringEnabled !== false,
+            lastPollAt: now, lastSeen: now,
           },
         });
       }
@@ -305,9 +326,11 @@ export class NdmService {
     return rows.map((p) => ({
       id: p.id, ifIndex: p.ifIndex, name: p.name, description: p.description,
       adminStatus: p.adminStatus, operStatus: p.operStatus, speedMbps: p.speedMbps, duplex: p.duplex,
-      rxRateBps: Math.round(p.rxRateBps), txRateBps: Math.round(p.txRateBps),
+      rxRateBps: p.rxRateBps, txRateBps: p.txRateBps,
       rxPps: p.rxPps, txPps: p.txPps, errorRatePerMin: p.errorRatePerMin,
       mac: p.mac, ifLastChangeTicks: p.ifLastChangeTicks,
+      ifType: p.ifType, interfaceCategory: p.interfaceCategory,
+      monitoringEnabled: p.monitoringEnabled !== false, soundEnabled: p.soundEnabled !== false,
       inOctets: p.inOctets, outOctets: p.outOctets, inErrors: p.inErrors, outErrors: p.outErrors,
       crcErrors: p.crcErrors, lastStateChangeAt: p.lastStateChangeAt,
       firstSeen: p.firstSeen, lastSeen: p.lastSeen,
@@ -468,7 +491,12 @@ export class NdmService {
       this.prisma.alert.count({ where }),
       this.prisma.alert.findMany({
         where, orderBy: [{ status: 'asc' }, { openedAt: 'desc' }], take: limit, skip: (page - 1) * limit,
-        include: { device: { select: { name: true, ip: true } }, rule: { select: { name: true, condition: true, channels: true } } },
+        include: {
+          device: { select: { name: true, ip: true } },
+          rule: { select: { name: true, condition: true, channels: true } },
+          // Delivery audit: did the alarm actually go off (SOUND / discord…)?
+          notifications: { select: { channel: true, status: true }, orderBy: { sentAt: 'desc' }, take: 5 },
+        },
       }),
     ]);
     return { total, page, limit, rows };

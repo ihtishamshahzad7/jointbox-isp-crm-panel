@@ -26,15 +26,18 @@ export type NdmDevice = {
   enabled: boolean; isReachable: boolean | null; uptimeSec: string | null;
   interfaceCount: number; upPorts: number; downPorts: number;
   lastSnmpPollAt: string | null; lastSyslogAt: string | null; lastError: string | null;
+  soundEnabled: boolean;
   openAlerts: number; portCount: number; createdAt: string;
 };
 
 export type NdmPort = {
   id: number; ifIndex: number; name: string; description: string | null;
   adminStatus: number; operStatus: number; speedMbps: number | null; duplex: string | null;
-  rxRateBps: number; txRateBps: number; rxPps: number; txPps: number; errorRatePerMin: number;
+  rxRateBps: number | null; txRateBps: number | null; rxPps: number | null; txPps: number | null; errorRatePerMin: number | null;
   mac: string | null; ifLastChangeTicks: string | null; lastStateChangeAt: string | null;
   firstSeen: string | null; lastSeen: string | null;
+  ifType: number | null; interfaceCategory: string | null;
+  monitoringEnabled: boolean; soundEnabled: boolean;
   inOctets: string | null; outOctets: string | null; inErrors: string | null; outErrors: string | null; crcErrors: string | null;
 };
 
@@ -51,6 +54,7 @@ export type NdmAlert = {
   acknowledgedAt: string | null; fireCount: number;
   device?: { name: string; ip: string } | null;
   rule?: { name: string; condition: string | null; channels: any } | null;
+  notifications?: Array<{ channel: string; status: string }>;
 };
 
 export type NdmRule = {
@@ -93,6 +97,8 @@ export const ndm = {
   check: (id: number) => req<any>(`/monitoring/ndm/devices/${id}/check`, { method: "POST", body: "{}" }),
   discoverDevice: (id: number) => req<any>(`/monitoring/ndm/devices/${id}/discover`, { method: "POST", body: "{}" }),
   ports: (id: number) => req<NdmPort[]>(`/monitoring/ndm/devices/${id}/ports`),
+  setPort: (deviceId: number, portId: number, b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) =>
+    req<NdmPort>(`/monitoring/ndm/devices/${deviceId}/ports/${portId}`, { method: "PUT", body: JSON.stringify(b) }),
   portHistory: (deviceId: number, portId: number, range: string) =>
     req<any>(`/monitoring/ndm/devices/${deviceId}/ports/${portId}/history?range=${range}`),
   deviceStream: (id: number, range: string) => req<any>(`/monitoring/ndm/devices/${id}/stream?range=${range}`),
@@ -155,6 +161,21 @@ export const fmtDuration = (sec: number) => {
 };
 export const fmtUptime = (sec: string | number | null | undefined) =>
   sec == null ? "—" : fmtDuration(Number(BigInt(String(sec))));
+/** Long form for the device card/detail: 11d 4h 23m (not just 11d 4h). */
+export const fmtUptimeFull = (sec: string | number | null | undefined) => {
+  if (sec == null) return "—";
+  const s = Math.max(0, Math.round(Number(sec)));
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${h}h ${m}m`;
+  if (h) return `${h}h ${m}m`;
+  return fmtDuration(s);
+};
+
+export const CATEGORY_LABELS: Record<string, string> = {
+  PHYSICAL: "Physical", VLAN: "VLAN", LOOPBACK: "Loopback", BRIDGE: "Bridge", BOND: "Bond",
+  TUNNEL: "Tunnel", PPP: "PPP", PPPOE_SESSION: "PPPoE", DYNAMIC: "Dynamic", UNKNOWN: "Unknown",
+};
+export const catLabel = (c: string | null | undefined) => CATEGORY_LABELS[String(c || "").toUpperCase()] || "Unknown";
 export const fmtTime = (iso: string | null | undefined) => {
   if (!iso) return "—";
   const d = new Date(iso);

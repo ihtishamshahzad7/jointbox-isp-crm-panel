@@ -44,11 +44,48 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     private eventsEmitter: EventsService,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
+    // One-time (idempotent) data fix: classify interface rows that predate
+    // the classifier (created before this deployment). Runs before the first
+    // poll so PPPoE/dynamic links start excluded. `db push` on the server
+    // does not execute the prisma/migrations folder, so this is the place the
+    // legacy rows actually get fixed.
+    await this.backfillLegacyRows();
+
     // Self-managed loop: cron minutes are too coarse for a 10-second poll;
     // a guarded 5 s beat is the established pattern in this codebase.
     this.timer = setInterval(() => { void this.tick(); }, 5000);
     this.timer.unref?.();
+  }
+
+  /** Idempotent: only touches rows whose category is still NULL. */
+  private async backfillLegacyRows() {
+    try {
+      const n = await this.prisma.$executeRawUnsafe(`
+        UPDATE "network_interface" SET
+          "interfaceCategory" = CASE
+            WHEN LOWER("name") LIKE 'pppoe-%' OR (LOWER("name") LIKE '%pppoe%' AND "name" ~ '[0-9]') THEN 'PPPOE_SESSION'
+            WHEN LOWER("name") ~ '^vlan[0-9.:-]*$' THEN 'VLAN'
+            WHEN LOWER("name") ~ '^(lo|loopback[0-9.:-]*)$' THEN 'LOOPBACK'
+            WHEN LOWER("name") ~ '^bridge[0-9.:-]*$' THEN 'BRIDGE'
+            WHEN LOWER("name") ~ '^bond[0-9.:-]*$' THEN 'BOND'
+            WHEN LOWER("name") ~ '^(gre|gre6|eoip|vxlan|ipip|eip|wireguard|tun[0-9.:-]*)$' THEN 'TUNNEL'
+            WHEN LOWER("name") ~ '^(ppp|l2tp|sstp|ovpn)[0-9.:-]*$' THEN 'PPP'
+            WHEN LOWER("name") ~ '^dynamic' THEN 'DYNAMIC'
+            ELSE 'UNKNOWN'
+          END,
+          "monitoringEnabled" = CASE
+            WHEN LOWER("name") LIKE 'pppoe-%' OR (LOWER("name") LIKE '%pppoe%' AND "name" ~ '[0-9]') THEN false
+            WHEN LOWER("name") ~ '^dynamic' THEN false
+            ELSE "monitoringEnabled"
+          END
+        WHERE "interfaceCategory" IS NULL;
+      `);
+      if (n) this.log.log(`Backfilled classification of ${n} legacy interface row(s) (PPPoE excluded by default)`);
+    } catch (e: any) {
+      // Column may not exist yet on a DB that wasn't pushed — retry next boot.
+      this.log.warn(`Legacy classification backfill skipped: ${e?.message || e}`);
+    }
   }
 
   onModuleDestroy() {
@@ -106,7 +143,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
 
   // ── Reachability ─────────────────────────────────────────────────
   private async markUnreachable(device: any, error: string) {
-    const wasUp = device.isReachable !== false;
+    // NULL isReachable = never polled: first failure just initializes the
+    // flag, it must NOT raise a fake DEVICE_DOWN (first-poll rule).
+    const wasUp = device.isReachable === true;
     this.prev.delete(device.id);
     await this.prisma.networkDevice.update({
       where: { id: device.id },
@@ -134,7 +173,8 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     const devOwner = { id: device.id, name: device.name, ownerId: device.ownerId };
 
     // ── Phase 0: device reachability + reboot bookkeeping ───────
-    if (!device.isReachable) {
+    // NULL isReachable = never polled → just initialize, no fake DEVICE_UP.
+    if (device.isReachable === false) {
       const ev = await this.eventEngine.record({
         eventType: 'DEVICE_UP', source: 'POLL', device: dev,
         message: 'Device is responding to SNMP again',
@@ -143,8 +183,22 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
       await this.alerts.onRecovery({ eventType: 'DEVICE_UP', deviceId: device.id, deviceName: device.name });
       this.broadcastDevice('up', device.name, null);
     }
-    const sysUp = table.sysUpTicks != null ? Number(table.sysUpTicks) : null;
-    if (!force && lastUptimeOutran(device.uptimeSec, sysUp)) {
+    // sysUpTime is TimeTicks = 1/100 s. Convert to REAL SECONDS here — the
+    // old code stored the raw ticks as "seconds" (~100× inflation: 1179d for
+    // an 11d device). The migration rewrites prod rows; this self-heal also
+    // catches any row the migration could not touch: when the stored value is
+    // still tick-scaled it sits within ~10% of the CURRENT raw ticks, so we
+    // recognize it and just overwrite with the corrected seconds (no reboot).
+    const sysUpTicksRaw = table.sysUpTicks != null ? Number(table.sysUpTicks) : null;
+    const sysUpSeconds = sysUpTicksRaw != null ? Math.round(sysUpTicksRaw / 100) : null;
+    let legacyTickRow = false;
+    if (!force && sysUpTicksRaw != null && sysUpTicksRaw > 0 && device.uptimeSec != null) {
+      const stored = Number(device.uptimeSec);
+      if (stored > 0 && stored >= sysUpTicksRaw * 0.9 && stored <= sysUpTicksRaw * 1.1) {
+        legacyTickRow = true; // stored is tick-scaled → overwrite below, no reboot
+      }
+    }
+    if (!force && !legacyTickRow && lastUptimeOutran(device.uptimeSec, sysUpSeconds)) {
       const ev = await this.eventEngine.record({
         eventType: 'DEVICE_REBOOT', source: 'POLL', device: dev,
         message: 'Device rebooted (SNMP uptime reset)',
@@ -155,6 +209,7 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     // ── Phase 1: upsert interfaces → stable db ids ───────────────
     const idMap = new Map<number, number>();
     const names = new Map<number, string>();
+    const mon = new Map<number, boolean>();
     for (const row of table.interfaces) {
       const upserted = await this.prisma.networkInterface.upsert({
         where: { deviceId_ifIndex: { deviceId: device.id, ifIndex: row.ifIndex } },
@@ -162,6 +217,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           name: row.name, description: row.description, adminStatus: row.adminStatus ?? 1,
           operStatus: row.operStatus ?? 2, speedMbps: row.speedMbps, duplex: row.duplex,
           mac: row.mac, ifLastChangeTicks: row.ifLastChangeTicks,
+          // Classification FACTS refresh every poll; monitoringEnabled is
+          // deliberately NOT touched here so a manual per-port toggle sticks.
+          ifType: row.ifType, interfaceCategory: row.interfaceCategory,
           inOctets: row.inOctets, outOctets: row.outOctets,
           inUcastPkts: row.inUcastPkts, outUcastPkts: row.outUcastPkts,
           inErrors: row.inErrors, outErrors: row.outErrors,
@@ -173,6 +231,8 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           adminStatus: row.adminStatus ?? 1, operStatus: row.operStatus ?? 2,
           speedMbps: row.speedMbps, duplex: row.duplex, mac: row.mac,
           ifLastChangeTicks: row.ifLastChangeTicks,
+          ifType: row.ifType, interfaceCategory: row.interfaceCategory,
+          monitoringEnabled: row.monitoringEnabled !== false, // classification default
           inOctets: row.inOctets, outOctets: row.outOctets,
           inUcastPkts: row.inUcastPkts, outUcastPkts: row.outUcastPkts,
           inErrors: row.inErrors, outErrors: row.outErrors,
@@ -182,19 +242,21 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
       });
       idMap.set(row.ifIndex, upserted.id);
       names.set(row.ifIndex, row.name);
+      mon.set(row.ifIndex, upserted.monitoringEnabled !== false);
     }
 
     const prevSnap = this.prev.get(device.id) || new Map<number, any>();
     const snap = new Map<number, any>();
     const eventsToRaise: { eventType: NdmEventType; ifIndex: number; message: string }[] = [];
     const rateRows: any[] = [];
-    let up = 0, down = 0;
+    let up = 0, down = 0, rxAll = 0, txAll = 0;
 
     // ── Phase 2+3: transitions + rates per interface ─────────────
     for (const row of table.interfaces) {
       const ifIndex = row.ifIndex;
       const dbId = idMap.get(ifIndex)!;
       const prior = prevSnap.get(ifIndex);
+      const monitored = mon.get(ifIndex) ?? true;
       const snapRow: any = {
         oper: row.operStatus, admin: row.adminStatus,
         inOct: row.inOctets, outOct: row.outOctets,
@@ -203,6 +265,10 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
         inDisc: row.inDiscards, outDisc: row.outDiscards,
       };
       snap.set(ifIndex, snapRow);
+
+      // Excluded interfaces (PPPoE/dynamic sessions…) are tracked but NEVER
+      // alerted, counted in totals or written to traffic history.
+      if (!monitored) continue;
 
       const isUpNow = this.snmp.isUp(row.operStatus);
       if (isUpNow) up++; else down++;
@@ -223,30 +289,38 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
-      // Rates — skip on first poll (no baseline) and on reset counters.
+      // Rates — skip on first poll (no baseline). When the delta is invalid
+      // (counter reset / device rebooted between polls) the rate is NULL —
+      // never a fake 0 bps.
       const dtSec = force ? 60 : Math.max(6, Math.min(600, (nowMs - (this.last.get(device.id) ?? nowMs - 30000)) / 1000));
       if (prior) {
         const dIn = counterDelta(snapRow.inOct, prior.inOct);
         const dOut = counterDelta(snapRow.outOct, prior.outOct);
-        const rx = dIn != null ? (Number(dIn) * 8) / dtSec : 0;
-        const tx = dOut != null ? (Number(dOut) * 8) / dtSec : 0;
+        const rx = dIn != null ? (Number(dIn) * 8) / dtSec : null;
+        const tx = dOut != null ? (Number(dOut) * 8) / dtSec : null;
         const rxp = counterDelta(snapRow.inPkts, prior.inPkts);
         const txp = counterDelta(snapRow.outPkts, prior.outPkts);
         const err = (counterDelta(snapRow.inErr, prior.inErr) ?? 0n) + (counterDelta(snapRow.outErr, prior.outErr) ?? 0n) +
           (counterDelta(snapRow.crc, prior.crc) ?? 0n) + (counterDelta(snapRow.inDisc, prior.inDisc) ?? 0n) +
           (counterDelta(snapRow.outDisc, prior.outDisc) ?? 0n);
-        const errorPerMin = dtSec > 0 ? (Number(err) * 60) / dtSec : 0;
-        const rxPps = rxp != null ? Number(rxp) / dtSec : 0;
-        const txPps = txp != null ? Number(txp) / dtSec : 0;
+        const errorPerMin = rx == null && tx == null && rxp == null && txp == null ? null : dtSec > 0 ? (Number(err) * 60) / dtSec : 0;
+        const rxPps = rxp != null ? Number(rxp) / dtSec : null;
+        const txPps = txp != null ? Number(txp) / dtSec : null;
 
         snapRow.rates = { rx, tx, rxPps, txPps, errorPerMin };
-        const changed = rx > 1 || tx > 1 || rxPps > 0 || txPps > 0 || errorPerMin > 0 || !isUpNow;
-        if (changed) {
+        if (rx != null && rx > 1) rxAll += rx;
+        if (tx != null && tx > 1) txAll += tx;
+
+        // A history point only when there is a real rate or the link is down
+        // (so graphs show the outage), never a fabricated flat-zero row.
+        const hasRate = rx != null || tx != null || rxPps != null || txPps != null || errorPerMin != null;
+        const nonzero = (rx ?? 0) > 1 || (tx ?? 0) > 1 || (rxPps ?? 0) > 0 || (txPps ?? 0) > 0 || (errorPerMin ?? 0) > 0;
+        if ((hasRate && (nonzero || !isUpNow)) || !isUpNow) {
           rateRows.push({
             deviceId: device.id, interfaceId: dbId, at: now,
-            rxRateBps: Math.round(rx), txRateBps: Math.round(tx),
-            rxPps: Math.round(rxPps * 10) / 10, txPps: Math.round(txPps * 10) / 10,
-            errorRatePerMin: Math.round(errorPerMin * 10) / 10, up: isUpNow, speedMbps: row.speedMbps,
+            rxRateBps: rx != null ? Math.round(rx) : 0, txRateBps: tx != null ? Math.round(tx) : 0,
+            rxPps: rxPps != null ? Math.round(rxPps * 10) / 10 : 0, txPps: txPps != null ? Math.round(txPps * 10) / 10 : 0,
+            errorRatePerMin: errorPerMin != null ? Math.round(errorPerMin * 10) / 10 : 0, up: isUpNow, speedMbps: row.speedMbps,
             inOctets: row.inOctets, outOctets: row.outOctets, inErrors: row.inErrors, outErrors: row.outErrors,
             inDiscards: row.inDiscards, outDiscards: row.outDiscards, crcErrors: row.crcErrors,
           });
@@ -257,9 +331,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           where: { id: dbId },
           data: {
             operStatus: row.operStatus ?? 2, adminStatus: row.adminStatus ?? 1,
-            rxRateBps: Math.round(rx), txRateBps: Math.round(tx),
-            rxPps: Math.round(rxPps * 10) / 10, txPps: Math.round(txPps * 10) / 10,
-            errorRatePerMin: Math.round(errorPerMin * 10) / 10,
+            rxRateBps: rx != null ? Math.round(rx) : null, txRateBps: tx != null ? Math.round(tx) : null,
+            rxPps: rxPps != null ? Math.round(rxPps * 10) / 10 : null, txPps: txPps != null ? Math.round(txPps * 10) / 10 : null,
+            errorRatePerMin: errorPerMin != null ? Math.round(errorPerMin * 10) / 10 : null,
             speedMbps: row.speedMbps, inOctets: row.inOctets, outOctets: row.outOctets,
             inErrors: row.inErrors, outErrors: row.outErrors,
             crcErrors: row.crcErrors, lastPollAt: now, updatedAt: now,
@@ -269,7 +343,6 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ── Phase 2b: raise transition events (now that dbIds are known) ──
-    const dtSec = force ? 60 : Math.max(6, Math.min(600, (nowMs - (this.last.get(device.id) ?? nowMs - 30000)) / 1000));
     for (const evt of eventsToRaise) {
       const dbId = idMap.get(evt.ifIndex)!;
       const intf = { id: dbId, name: names.get(evt.ifIndex)! };
@@ -292,20 +365,20 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ── Phase 4: device totals + health metric + escalations ────
-    const rxAll = table.interfaces.reduce((a: number, r: any) => a + (r.rxRateBps || 0), 0);
-    const txAll = table.interfaces.reduce((a: number, r: any) => a + (r.txRateBps || 0), 0);
+    // (rxAll/txAll accumulated in Phase 2+3 — SUM OF THE REAL DELTA RATES of
+    // monitored interfaces; the old code summed a field SNMP never fills.)
     await this.prisma.networkDevice.update({
       where: { id: device.id },
       data: {
         isReachable: true, lastError: null, lastSnmpPollAt: now,
         interfaceCount: table.interfaces.length, upPorts: up, downPorts: down,
-        uptimeSec: sysUp,
+        uptimeSec: sysUpSeconds, // real seconds (sysUpTime ticks ÷ 100)
       },
     });
-    if (sysUp != null) {
+    if (sysUpSeconds != null) {
       await this.prisma.deviceHealthMetric.createMany({
         data: [
-          { deviceId: device.id, ts: now, metric: 'uptime', value: sysUp },
+          { deviceId: device.id, ts: now, metric: 'uptime', value: sysUpSeconds },
           { deviceId: device.id, ts: now, metric: 'rx', value: Math.round(rxAll) },
           { deviceId: device.id, ts: now, metric: 'tx', value: Math.round(txAll) },
         ],

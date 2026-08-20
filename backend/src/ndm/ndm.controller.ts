@@ -52,6 +52,12 @@ export class NdmController {
   @Get('ndm/devices/:id/ports')
   ports(@Param('id') id: string, @Req() req: any) { return this.ndm.ports(+id, req.user); }
 
+  /** Per-port settings (monitoring / sound override). */
+  @Put('ndm/devices/:id/ports/:portId')
+  setPortSettings(@Param('id') id: string, @Param('portId') portId: string, @Body() body: any, @Req() req: any) {
+    return this.ndm.setPortSettings(+id, +portId, body, req.user);
+  }
+
   @Get('ndm/devices/:id/ports/:portId/history')
   portHistory(@Param('id') id: string, @Param('portId') portId: string, @Query('range') range: string, @Req() req: any) {
     return this.ndm.portHistory(+id, +portId, range || '1h', req.user);

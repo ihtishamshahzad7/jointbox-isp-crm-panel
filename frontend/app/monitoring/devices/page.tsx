@@ -2,8 +2,9 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { ndm, fmtUptime, fmtTime, type NdmDevice } from "../ndm";
+import { ndm, fmtUptimeFull, fmtTime, catLabel, type NdmDevice } from "../ndm";
 import { NDMCSS, NdmModal, Stat, useNdmRefresh } from "../ndm-ui";
+import { NdmSoundBell } from "../../components/ndm-sound";
 import { useSSE } from "../../components/use-sse";
 import Link from "next/link";
 
@@ -48,6 +49,7 @@ export default function DevicesPage() {
           <p>SNMP switches &amp; routers — live ports, traffic, syslog events and alerts.</p>
         </div>
         <div className="ndm-row-actions">
+          <NdmSoundBell />
           <Link className="ndm-btn" href="/monitoring/ports">Ports</Link>
           <Link className="ndm-btn" href="/monitoring/alerts">Alerts &amp; Rules</Link>
           <button className="ndm-btn pri" onClick={() => setWizard(true)}>+ Add device</button>
@@ -103,6 +105,10 @@ function DeviceCard({ d, onOpen, onRefresh }: { d: NdmDevice; onOpen: () => void
     e.stopPropagation();
     await ndm.update(d.id, { enabled: !d.enabled }); onRefresh();
   };
+  const toggleSound = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await ndm.update(d.id, { soundEnabled: d.soundEnabled !== false ? false : true }); onRefresh();
+  };
   const remove = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Disable "${d.name}"? It keeps its history but stops polling and alerts. You can re-enable it any time.`)) return;
@@ -118,12 +124,15 @@ function DeviceCard({ d, onOpen, onRefresh }: { d: NdmDevice; onOpen: () => void
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, margin: "12px 0" }}>
         <MiniStat label="Ports up" value={`${d.upPorts} / ${d.interfaceCount}`} color="var(--online)" />
         <MiniStat label="Open alerts" value={d.openAlerts} color={d.openAlerts ? "var(--danger)" : "var(--muted)"} />
-        <MiniStat label="Uptime" value={fmtUptime(d.uptimeSec)} />
+        <MiniStat label="Uptime" value={fmtUptimeFull(d.uptimeSec)} />
         <MiniStat label="Last poll" value={fmtTime(d.lastSnmpPollAt)} />
       </div>
       {d.lastError && <div className="ndm-err" style={{ fontSize: 11 }} title={d.lastError}>{d.lastError.slice(0, 90)}</div>}
       <div className="ndm-row-actions" style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
         <button className="ndm-btn" onClick={check} disabled={busy}>{busy ? "Polling…" : "Check now"}</button>
+        <button className="ndm-btn" onClick={toggleSound} title={d.soundEnabled !== false ? "Port alerts sound ON — click to mute this device" : "Sound OFF — click to enable"}>
+          {d.soundEnabled !== false ? "🔔" : "🔕"}
+        </button>
         <button className="ndm-btn" onClick={toggle}>{d.enabled ? "Pause" : "Enable"}</button>
         <button className="ndm-btn danger" onClick={remove}>Disable…</button>
       </div>
@@ -352,19 +361,23 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
               <div className="ndm-ok" style={{ marginBottom: 8 }}>✓ Found {discovered.length} interface(s) — this is what the poller will track.</div>
               <div style={{ maxHeight: 300, overflow: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
                 <table className="ndm-tbl">
-                  <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>MAC</th><th>Description</th></tr></thead>
+                  <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Type</th><th>Monitored</th><th>Speed</th><th>MAC</th></tr></thead>
                   <tbody>
                     {discovered.map((p) => (
-                      <tr key={p.ifIndex}>
+                      <tr key={p.ifIndex} style={p.monitoringEnabled === false ? { opacity: .55 } : undefined}>
                         <td>{p.ifIndex}</td><td><b>{p.name}</b></td>
                         <td><span style={{ color: p.operStatus === 1 ? "var(--online)" : "var(--danger)" }}>{p.operStatus === 1 ? "UP" : "down"}</span></td>
+                        <td>{catLabel(p.interfaceCategory)}</td>
+                        <td>{p.monitoringEnabled === false
+                          ? <span className="ndm-pill" title="PPPoE/dynamic/session links are excluded — no alerts, no traffic history">{catLabel(p.interfaceCategory)} — off</span>
+                          : <b style={{ color: "var(--online)" }}>yes</b>}</td>
                         <td>{p.speedMbps ? `${p.speedMbps} Mbps` : "—"}</td><td style={{ fontFamily: "monospace", fontSize: 11 }}>{p.mac || "—"}</td>
-                        <td className="ndm-card-sub">{p.description || ""}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <div className="ndm-hint" style={{ marginTop: 6 }}>PPPoE / dynamic / tunnel session links start excluded automatically — you can enable or disable any port later under Ports.</div>
             </>
           ) : (
             <div className="ndm-empty">No discovery data — the first poll will populate the ports automatically.</div>

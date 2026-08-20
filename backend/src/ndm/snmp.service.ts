@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../common/secrets.service';
 import { decField } from '../nas/nas-credentials';
-import { NDM_IF, NDM_IF_OPER, NDM_CRC_OIDS, duplexName } from './ndm.constants';
+import { NDM_IF, NDM_IF_OPER, NDM_CRC_OIDS, duplexName, classifyInterface, defaultMonitored } from './ndm.constants';
 
 /**
  * SNMP service — the low-level, protocol-facing layer for switch/router
@@ -194,6 +194,7 @@ export class NdmSnmpService {
       const reads = [
         this.get(session, [NDM_IF.sysDescr, NDM_IF.sysName, NDM_IF.sysUpTime]),
         this.walk(session, NDM_IF.descr),
+        this.walk(session, NDM_IF.ifType),
         this.walk(session, NDM_IF.adminStatus),
         this.walk(session, NDM_IF.operStatus),
         this.walk(session, NDM_IF.lastChange),
@@ -216,7 +217,7 @@ export class NdmSnmpService {
         this.walk(session, NDM_IF.duplex),
         this.crcWalk(device.vendor as any, session),
       ];
-      const [sys, descr, admin, oper, lastChange, inOct, outOct, inPkts, outPkts,
+      const [sys, descr, ifType, admin, oper, lastChange, inOct, outOct, inPkts, outPkts,
              inErr, outErr, inDis, outDis, hcName, hcIn, hcOut, hcInPkts, hcOutPkts,
              speed, alias, mac, duplex, crc] = await Promise.all<any>(reads);
 
@@ -232,6 +233,13 @@ export class NdmSnmpService {
           ifIndex,
           name: this.str(hcName.get(ifIndex)) || this.str(descr.get(ifIndex)) || `if${ifIndex}`,
           description: this.str(alias.get(ifIndex)) || null,
+          // Classification: what IS this interface + should it be monitored?
+          // PPPoE/dynamic links are discovered but excluded by default.
+          ifType: this.num(ifType.get(ifIndex)),
+          interfaceCategory: classifyInterface(this.num(ifType.get(ifIndex)), this.str(hcName.get(ifIndex)) || this.str(descr.get(ifIndex))),
+          monitoringEnabled: defaultMonitored(
+            classifyInterface(this.num(ifType.get(ifIndex)), this.str(hcName.get(ifIndex)) || this.str(descr.get(ifIndex))),
+          ),
           adminStatus: this.num(admin.get(ifIndex)),
           operStatus: this.num(oper.get(ifIndex)),
           ifLastChangeTicks: this.big(lastChange.get(ifIndex)),

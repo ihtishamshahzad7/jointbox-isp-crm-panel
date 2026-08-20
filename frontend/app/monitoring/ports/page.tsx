@@ -2,8 +2,9 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { ndm, fmtBits, fmtTime, isUp, type NdmDevice, type NdmPort } from "../ndm";
+import { ndm, fmtBits, fmtTime, isUp, catLabel, type NdmDevice, type NdmPort } from "../ndm";
 import { NDMCSS, NdmModal, Stat, PortTile, useNdmRefresh } from "../ndm-ui";
+import { NdmSoundBell } from "../../components/ndm-sound";
 import { useSSE } from "../../components/use-sse";
 
 /** Every port across every reachable switch, live. */
@@ -13,6 +14,7 @@ export default function PortsPage() {
   const [portsByDevice, setPortsByDevice] = React.useState<Record<number, NdmPort[]>>({});
   const [q, setQ] = React.useState("");
   const [onlyDown, setOnlyDown] = React.useState(false);
+  const [showExcluded, setShowExcluded] = React.useState(false);
   const [stats, setStats] = React.useState<any>(null);
   const [sel, setSel] = React.useState<{ device: NdmDevice; port: NdmPort } | null>(null);
 
@@ -42,11 +44,16 @@ export default function PortsPage() {
   }, [devices, portsByDevice]);
 
   const filtered = all.filter(({ port, device }) => {
+    if (!showExcluded && port.monitoringEnabled === false) return false;
     if (onlyDown && isUp(port)) return false;
     if (!q.trim()) return true;
     const hay = `${port.name} ${port.description || ""} ${device.name} ${device.ip}`.toLowerCase();
     return q.trim().toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   });
+
+  const togglePort = async (deviceId: number, port: NdmPort, b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) => {
+    try { await ndm.setPort(deviceId, port.id, b); void load(); } catch { /* keep */ }
+  };
 
   const up = filtered.filter(({ port }) => isUp(port)).length;
   const down = filtered.length - up;
@@ -62,6 +69,7 @@ export default function PortsPage() {
           <p>Every interface on every monitored switch — live state, rates and errors.</p>
         </div>
         <div className="ndm-row-actions">
+          <NdmSoundBell />
           <button className="ndm-btn" onClick={() => router.push("/monitoring/devices")}>Devices</button>
           <button className="ndm-btn" onClick={() => router.push("/monitoring/alerts")}>Alerts &amp; Rules</button>
         </div>
@@ -80,6 +88,9 @@ export default function PortsPage() {
           style={{ flex: 1, minWidth: 220, border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "8px 10px", background: "var(--surface)", color: "var(--text)" }} />
         <button className={`ndm-pill ${onlyDown ? "" : ""}`} style={onlyDown ? { borderColor: "var(--danger)", color: "var(--danger)" } : undefined}
           onClick={() => setOnlyDown((v) => !v)}>Only down {onlyDown ? "✓" : ""}</button>
+        <button className={`ndm-pill`} style={showExcluded ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+          title="PPPoE / dynamic / tunnel session links are excluded from monitoring by default"
+          onClick={() => setShowExcluded((v) => !v)}>Show excluded {showExcluded ? "✓" : ""}</button>
       </div>
 
       {!all.length ? (
@@ -99,7 +110,12 @@ export default function PortsPage() {
                   <span className="ndm-card-sub">{d.ip} · {rows.filter((r) => isUp(r.port)).length} up / {rows.filter((r) => !isUp(r.port)).length} down · last poll {fmtTime(d.lastSnmpPollAt)}</span>
                 </div>
                 <div className="ndm-ports">
-                  {rows.map(({ port }) => <PortTile key={port.id} port={port} onClick={() => setSel({ device: d, port })} />)}
+                  {rows.map(({ port }) => (
+                    <PortTile key={port.id} port={port}
+                      onClick={() => setSel({ device: d, port })}
+                      onToggleSound={() => togglePort(d.id, port, { soundEnabled: port.soundEnabled !== false ? false : true })}
+                      onToggleMonitor={() => togglePort(d.id, port, { monitoringEnabled: port.monitoringEnabled === false ? true : false })} />
+                  ))}
                 </div>
               </div>
             );
@@ -116,17 +132,23 @@ export default function PortsPage() {
 /** Port snapshot modal — full graphs live on the device page. */
 function PortModalPair({ device, port, onClose }: { device: NdmDevice; port: NdmPort; onClose: () => void }) {
   const router = useRouter();
+  const monitored = port.monitoringEnabled !== false;
+  const up = isUp(port);
   return (
     <NdmModal title={`${device.name} — ${port.name}`} onClose={onClose}>
       <div className="ndm-form">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <Stat label="RX rate" value={fmtBits(port.rxRateBps)} />
-          <Stat label="TX rate" value={fmtBits(port.txRateBps)} />
-          <Stat label="State" value={isUp(port) ? "UP" : "DOWN"} color={isUp(port) ? "var(--online)" : "var(--danger)"} />
-          <Stat label="Errors / min" value={Math.round(port.errorRatePerMin)} color={port.errorRatePerMin > 0 ? "var(--danger)" : undefined} />
+          <Stat label="RX rate" value={port.rxRateBps != null ? fmtBits(port.rxRateBps) : "—"} />
+          <Stat label="TX rate" value={port.txRateBps != null ? fmtBits(port.txRateBps) : "—"} />
+          <Stat label="State" value={monitored ? (up ? "UP" : "DOWN") : "excluded"} color={monitored ? (up ? "var(--online)" : "var(--danger)") : "var(--muted)"} />
+          <Stat label="Errors / min" value={port.errorRatePerMin != null && port.errorRatePerMin > 0 ? Math.round(port.errorRatePerMin) : 0} color={port.errorRatePerMin != null && port.errorRatePerMin > 0 ? "var(--danger)" : undefined} />
         </div>
         <div className="ndm-card-sub">{port.description || "no description"}{port.mac ? ` · ${port.mac}` : ""} · ifIndex {port.ifIndex} · full history &amp; graphs</div>
-        <button className="ndm-btn pri" onClick={() => { onClose(); router.push(`/monitoring/devices/${device.id}`); }}>Open device →</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {!monitored && <span className="ndm-pill" style={{ color: "var(--muted)" }}>{port.interfaceCategory ? catLabel(port.interfaceCategory) : "excluded"} · not monitored — no alerts/rates</span>}
+          {monitored && <span className="ndm-pill">{catLabel(port.interfaceCategory)} · monitored</span>}
+          <button className="ndm-btn pri" onClick={() => { onClose(); router.push(`/monitoring/devices/${device.id}`); }}>Open device →</button>
+        </div>
       </div>
     </NdmModal>
   );

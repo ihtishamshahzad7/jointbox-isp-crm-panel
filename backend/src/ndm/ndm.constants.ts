@@ -12,6 +12,7 @@ export const NDM_IF = {
   sysName: '1.3.6.1.2.1.1.5.0',
   sysUpTime: '1.3.6.1.2.1.1.3.0',
   descr: '1.3.6.1.2.1.2.2.1.2',        // ifDescr
+  ifType: '1.3.6.1.2.1.2.2.1.3',       // ifType (IANAifType) — classification signal
   adminStatus: '1.3.6.1.2.1.2.2.1.7',  // ifAdminStatus 1=up 2=down
   operStatus: '1.3.6.1.2.1.2.2.1.8',   // ifOperStatus 1=up 2=down
   lastChange: '1.3.6.1.2.1.2.2.1.9',   // ifLastChange (ticks)
@@ -151,6 +152,75 @@ export function parseCondition(cond: string | null | undefined): ParsedCondition
   const s = c.match(/^SYSLOG_SILENCE:(\d+)$/);
   if (s) return { kind: 'SYSLOG_SILENCE', seconds: Math.max(60, Number(s[1])) };
   return { kind: 'ANY' };
+}
+
+// ── Interface classification (which interfaces are real ports) ───────────
+/**
+ * Categories understood by the GUI. PPPoE/dynamic/tunnel/PPP session links
+ * are NOT real outage indicators (they flap with the ISP), so by default
+ * they are discovered + tracked but excluded from monitoring (no alerts,
+ * no traffic history, not counted in port totals).
+ */
+export type InterfaceCategory =
+  | 'PHYSICAL' | 'VLAN' | 'LOOPBACK' | 'BRIDGE' | 'BOND'
+  | 'TUNNEL' | 'PPP' | 'PPPOE_SESSION' | 'DYNAMIC' | 'UNKNOWN';
+
+/** IANAifType values RouterOS/Cisco/Huawei actually send (fallback signals). */
+const IANA_IF_TYPE_CATEGORY: Record<number, InterfaceCategory> = {
+  6: 'PHYSICAL',     // ethernetCsmacd
+  24: 'LOOPBACK',    // softwareLoopback
+  135: 'VLAN',       // l2vlan
+  209: 'BRIDGE',     // bridge (incl. RouterOS bridge)
+  161: 'BOND',       // ieee8023adLag
+  131: 'TUNNEL',     // tunnel (gre/eoip/vxlan…)
+};
+
+/**
+ * Decide what an interface IS. RouterOS names are the primary signal
+ * (ifName is reliable; proprietary ifType values are not), ifType is the
+ * fallback, then UNKNOWN.
+ */
+export function classifyInterface(ifType: number | null | undefined, name: string | null | undefined): InterfaceCategory {
+  const nm = String(name || '').toLowerCase().trim();
+  // Name signals first — they are what operators actually see in Winbox.
+  if (/^pppoe-/i.test(nm) || (/pppoe/i.test(nm) && /\d/.test(nm))) return 'PPPOE_SESSION';
+  if (/^vlan[\d.:-]*$/i.test(nm)) return 'VLAN';
+  if (/^(lo|loopback[\d.:-]*)$/i.test(nm)) return 'LOOPBACK';
+  if (/^bridge[\d.:-]*$/i.test(nm)) return 'BRIDGE';
+  if (/^bond[\d.:-]*$/i.test(nm)) return 'BOND';
+  if (/^(gre|gre6|eoip|vxlan|ipip|eip|wireguard|tun[\d.:-]*)$/i.test(nm)) return 'TUNNEL';
+  if (/^(ppp|l2tp|sstp|ovpn)[\d.:-]*$/i.test(nm)) return 'PPP';
+  if (/^dynamic/i.test(nm)) return 'DYNAMIC';
+  // ifType fallback (works even when a vendor mangles names).
+  const t = ifType != null ? Number(ifType) : null;
+  if (t != null && IANA_IF_TYPE_CATEGORY[t]) {
+    if (t === 23) return /pppoe/i.test(nm) ? 'PPPOE_SESSION' : 'PPP';
+    return IANA_IF_TYPE_CATEGORY[t];
+  }
+  return 'UNKNOWN';
+}
+
+/** Default monitoring policy per category — PPPoE/dynamic links excluded. */
+export function defaultMonitored(category: InterfaceCategory): boolean {
+  return category === 'PHYSICAL' || category === 'VLAN' || category === 'LOOPBACK'
+    || category === 'BRIDGE' || category === 'BOND';
+}
+
+/** Human label for the category (used by the UI + wizard). */
+export const CATEGORY_LABELS: Record<InterfaceCategory, string> = {
+  PHYSICAL: 'Physical', VLAN: 'VLAN', LOOPBACK: 'Loopback', BRIDGE: 'Bridge', BOND: 'Bond',
+  TUNNEL: 'Tunnel', PPP: 'PPP', PPPOE_SESSION: 'PPPoE session', DYNAMIC: 'Dynamic', UNKNOWN: 'Unknown',
+};
+
+// ── Sound defaults ───────────────────────────────────────────────────────
+/**
+ * Conservative sound policy: only CRITICAL/HIGH alerts make noise by
+ * default. WARNING/INFO/Debug stay silent unless a rule explicitly asks
+ * (rule.channels.sound). This is the "no fireworks at 3am" default.
+ */
+export function severityDefaultSound(severity: string | null | undefined): boolean {
+  const s = String(severity || '').toUpperCase();
+  return s === 'CRITICAL' || s === 'HIGH';
 }
 
 // ── Polling intervals the UI offers (seconds) ───────────────────────────

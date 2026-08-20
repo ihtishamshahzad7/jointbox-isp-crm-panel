@@ -2,8 +2,9 @@
 
 import React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ndm, fmtBits, fmtPps, fmtUptime, fmtTime, isUp, sevColor, type NdmPort, type NdmEvent, type NdmAlert, type SyslogRow } from "../../ndm";
+import { ndm, fmtBits, fmtPps, fmtUptimeFull, fmtTime, isUp, catLabel, type NdmPort, type NdmEvent, type NdmAlert, type SyslogRow } from "../../ndm";
 import { NDMCSS, NdmModal, PortTile, TrafficChart, UpStrip, SeverityBadge, useNdmRefresh } from "../../ndm-ui";
+import { NdmSoundBell } from "../../../components/ndm-sound";
 import { useSSE } from "../../../components/use-sse";
 
 const RANGES = ["5m", "1h", "6h", "24h", "7d", "30d"] as const;
@@ -61,6 +62,10 @@ export default function DeviceDetail() {
   const label = { off: "Paused", wait: "First check…", up: "Reachable", down: "DOWN" }[state];
   const upPorts = ports.filter((p) => isUp(p)).length;
 
+  const togglePort = async (p: NdmPort, b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) => {
+    try { await ndm.setPort(deviceId, p.id, b); void loadAll(); } catch { /* keep */ }
+  };
+
   return (
     <div className="ndm">
       <style>{NDMCSS}</style>
@@ -73,6 +78,7 @@ export default function DeviceDetail() {
           <p>{device.ip} · {device.vendor}{device.deviceType ? ` · ${device.deviceType}` : ""}{device.groupName ? ` · ${device.groupName}` : ""} · polls every {device.pollIntervalSec}s</p>
         </div>
         <div className="ndm-row-actions">
+          <NdmSoundBell />
           <span style={{ fontSize: 12.5, fontWeight: 700, color, border: `1px solid ${color}55`, borderRadius: 999, padding: "3px 10px" }}>{label}</span>
           <button className="ndm-btn" onClick={() => { void (async () => { await ndm.check(deviceId); setTimeout(loadAll, 1800); })(); }}>Check now</button>
           <button className="ndm-btn" onClick={() => setShowConfig(true)}>Edit</button>
@@ -83,7 +89,7 @@ export default function DeviceDetail() {
       {device.lastError && <div className="ndm-err" style={{ marginBottom: 10 }}>⚠ {device.lastError}</div>}
 
       <div className="ndm-strip">
-        <Stat label="Uptime" value={fmtUptime(device.uptimeSec)} />
+        <Stat label="Uptime" value={fmtUptimeFull(device.uptimeSec)} />
         <Stat label="Ports up" value={`${upPorts} / ${ports.length}`} color="var(--online)" />
         <Stat label="Ports down" value={device.downPorts} color="var(--danger)" />
         <Stat label="Last poll" value={fmtTime(device.lastSnmpPollAt)} />
@@ -119,7 +125,9 @@ export default function DeviceDetail() {
 
       {tab === "Ports" && (
         <div className="ndm-ports">
-          {ports.map((p) => <PortTile key={p.id} port={p} onClick={() => setPortSel(p)} />)}
+          {ports.map((p) => <PortTile key={p.id} port={p} onClick={() => setPortSel(p)}
+            onToggleSound={() => togglePort(p, { soundEnabled: p.soundEnabled !== false ? false : true })}
+            onToggleMonitor={() => togglePort(p, { monitoringEnabled: p.monitoringEnabled === false ? true : false })} />)}
           {!ports.length && <div className="ndm-empty">No ports discovered yet — run "Check now" or wait for the first poll.</div>}
         </div>
       )}
@@ -131,7 +139,7 @@ export default function DeviceDetail() {
         <ConfigForm device={device} onSaved={() => { setShowConfig(false); void loadAll(); }} />
       )}
 
-      {portSel && <PortDetail deviceId={deviceId} deviceName={device.name} port={portSel} onClose={() => setPortSel(null)} />}
+      {portSel && <PortDetail deviceId={deviceId} deviceName={device.name} port={portSel} onClose={() => setPortSel(null)} onToggle={(b) => togglePort(portSel, b)} />}
       {showConfig && <ConfigForm device={device} modal onClose={() => setShowConfig(false)} onSaved={() => { setShowConfig(false); void loadAll(); }} />}
     </div>
   );
@@ -142,7 +150,7 @@ function Stat({ label, value, color }: { label: string; value: any; color?: stri
 }
 
 // ── Port detail modal with traffic graph + status history ──────────
-function PortDetail({ deviceId, deviceName, port, onClose }: { deviceId: number; deviceName: string; port: NdmPort; onClose: () => void }) {
+function PortDetail({ deviceId, deviceName, port, onClose, onToggle }: { deviceId: number; deviceName: string; port: NdmPort; onClose: () => void; onToggle?: (b: { monitoringEnabled?: boolean; soundEnabled?: boolean }) => void }) {
   const [range, setRange] = React.useState<(typeof RANGES)[number]>("24h");
   const [data, setData] = React.useState<any>(null);
   React.useEffect(() => {
@@ -163,7 +171,11 @@ function PortDetail({ deviceId, deviceName, port, onClose }: { deviceId: number;
     <NdmModal title={`${port.name} — ${deviceName}`} onClose={onClose} wide>
       <div className="ndm-page-h" style={{ marginTop: 0 }}>
         <div className="ndm-card-sub">{port.description || "no description"}{port.mac ? ` · ${port.mac}` : ""}</div>
-        <span style={{ fontWeight: 700, color, border: `1px solid ${color}55`, borderRadius: 999, padding: "2px 10px", fontSize: 12 }}>{state}</span>
+        <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {port.monitoringEnabled === false && <span className="ndm-pill" title={`${catLabel(port.interfaceCategory)} — excluded from alerts/traffic`} style={{ color: "var(--muted)" }}>{catLabel(port.interfaceCategory)} · off</span>}
+          {port.monitoringEnabled !== false && <span className="ndm-pill">{catLabel(port.interfaceCategory)} · monitored</span>}
+          <span style={{ fontWeight: 700, color, border: `1px solid ${color}55`, borderRadius: 999, padding: "2px 10px", fontSize: 12 }}>{state}</span>
+        </span>
       </div>
 
       <div className="ndm-ranges">{RANGES.map((r) => <button key={r} className={range === r ? "on" : ""} onClick={() => setRange(r)}>{r}</button>)}</div>
@@ -183,15 +195,26 @@ function PortDetail({ deviceId, deviceName, port, onClose }: { deviceId: number;
         <Stat label="Peak RX" value={s ? fmtBits(s.maxRx) : "—"} />
         <Stat label="Avg TX" value={s ? fmtBits(s.avgTx) : "—"} />
         <Stat label="Peak TX" value={s ? fmtBits(s.maxTx) : "—"} />
-        <Stat label="Errors / min" value={port.errorRatePerMin > 0 ? Math.round(port.errorRatePerMin) : 0} color={port.errorRatePerMin > 0 ? "var(--danger)" : undefined} />
+        <Stat label="Errors / min" value={port.errorRatePerMin != null && port.errorRatePerMin > 0 ? Math.round(port.errorRatePerMin) : 0} color={port.errorRatePerMin != null && port.errorRatePerMin > 0 ? "var(--danger)" : undefined} />
         <Stat label="Link uptime" value={s?.upPct != null ? `${s.upPct}%` : "—"} color="var(--online)" />
       </div>
 
       <div className="ndm-card-sub" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 6 }}>
-        <span>RX {fmtPps(port.rxPps)} · TX {fmtPps(port.txPps)}</span>
+        <span>RX {port.rxPps != null ? fmtPps(port.rxPps) : "—"} · TX {port.txPps != null ? fmtPps(port.txPps) : "—"}</span>
         <span>Speed {port.speedMbps ? `${port.speedMbps} Mbps` : "—"} · {port.duplex || "—"} duplex</span>
         <span>ifIndex {port.ifIndex} · first seen {fmtTime(port.firstSeen)}</span>
       </div>
+
+      {onToggle && (
+        <div className="ndm-row-actions" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+          <button className="ndm-btn" onClick={() => onToggle({ soundEnabled: port.soundEnabled !== false ? false : true })}>
+            {port.soundEnabled !== false ? "🔔 Mute this port's sound" : "🔕 Enable sound for this port"}
+          </button>
+          {port.monitoringEnabled === false
+            ? <button className="ndm-btn pri" onClick={() => onToggle({ monitoringEnabled: true })}>◉ Start monitoring this port</button>
+            : <button className="ndm-btn" onClick={() => onToggle({ monitoringEnabled: false })}>○ Stop monitoring (exclude)</button>}
+        </div>
+      )}
     </NdmModal>
   );
 }
@@ -278,6 +301,7 @@ function ConfigForm({ device, onSaved, onClose, modal }: { device: any; onSaved:
     v3PrivProto: "AES", v3PrivKey: "", snmpVersion: device.snmpVersion, snmpPort: String(device.snmpPort),
     pollIntervalSec: String(device.pollIntervalSec), snmpTimeoutMs: String(device.snmpTimeoutMs), snmpRetries: String(device.snmpRetries),
     syslogEnabled: device.syslogEnabled, syslogProtocol: device.syslogProtocol, syslogPort: String(device.syslogPort),
+    soundEnabled: device.soundEnabled !== false,
   });
   const [saving, setSaving] = React.useState(false);
   const [err, setErr] = React.useState("");
@@ -291,6 +315,7 @@ function ConfigForm({ device, onSaved, onClose, modal }: { device: any; onSaved:
       pollIntervalSec: Number(f.pollIntervalSec) || 30,
       snmpTimeoutMs: Number(f.snmpTimeoutMs) || 5000, snmpRetries: Number(f.snmpRetries) || 1,
       syslogEnabled: f.syslogEnabled, syslogProtocol: f.syslogProtocol, syslogPort: Number(f.syslogPort) || 514,
+      soundEnabled: f.soundEnabled,
     };
     if (f.snmpVersion === "V2C") { if (f.community.trim()) b.community = f.community.trim(); }
     else { b.v3Username = f.v3Username.trim() || undefined; b.v3AuthProto = f.v3AuthProto; if (f.v3AuthKey) b.v3AuthKey = f.v3AuthKey; b.v3PrivProto = f.v3PrivProto; if (f.v3PrivKey) b.v3PrivKey = f.v3PrivKey; }
@@ -345,6 +370,10 @@ function ConfigForm({ device, onSaved, onClose, modal }: { device: any; onSaved:
             <option value="10">10 s</option><option value="30">30 s</option><option value="60">60 s</option><option value="300">5 min</option>
           </select></div>
       </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+        <input type="checkbox" checked={f.soundEnabled} onChange={(e) => setF((p) => ({ ...p, soundEnabled: e.target.checked }))} />
+        🔔 Play sound for this device's alerts <span className="ndm-hint">(overrides the global "sound by severity" default; individual ports can mute themselves too)</span>
+      </label>
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={f.syslogEnabled} onChange={(e) => setF((p) => ({ ...p, syslogEnabled: e.target.checked }))} />
         Receives syslog ({f.syslogProtocol} :{f.syslogPort})
