@@ -1224,13 +1224,53 @@ export class SubscribersService implements OnModuleInit {
       }
     }
     if (data.nasId) await this.assertNasAllowed(actor, parseInt(data.nasId));
-    // Owner = the reseller creating this subscriber (so it lands in their subtree).
-    // An ISP admin may pass an explicit userId to assign it to a specific reseller.
-    const ownerId = data.userId
+    /**
+     * WHO OWNS THIS CUSTOMER — and therefore WHOSE WALLET PAYS.
+     *
+     * Ownership drives two things: visibility (whose subtree it appears in) and
+     * money (settleActivation debits the owner, never whoever clicked). So
+     * getting this wrong charges the wrong account.
+     *
+     * THE BUG THIS FIXES: the form's "Salesperson" dropdown sends
+     * `salespersonId`, not `userId`. An ISP admin who created a customer and
+     * selected a DEALER there got `data.userId === undefined`, so ownership
+     * fell through to the actor — the ISP itself. The dealer was recorded as
+     * salesperson, the subscriber list showed the dealer's name, and everyone
+     * reasonably assumed the dealer owned it. But the activation charge landed
+     * on the ISP's own wallet, and the dealer paid nothing.
+     *
+     * The rule now: if no explicit owner was given and the selected salesperson
+     * is an account that CAN own customers and hold a wallet — a reseller tier,
+     * not ISP staff — then selecting them means they own it. That is the only
+     * sensible reading of "assign this customer to D1".
+     *
+     * A SALES staff member is different: they sell on the ISP's behalf and hold
+     * no wallet, so the ISP keeps ownership and pays. Passing `userId`
+     * explicitly always wins, so the API can still express any combination.
+     */
+    let ownerId = data.userId
       ? parseInt(data.userId)
       : actor
         ? this.scope.actorId(actor)
         : null;
+
+    if (!data.userId && data.salespersonId) {
+      const sp = await this.prisma.user.findUnique({
+        where: { id: parseInt(data.salespersonId) },
+        select: { id: true, name: true, role: true },
+      });
+      // Roles that own customers and settle from their own wallet.
+      const OWNS_CUSTOMERS = ['RESELLER', 'SUB_RESELLER', 'RETAILER'];
+      if (sp && OWNS_CUSTOMERS.includes(sp.role)) {
+        if (ownerId !== sp.id) {
+          this.logger.log(
+            `Owner set to "${sp.name}" (${sp.role}, #${sp.id}) from the selected salesperson — ` +
+            `their wallet will be charged for this activation, not the creating account's.`,
+          );
+        }
+        ownerId = sp.id;
+      }
+    }
 
     // ── Prepaid accounting: compute retail price, cost and profit for this sale.
     // sellPrice = what the END customer pays. ANY tier can set its own retail
