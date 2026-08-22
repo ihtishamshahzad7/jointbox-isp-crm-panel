@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
 import { OrganizationService } from './organization.service';
 import { ResellerPricingService } from './reseller-pricing.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -106,6 +106,37 @@ export class OrganizationController {
   async explainCharge(@Param('subscriberId') subscriberId: string, @Request() req: any) {
     await this.scope.assertSubscriber(req.user, +subscriberId);
     return this.pricing.explainCharge(+subscriberId);
+  }
+
+  /**
+   * Activations that were never billed — ACTIVE, reseller-owned subscribers
+   * with no settlement ledger entry. Read-only audit.
+   */
+  @Get('pricing/unbilled')
+  async unbilled(@Request() req: any) {
+    return this.pricing.findUnbilledActivations(req.user);
+  }
+
+  /**
+   * Back-charge previously unbilled activations.
+   *
+   * ISP-level only: it moves real money out of dealer wallets, and the operator
+   * doing it must be able to see the whole tree. Prepaid enforcement still
+   * applies per dealer, and it is idempotent, so a re-run cannot double-bill.
+   * Service state is untouched — these customers stay online.
+   */
+  @Post('pricing/backcharge')
+  async backcharge(
+    @Body() body: { subscriberIds: number[]; reason?: string },
+    @Request() req: any,
+  ) {
+    if (!this.scope.isAdmin(req.user?.role)) {
+      throw new ForbiddenException('Only ISP-level accounts can back-charge activations.');
+    }
+    return this.pricing.backchargeUnbilled(body?.subscriberIds || [], {
+      actorId: req.user?.sub,
+      reason: body?.reason,
+    });
   }
 
   /** Consolidated reversals across the caller's dealer tree (Disputes module). */

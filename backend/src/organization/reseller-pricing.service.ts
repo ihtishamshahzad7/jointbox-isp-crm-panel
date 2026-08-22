@@ -1180,6 +1180,137 @@ export class ResellerPricingService {
     };
   }
 
+  /**
+   * FIND ACTIVATIONS THAT WERE NEVER BILLED.
+   *
+   * The zero-charge hole (see settleActivation) let reseller-owned subscribers
+   * go ACTIVE with no wallet movement and no ledger row. Those customers are
+   * online and earning the dealer money while the dealer paid nothing, and
+   * nothing in the product surfaced it — the only trace is an ABSENCE, which
+   * no report was looking for.
+   *
+   * This finds them: ACTIVE, reseller-owned (the ISP's own direct customers are
+   * legitimately unsettled), and with NO UserBalanceTransaction carrying this
+   * subscriber's settlement reference — neither the original `SUB#id` nor any
+   * `SUB#id:event` renewal form.
+   *
+   * Read-only. Fixing them is a deliberate second step (backchargeUnbilled).
+   */
+  async findUnbilledActivations(actor?: Actor) {
+    const scopeIds = actor && !this.scope.isAdmin(actor.role)
+      ? await this.scope.descendantIds(await this.scope.rootId(actor))
+      : null;
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      id: number; username: string; fullname: string; status: string;
+      ownerid: number; ownername: string; ownerrole: string;
+      ownerbalance: number; packagename: string; packageprice: number;
+      createdat: Date;
+    }>>`
+      SELECT s.id, s.username, s."fullName" AS fullname, s.status,
+             u.id AS ownerid, u.name AS ownername, u.role AS ownerrole,
+             u.balance::float8 AS ownerbalance,
+             p.name AS packagename, p.price::float8 AS packageprice,
+             s."createdAt" AS createdat
+        FROM "Subscriber" s
+        JOIN "User" u    ON u.id = s."userId"
+        JOIN "packages" p ON p.id = s."packageId"
+       WHERE s.status = 'ACTIVE'
+         -- The ISP's OWN direct customers never produce an internal transfer,
+         -- so an absent settlement is correct for them, not a defect.
+         AND u."parentId" IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM "UserBalanceTransaction" t
+            WHERE t.reference = CONCAT('SUB#', s.id)
+               OR t.reference LIKE CONCAT('SUB#', s.id, ':%')
+         )
+         ${scopeIds ? Prisma.sql`AND s."userId" IN (${Prisma.join(scopeIds.length ? scopeIds : [-1])})` : Prisma.empty}
+       ORDER BY s."createdAt" DESC
+       LIMIT 500;`;
+
+    const items = rows.map((r) => ({
+      subscriberId: Number(r.id),
+      username: r.username,
+      name: r.fullname,
+      owner: { id: Number(r.ownerid), name: r.ownername, role: r.ownerrole, balance: Number(r.ownerbalance) },
+      package: { name: r.packagename, price: Number(r.packageprice) },
+      activatedAt: r.createdat,
+    }));
+
+    return {
+      total: items.length,
+      items,
+      note: 'ACTIVE, reseller-owned subscribers with no settlement ledger entry — they are online but nobody was billed. ' +
+            'Set the owner\'s package price first, then back-charge; a back-charge cannot succeed while the price resolves to zero.',
+    };
+  }
+
+  /**
+   * BACK-CHARGE previously unbilled activations — the real accounting fix.
+   *
+   * NOT a reversal. Reversal posts offsetting entries against an EXISTING
+   * settlement; here no settlement was ever written, so there is nothing to
+   * offset. What is required is the charge that should have happened.
+   *
+   * Safety properties, all inherited rather than reimplemented:
+   *   • IDEMPOTENT — settleActivation refuses a second charge on the same
+   *     reference, so re-running this cannot double-bill.
+   *   • PREPAID ENFORCED — a dealer without the balance is refused, exactly as
+   *     a normal activation would be. It does NOT quietly overdraw them.
+   *   • PER-ROW RESULTS — one dealer being short must not abort the rest.
+   *
+   * Deliberately does NOT change service state: these customers are already
+   * online and must stay online. This corrects the books, not the network.
+   */
+  async backchargeUnbilled(
+    subscriberIds: number[],
+    opts: { actorId?: number; reason?: string } = {},
+  ) {
+    if (!Array.isArray(subscriberIds) || subscriberIds.length === 0) {
+      throw new ForbiddenException('Select at least one subscriber to back-charge.');
+    }
+    const reason = (opts.reason || '').trim();
+    if (!reason) {
+      throw new ForbiddenException('A reason is required — this moves real money out of a dealer wallet.');
+    }
+
+    const results: Array<{ subscriberId: number; status: 'charged' | 'skipped' | 'failed'; amount?: number; reason?: string }> = [];
+    let charged = 0, skipped = 0, failed = 0, total = 0;
+
+    for (const id of subscriberIds.slice(0, 500)) {
+      try {
+        const r: any = await this.settleActivation(id, {
+          byUserId: opts.actorId,
+          // Distinct, deterministic reference: a back-charge is its own event,
+          // so it can be identified (and reversed) separately later.
+          event: 'BACKCHARGE',
+        });
+        if (r?.alreadySettled) {
+          results.push({ subscriberId: id, status: 'skipped', reason: 'Already settled.' });
+          skipped++;
+        } else if (r?.settled === false) {
+          results.push({ subscriberId: id, status: 'skipped', reason: r?.reason || 'Nothing to bill.' });
+          skipped++;
+        } else {
+          const amt = Math.abs(r?.movements?.[0]?.delta ?? 0);
+          total += amt;
+          results.push({ subscriberId: id, status: 'charged', amount: amt });
+          charged++;
+        }
+      } catch (e: any) {
+        results.push({ subscriberId: id, status: 'failed', reason: e?.message || 'Charge failed.' });
+        failed++;
+      }
+    }
+
+    this.logger.warn(
+      `BACK-CHARGE by user ${opts.actorId ?? '?'}: ${charged} charged (${total} total), ` +
+      `${skipped} skipped, ${failed} failed. Reason: ${reason}`,
+    );
+
+    return { charged, skipped, failed, totalCharged: Math.round(total * 100) / 100, reason, results };
+  }
+
   async settleActivation(
     subscriberId: number,
     opts: { enforce?: boolean; byUserId?: number; event?: string } = {},
