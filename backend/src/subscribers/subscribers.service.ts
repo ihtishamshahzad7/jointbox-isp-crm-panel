@@ -1924,6 +1924,56 @@ if (!unpaid && data.username && data.password) {
     const old = await this.prisma.subscriber.findUnique({ where: { id } });
     if (!old) throw new Error('Subscriber not found');
 
+    /**
+     * ADOPTION ON EDIT — allowed ONLY when the subscriber currently has no owner.
+     *
+     * Edit deliberately ignores `userId`, because CHANGING an owner is a
+     * transfer: it moves money, re-prices the customer for the new chain and
+     * suspends them until the new owner activates. That must go through Move,
+     * never a quiet field edit.
+     *
+     * But that blanket rule also made a MISSING owner unfixable from the editor.
+     * A subscriber with userId = NULL belongs to nobody, is billed to nobody and
+     * appears in no reseller's books — and picking an owner in the form did
+     * nothing, silently, which is why it still read "No owner" after saving.
+     *
+     * Filling in an absent owner is a repair, not a transfer: there is no
+     * previous owner to hand over from, no pro-rata to settle, and the customer
+     * must not be disconnected for it. So it is permitted here, and ONLY here —
+     * once an owner exists, the transfer rules apply again.
+     */
+    let adoptOwnerId: number | null = null;
+    if (data.userId !== undefined && data.userId !== null && data.userId !== '') {
+      const requested = parseInt(data.userId);
+      if (Number.isFinite(requested)) {
+        if (old.userId == null) {
+          const owner = await this.prisma.user.findUnique({
+            where: { id: requested }, select: { id: true, name: true, role: true, isActive: true },
+          });
+          if (!owner) throw new BadRequestException(`Account ${requested} not found.`);
+          if (owner.isActive === false) throw new BadRequestException(`${owner.name} is deactivated.`);
+          if (actor && !this.scope.isAdmin(actor.role)) {
+            const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+            if (!ids.includes(requested)) {
+              throw new ForbiddenException('You can only assign subscribers to accounts in your own tree.');
+            }
+          }
+          adoptOwnerId = requested;
+          this.logger.log(
+            `Subscriber #${id} (${old.username}) had no owner; adopting to ${owner.name} (${owner.role}). ` +
+            `Service and billing unchanged.`,
+          );
+        } else if (requested !== old.userId) {
+          // Explicit refusal beats silently ignoring it — the silent version is
+          // what made this look broken.
+          throw new BadRequestException(
+            'This subscriber already belongs to an account. Changing the owner is a transfer — ' +
+            'use Move, which preserves their remaining days and lets the new owner activate and pay.',
+          );
+        }
+      }
+    }
+
     // ── Validate connectionType
     const connectionType = this.normalizeConnectionType(data.connectionType || old.connectionType);
 
@@ -1982,8 +2032,25 @@ if (!unpaid && data.username && data.password) {
           const requested = this.normalizeStatus(data.status || old.status);
           return (requested === 'ACTIVE' && old.status !== 'ACTIVE') ? old.status : requested;
         })(),
+        // Set ONLY when adopting a previously ownerless subscriber (see above).
+        // `undefined` leaves an existing owner untouched — a change is a Move.
+        ...(adoptOwnerId != null ? { userId: adoptOwnerId } : {}),
       },
     });
+
+    if (adoptOwnerId != null) {
+      await this.prisma.activityLog.create({
+        data: {
+          userId: actor ? this.scope.actorId(actor) : null,
+          action: 'SUBSCRIBER_OWNER_ASSIGNED',
+          entity: 'Subscriber',
+          entityId: id,
+          details:
+            `${old.fullName || old.username} had no owner; assigned to account #${adoptOwnerId} via edit. ` +
+            `Service untouched (still ${old.status}); nothing charged.`,
+        },
+      }).catch(() => null);
+    }
 
     // ── Decide what RADIUS update is needed
     const usernameChanged = data.username && data.username !== old.username;

@@ -585,7 +585,18 @@ export default function SubscribersPage() {
        */
       if (editSub) {
         delete payload.activateNow;
-        delete payload.userId;           // ownership changes go through Move
+        /**
+         * Ownership CHANGES go through Move (it re-prices the customer and
+         * suspends them until the new owner activates). But a subscriber with
+         * NO owner is a different case: it belongs to nobody, is billed to
+         * nobody, and must be fixable here — stripping userId unconditionally
+         * is why picking an owner while editing appeared to do nothing and the
+         * row still read "No owner" after saving.
+         *
+         * So: send it only when adopting an ownerless subscriber. The backend
+         * enforces the same rule and rejects an attempted change outright.
+         */
+        if (editSub.userId != null || !form.userId) delete payload.userId;
       } else {
         payload.activateNow = !!form.activateNow;
         if (!form.userId) delete payload.userId;   // blank = the current account
@@ -2273,19 +2284,47 @@ export default function SubscribersPage() {
                   pays on activation and whose books they appear in. Distinct from
                   Salesperson (who sold it). Without this the customer silently
                   stayed owned by whoever created them. */}
-              {!editSub && (
+              {/* Shown on CREATE, and on EDIT only while the subscriber has no
+                  owner — filling in a missing owner is a repair; changing an
+                  existing one is a transfer and belongs to Move. */}
+              {(!editSub || editSub.userId == null) && (
                 <div>
-                  <label style={labelSt}>Owner account <span style={{ color: t.textMuted, fontWeight: 400 }}>(whose wallet pays)</span></label>
+                  <label style={labelSt}>
+                    Owner account <span style={{ color: t.textMuted, fontWeight: 400 }}>(whose wallet pays)</span>
+                  </label>
                   <select
-                    style={{ ...inputSt, cursor: "pointer" }}
+                    style={{
+                      ...inputSt, cursor: "pointer",
+                      ...(editSub && editSub.userId == null && !form.userId
+                        ? { borderColor: "#B02A37" } : {}),
+                    }}
                     value={form.userId}
                     onChange={(e) => setForm((p) => ({ ...p, userId: e.target.value }))}
                   >
-                    <option value="">— Me (the account I'm using) —</option>
+                    <option value="">
+                      {editSub ? "— Select an owner —" : "— Me (the account I'm using) —"}
+                    </option>
                     {transferAccounts.map((u: any) => (
                       <option key={u.id} value={u.id}>{u.name} — {u.role}</option>
                     ))}
                   </select>
+                  {editSub && editSub.userId == null && (
+                    <div style={{ fontSize: 11, color: "#B02A37", marginTop: 5, lineHeight: 1.5 }}>
+                      ⚠ This subscriber has <b>no owner</b> — nobody is billed when they are activated,
+                      and they appear in no reseller's books. Pick the account that owns them.
+                      Saving only records the owner: the customer is <b>not</b> disconnected and
+                      nothing is charged.
+                    </div>
+                  )}
+                </div>
+              )}
+              {editSub && editSub.userId != null && (
+                <div>
+                  <label style={labelSt}>Owner account</label>
+                  <div style={{ ...inputSt, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span>{editSub.user?.name ?? `#${editSub.userId}`}</span>
+                    <span style={{ fontSize: 11, color: t.textMuted }}>use Move to change</span>
+                  </div>
                 </div>
               )}
 
