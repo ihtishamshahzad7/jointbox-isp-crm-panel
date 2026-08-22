@@ -267,9 +267,36 @@ export function SubscriberTable({
                   )}
                 </td>
 
-                {/* Whose customer, and where. */}
+                {/*
+                  OWNER = whose wallet is charged on activation and in whose
+                  subtree this customer sits. SOLD BY = attribution only.
+
+                  These are different fields and must never be shown as one.
+                  This cell used to render `user?.name ?? salesperson?.name`,
+                  so a subscriber with NO owner silently displayed the
+                  SALESPERSON's name — which reads as "that dealer owns this".
+                  The activation then charged somebody else entirely and the
+                  discrepancy was invisible, because the fallback hid it.
+
+                  Now: an absent owner is shown as an explicit warning, never
+                  papered over with another account's name.
+                */}
                 <td data-label="Owner">
-                  <div className="nm sm">{r.user?.name ?? r.salesperson?.name ?? "—"}</div>
+                  {r.user?.name ? (
+                    <div className="nm sm">{r.user.name}</div>
+                  ) : (
+                    <div className="nm sm" style={{ color: "#B02A37" }}
+                      title="No owner account — nobody's wallet is charged when this subscriber is activated.">
+                      ⚠ No owner
+                    </div>
+                  )}
+                  {/* Only worth showing when it differs from the owner — otherwise
+                      it is noise on every row. */}
+                  {r.salesperson?.name && r.salesperson.name !== r.user?.name && (
+                    <div className="sub" title="Sold by (attribution only — this account is not charged)">
+                      sold by {r.salesperson.name}
+                    </div>
+                  )}
                   <div className="sub">{r.area?.name ?? r.nas?.nasname ?? "—"}</div>
                 </td>
 

@@ -70,7 +70,19 @@ interface Subscriber {
   package?: Package;
   area?: Area;
   nas?: NasEntry;
+  /** WHO SOLD IT — attribution only. Carries no wallet and no visibility. */
   salesperson?: Salesperson;
+  /**
+   * WHO OWNS IT — whose wallet is charged on activation and in whose subtree
+   * this customer appears.
+   *
+   * The list used to show only `salesperson`, so a customer owned by the ISP
+   * but sold by a dealer displayed the DEALER's name — and everyone read that
+   * as "the dealer owns this". The activation then charged the ISP, and the
+   * discrepancy was invisible because the two fields were never shown apart.
+   */
+  userId?: number | null;
+  user?: { id: number; name: string; role: string } | null;
   serviceSettings?: {
     expiryDate?: string | null;
   } | null;
