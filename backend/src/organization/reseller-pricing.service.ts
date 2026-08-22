@@ -540,7 +540,15 @@ export class ResellerPricingService {
       });
     }
 
-    return { subscriberId, packageId: sub.packageId, packageName: sub.package?.name, base, movements };
+    return {
+      subscriberId, packageId: sub.packageId, packageName: sub.package?.name, base, movements,
+      // Carried so settleActivation can tell "legitimately free" (the ISP owns
+      // this customer directly) apart from "should have been charged but the
+      // price resolved to nothing" — see the guard in settleActivation().
+      ownerId: sub.userId,
+      chainLength: chain.length,
+      ispOwned: chain.length === 1,
+    };
   }
 
   // ── Simple layman accounting: profit per layer + per subscriber ──
@@ -1109,6 +1117,69 @@ export class ResellerPricingService {
     }));
   }
 
+  /**
+   * Explain an activation charge without performing it.
+   *
+   * Built because "it activated but nobody was charged" was previously only
+   * diagnosable by reading four tables by hand. Returns the owner, the price
+   * ladder, the wallet that would actually be debited, and whether that debit
+   * would currently succeed — so a misconfiguration is visible before an
+   * operator discovers it in a month-end reconciliation.
+   */
+  async explainCharge(subscriberId: number) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: {
+        id: true, username: true, fullName: true, status: true, packageId: true,
+        package: { select: { name: true, price: true } },
+        user: { select: { id: true, name: true, role: true, balance: true, creditLimit: true, parentId: true } },
+      },
+    });
+    if (!sub) throw new NotFoundException('Subscriber not found');
+    if (!sub.user) return { chargeable: false, reason: 'This subscriber has no owning account, so no wallet can be charged.' };
+    if (!sub.packageId) return { chargeable: false, reason: 'This subscriber has no package, so there is nothing to price.' };
+
+    const q = await this.quote(subscriberId);
+    if (!q) {
+      return {
+        chargeable: false,
+        owner: sub.user,
+        reason: 'No price could be resolved for the owning account — assign the package to them in Organization → Pricing.',
+      };
+    }
+
+    const payer = q.movements[0];
+    const cost = payer && payer.delta < 0 ? -payer.delta : 0;
+    const balance = sub.user.balance ?? 0;
+    const creditLimit = sub.user.creditLimit ?? 0;
+    const affordable = balance >= cost - creditLimit;
+
+    return {
+      subscriber: { id: sub.id, username: sub.username, name: sub.fullName, status: sub.status },
+      package: { id: sub.packageId, name: sub.package?.name, basePrice: sub.package?.price },
+      owner: {
+        id: sub.user.id, name: sub.user.name, role: sub.user.role,
+        balance, creditLimit, isTopOfTree: sub.user.parentId == null,
+      },
+      ispOwned: q.ispOwned,
+      chainLength: q.chainLength,
+      /** The wallet that is debited — ALWAYS the owner, never whoever clicks. */
+      payer: payer ? { userId: payer.userId, role: payer.role, amount: cost, note: payer.note } : null,
+      cost,
+      chargeable: cost > 0 || q.ispOwned,
+      affordable,
+      wouldBeRefused: !q.ispOwned && cost <= 0
+        ? 'No buy price for the owner — activation is refused so it cannot go through unbilled.'
+        : cost > 0 && !affordable
+          ? `Owner has ${balance} (+${creditLimit} credit) but the activation costs ${cost}.`
+          : null,
+      movements: q.movements,
+      note: q.ispOwned
+        ? 'The ISP owns this customer directly — no internal transfer, so a zero settlement is correct here.'
+        : 'Reseller-owned: the owner wallet must be debited for the activation to be allowed.',
+    };
+  }
+
   async settleActivation(
     subscriberId: number,
     opts: { enforce?: boolean; byUserId?: number; event?: string } = {},
@@ -1117,7 +1188,61 @@ export class ResellerPricingService {
     // Use the caller's transaction (if any) so the package/owner set moments ago
     // in the same uncommitted activation transaction are visible here.
     const q = await this.quote(subscriberId, tx ?? (this.prisma as any));
-    if (!q) return { settled: false, reason: 'No reseller owner or package on this subscriber.' };
+
+    /**
+     * A SETTLEMENT THAT CHARGES NOBODY MUST NOT LOOK LIKE SUCCESS.
+     *
+     * THE BUG THIS CLOSES: a Super Admin could activate a subscriber OWNED BY A
+     * DEALER whose wallet held 0, and it went through free. The owner is
+     * resolved correctly (movements[0] comes from chainUp(subscriber.userId),
+     * never from whoever clicked), and the prepaid check is correct — but every
+     * route to a ZERO charge bypassed that check silently:
+     *
+     *   a) quote() returns null — no owner, or no package at settle time —
+     *      and this returned `{ settled: false }`, which the activation path
+     *      treats as "fine, carry on".
+     *   b) the owner's buy price resolves to 0 (no ResellerPackagePrice row and
+     *      a 0 base, or a row explicitly set to 0), so movements[0].delta is 0,
+     *      `delta < 0` is false, and the enforce block never runs.
+     *
+     * In both cases the customer goes online and nobody is billed. That is
+     * indistinguishable from theft by misconfiguration, and it is silent.
+     *
+     * The rule now: a customer owned by a RESELLER must produce a real debit.
+     * Only a customer the ISP owns DIRECTLY (chain length 1) may settle at
+     * zero, because there is genuinely no internal transfer — the ISP collects
+     * from the subscriber outside the panel.
+     */
+    if (!q) {
+      const sub = await (tx ?? (this.prisma as any)).subscriber.findUnique({
+        where: { id: subscriberId },
+        select: { userId: true, packageId: true },
+      });
+      // Genuinely nothing to bill (no owner or no package) — allow, and say so.
+      if (!sub?.userId || !sub?.packageId) {
+        return { settled: false, reason: 'No owner or no package on this subscriber — nothing to bill.' };
+      }
+      // It HAS an owner and a package, so a price should have resolved.
+      throw new ForbiddenException(
+        `Cannot activate: this subscriber has an owner and a package, but no price could be ` +
+        `resolved for them. Assign the package to the owning account (Organization → Pricing) ` +
+        `before activating, so the correct wallet is charged.`,
+      );
+    }
+
+    const payer = q.movements[0];
+    const chargesNobody = !payer || payer.delta >= 0;
+    if (opts.enforce !== false && chargesNobody && !q.ispOwned) {
+      const owner = await (tx ?? (this.prisma as any)).user.findUnique({
+        where: { id: q.ownerId }, select: { name: true, role: true },
+      });
+      throw new ForbiddenException(
+        `Cannot activate: "${q.packageName ?? 'this package'}" has no buy price for ` +
+        `${owner?.name ?? 'the owning account'} (${owner?.role ?? 'reseller'}), so the activation ` +
+        `would cost them nothing and no wallet would be charged. Set their price in ` +
+        `Organization → Pricing first.`,
+      );
+    }
 
     /**
      * IDEMPOTENCY.

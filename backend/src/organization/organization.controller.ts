@@ -94,6 +94,20 @@ export class OrganizationController {
     });
   }
 
+  /**
+   * WHO PAYS, AND HOW MUCH — read-only explanation of an activation charge.
+   *
+   * Answers "why was this activated for free?" without reading the database by
+   * hand: shows the owner, the resolved price ladder, the exact wallet that
+   * would be debited, that wallet's balance and credit limit, and whether the
+   * charge would currently be refused.
+   */
+  @Get('pricing/explain/:subscriberId')
+  async explainCharge(@Param('subscriberId') subscriberId: string, @Request() req: any) {
+    await this.scope.assertSubscriber(req.user, +subscriberId);
+    return this.pricing.explainCharge(+subscriberId);
+  }
+
   /** Consolidated reversals across the caller's dealer tree (Disputes module). */
   @Get('pricing/reversals')
   listReversals(@Request() req: any) {

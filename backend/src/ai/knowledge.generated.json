@@ -2,11 +2,11 @@
   "generated": true,
   "note": "Auto-generated from the codebase by tools/build_ai_knowledge.py. Do not edit by hand — re-run the script instead.",
   "counts": {
-    "screens": 58,
-    "actions": 50,
-    "tabs": 52,
-    "buttons": 79,
-    "total": 239
+    "screens": 64,
+    "actions": 51,
+    "tabs": 53,
+    "buttons": 81,
+    "total": 249
   },
   "tabs": {
     "admin-center": [
@@ -42,6 +42,11 @@
       }
     ],
     "billing-center": [
+      {
+        "id": "profit",
+        "label": "Profit Report",
+        "hint": "What you earned from your downline's activations — by day, week, month, year or a custom range, with the line items. Reporting only: profit never touches a wallet."
+      },
       {
         "id": "accountability",
         "label": "Profit & Accountability",
@@ -447,6 +452,12 @@
       }
     ],
     "billing-center": [
+      {
+        "label": "Profit Report",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
       {
         "label": "Profit & Accountability",
         "does": "",
@@ -1188,7 +1199,47 @@
         "risk": "low"
       }
     ],
+    "monitoring/alerts": [
+      {
+        "label": "Cancel",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
+    "monitoring/devices": [
+      {
+        "label": "Disable…",
+        "does": "Switches this record off so it stops being used.",
+        "careful": "Anyone relying on it loses access until you enable it again.",
+        "risk": "high"
+      },
+      {
+        "label": "Cancel",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      }
+    ],
     "monitoring": [
+      {
+        "label": "▶ Test sound",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Cancel",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
+      {
+        "label": "Done",
+        "does": "",
+        "careful": "",
+        "risk": "low"
+      },
       {
         "label": "Check now",
         "does": "",
@@ -1484,12 +1535,6 @@
         "does": "",
         "careful": "",
         "risk": "low"
-      },
-      {
-        "label": "Delete Forever",
-        "does": "Destroys the record permanently.",
-        "careful": "This is the confirmed step — there is no recycle bin behind it.",
-        "risk": "high"
       },
       {
         "label": "Add",
@@ -2383,9 +2428,45 @@
       "src": "screens"
     },
     {
+      "t": "Screen: Monitoring → Alerts",
+      "k": "monitoring/alerts monitoring/alerts page screen where find open go to monitoring → alerts",
+      "a": "Operations → Monitoring.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Monitoring → Devices",
+      "k": "monitoring/devices monitoring/devices page screen where find open go to monitoring → devices",
+      "a": "Operations → Monitoring. Network devices (SNMP switches/routers) — list + add wizard.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Monitoring → Events",
+      "k": "monitoring/events monitoring/events page screen where find open go to monitoring → events",
+      "a": "Operations → Monitoring. Events — every state change the engines recorded (port up/down, device reboot, syslog-parsed link flaps, thresholds…). Filterable by status and device.",
+      "src": "screens"
+    },
+    {
       "t": "Screen: Monitoring",
       "k": "monitoring monitoring page screen where find open go to monitoring",
       "a": "Operations → Monitoring. Network Monitoring — each account adds hosts (IP/hostname), grouped, pinged continuously by the backend. Small live latency graphs, and a loud in-app alert (beep + spoken \"<host> is down\", repeating) the moment one drops.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Monitoring → Ports",
+      "k": "monitoring/ports monitoring/ports page screen where find open go to monitoring → ports",
+      "a": "Operations → Monitoring. Every port across every reachable switch, live.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Monitoring → Settings",
+      "k": "monitoring/settings monitoring/settings page screen where find open go to monitoring → settings",
+      "a": "Operations → Monitoring. Settings — live subsystem health (§52): SNMP connectivity, poller beat, alert/notification engines, sound, monitored vs excluded interfaces, plus the syslog listener status. Real numbers only — nothing invented.",
+      "src": "screens"
+    },
+    {
+      "t": "Screen: Monitoring → Syslog",
+      "k": "monitoring/syslog monitoring/syslog page screen where find open go to monitoring → syslog",
+      "a": "Operations → Monitoring. Syslog — the per-device message feed as parsed by the syslog receiver. Severity + device filters, auto-refresh, live SSE updates.",
       "src": "screens"
     },
     {
@@ -2733,13 +2814,19 @@
     {
       "t": "What the panel can do: monitoring",
       "k": "monitoring monitoring api action endpoint capability can i",
-      "a": "Available actions: create/run /monitoring/diagnostics/dns; create/run /monitoring/diagnostics/http; create/run /monitoring/diagnostics/ping; create/run /monitoring/diagnostics/tcp; create/run /monitoring/diagnostics/tcp-trace; create/run /monitoring/diagnostics/traceroute; create/run /monitoring/groups/rename; create/run /monitoring/targets; create/run /monitoring/targets/:id/check; remove /monitoring/targets/:id; replace /monitoring/targets/:id; view /monitoring/targets; view /monitoring/targets/:id; view /monitoring/targets/:id/history.",
+      "a": "Unified device list — ping monitors and SNMP devices correlated by address so one physical box is one row, with a summary for the dashboard header. This is what the main Network Monitoring page should render. Available actions: create/run /monitoring/diagnostics/dns; create/run /monitoring/diagnostics/http; create/run /monitoring/diagnostics/ping; create/run /monitoring/diagnostics/tcp; create/run /monitoring/diagnostics/tcp-trace; create/run /monitoring/diagnostics/traceroute; create/run /monitoring/groups/rename; create/run /monitoring/targets; create/run /monitoring/targets/:id/check; create/run /monitoring/targets/import; remove /monitoring/targets/:id; replace /monitoring/targets/:id; view /monitoring/targets; view /monitoring/targets/:id.",
       "src": "actions"
     },
     {
       "t": "What the panel can do: nas",
       "k": "nas nas api action endpoint capability can i",
       "a": "Bulk: give several routers to several accounts at once. Available actions: create/run /nas; create/run /nas/:id/assign/:userId; create/run /nas/assign-bulk; create/run /nas/import; remove /nas/:id; remove /nas/:id/assign/:userId; replace /nas/:id; update /nas/:id/monitored-ports; update /nas/:id/toggle; view /nas; view /nas/:id; view /nas/:id/ping; view /nas/:id/quick-check; view /nas/:id/reachability.",
+      "src": "actions"
+    },
+    {
+      "t": "What the panel can do: ndm",
+      "k": "ndm ndm api action endpoint capability can i",
+      "a": "Network device monitoring — switches/routers over SNMP + syslog. Lives under the existing /monitoring prefix so the established `monitoring.read` / `monitoring.write` permission keys and the JwtAuthGuard + PermissionsGuard apply automatically. Available actions: create/run /monitoring/ndm/alerts/:id/ack; create/run /monitoring/ndm/alerts/:id/resolve; create/run /monitoring/ndm/devices; create/run /monitoring/ndm/devices/:id/check; create/run /monitoring/ndm/devices/:id/discover; create/run /monitoring/ndm/devices/:id/ports/:portId/test; create/run /monitoring/ndm/devices/discover; create/run /monitoring/ndm/devices/test; create/run /monitoring/ndm/rules; remove /monitoring/ndm/devices/:id; remove /monitoring/ndm/rules/:id; replace /monitoring/ndm/devices/:id; replace /monitoring/ndm/devices/:id/ports/:portId; replace /monitoring/ndm/rules/:id.",
       "src": "actions"
     },
     {
@@ -2775,7 +2862,7 @@
     {
       "t": "What the panel can do: packages",
       "k": "packages packages api action endpoint capability can i",
-      "a": "Bulk import packages from a file (used by the Import dialog). Available actions: create/run /packages; create/run /packages/:id/duplicate; create/run /packages/allocations; create/run /packages/import; create/run /packages/policies; create/run /packages/taxes; remove /packages/:id; remove /packages/allocations/:id; remove /packages/policies/:id; remove /packages/taxes/:id; replace /packages/:id; replace /packages/allocations/:id; replace /packages/policies/:id; replace /packages/taxes/:id.",
+      "a": "Archive (deactivate) — keeps existing subscribers running, blocks new sign-ups. Available actions: create/run /packages; create/run /packages/:id/apply; create/run /packages/:id/archive; create/run /packages/:id/duplicate; create/run /packages/allocations; create/run /packages/import; create/run /packages/policies; create/run /packages/taxes; remove /packages/:id; remove /packages/allocations/:id; remove /packages/policies/:id; remove /packages/taxes/:id; replace /packages/:id; replace /packages/allocations/:id.",
       "src": "actions"
     },
     {
@@ -2835,7 +2922,7 @@
     {
       "t": "What the panel can do: static ip",
       "k": "static-ip static ip api action endpoint capability can i",
-      "a": "Pool utilisation, monthly revenue, expiring and overdue counts. Available actions: create/run /static-ips; create/run /static-ips/range; create/run /static-ips/subscriber/:subscriberId; remove /static-ips/:id; replace /static-ips/:id; update /static-ips/:id/assign; update /static-ips/:id/release; view /static-ips; view /static-ips/:id; view /static-ips/alerts; view /static-ips/stats; view /static-ips/subscriber/:subscriberId.",
+      "a": "Pool utilisation, monthly revenue, expiring and overdue counts. Available actions: create/run /static-ips; create/run /static-ips/range; create/run /static-ips/subscriber/:subscriberId; remove /static-ips/:id; replace /static-ips/:id; update /static-ips/:id/assign; update /static-ips/:id/release; view /static-ips; view /static-ips/:id; view /static-ips/alerts; view /static-ips/stats; view /static-ips/subscriber/:subscriberId; view /static-ips/subscriber/:subscriberId/health.",
       "src": "actions"
     },
     {
@@ -2847,7 +2934,7 @@
     {
       "t": "What the panel can do: telemetry",
       "k": "telemetry telemetry api action endpoint capability can i",
-      "a": "One-off SNMP walk to list a NAS's interfaces for port registration. Available actions: view /telemetry/events; view /telemetry/feed; view /telemetry/nas-health; view /telemetry/nas/:id/discover-interfaces; view /telemetry/nas/:id/signals; view /telemetry/nas/:id/traffic; view /telemetry/nas/:id/uptime; view /telemetry/nas/:id/vlans; view /telemetry/onu/:id/signal; view /telemetry/ops-alerts; view /telemetry/subscriber/:id/path.",
+      "a": "One-off SNMP walk to list a NAS's interfaces for port registration. Available actions: create/run /telemetry/nas/:id/snmp-test; view /telemetry/events; view /telemetry/feed; view /telemetry/nas-health; view /telemetry/nas/:id/discover-interfaces; view /telemetry/nas/:id/health-history; view /telemetry/nas/:id/interfaces; view /telemetry/nas/:id/interfaces/:ifIndex/history; view /telemetry/nas/:id/signals; view /telemetry/nas/:id/traffic; view /telemetry/nas/:id/uptime; view /telemetry/nas/:id/vlans; view /telemetry/onu/:id/signal; view /telemetry/ops-alerts.",
       "src": "actions"
     },
     {
@@ -2914,6 +3001,12 @@
       "t": "Settings tab",
       "k": "settings settings tab admin-center admin center what is this screen",
       "a": "System → Administration → Settings tab. Currency, branding and system options.",
+      "src": "tabs"
+    },
+    {
+      "t": "Profit Report tab",
+      "k": "profit profit report tab billing-center billing center what is this screen",
+      "a": "Business → Billing & Accounting → Profit Report tab. What you earned from your downline's activations — by day, week, month, year or a custom range, with the line items. Reporting only: profit never touches a wallet.",
       "src": "tabs"
     },
     {
@@ -3225,7 +3318,7 @@
     {
       "t": "Buttons on Billing Center",
       "k": "billing-center buttons button options controls what can i click press tap here billing center",
-      "a": "Business → Billing & Accounting. The controls on this screen are: Profit & Accountability, Accounting, Wallets, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
+      "a": "Business → Billing & Accounting. The controls on this screen are: Profit Report, Profit & Accountability, Accounting, Wallets, Collections, Invoices, Payments, Online Gateways, Vouchers, Reseller Pricing, Disputes & Reversals.",
       "src": "buttons"
     },
     {
@@ -3349,9 +3442,27 @@
       "src": "buttons"
     },
     {
+      "t": "Buttons on Monitoring/Alerts",
+      "k": "monitoring/alerts buttons button options controls what can i click press tap here monitoring/alerts",
+      "a": "Operations → Monitoring. The controls on this screen are: Cancel.",
+      "src": "buttons"
+    },
+    {
+      "t": "Buttons on Monitoring/Devices",
+      "k": "monitoring/devices buttons button options controls what can i click press tap here monitoring/devices",
+      "a": "Operations → Monitoring. The controls on this screen are: Disable…, Cancel.",
+      "src": "buttons"
+    },
+    {
+      "t": "The \"Disable…\" button (Monitoring/Devices)",
+      "k": "disable… monitoring/devices button what happens if i press click disable… safe undo",
+      "a": "Operations → Monitoring → Disable…. What it does: Switches this record off so it stops being used. Before you press: Anyone relying on it loses access until you enable it again.",
+      "src": "buttons"
+    },
+    {
       "t": "Buttons on Monitoring",
       "k": "monitoring buttons button options controls what can i click press tap here monitoring",
-      "a": "Operations → Monitoring. The controls on this screen are: Check now, Delete.",
+      "a": "Operations → Monitoring. The controls on this screen are: ▶ Test sound, Cancel, Done, Check now, Delete.",
       "src": "buttons"
     },
     {
@@ -3417,13 +3528,7 @@
     {
       "t": "Buttons on Packages",
       "k": "packages buttons button options controls what can i click press tap here packages",
-      "a": "Operations → Plans & Stock → Packages. The controls on this screen are: Add New Package, + Add Package, Update Package, Create Tax/Fee, Create Policy, Create Allocation, Delete Forever, Add, Import, Export.",
-      "src": "buttons"
-    },
-    {
-      "t": "The \"Delete Forever\" button (Packages)",
-      "k": "delete forever packages button what happens if i press click delete forever safe undo",
-      "a": "Operations → Plans & Stock → Packages → Delete Forever. What it does: Destroys the record permanently. Before you press: This is the confirmed step — there is no recycle bin behind it.",
+      "a": "Operations → Plans & Stock → Packages. The controls on this screen are: Add New Package, + Add Package, Update Package, Create Tax/Fee, Create Policy, Create Allocation, Add, Import, Export.",
       "src": "buttons"
     },
     {
