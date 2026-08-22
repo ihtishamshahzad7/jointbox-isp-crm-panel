@@ -419,7 +419,20 @@ export default function SubscribersPage() {
       if (pkgRes.ok) setPackages(await pkgRes.json());
       if (areaRes.ok) setAreas(await areaRes.json());
       if (nasRes.ok) setNasList(await nasRes.json());
-      if (usersRes.ok) setSalespersons(await usersRes.json());
+      if (usersRes.ok) {
+        const users = await usersRes.json();
+        const list = Array.isArray(users) ? users : users?.data ?? [];
+        setSalespersons(list);
+        /**
+         * The Owner dropdown is fed from the SAME /users response.
+         *
+         * It used to be populated only when the ADD dialog opened, so opening
+         * EDIT — the one place an ownerless subscriber gets repaired — showed
+         * an empty list with nothing selectable. Same data, one request; there
+         * is no reason for the two lists to load on different triggers.
+         */
+        setTransferAccounts(list);
+      }
     } catch {
       showToast("Failed to load data", "err");
     }
@@ -2304,6 +2317,13 @@ export default function SubscribersPage() {
                     <option value="">
                       {editSub ? "— Select an owner —" : "— Me (the account I'm using) —"}
                     </option>
+                    {/* The logged-in account is a legitimate owner (an ISP owns
+                        its own direct customers), but /users lists the DOWNLINE
+                        and may not include self — without this, "x", which
+                        belongs to Super Admin, could not be assigned at all. */}
+                    {user && !transferAccounts.some((u: any) => u.id === user.id) && (
+                      <option value={user.id}>{user.name} — {user.role} (me)</option>
+                    )}
                     {transferAccounts.map((u: any) => (
                       <option key={u.id} value={u.id}>{u.name} — {u.role}</option>
                     ))}
