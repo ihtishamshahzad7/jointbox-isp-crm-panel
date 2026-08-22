@@ -209,6 +209,31 @@ export class SubscribersController {
     return this.subscribersService.findSplitOwnership(req.user, repair === 'true');
   }
 
+  /**
+   * Subscribers with NO owner account — nobody is charged when they activate,
+   * and they sit outside every reseller's books. Read-only audit.
+   */
+  @Get('audit/ownerless')
+  ownerless(@Req() req: any) {
+    return this.subscribersService.findOwnerless(req.user);
+  }
+
+  /**
+   * Assign an owner to an OWNERLESS subscriber. A data repair, not a transfer:
+   * service, expiry and RADIUS are untouched and nothing is charged. Refuses if
+   * the subscriber already has an owner — that is a Move.
+   */
+  @Post('assign-owner')
+  assignOwner(
+    @Body() body: { subscriberIds: number[]; ownerId: number; reason?: string },
+    @Req() req: any,
+  ) {
+    return this.subscribersService.assignOwnerBulk(
+      body?.subscriberIds || [], Number(body?.ownerId),
+      { actor: req.user, reason: body?.reason },
+    );
+  }
+
   /** Who has owned this subscriber, when, and at what price. */
   @Get(':id/transfers')
   transfers(@Param('id') id: string, @Req() req: any) {

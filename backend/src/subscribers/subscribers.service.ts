@@ -1212,6 +1212,163 @@ export class SubscribersService implements OnModuleInit {
     }
   }
 
+  /**
+   * Subscribers with NO owner account.
+   *
+   * These are invisible in every reseller's books, charge nobody on activation,
+   * and — when ACTIVE — are receiving service that no wallet ever paid for. The
+   * only trace is a NULL, which no report was looking for.
+   */
+  async findOwnerless(actor?: Actor) {
+    // Ownerless rows belong to nobody, so only an ISP-level account can see the
+    // full set; a reseller subtree query would return nothing by definition.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      throw new ForbiddenException('Only ISP-level accounts can list ownerless subscribers.');
+    }
+    const rows = await this.prisma.subscriber.findMany({
+      where: { userId: null },
+      select: {
+        id: true, username: true, fullName: true, status: true, createdAt: true,
+        package: { select: { name: true, price: true } },
+        salesperson: { select: { id: true, name: true, role: true } },
+        serviceSettings: { select: { expiryDate: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    const active = rows.filter((r) => r.status === 'ACTIVE');
+    return {
+      total: rows.length,
+      active: active.length,
+      items: rows.map((r) => ({
+        subscriberId: r.id, username: r.username, name: r.fullName, status: r.status,
+        package: r.package?.name ?? null, price: r.package?.price ?? null,
+        expiry: r.serviceSettings?.expiryDate ?? null,
+        // The most likely intended owner: whoever sold it.
+        suggestedOwner: r.salesperson ?? null,
+        createdAt: r.createdAt,
+      })),
+      note: active.length
+        ? `${active.length} of these are ACTIVE — they have working internet and no account is being billed for them.`
+        : 'None are currently active.',
+    };
+  }
+
+  /**
+   * ASSIGN AN OWNER TO AN OWNERLESS SUBSCRIBER — a data repair, not a transfer.
+   *
+   * WHY THIS IS NOT "MOVE". transferOwnership() deliberately SUSPENDS the
+   * customer and cuts their internet, because a real dealer-to-dealer handover
+   * must not leave them running on the new owner's books unpaid — the new owner
+   * activates, and that step charges them. That is right for a transfer.
+   *
+   * It is wrong for THIS. These subscribers have `userId = NULL`: no owner was
+   * ever recorded, so there is no previous owner to hand over from, and several
+   * of them are live, paying customers who are online right now. Running Move
+   * on them would take working customers offline to correct a database field.
+   *
+   * So this does exactly one thing: fills in the missing owner. It does NOT
+   * touch status, expiry, RADIUS or the session. Billing is a SEPARATE, explicit
+   * decision afterwards (see backchargeUnbilled) — assigning an owner must never
+   * silently reach into someone's wallet.
+   *
+   * Refuses outright if the subscriber ALREADY has an owner: changing that is a
+   * transfer, with money and service consequences, and must go through Move.
+   */
+  async assignOwner(
+    subscriberId: number,
+    newOwnerId: number,
+    opts: { actor?: Actor; reason?: string } = {},
+  ) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: { id: true, username: true, fullName: true, userId: true, status: true },
+    });
+    if (!sub) throw new NotFoundException(`Subscriber ${subscriberId} not found`);
+
+    if (sub.userId != null) {
+      throw new BadRequestException(
+        `${sub.fullName || sub.username} already belongs to an account. ` +
+        `Changing ownership is a transfer — use Move, which suspends the customer ` +
+        `until the new owner activates and pays for the remaining days.`,
+      );
+    }
+
+    const owner = await this.prisma.user.findUnique({
+      where: { id: newOwnerId },
+      select: { id: true, name: true, role: true, isActive: true },
+    });
+    if (!owner) throw new NotFoundException(`Account ${newOwnerId} not found`);
+    if (owner.isActive === false) {
+      throw new BadRequestException(`${owner.name} is deactivated — pick an active account.`);
+    }
+    // The caller must be allowed to hand customers to this account.
+    if (opts.actor && !this.scope.isAdmin(opts.actor.role)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(opts.actor));
+      if (!ids.includes(newOwnerId)) {
+        throw new ForbiddenException('You can only assign subscribers to accounts in your own tree.');
+      }
+    }
+
+    await this.prisma.subscriber.update({
+      where: { id: subscriberId },
+      data: { userId: newOwnerId },
+    });
+
+    await this.prisma.activityLog.create({
+      data: {
+        userId: opts.actor ? this.scope.actorId(opts.actor) : null,
+        action: 'SUBSCRIBER_OWNER_ASSIGNED',
+        entity: 'Subscriber',
+        entityId: subscriberId,
+        details:
+          `${sub.fullName || sub.username} had no owner; assigned to ${owner.name} (${owner.role}). ` +
+          `Service untouched (still ${sub.status}). Billing not changed — back-charge separately if required.` +
+          (opts.reason ? ` Reason: ${opts.reason}` : ''),
+      },
+    }).catch(() => null);
+
+    this.logger.log(
+      `Owner assigned: subscriber #${subscriberId} (${sub.username}) → ${owner.name} (#${owner.id}). ` +
+      `No service or billing change.`,
+    );
+
+    return {
+      ok: true,
+      subscriberId,
+      username: sub.username,
+      owner: { id: owner.id, name: owner.name, role: owner.role },
+      serviceChanged: false,
+      billed: false,
+      note: 'Owner recorded. The customer was not disconnected and nothing was charged — ' +
+            'use the back-charge tool if this activation should be billed.',
+    };
+  }
+
+  /** Bulk form of assignOwner — per-row results, one failure never aborts the rest. */
+  async assignOwnerBulk(
+    subscriberIds: number[],
+    newOwnerId: number,
+    opts: { actor?: Actor; reason?: string } = {},
+  ) {
+    const results: Array<{ subscriberId: number; status: 'assigned' | 'skipped' | 'failed'; reason?: string }> = [];
+    let assigned = 0, skipped = 0, failed = 0;
+    for (const id of (subscriberIds || []).slice(0, 500)) {
+      try {
+        await this.assignOwner(id, newOwnerId, opts);
+        results.push({ subscriberId: id, status: 'assigned' });
+        assigned++;
+      } catch (e: any) {
+        const msg = e?.message || 'Failed';
+        // "already belongs to an account" is a skip, not an error.
+        const isSkip = /already belongs/i.test(msg);
+        results.push({ subscriberId: id, status: isSkip ? 'skipped' : 'failed', reason: msg });
+        isSkip ? skipped++ : failed++;
+      }
+    }
+    return { assigned, skipped, failed, results };
+  }
+
   async create(data: any, actor?: Actor) {
     // IDEMPOTENCY: if the request carries a key and a subscriber was already
     // created with it (a retry or a double-clicked "Add"), return that record
