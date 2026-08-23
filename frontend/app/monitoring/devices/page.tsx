@@ -2,7 +2,11 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { ndm, fmtUptimeFull, fmtTime, catLabel, type NdmDevice } from "../ndm";
+import {
+  ndm, fmtUptimeFull, fmtTime, fmtBits, catLabel, sevColor, portState,
+  methodOf, isSnmp,
+  type NdmDevice, type NdmPort, type NdmAlert, type NdmEvent, type SyslogRow,
+} from "../ndm";
 // `Stat` is no longer used here: the old 8-tile strip was replaced by the
 // 6-KPI grid below. The card view (DeviceCard) still uses its own MiniStat.
 import { NDMCSS, NdmModal, useNdmRefresh } from "../ndm-ui";
@@ -17,6 +21,15 @@ const dash = (v: any): string => {
   return s && s !== "null" && s !== "undefined" && s !== "[object Object]" ? s : "—";
 };
 
+/**
+ * "OTHER" is the vendor default, not information. Showing it wastes a column
+ * and reads as though something is known when nothing is.
+ */
+const realVendor = (v: string | null | undefined) => {
+  const s = String(v || "").trim();
+  return !s || s.toUpperCase() === "OTHER" || s.toUpperCase() === "UNKNOWN" ? "" : s;
+};
+
 /** Operational state, in the order an engineer triages. */
 type DState = "DOWN" | "WARN" | "UP" | "PAUSED" | "UNKNOWN";
 const deviceState = (d: NdmDevice): DState => {
@@ -24,6 +37,30 @@ const deviceState = (d: NdmDevice): DState => {
   if (d.isReachable === false) return "DOWN";
   if (d.isReachable == null) return "UNKNOWN";
   return (d.openAlerts || 0) > 0 || (d.downPorts || 0) > 0 ? "WARN" : "UP";
+};
+
+/**
+ * WARNING must always be explainable. A vague amber badge tells an engineer
+ * nothing and trains them to ignore it, so the reason is computed here and
+ * shown next to the badge and in the expanded row.
+ */
+const warnReason = (d: NdmDevice): string => {
+  const parts: string[] = [];
+  if ((d.openAlerts || 0) > 0) parts.push(`${d.openAlerts} open alert${d.openAlerts === 1 ? "" : "s"}`);
+  if ((d.downPorts || 0) > 0) parts.push(`${d.downPorts} of ${d.portCount} ports down`);
+  return parts.join(" · ");
+};
+
+/** "6m", "2h 14m" — how long the current outage has lasted. */
+const downFor = (since: string | null | undefined): string => {
+  if (!since) return "";
+  const ms = Date.now() - new Date(since).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
 };
 const STATE_META: Record<DState, { label: string; cls: string }> = {
   DOWN:    { label: "Down",    cls: "st-down" },
@@ -49,12 +86,15 @@ export default function DevicesPage() {
   const [loaded, setLoaded] = React.useState(false);
   const [statusFilter, setStatusFilter] = React.useState<"ALL" | DState | "ALERTS">("ALL");
   const [groupFilter, setGroupFilter] = React.useState("ALL");
+  const [methodFilter, setMethodFilter] = React.useState<"ALL" | "SNMP" | "ICMP" | "HTTP">("ALL");
   const [sortKey, setSortKey] = React.useState<"triage" | "name" | "ip" | "alerts" | "uptime" | "poll">("triage");
   const [view, setView] = React.useState<"table" | "cards">("table");
   const [groupBy, setGroupBy] = React.useState<"none" | "status" | "group">("none");
   const [selected, setSelected] = React.useState<number[]>([]);
   const [expanded, setExpanded] = React.useState<number | null>(null);
   const [busyIds, setBusyIds] = React.useState<number[]>([]);
+  /** Device shown in the drawer. Held by id so live refreshes flow through. */
+  const [drawerId, setDrawerId] = React.useState<number | null>(null);
 
   React.useEffect(() => {
     try { const v = localStorage.getItem(VIEW_KEY); if (v === "cards" || v === "table") setView(v); } catch {}
@@ -103,8 +143,10 @@ export default function DevicesPage() {
       if (statusFilter === "ALERTS") { if (!(d.openAlerts > 0)) return false; }
       else if (statusFilter !== "ALL" && st !== statusFilter) return false;
       if (groupFilter !== "ALL" && (d.groupName || "—") !== groupFilter) return false;
+      if (methodFilter !== "ALL" && String(d.monitorMethod || "SNMP").toUpperCase() !== methodFilter) return false;
       if (!terms.length) return true;
-      const hay = `${d.name} ${d.ip} ${d.vendor} ${d.deviceType || ""} ${d.groupName || ""} ${d.location || ""}`.toLowerCase();
+      // Method is searchable too ("ping", "snmp") — a quick way to see one class.
+      const hay = `${d.name} ${d.ip} ${realVendor(d.vendor)} ${d.deviceType || ""} ${d.groupName || ""} ${d.location || ""} ${methodOf(d).label}`.toLowerCase();
       return terms.every((w) => hay.includes(w));
     });
     const by = {
@@ -120,7 +162,7 @@ export default function DevicesPage() {
         new Date(b.lastSnmpPollAt || 0).getTime() - new Date(a.lastSnmpPollAt || 0).getTime(),
     }[sortKey];
     return [...rows].sort(by);
-  }, [devices, dq, statusFilter, groupFilter, sortKey]);
+  }, [devices, dq, statusFilter, groupFilter, methodFilter, sortKey]);
 
   // Counts come from the device list so the chips always match the rows.
   const counts = React.useMemo(() => {
@@ -236,7 +278,21 @@ export default function DevicesPage() {
           <div className="ndmx-banner bad" role="status">
             <div>
               <b>{downList.length} device{downList.length === 1 ? " is" : "s are"} currently unreachable</b>
-              <span>{downList.slice(0, 4).map((d) => d.name).join(", ")}{downList.length > 4 ? ` +${downList.length - 4} more` : ""}</span>
+              {/* Method split first: it tells the engineer whether this is an
+                  SNMP problem or genuine loss of reachability. */}
+              <span>
+                {(() => {
+                  const snmpDown = downList.filter((x) => isSnmp(x)).length;
+                  const pingDown = downList.length - snmpDown;
+                  return [
+                    snmpDown ? `${snmpDown} SNMP device${snmpDown === 1 ? "" : "s"}` : "",
+                    pingDown ? `${pingDown} ICMP target${pingDown === 1 ? "" : "s"}` : "",
+                  ].filter(Boolean).join(" · ");
+                })()}
+                {" — "}
+                {downList.slice(0, 3).map((d) => d.name).join(", ")}
+                {downList.length > 3 ? ` +${downList.length - 3} more` : ""}
+              </span>
             </div>
             <div className="ndmx-banner-actions">
               <button className="ndm-btn" onClick={() => { setStatusFilter("DOWN"); setGroupBy("none"); }}>View down devices</button>
@@ -273,6 +329,13 @@ export default function DevicesPage() {
         </div>
 
         <div className="ndmx-selects">
+          <select aria-label="Filter by monitoring method" value={methodFilter}
+            onChange={(e) => setMethodFilter(e.target.value as any)}>
+            <option value="ALL">All monitoring</option>
+            <option value="SNMP">SNMP</option>
+            <option value="ICMP">ICMP Ping</option>
+            <option value="HTTP">HTTP/HTTPS</option>
+          </select>
           {groups.length > 0 && (
             <select aria-label="Filter by group" value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
               <option value="ALL">Group: all</option>
@@ -335,7 +398,7 @@ export default function DevicesPage() {
         <div className="ndm-empty">
           <b>No devices match your filters</b>
           <div style={{ marginTop: 12 }}>
-            <button className="ndm-btn" onClick={() => { setQ(""); setStatusFilter("ALL"); setGroupFilter("ALL"); }}>Clear filters</button>
+            <button className="ndm-btn" onClick={() => { setQ(""); setStatusFilter("ALL"); setGroupFilter("ALL"); setMethodFilter("ALL"); }}>Clear filters</button>
           </div>
         </div>
       ) : view === "cards" ? (
@@ -366,8 +429,8 @@ export default function DevicesPage() {
                         <input type="checkbox" aria-label="Select all visible devices"
                           checked={allVisibleSelected} onChange={toggleAll} />
                       </th>
-                      <th>Status</th><th>Device</th><th>Address</th><th>Type / group</th>
-                      <th>Ports</th><th>Uptime</th><th>Last poll</th><th>Alerts</th>
+                      <th>Status</th><th>Device</th><th>Address</th><th>Monitoring</th>
+                      <th>Ports</th><th>Uptime / RTT</th><th>Last check</th><th>Alerts</th>
                       <th className="ta-r">Actions</th>
                     </tr>
                   </thead>
@@ -380,7 +443,7 @@ export default function DevicesPage() {
                         expanded={expanded === d.id}
                         onSelect={() => setSelected((p) => p.includes(d.id) ? p.filter((x) => x !== d.id) : [...p, d.id])}
                         onExpand={() => setExpanded((p) => (p === d.id ? null : d.id))}
-                        onOpen={() => router.push(`/monitoring/devices/${d.id}`)}
+                        onOpen={() => setDrawerId(d.id)}
                         onCheck={() => checkNow(d.id)}
                         onPatch={(b) => patch(d.id, b)}
                         onDelete={() => removeDevice(d)}
@@ -394,7 +457,314 @@ export default function DevicesPage() {
         ))
       )}
 
+      {/* Drawer is keyed off the LIVE row, so the 15s poll and SSE pushes keep
+          its header/overview current while it is open. */}
+      {drawerId != null && (() => {
+        const dev = devices.find((x) => x.id === drawerId);
+        if (!dev) return null;
+        return (
+          <DeviceDrawer
+            d={dev}
+            busy={busyIds.includes(dev.id)}
+            onClose={() => setDrawerId(null)}
+            onOpenFull={() => router.push(`/monitoring/devices/${dev.id}`)}
+            onCheck={() => checkNow(dev.id)}
+            onPatch={(b) => patch(dev.id, b)}
+          />
+        );
+      })()}
+
       {wizard && <AddDeviceWizard onClose={() => setWizard(false)} onDone={() => { setWizard(false); void load().then(setDevices); void loadStats().then(setStats); }} />}
+    </div>
+  );
+}
+
+/**
+ * DEVICE DRAWER — everything about one device, without leaving the list.
+ *
+ * Built against the typed `ndm` API methods rather than the /devices/[id]
+ * page's internals, deliberately: that page keeps working untouched as the
+ * deep-link target (and still owns Traffic and History, which need their own
+ * time-range machinery). Refactoring it into shared components would have put
+ * working tabs at risk for no gain here.
+ *
+ * Every tab fetches ONLY when first opened, and the result is cached for the
+ * life of the drawer — opening a device must not pull ports, syslog, events and
+ * alerts for a device the engineer only glanced at.
+ */
+function DeviceDrawer({ d, onClose, onOpenFull, onCheck, onPatch, busy }: {
+  d: NdmDevice; onClose: () => void; onOpenFull: () => void;
+  onCheck: () => void; onPatch: (b: any) => void; busy: boolean;
+}) {
+  type Tab = "overview" | "ports" | "alerts" | "syslog" | "events";
+  const [tab, setTab] = React.useState<Tab>("overview");
+  const [ports, setPorts] = React.useState<NdmPort[] | null>(null);
+  const [alerts, setAlerts] = React.useState<NdmAlert[] | null>(null);
+  const [syslog, setSyslog] = React.useState<SyslogRow[] | null>(null);
+  const [events, setEvents] = React.useState<NdmEvent[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [tabErr, setTabErr] = React.useState("");
+  const [sevFilter, setSevFilter] = React.useState("ALL");
+  const [portQ, setPortQ] = React.useState("");
+
+  const st = deviceState(d);
+  const meta = STATE_META[st];
+
+  // Close on Escape — expected of any drawer.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Lazy-load the active tab once.
+  React.useEffect(() => {
+    let alive = true;
+    const need =
+      (tab === "ports" && ports === null) || (tab === "alerts" && alerts === null) ||
+      (tab === "syslog" && syslog === null) || (tab === "events" && events === null);
+    if (!need) return;
+    setLoading(true); setTabErr("");
+    (async () => {
+      try {
+        if (tab === "ports")  { const r = await ndm.ports(d.id); if (alive) setPorts(r); }
+        if (tab === "alerts") { const r = await ndm.alerts({ deviceId: d.id, limit: 50 }); if (alive) setAlerts(r.rows || []); }
+        if (tab === "syslog") { const r = await ndm.syslog({ deviceId: d.id, limit: 100 }); if (alive) setSyslog(r.rows || []); }
+        if (tab === "events") { const r = await ndm.events({ deviceId: d.id, limit: 100 }); if (alive) setEvents(r.rows || []); }
+      } catch (e: any) {
+        if (alive) setTabErr(e?.message || "Could not load this tab");
+      } finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [tab, d.id, ports, alerts, syslog, events]);
+
+  const ack = async (id: number) => {
+    try { await ndm.ackAlert(id); setAlerts(await ndm.alerts({ deviceId: d.id, limit: 50 }).then((r) => r.rows || [])); }
+    catch (e: any) { setTabErr(e?.message || "Acknowledge failed"); }
+  };
+
+  /** Only interfaces the poller actually monitors — PPPoE/dynamic stay out. */
+  const visiblePorts = (ports || []).filter((p) => {
+    if (!p.monitoringEnabled) return false;
+    if (!portQ.trim()) return true;
+    const hay = `${p.name} ${p.description || ""}`.toLowerCase();
+    return portQ.trim().toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+  });
+  const excludedCount = (ports || []).length - (ports || []).filter((p) => p.monitoringEnabled).length;
+
+  const visibleSyslog = (syslog || []).filter(
+    (r) => sevFilter === "ALL" || String(r.severityName || "").toUpperCase() === sevFilter);
+
+  return (
+    <div className="ndmx-drawer-bg" onClick={onClose} role="dialog" aria-modal="true"
+      aria-label={`Device ${d.name}`}>
+      <div className="ndmx-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="ndmx-drawer-h">
+          <div>
+            <div className="ndmx-drawer-title">
+              <span className={`ndmx-pill ${meta.cls}`}><i aria-hidden="true" /> {meta.label}</span>
+              <b>{dash(d.name)}</b>
+            </div>
+            <div className="ndmx-drawer-sub">
+              <span className="mono">{dash(d.ip)}</span>
+              <span>·</span><span>{dash(d.deviceType || d.vendor)}</span>
+              {d.groupName && <><span>·</span><span>{d.groupName}</span></>}
+              {d.location && <><span>·</span><span>{d.location}</span></>}
+            </div>
+          </div>
+          <div className="ndmx-drawer-actions">
+            <button className="ndm-btn sm" onClick={onCheck} disabled={busy}>{busy ? "Checking…" : "Check now"}</button>
+            <button className="ndm-btn sm" onClick={() => onPatch({ enabled: !d.enabled })}>{d.enabled ? "Pause" : "Resume"}</button>
+            <button className="ndm-btn sm" onClick={onOpenFull} title="Traffic and history live on the full page">Full page</button>
+            <button className="ndm-btn sm" onClick={onClose} aria-label="Close">✕</button>
+          </div>
+        </div>
+
+        <div className="ndmx-drawer-tabs" role="tablist">
+          {/* Only tabs that apply to THIS method. An ICMP target has no
+              interface table and receives no syslog, so offering those tabs
+              would promise data that cannot exist. */}
+          {(isSnmp(d)
+            ? ([["overview", "Overview"], ["ports", "Ports"], ["alerts", "Alerts"],
+                ["syslog", "Syslog"], ["events", "Events"]] as const)
+            : ([["overview", "Overview"], ["alerts", "Alerts"], ["events", "Events"]] as const)
+          ).map(([k, label]) => (
+            <button key={k} role="tab" aria-selected={tab === k}
+              className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
+              {label}
+              {k === "alerts" && d.openAlerts > 0 && <em>{d.openAlerts}</em>}
+            </button>
+          ))}
+        </div>
+
+        <div className="ndmx-drawer-body">
+          {tabErr && <div className="ndm-err" role="alert">{tabErr}</div>}
+
+          {tab === "overview" && (
+            <>
+              <div className="ndmx-exp-grid">
+                <Field label="Monitoring" value={methodOf(d).label} />
+                <Field label="Status" value={meta.label} />
+                <Field label="Reachable" value={d.isReachable == null ? "Not checked yet" : d.isReachable ? "Yes" : "No"} />
+                {isSnmp(d) ? (
+                  <>
+                    <Field label="SNMP uptime" value={d.uptimeSec ? fmtUptimeFull(d.uptimeSec) : "—"} />
+                    <Field label="Ports up / total" value={d.portCount ? `${d.upPorts} / ${d.portCount}` : "—"} />
+                    <Field label="Ports down" value={d.downPorts || 0} />
+                    <Field label="Last syslog" value={d.lastSyslogAt ? fmtTime(d.lastSyslogAt) : "No syslog received"} />
+                  </>
+                ) : (
+                  <>
+                    <Field label="Response time" value={d.lastLatencyMs != null ? `${d.lastLatencyMs} ms` : "—"} />
+                    {d.lastLossPct != null && <Field label="Packet loss" value={`${Math.round(d.lastLossPct)}%`} />}
+                    <Field label="Last successful check" value={d.lastOkAt ? fmtTime(d.lastOkAt) : "Never"} />
+                    {st === "DOWN" && <Field label="Down for" value={downFor(d.downSince) || "—"} />}
+                  </>
+                )}
+                <Field label="Last check" value={d.lastSnmpPollAt ? fmtTime(d.lastSnmpPollAt) : "Never"} />
+                <Field label="Open alerts" value={d.openAlerts || 0} />
+                {realVendor(d.vendor) && <Field label="Vendor" value={realVendor(d.vendor)} />}
+                <Field label="Monitoring" value={d.enabled ? "Enabled" : "Paused"} />
+                <Field label="Alert sound" value={d.soundEnabled === false ? "Muted" : "On"} />
+                <Field label="Recovery sound" value={d.soundUpEnabled === false ? "Off" : "On"} />
+              </div>
+              {d.lastError && <div className="ndmx-reason"><b>Last failure:</b> {dash(d.lastError)}</div>}
+              {d.description && <div className="ndmx-desc">{dash(d.description)}</div>}
+              <p className="ndmx-note">
+                {isSnmp(d)
+                  ? "Interface traffic graphs and the full event history live on the device page — they need their own time-range controls. "
+                  : "This target is checked by ping, so there are no interface or traffic graphs. Event history lives on the device page. "}
+                <button className="linkish strong" onClick={onOpenFull}>Open full page</button>
+              </p>
+            </>
+          )}
+
+          {tab === "ports" && (
+            loading && ports === null ? <Skel rows={6} /> : (
+              <>
+                <div className="ndmx-drawer-tools">
+                  <input placeholder="Filter interfaces…" value={portQ} onChange={(e) => setPortQ(e.target.value)}
+                    aria-label="Filter interfaces" />
+                  {excludedCount > 0 && (
+                    <span className="muted" title="PPPoE / dynamic session interfaces are never monitored">
+                      {excludedCount} excluded
+                    </span>
+                  )}
+                </div>
+                {!visiblePorts.length ? <div className="ndm-empty sm">No monitored interfaces.</div> : (
+                  <table className="ndmx-table sub">
+                    <thead><tr><th>Interface</th><th>Description</th><th>State</th><th>Speed</th><th>RX</th><th>TX</th></tr></thead>
+                    <tbody>
+                      {visiblePorts.map((p) => {
+                        const s = portState(p);
+                        return (
+                          <tr key={p.id}>
+                            <td className="mono">{dash(p.name)}</td>
+                            <td className="muted">{dash(p.description)}</td>
+                            <td><span className={`ndmx-pill ${s === "up" ? "st-up" : s === "down" ? "st-down" : ""}`}>
+                              <i aria-hidden="true" /> {s === "disabled" ? "Disabled" : s === "up" ? "Up" : "Down"}
+                            </span></td>
+                            <td className="mono">{p.speedMbps ? `${p.speedMbps}M` : "—"}</td>
+                            <td className="mono">{p.rxRateBps != null ? fmtBits(p.rxRateBps) : "—"}</td>
+                            <td className="mono">{p.txRateBps != null ? fmtBits(p.txRateBps) : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )
+          )}
+
+          {tab === "alerts" && (
+            loading && alerts === null ? <Skel rows={4} /> :
+            !alerts?.length ? <div className="ndm-empty sm">No alerts for this device.</div> : (
+              <div className="ndmx-list">
+                {alerts.map((a) => (
+                  <div key={a.id} className="ndmx-item">
+                    <span className="sev" style={{ background: sevColor(a.severity) }} aria-hidden="true" />
+                    <div className="body">
+                      <b>{dash(a.title)}</b>
+                      <span className="muted">{dash(a.message)}</span>
+                      <span className="meta">
+                        {dash(a.severity)} · {fmtTime(a.openedAt)} · {dash(a.status)}
+                        {a.interfaceName ? ` · ${a.interfaceName}` : ""}
+                      </span>
+                    </div>
+                    {a.status === "OPEN" && !a.acknowledgedAt && (
+                      <button className="ndm-btn sm" onClick={() => ack(a.id)}>Acknowledge</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+
+          {tab === "syslog" && (
+            loading && syslog === null ? <Skel rows={6} /> : (
+              <>
+                <div className="ndmx-drawer-tools">
+                  <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value)} aria-label="Filter by severity">
+                    <option value="ALL">All severities</option>
+                    {["EMERGENCY", "ALERT", "CRITICAL", "ERROR", "WARNING", "NOTICE", "INFORMATIONAL", "DEBUG"]
+                      .map((s) => <option key={s} value={s}>{s[0] + s.slice(1).toLowerCase()}</option>)}
+                  </select>
+                </div>
+                {!visibleSyslog.length ? (
+                  <div className="ndm-empty sm">
+                    {syslog?.length ? "No messages at that severity." : "No syslog received from this device."}
+                  </div>
+                ) : (
+                  <table className="ndmx-table sub">
+                    <thead><tr><th>Time</th><th>Severity</th><th>Tag</th><th>Message</th></tr></thead>
+                    <tbody>
+                      {visibleSyslog.map((r) => (
+                        <tr key={r.id}>
+                          <td className="mono nowrap">{fmtTime(r.receivedAt)}</td>
+                          <td><span style={{ color: sevColor(r.severityName), fontWeight: 700 }}>{dash(r.severityName)}</span></td>
+                          <td className="mono">{dash(r.tag)}</td>
+                          <td>{dash(r.message)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )
+          )}
+
+          {tab === "events" && (
+            loading && events === null ? <Skel rows={5} /> :
+            !events?.length ? <div className="ndm-empty sm">No events recorded for this device.</div> : (
+              <div className="ndmx-list">
+                {events.map((e) => (
+                  <div key={e.id} className="ndmx-item">
+                    <span className="sev" style={{ background: sevColor(e.severity) }} aria-hidden="true" />
+                    <div className="body">
+                      <b>{dash(e.label || e.eventType)}</b>
+                      <span className="muted">{dash(e.message)}</span>
+                      <span className="meta">
+                        {fmtTime(e.createdAt)} · {dash(e.status)}
+                        {e.interfaceName ? ` · ${e.interfaceName}` : ""}
+                        {e.count > 1 ? ` · ×${e.count}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Skel({ rows }: { rows: number }) {
+  return (
+    <div className="ndmx-skel" aria-busy="true">
+      {Array.from({ length: rows }).map((_, i) => <div key={i} className="row" />)}
     </div>
   );
 }
@@ -428,6 +798,10 @@ function DeviceRow({ d, busy, selected, expanded, onSelect, onExpand, onOpen, on
   const st = deviceState(d);
   const meta = STATE_META[st];
   const portPct = d.portCount ? (d.upPorts / d.portCount) * 100 : 0;
+  const method = methodOf(d);
+  const snmp = isSnmp(d);
+  const vendor = realVendor(d.vendor);
+  const reason = warnReason(d);
 
   return (
     <>
@@ -440,24 +814,42 @@ function DeviceRow({ d, busy, selected, expanded, onSelect, onExpand, onOpen, on
           <span className={`ndmx-pill ${meta.cls}`}>
             <i aria-hidden="true" /> {meta.label}
           </span>
+          {st === "WARN" && reason && <span className="ndmx-why" title={reason}>{reason}</span>}
+          {st === "DOWN" && d.downSince && <span className="ndmx-why">for {downFor(d.downSince)}</span>}
         </td>
         <td className="nm">
           <button className="linkish" onClick={onExpand} aria-expanded={expanded}
-            title="Show quick details">{expanded ? "▾" : "▸"}</button>
+            title={expanded ? "Collapse" : "Show quick details"}>{expanded ? "▾" : "▸"}</button>
           <button className="linkish strong" onClick={onOpen} title="Open device">{dash(d.name)}</button>
-          {d.location && <span className="muted"> · {dash(d.location)}</span>}
+          {/* Secondary line only when there is something real to say — no
+              trailing "· —" next to every device name. */}
+          {(d.deviceType || d.location) && (
+            <div className="ndmx-sub">{[d.deviceType, d.location].filter(Boolean).join(" · ")}</div>
+          )}
         </td>
         <td className="mono">{dash(d.ip)}</td>
-        <td className="muted">{dash(d.deviceType || d.vendor)}{d.groupName ? ` · ${d.groupName}` : ""}</td>
+        <td className="muted">
+          {/* Method first: it is what tells an engineer whether a failure is an
+              SNMP problem or a reachability problem. */}
+          {method.label}
+          {vendor && <span className="dimmer"> · {vendor}</span>}
+          {d.groupName && <span className="dimmer"> · {d.groupName}</span>}
+        </td>
         <td>
-          {d.portCount ? (
+          {!snmp ? (
+            <span className="muted" title="Ports come from SNMP — this target is not SNMP-polled">—</span>
+          ) : d.portCount ? (
             <div className="ndmx-ports">
               <span>{d.upPorts}/{d.portCount}</span>
               <div className="ndmx-bar sm" aria-hidden="true"><i className={d.downPorts ? "warn" : ""} style={{ width: `${portPct}%` }} /></div>
             </div>
-          ) : "—"}
+          ) : <span className="muted">—</span>}
         </td>
-        <td className="mono">{d.uptimeSec ? fmtUptimeFull(d.uptimeSec) : "—"}</td>
+        <td className="mono">
+          {snmp && d.uptimeSec ? fmtUptimeFull(d.uptimeSec)
+            : !snmp && d.lastLatencyMs != null ? `${d.lastLatencyMs} ms`
+            : <span className="muted">—</span>}
+        </td>
         <td className="muted">{d.lastSnmpPollAt ? fmtTime(d.lastSnmpPollAt) : "—"}</td>
         <td>{d.openAlerts > 0 ? <span className="ndmx-alerts">{d.openAlerts}</span> : <span className="muted">—</span>}</td>
         <td className="ta-r nowrap">
@@ -490,18 +882,36 @@ function DeviceRow({ d, busy, selected, expanded, onSelect, onExpand, onOpen, on
       {expanded && (
         <tr className="ndmx-exp">
           <td colSpan={10}>
+            {/* Only the fields that MEAN something for this method. A ping
+                target has no ports, no SNMP uptime and no syslog — printing
+                them as "—" is noise that hides the fields that do matter. */}
             <div className="ndmx-exp-grid">
+              <Field label="Monitoring" value={method.label} />
               <Field label="State" value={meta.label} />
-              <Field label="Vendor" value={dash(d.vendor)} />
-              <Field label="Group" value={dash(d.groupName)} />
-              <Field label="Location" value={dash(d.location)} />
-              <Field label="Ports up / total" value={d.portCount ? `${d.upPorts} / ${d.portCount}` : "—"} />
-              <Field label="Ports down" value={d.downPorts || 0} />
-              <Field label="Uptime (SNMP)" value={d.uptimeSec ? fmtUptimeFull(d.uptimeSec) : "—"} />
-              <Field label="Last SNMP poll" value={d.lastSnmpPollAt ? fmtTime(d.lastSnmpPollAt) : "Never"} />
-              <Field label="Last syslog" value={d.lastSyslogAt ? fmtTime(d.lastSyslogAt) : "No syslog received"} />
+              {st === "WARN" && reason && <Field label="Warning reason" value={reason} />}
+              {vendor && <Field label="Vendor" value={vendor} />}
+              {d.groupName && <Field label="Group" value={d.groupName} />}
+              {d.location && <Field label="Location" value={d.location} />}
+
+              {snmp ? (
+                <>
+                  <Field label="Ports up / total" value={d.portCount ? `${d.upPorts} / ${d.portCount}` : "—"} />
+                  <Field label="Ports down" value={d.downPorts || 0} />
+                  <Field label="SNMP uptime" value={d.uptimeSec ? fmtUptimeFull(d.uptimeSec) : "—"} />
+                  <Field label="Last syslog" value={d.lastSyslogAt ? fmtTime(d.lastSyslogAt) : "No syslog received"} />
+                </>
+              ) : (
+                <>
+                  <Field label="Response time" value={d.lastLatencyMs != null ? `${d.lastLatencyMs} ms` : "—"} />
+                  {d.lastLossPct != null && <Field label="Packet loss" value={`${Math.round(d.lastLossPct)}%`} />}
+                  <Field label="Last successful check" value={d.lastOkAt ? fmtTime(d.lastOkAt) : "Never"} />
+                  {st === "DOWN" && <Field label="Down for" value={downFor(d.downSince) || "—"} />}
+                </>
+              )}
+
+              <Field label="Last check" value={d.lastSnmpPollAt ? fmtTime(d.lastSnmpPollAt) : "Never"} />
               <Field label="Open alerts" value={d.openAlerts || 0} />
-              <Field label="Polling" value={d.enabled ? "Enabled" : "Paused"} />
+              <Field label="Monitoring" value={d.enabled ? "Enabled" : "Paused"} />
               <Field label="Alert sound" value={d.soundEnabled === false ? "Muted" : "On"} />
             </div>
             {d.lastError && (
@@ -511,7 +921,7 @@ function DeviceRow({ d, busy, selected, expanded, onSelect, onExpand, onOpen, on
             )}
             {d.description && <div className="ndmx-desc">{dash(d.description)}</div>}
             <div className="ndmx-exp-actions">
-              <button className="ndm-btn pri sm" onClick={onOpen}>Open full details</button>
+              <button className="ndm-btn pri sm" onClick={onOpen}>Open device</button>
               <button className="ndm-btn sm" onClick={onCheck} disabled={busy}>{busy ? "Checking…" : "Check now"}</button>
             </div>
           </td>
@@ -631,6 +1041,14 @@ const DEVCSS = `
 .ndmx-pill.st-warn{color:var(--warning,#B45309);border-color:rgba(180,83,9,.4);background:rgba(180,83,9,.08)}
 .ndmx-pill.st-up{color:var(--online,#157F43);border-color:rgba(21,127,67,.35);background:rgba(21,127,67,.07)}
 .ndmx-ports{display:flex;align-items:center;gap:7px;font-variant-numeric:tabular-nums}
+/* Secondary line under a device name — only rendered when there is real
+   content, so no row ever ends in a stray "· —". */
+.ndmx-sub{font-size:10.5px;color:var(--muted);margin-left:20px;margin-top:1px}
+/* Why a row is amber/red, next to the badge. A status without a reason is
+   noise an engineer learns to ignore. */
+.ndmx-why{display:block;font-size:10px;color:var(--muted);margin-top:2px;max-width:190px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dimmer{opacity:.7}
 .ndmx-alerts{display:inline-block;min-width:20px;text-align:center;background:rgba(176,42,55,.12);
   color:var(--danger,#B02A37);border:1px solid rgba(176,42,55,.35);border-radius:99px;padding:1px 7px;font-weight:800}
 
@@ -660,6 +1078,43 @@ const DEVCSS = `
   background:linear-gradient(90deg,rgba(127,127,127,.06),rgba(127,127,127,.14),rgba(127,127,127,.06));
   background-size:200% 100%;animation:ndmxsk 1.2s ease-in-out infinite}
 @keyframes ndmxsk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ── Device drawer ── */
+.ndmx-drawer-bg{position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.42);backdrop-filter:blur(2px);
+  display:flex;justify-content:flex-end}
+.ndmx-drawer{width:min(760px,96vw);height:100%;background:var(--surface);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;box-shadow:-16px 0 44px rgba(0,0,0,.35)}
+.ndmx-drawer-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;
+  padding:14px 18px;border-bottom:1px solid var(--border)}
+.ndmx-drawer-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.ndmx-drawer-title b{font-size:16px;font-weight:800}
+.ndmx-drawer-sub{display:flex;gap:6px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:4px}
+.ndmx-drawer-actions{display:flex;gap:6px;flex-wrap:wrap}
+.ndmx-drawer-tabs{display:flex;gap:2px;padding:0 12px;border-bottom:1px solid var(--border);overflow-x:auto}
+.ndmx-drawer-tabs button{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;
+  padding:9px 12px;font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap;
+  display:inline-flex;align-items:center;gap:6px}
+.ndmx-drawer-tabs button:hover{color:var(--text)}
+.ndmx-drawer-tabs button.on{color:var(--accent,#3C50E0);border-bottom-color:var(--accent,#3C50E0)}
+.ndmx-drawer-tabs button em{font-style:normal;font-size:10px;font-weight:800;background:rgba(176,42,55,.14);
+  color:var(--danger,#B02A37);border-radius:99px;padding:1px 6px}
+.ndmx-drawer-body{flex:1;overflow:auto;padding:14px 18px}
+.ndmx-drawer-tools{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.ndmx-drawer-tools input,.ndmx-drawer-tools select{border:1px solid var(--border);border-radius:var(--r);
+  padding:6px 9px;background:var(--surface);color:var(--text);font-size:12.5px}
+.ndmx-drawer-tools input{flex:1;min-width:160px}
+.ndmx-note{font-size:11.5px;color:var(--muted);margin-top:12px;line-height:1.6}
+.ndmx-table.sub{font-size:12px}
+.ndmx-table.sub th{position:static}
+.ndm-empty.sm{padding:18px;font-size:12.5px}
+.ndmx-list{display:flex;flex-direction:column;gap:6px}
+.ndmx-item{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--r);
+  padding:9px 11px}
+.ndmx-item .sev{width:3px;align-self:stretch;border-radius:99px;flex:none}
+.ndmx-item .body{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+.ndmx-item .body b{font-size:12.5px}
+.ndmx-item .body .muted{font-size:12px;color:var(--muted);word-break:break-word}
+.ndmx-item .body .meta{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 
 @media (max-width:900px){
   .ndmx-table th:nth-child(5),.ndmx-table td:nth-child(5),

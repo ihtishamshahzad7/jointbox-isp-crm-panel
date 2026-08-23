@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { execFile } from 'child_process';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { EventsService } from '../common/events.service';
@@ -121,6 +122,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
           id: true, name: true, ip: true, vendor: true, snmpVersion: true,
           snmpPort: true, pollIntervalSec: true, snmpTimeoutMs: true, snmpRetries: true,
           ownerId: true, syslogEnabled: true, isReachable: true, uptimeSec: true,
+          // Without this the branch in pollDevice() cannot see the method and
+          // every target would fall back to SNMP again.
+          monitorMethod: true, downSince: true,
         },
       });
       const now = Date.now();
@@ -148,8 +152,67 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
+  /**
+   * ICMP reachability for targets that are not SNMP devices.
+   *
+   * 2 packets, 2s deadline — enough to distinguish "answers" from "does not"
+   * without holding the sweep open. Returns the latest values only; this page
+   * shows CURRENT state, and latency history belongs to the ping-monitor
+   * module rather than being duplicated here.
+   */
+  private ping(host: string): Promise<{ up: boolean; ms: number | null; loss: number }> {
+    return new Promise((resolve) => {
+      execFile('ping', ['-n', '-c', '2', '-w', '2', host], { timeout: 5000 }, (_err, stdout) => {
+        const out = String(stdout || '');
+        const lossM = out.match(/([\d.]+)% packet loss/);
+        const rttM = out.match(/=\s*[\d.]+\/([\d.]+)\//); // avg
+        const loss = lossM ? parseFloat(lossM[1]) : 100;
+        resolve({ up: loss < 100, ms: rttM ? Math.round(parseFloat(rttM[1]) * 10) / 10 : null, loss });
+      });
+    });
+  }
+
   private async pollDevice(device: any, force = false) {
     if (!force) this.last.set(device.id, Date.now());
+
+    /**
+     * RUN THE CHECK THE DEVICE IS ACTUALLY CONFIGURED FOR.
+     *
+     * This used to run SNMP unconditionally, so an internet target with no
+     * SNMP agent was reported as "SNMP timeout" — a wrong status AND a
+     * misleading reason, on a host that answers ping instantly. HTTP is
+     * treated as ICMP for now: reachability is still measured honestly, and
+     * the method is recorded so the UI never claims a check it did not run.
+     */
+    const method = String(device.monitorMethod || 'SNMP').toUpperCase();
+    if (method === 'ICMP' || method === 'HTTP') {
+      const r = await this.ping(device.ip);
+      if (!r.up) {
+        await this.markUnreachable(device, 'Ping timeout — no ICMP reply');
+        return;
+      }
+      const now = new Date();
+      await this.prisma.networkDevice.update({
+        where: { id: device.id },
+        data: {
+          isReachable: true, lastError: null, lastSnmpPollAt: now, lastOkAt: now,
+          downSince: null, lastLatencyMs: r.ms, lastLossPct: r.loss,
+          // An ICMP target has no interface table — never fabricate port counts.
+          interfaceCount: 0, upPorts: 0, downPorts: 0,
+        },
+      });
+      if (device.isReachable === false) {
+        const ev = await this.eventEngine.record({
+          eventType: 'DEVICE_UP', source: 'POLL', device,
+          message: `Device is answering ping again (${r.ms ?? '—'} ms)`,
+        });
+        await this.alerts.evaluate({ eventId: ev.id, eventType: 'DEVICE_UP', message: ev.message, severity: 'info', device });
+        await this.alerts.onRecovery({ eventType: 'DEVICE_UP', deviceId: device.id, deviceName: device.name });
+        this.broadcastDevice('up', device.name, null);
+      }
+      return;
+    }
+
     const table = await this.snmp.readInterfaceTable(device);
     if (!table.reachable || !table.interfaces.length) {
       await this.markUnreachable(device, table.error || 'SNMP timeout');
@@ -166,7 +229,12 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     this.prev.delete(device.id);
     await this.prisma.networkDevice.update({
       where: { id: device.id },
-      data: { isReachable: false, lastError: String(error).slice(0, 500), lastSnmpPollAt: new Date() },
+      data: {
+        isReachable: false, lastError: String(error).slice(0, 500), lastSnmpPollAt: new Date(),
+        // Stamped on the FIRST failure only, so "down for 6m" measures the
+        // outage rather than resetting on every poll.
+        ...(device.downSince ? {} : { downSince: new Date() }),
+      },
     });
     if (wasUp) {
       const ev = await this.eventEngine.record({
@@ -397,6 +465,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
       where: { id: device.id },
       data: {
         isReachable: true, lastError: null, lastSnmpPollAt: now,
+        // Clear the outage stamp on recovery, and record the last good check so
+        // the UI can show "last successful check" without inferring it.
+        lastOkAt: now, downSince: null,
         interfaceCount: table.interfaces.length, upPorts: up, downPorts: down,
         uptimeSec: sysUpSeconds, // real seconds (sysUpTime ticks ÷ 100)
       },

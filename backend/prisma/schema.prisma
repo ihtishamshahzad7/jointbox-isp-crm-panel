@@ -3071,9 +3071,31 @@ model NetworkDevice {
   location      String?  @db.VarChar(160)
   description   String?  @db.VarChar(500)
   enabled       Boolean  @default(true)
+  /// HOW this target is actually checked — SNMP | ICMP | HTTP.
+  ///
+  /// Every NetworkDevice used to be SNMP-polled unconditionally, because the
+  /// module was built for switches and routers. Operators then (reasonably)
+  /// added plain internet targets — 8.8.8.8, google.com, youtube.com — which
+  /// answer ping but have no SNMP agent, so the poller reported "SNMP timeout"
+  /// on hosts that were perfectly reachable. The status was wrong, the failure
+  /// reason was misleading, and the sweep wasted a timeout on each one.
+  ///
+  /// SNMP → interface table, ports, traffic, uptime (a real network device)
+  /// ICMP → reachability + latency only; no ports, no SNMP uptime
+  /// HTTP → endpoint check (reserved; polled as ICMP until implemented)
+  monitorMethod String   @db.VarChar(8) @default("SNMP")
   /// V2C | V3
   snmpVersion   String   @db.VarChar(8) @default("V2C")
   snmpPort      Int      @default(161)
+  /// Last ICMP round-trip in ms and loss %, for ICMP targets. Latest value
+  /// only — deliberately NOT a history series: this page shows current state,
+  /// and long-term latency graphing belongs to the ping-monitor module.
+  lastLatencyMs Float?
+  lastLossPct   Float?
+  /// When the target last answered successfully (either method).
+  lastOkAt      DateTime?
+  /// When it first went down in the current outage — drives "down for 6m".
+  downSince     DateTime?
   pollIntervalSec Int    @default(30) // 10 | 30 | 60 | 300
   snmpTimeoutMs Int      @default(5000)
   snmpRetries   Int      @default(1)

@@ -80,6 +80,11 @@ export class NdmService {
       lastSnmpPollAt: r.lastSnmpPollAt, lastSyslogAt: r.lastSyslogAt, lastError: r.lastError,
       soundEnabled: r.soundEnabled, soundUpEnabled: r.soundUpEnabled,
       openAlerts: r._count?.alerts ?? 0, portCount: r._count?.interfaces ?? 0,
+      // How this target is ACTUALLY checked, plus the ICMP result fields. The
+      // UI must never infer the method from the address — a switch on a public
+      // IP is still SNMP, and an internal host can be ping-only.
+      monitorMethod: r.monitorMethod, lastLatencyMs: r.lastLatencyMs,
+      lastLossPct: r.lastLossPct, lastOkAt: r.lastOkAt, downSince: r.downSince,
       createdAt: r.createdAt,
     }));
   }
@@ -182,6 +187,11 @@ export class NdmService {
         groupName: body.groupName ? String(body.groupName).slice(0, 80) : null,
         location: body.location ? String(body.location).slice(0, 160) : null,
         description: body.description ? String(body.description).slice(0, 500) : null,
+        // SNMP unless told otherwise — the module's devices are overwhelmingly
+        // switches and routers, and defaulting a real device to ping would
+        // silently stop collecting ports and traffic.
+        monitorMethod: ['SNMP', 'ICMP', 'HTTP'].includes(String(body.monitorMethod || '').toUpperCase())
+          ? String(body.monitorMethod).toUpperCase() : 'SNMP',
         snmpVersion: String(body.snmpVersion || 'V2C').toUpperCase(),
         snmpPort: Number(body.snmpPort) || 161,
         pollIntervalSec: Number(body.pollIntervalSec) || 30,
@@ -213,6 +223,22 @@ export class NdmService {
       data.ip = ip;
     }
     if (body.enabled !== undefined) data.enabled = !!body.enabled;
+    if (body.monitorMethod !== undefined) {
+      const m = String(body.monitorMethod).toUpperCase();
+      if (!['SNMP', 'ICMP', 'HTTP'].includes(m)) {
+        throw new BadRequestException('Monitoring method must be SNMP, ICMP or HTTP.');
+      }
+      data.monitorMethod = m;
+      // Switching AWAY from SNMP: the cached port counts describe a method no
+      // longer in use, and leaving them would show "9 / 22 ports" on a target
+      // that is only pinged. The interface rows themselves are kept, so
+      // switching back restores the history rather than rediscovering it.
+      if (m !== 'SNMP') {
+        data.interfaceCount = 0;
+        data.upPorts = 0;
+        data.downPorts = 0;
+      }
+    }
     if (body.snmpVersion !== undefined) data.snmpVersion = String(body.snmpVersion).toUpperCase();
     if (body.snmpPort !== undefined) data.snmpPort = Number(body.snmpPort) || 161;
     if (body.pollIntervalSec !== undefined) {

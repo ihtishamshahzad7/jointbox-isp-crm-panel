@@ -28,7 +28,30 @@ export type NdmDevice = {
   lastSnmpPollAt: string | null; lastSyslogAt: string | null; lastError: string | null;
   soundEnabled: boolean; soundUpEnabled: boolean;
   openAlerts: number; portCount: number; createdAt: string;
+  /**
+   * How this target is ACTUALLY checked. Never infer it from the address — a
+   * switch can sit on a public IP, and an internal host can be ping-only.
+   * SNMP → ports/traffic/uptime. ICMP/HTTP → reachability + latency only.
+   */
+  monitorMethod?: "SNMP" | "ICMP" | "HTTP";
+  lastLatencyMs?: number | null;
+  lastLossPct?: number | null;
+  lastOkAt?: string | null;
+  downSince?: string | null;
 };
+
+/** Label + failure wording per method, so the UI never says "SNMP timeout"
+ *  about a target that is only pinged. */
+export const METHOD_META: Record<string, { label: string; short: string; timeout: string }> = {
+  SNMP: { label: "SNMP", short: "SNMP", timeout: "SNMP timeout" },
+  ICMP: { label: "ICMP Ping", short: "Ping", timeout: "Ping timeout" },
+  HTTP: { label: "HTTP Check", short: "HTTP", timeout: "Connection timeout" },
+};
+export const methodOf = (d: { monitorMethod?: string | null }) =>
+  METHOD_META[String(d.monitorMethod || "SNMP").toUpperCase()] || METHOD_META.SNMP;
+/** SNMP is the only method that yields interfaces, traffic and device uptime. */
+export const isSnmp = (d: { monitorMethod?: string | null }) =>
+  String(d.monitorMethod || "SNMP").toUpperCase() === "SNMP";
 
 export type NdmPort = {
   id: number; ifIndex: number; name: string; description: string | null;
