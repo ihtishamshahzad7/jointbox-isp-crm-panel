@@ -3,10 +3,39 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import { ndm, fmtUptimeFull, fmtTime, catLabel, type NdmDevice } from "../ndm";
-import { NDMCSS, NdmModal, Stat, useNdmRefresh } from "../ndm-ui";
+// `Stat` is no longer used here: the old 8-tile strip was replaced by the
+// 6-KPI grid below. The card view (DeviceCard) still uses its own MiniStat.
+import { NDMCSS, NdmModal, useNdmRefresh } from "../ndm-ui";
 import { NdmSoundBell } from "../../components/ndm-sound";
 import { useSSE } from "../../components/use-sse";
 import Link from "next/link";
+
+/** Nothing in the UI may ever print null/undefined/[object Object]. */
+const dash = (v: any): string => {
+  if (v === null || v === undefined) return "—";
+  const s = typeof v === "object" ? "" : String(v).trim();
+  return s && s !== "null" && s !== "undefined" && s !== "[object Object]" ? s : "—";
+};
+
+/** Operational state, in the order an engineer triages. */
+type DState = "DOWN" | "WARN" | "UP" | "PAUSED" | "UNKNOWN";
+const deviceState = (d: NdmDevice): DState => {
+  if (!d.enabled) return "PAUSED";
+  if (d.isReachable === false) return "DOWN";
+  if (d.isReachable == null) return "UNKNOWN";
+  return (d.openAlerts || 0) > 0 || (d.downPorts || 0) > 0 ? "WARN" : "UP";
+};
+const STATE_META: Record<DState, { label: string; cls: string }> = {
+  DOWN:    { label: "Down",    cls: "st-down" },
+  WARN:    { label: "Warning", cls: "st-warn" },
+  UP:      { label: "Up",      cls: "st-up" },
+  PAUSED:  { label: "Paused",  cls: "st-paused" },
+  UNKNOWN: { label: "Pending", cls: "st-unknown" },
+};
+/** Triage order: Down → alerts → Warning → Up → Paused. */
+const TRIAGE: Record<DState, number> = { DOWN: 0, WARN: 1, UNKNOWN: 2, UP: 3, PAUSED: 4 };
+
+const VIEW_KEY = "jb.ndm.devices.view";
 
 /** Network devices (SNMP switches/routers) — list + add wizard. */
 export default function DevicesPage() {
@@ -15,40 +44,161 @@ export default function DevicesPage() {
   const [stats, setStats] = React.useState<any>(null);
   const [err, setErr] = React.useState("");
   const [q, setQ] = React.useState("");
-  const [adding, setAdding] = React.useState(false);
+  const [dq, setDq] = React.useState("");           // debounced query
   const [wizard, setWizard] = React.useState(false);
+  const [loaded, setLoaded] = React.useState(false);
+  const [statusFilter, setStatusFilter] = React.useState<"ALL" | DState | "ALERTS">("ALL");
+  const [groupFilter, setGroupFilter] = React.useState("ALL");
+  const [sortKey, setSortKey] = React.useState<"triage" | "name" | "ip" | "alerts" | "uptime" | "poll">("triage");
+  const [view, setView] = React.useState<"table" | "cards">("table");
+  const [groupBy, setGroupBy] = React.useState<"none" | "status" | "group">("none");
+  const [selected, setSelected] = React.useState<number[]>([]);
+  const [expanded, setExpanded] = React.useState<number | null>(null);
+  const [busyIds, setBusyIds] = React.useState<number[]>([]);
+
+  React.useEffect(() => {
+    try { const v = localStorage.getItem(VIEW_KEY); if (v === "cards" || v === "table") setView(v); } catch {}
+  }, []);
+  const pickView = (v: "table" | "cards") => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch {} };
+
+  // Debounce search so 500 rows don't re-filter on every keystroke.
+  React.useEffect(() => { const t = setTimeout(() => setDq(q), 180); return () => clearTimeout(t); }, [q]);
 
   const load = React.useCallback(async () => {
-    try { return await ndm.devices(); } catch (e: any) { setErr(e?.message || "Could not load devices"); return []; }
+    try { const r = await ndm.devices(); setErr(""); setLoaded(true); return r; }
+    catch (e: any) { setErr(e?.message || "Could not load devices"); setLoaded(true); return []; }
   }, []);
+  /**
+   * MUST RETURN the stats, not set them.
+   *
+   * useNdmRefresh does `setter(await loader())`. This used to call setStats()
+   * itself and return undefined, so the very next line wrote `undefined` over
+   * the value it had just stored — every KPI fell back to 0 on each refresh.
+   * Returning the object lets useNdmRefresh commit it, which is the contract
+   * the hook expects (and how `load` already behaved).
+   */
   const loadStats = React.useCallback(async () => {
-    try { setStats(await ndm.stats()); } catch { /* fine */ }
+    try { return await ndm.stats(); } catch { return null; }
   }, []);
 
   useNdmRefresh(load, setDevices, [load]);
   useNdmRefresh(loadStats, setStats, [loadStats], 30000);
   // Live: re-fetch on any push from the poller/syslog.
   useSSE({ onEvent: (t: string) => {
-    if (t === "ndm:event" || t === "ndm:alert" || t === "ndm:device" || t === "ndm:port") { void load(); void loadStats(); }
+    // Commit both results — a bare `void load()` fetched the rows and threw
+    // them away, so a live push only took effect on the next 15s poll.
+    if (t === "ndm:event" || t === "ndm:alert" || t === "ndm:device" || t === "ndm:port") {
+      void load().then(setDevices); void loadStats().then(setStats);
+    }
   } });
 
-  const filtered = devices.filter((d) => {
-    if (!q.trim()) return true;
-    const hay = `${d.name} ${d.ip} ${d.vendor} ${d.groupName || ""} ${d.location || ""}`.toLowerCase();
-    return q.trim().toLowerCase().split(/\s+/).every((w) => hay.includes(w));
-  });
+  const groups = React.useMemo(
+    () => [...new Set(devices.map((d) => d.groupName).filter(Boolean) as string[])].sort(),
+    [devices]);
+
+  const filtered = React.useMemo(() => {
+    const terms = dq.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = devices.filter((d) => {
+      const st = deviceState(d);
+      if (statusFilter === "ALERTS") { if (!(d.openAlerts > 0)) return false; }
+      else if (statusFilter !== "ALL" && st !== statusFilter) return false;
+      if (groupFilter !== "ALL" && (d.groupName || "—") !== groupFilter) return false;
+      if (!terms.length) return true;
+      const hay = `${d.name} ${d.ip} ${d.vendor} ${d.deviceType || ""} ${d.groupName || ""} ${d.location || ""}`.toLowerCase();
+      return terms.every((w) => hay.includes(w));
+    });
+    const by = {
+      triage: (a: NdmDevice, b: NdmDevice) =>
+        TRIAGE[deviceState(a)] - TRIAGE[deviceState(b)] ||
+        (b.openAlerts || 0) - (a.openAlerts || 0) ||
+        a.name.localeCompare(b.name),
+      name:   (a: NdmDevice, b: NdmDevice) => a.name.localeCompare(b.name),
+      ip:     (a: NdmDevice, b: NdmDevice) => a.ip.localeCompare(b.ip, undefined, { numeric: true }),
+      alerts: (a: NdmDevice, b: NdmDevice) => (b.openAlerts || 0) - (a.openAlerts || 0),
+      uptime: (a: NdmDevice, b: NdmDevice) => Number(b.uptimeSec || 0) - Number(a.uptimeSec || 0),
+      poll:   (a: NdmDevice, b: NdmDevice) =>
+        new Date(b.lastSnmpPollAt || 0).getTime() - new Date(a.lastSnmpPollAt || 0).getTime(),
+    }[sortKey];
+    return [...rows].sort(by);
+  }, [devices, dq, statusFilter, groupFilter, sortKey]);
+
+  // Counts come from the device list so the chips always match the rows.
+  const counts = React.useMemo(() => {
+    const c = { ALL: devices.length, DOWN: 0, WARN: 0, UP: 0, PAUSED: 0, UNKNOWN: 0, ALERTS: 0 } as Record<string, number>;
+    for (const d of devices) { c[deviceState(d)]++; if (d.openAlerts > 0) c.ALERTS++; }
+    return c;
+  }, [devices]);
+
   const ds = stats?.devices || { total: 0, reachable: 0, down: 0, ports: 0, upPorts: 0, downPorts: 0 };
+  const downList = React.useMemo(() => devices.filter((d) => deviceState(d) === "DOWN"), [devices]);
+
+  const setBusy = (id: number, on: boolean) =>
+    setBusyIds((p) => (on ? [...p, id] : p.filter((x) => x !== id)));
+
+  const checkNow = async (id: number) => {
+    setBusy(id, true);
+    try { await ndm.check(id); await new Promise((r) => setTimeout(r, 1200)); await load().then(setDevices); }
+    catch (e: any) { setErr(e?.message || "Check failed"); }
+    finally { setBusy(id, false); }
+  };
+  const patch = async (id: number, body: any) => {
+    setBusy(id, true);
+    try { await ndm.update(id, body); await load().then(setDevices); }
+    catch (e: any) { setErr(e?.message || "Update failed"); }
+    finally { setBusy(id, false); }
+  };
+  const removeDevice = async (d: NdmDevice) => {
+    if (!confirm(`Delete "${d.name}" (${d.ip})? Its ports, syslog and alert history go with it.`)) return;
+    setBusy(d.id, true);
+    try { await ndm.remove(d.id); await load().then(setDevices); void loadStats().then(setStats); }
+    catch (e: any) { setErr(e?.message || "Delete failed"); }
+    finally { setBusy(d.id, false); }
+  };
+
+  /** Bulk actions run sequentially so one failure never hides the rest. */
+  const bulk = async (fn: (id: number) => Promise<any>, label: string) => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (label === "Delete" && !confirm(`Delete ${ids.length} device(s)? This cannot be undone.`)) return;
+    for (const id of ids) { try { await fn(id); } catch { /* keep going */ } }
+    setSelected([]);
+    await load().then(setDevices); void loadStats().then(setStats);
+  };
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((d) => selected.includes(d.id));
+  const toggleAll = () =>
+    setSelected(allVisibleSelected ? [] : filtered.map((d) => d.id));
+
+  // Grouped rendering (collapsible sections) or one flat list.
+  const sections = React.useMemo(() => {
+    if (groupBy === "none") return [["", filtered]] as [string, NdmDevice[]][];
+    const m = new Map<string, NdmDevice[]>();
+    for (const d of filtered) {
+      const k = groupBy === "status" ? STATE_META[deviceState(d)].label : (d.groupName || "Ungrouped");
+      (m.get(k) || m.set(k, []).get(k)!).push(d);
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [filtered, groupBy]);
+
+  const [collapsed, setCollapsed] = React.useState<string[]>([]);
+  const toggleSection = (k: string) =>
+    setCollapsed((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]));
 
   return (
-    <div className="ndm">
+    <div className="ndm ndmx">
       <style>{NDMCSS}</style>
+      <style>{DEVCSS}</style>
 
-      <div className="ndm-page-h">
-        <div>
+      {/* ── Header ─────────────────────────────────────────────── */}
+      <div className="ndmx-head">
+        <div className="ndmx-head-l">
+          <nav className="ndmx-crumb" aria-label="Breadcrumb">
+            <Link href="/monitoring">Monitoring</Link><span aria-hidden="true">/</span><span>Network Devices</span>
+          </nav>
           <h1>Network Devices</h1>
-          <p>SNMP switches &amp; routers — live ports, traffic, syslog events and alerts.</p>
+          <p>Monitor SNMP switches, routers, internet targets, ports, traffic, syslog events and alerts.</p>
         </div>
-        <div className="ndm-row-actions">
+        <div className="ndmx-head-r">
           <NdmSoundBell />
           <Link className="ndm-btn" href="/monitoring/ports">Ports</Link>
           <Link className="ndm-btn" href="/monitoring/alerts">Alerts &amp; Rules</Link>
@@ -56,40 +206,472 @@ export default function DevicesPage() {
         </div>
       </div>
 
-      <div className="ndm-strip">
-        <Stat label="Devices" value={ds.total} />
-        <Stat label="Reachable" value={ds.reachable} color="var(--online)" />
-        <Stat label="Down / unreachable" value={ds.down} color="var(--danger)" />
-        <Stat label="Ports in use" value={`${ds.upPorts} / ${ds.ports}`} color="var(--warning)" />
-        <Stat label="Down ports" value={ds.downPorts} color="var(--danger)" />
-        <Stat label="Open alerts" value={stats?.alerts?.open ?? 0} color={(stats?.alerts?.open || 0) > 0 ? "var(--danger)" : undefined} />
-        <Stat label="Events / 24h" value={stats?.events?.last24h ?? 0} />
-        <Stat label="Syslog / 24h" value={stats?.syslog?.last24h ?? 0} />
+      {/* ── Tabs ───────────────────────────────────────────────── */}
+      <div className="ndmx-tabs" role="tablist">
+        <span className="tab active" role="tab" aria-selected="true">Devices</span>
+        <Link className="tab" role="tab" aria-selected="false" href="/monitoring/ports">Ports</Link>
+        <Link className="tab" role="tab" aria-selected="false" href="/monitoring/alerts">Alerts &amp; Rules</Link>
       </div>
 
-      <div className="ndm-filter" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14 }}>
-        <input placeholder="Search name, IP, vendor, group…" value={q} onChange={(e) => setQ(e.target.value)}
-          style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "8px 10px", background: "var(--surface)", color: "var(--text)" }} />
-        {err && <span className="ndm-err">{err}</span>}
+      {/* ── 6 KPIs ─────────────────────────────────────────────── */}
+      <div className="ndmx-kpis">
+        <Kpi label="Total devices" value={ds.total}
+          sub={`${counts.UP + counts.WARN + counts.DOWN + counts.UNKNOWN} active · ${counts.PAUSED} paused`} />
+        <Kpi label="Reachable" value={ds.reachable} tone="ok"
+          sub={ds.total ? `${Math.round((ds.reachable / ds.total) * 100)}% online` : "—"} />
+        <Kpi label="Down" value={ds.down} tone={ds.down > 0 ? "bad" : undefined}
+          sub={ds.down > 0 ? "needs attention" : "none"} />
+        <Kpi label="Ports" value={`${ds.upPorts} / ${ds.ports}`} sub="up / monitored"
+          bar={ds.ports ? (ds.upPorts / ds.ports) * 100 : 0} />
+        <Kpi label="Open alerts" value={stats?.alerts?.open ?? 0}
+          tone={(stats?.alerts?.open || 0) > 0 ? "bad" : undefined}
+          sub={`${stats?.alerts?.critical ?? 0} critical`} />
+        <Kpi label="Events &amp; syslog" value={(stats?.events?.last24h ?? 0) + (stats?.syslog?.last24h ?? 0)}
+          sub="last 24 hours" />
       </div>
 
-      {!devices.length ? (
-        <div className="ndm-empty">
-          No network devices yet. Add your first switch or router to start SNMP polling — it takes about two minutes
-          because the wizard tests the credentials live before anything is saved.
-          <div style={{ marginTop: 12 }}><button className="ndm-btn pri" onClick={() => setWizard(true)}>+ Add device</button></div>
+      {/* ── Health banner (data-driven) ────────────────────────── */}
+      {loaded && devices.length > 0 && (
+        downList.length > 0 ? (
+          <div className="ndmx-banner bad" role="status">
+            <div>
+              <b>{downList.length} device{downList.length === 1 ? " is" : "s are"} currently unreachable</b>
+              <span>{downList.slice(0, 4).map((d) => d.name).join(", ")}{downList.length > 4 ? ` +${downList.length - 4} more` : ""}</span>
+            </div>
+            <div className="ndmx-banner-actions">
+              <button className="ndm-btn" onClick={() => { setStatusFilter("DOWN"); setGroupBy("none"); }}>View down devices</button>
+              <button className="ndm-btn" onClick={() => downList.forEach((d) => void checkNow(d.id))}>Check all now</button>
+            </div>
+          </div>
+        ) : (
+          <div className="ndmx-banner ok" role="status">
+            <div><b>All monitored devices are operating normally</b></div>
+          </div>
+        )
+      )}
+
+      {/* ── Sticky toolbar ─────────────────────────────────────── */}
+      <div className="ndmx-toolbar">
+        <div className="ndmx-search">
+          <input
+            aria-label="Search devices"
+            placeholder="Search device name, IP address, type, group or location…"
+            value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") setQ(""); }} />
+          {q && <button className="clr" aria-label="Clear search" onClick={() => setQ("")}>✕</button>}
         </div>
-      ) : (
-        <div className="ndm-grid">
-          {filtered.map((d) => <DeviceCard key={d.id} d={d} onOpen={() => router.push(`/monitoring/devices/${d.id}`)} onRefresh={load} />)}
-          {!filtered.length && <div className="ndm-empty">Nothing matches the search.</div>}
+
+        <div className="ndmx-chips" role="group" aria-label="Filter by status">
+          {([["ALL", "All"], ["DOWN", "Down"], ["WARN", "Warning"], ["UP", "Up"],
+             ["PAUSED", "Paused"], ["ALERTS", "Has alerts"]] as const).map(([k, label]) => (
+            <button key={k} aria-pressed={statusFilter === k}
+              className={`chip ${statusFilter === k ? "on" : ""} ${String(k).toLowerCase()}`}
+              onClick={() => setStatusFilter(k as any)}>
+              {label} <em>{counts[k] ?? 0}</em>
+            </button>
+          ))}
+        </div>
+
+        <div className="ndmx-selects">
+          {groups.length > 0 && (
+            <select aria-label="Filter by group" value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+              <option value="ALL">Group: all</option>
+              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+          )}
+          <select aria-label="Sort by" value={sortKey} onChange={(e) => setSortKey(e.target.value as any)}>
+            <option value="triage">Sort: triage (down first)</option>
+            <option value="name">Name</option>
+            <option value="ip">IP address</option>
+            <option value="alerts">Open alerts</option>
+            <option value="uptime">Uptime</option>
+            <option value="poll">Last poll</option>
+          </select>
+          <select aria-label="Group by" value={groupBy} onChange={(e) => setGroupBy(e.target.value as any)}>
+            <option value="none">No grouping</option>
+            <option value="status">Group by status</option>
+            <option value="group">Group by group</option>
+          </select>
+          <div className="ndmx-view" role="group" aria-label="View">
+            <button aria-pressed={view === "table"} className={view === "table" ? "on" : ""} onClick={() => pickView("table")}>Table</button>
+            <button aria-pressed={view === "cards"} className={view === "cards" ? "on" : ""} onClick={() => pickView("cards")}>Cards</button>
+          </div>
+        </div>
+      </div>
+
+      {err && <div className="ndm-err ndmx-error" role="alert">
+        {err} <button className="ndm-btn" onClick={() => { setErr(""); void load().then(setDevices); }}>Retry</button>
+      </div>}
+
+      {/* ── Bulk bar ───────────────────────────────────────────── */}
+      {selected.length > 0 && (
+        <div className="ndmx-bulk" role="region" aria-label="Bulk actions">
+          <b>{selected.length} device{selected.length === 1 ? "" : "s"} selected</b>
+          <button className="ndm-btn" onClick={() => bulk((id) => ndm.check(id), "Check")}>Check</button>
+          <button className="ndm-btn" onClick={() => bulk((id) => ndm.update(id, { enabled: true }), "Resume")}>Resume</button>
+          <button className="ndm-btn" onClick={() => bulk((id) => ndm.update(id, { enabled: false }), "Pause")}>Pause</button>
+          <button className="ndm-btn" onClick={() => bulk((id) => ndm.update(id, { soundEnabled: false }), "Mute")}>Mute</button>
+          <button className="ndm-btn" onClick={() => bulk((id) => ndm.update(id, { soundEnabled: true }), "Unmute")}>Unmute</button>
+          <button className="ndm-btn danger" onClick={() => bulk((id) => ndm.remove(id), "Delete")}>Delete</button>
+          <button className="ndm-btn" onClick={() => setSelected([])}>Clear</button>
         </div>
       )}
 
-      {wizard && <AddDeviceWizard onClose={() => setWizard(false)} onDone={() => { setWizard(false); void load(); void loadStats(); }} />}
+      {/* ── Body ───────────────────────────────────────────────── */}
+      {!loaded ? (
+        <div className="ndmx-skel" aria-busy="true" aria-label="Loading devices">
+          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="row" />)}
+        </div>
+      ) : !devices.length ? (
+        <div className="ndm-empty">
+          <b>No network devices yet</b>
+          <div style={{ marginTop: 6 }}>
+            Add your first router, switch, server or internet target to start monitoring. The wizard tests the
+            credentials live before anything is saved.
+          </div>
+          <div style={{ marginTop: 12 }}><button className="ndm-btn pri" onClick={() => setWizard(true)}>+ Add device</button></div>
+        </div>
+      ) : !filtered.length ? (
+        <div className="ndm-empty">
+          <b>No devices match your filters</b>
+          <div style={{ marginTop: 12 }}>
+            <button className="ndm-btn" onClick={() => { setQ(""); setStatusFilter("ALL"); setGroupFilter("ALL"); }}>Clear filters</button>
+          </div>
+        </div>
+      ) : view === "cards" ? (
+        <div className="ndm-grid">
+          {filtered.map((d) => (
+            <DeviceCard key={d.id} d={d} onOpen={() => router.push(`/monitoring/devices/${d.id}`)}
+              /* load() returns the rows; the caller must commit them to state,
+                 otherwise a card action only took effect on the next poll. */
+              onRefresh={() => { void load().then(setDevices); void loadStats().then(setStats); }} />
+          ))}
+        </div>
+      ) : (
+        sections.map(([sectionName, list]) => (
+          <div key={sectionName || "all"} className="ndmx-section">
+            {sectionName && (
+              <button className="ndmx-section-h" onClick={() => toggleSection(sectionName)}
+                aria-expanded={!collapsed.includes(sectionName)}>
+                <span>{collapsed.includes(sectionName) ? "▸" : "▾"}</span> {sectionName}
+                <em>{list.length}</em>
+              </button>
+            )}
+            {!collapsed.includes(sectionName) && (
+              <div className="ndmx-tablewrap">
+                <table className="ndmx-table">
+                  <thead>
+                    <tr>
+                      <th className="cbx">
+                        <input type="checkbox" aria-label="Select all visible devices"
+                          checked={allVisibleSelected} onChange={toggleAll} />
+                      </th>
+                      <th>Status</th><th>Device</th><th>Address</th><th>Type / group</th>
+                      <th>Ports</th><th>Uptime</th><th>Last poll</th><th>Alerts</th>
+                      <th className="ta-r">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {list.map((d) => (
+                      <DeviceRow
+                        key={d.id} d={d}
+                        busy={busyIds.includes(d.id)}
+                        selected={selected.includes(d.id)}
+                        expanded={expanded === d.id}
+                        onSelect={() => setSelected((p) => p.includes(d.id) ? p.filter((x) => x !== d.id) : [...p, d.id])}
+                        onExpand={() => setExpanded((p) => (p === d.id ? null : d.id))}
+                        onOpen={() => router.push(`/monitoring/devices/${d.id}`)}
+                        onCheck={() => checkNow(d.id)}
+                        onPatch={(b) => patch(d.id, b)}
+                        onDelete={() => removeDevice(d)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ))
+      )}
+
+      {wizard && <AddDeviceWizard onClose={() => setWizard(false)} onDone={() => { setWizard(false); void load().then(setDevices); void loadStats().then(setStats); }} />}
     </div>
   );
 }
+
+function Kpi({ label, value, sub, tone, bar }: {
+  label: string; value: any; sub?: string; tone?: "ok" | "bad"; bar?: number;
+}) {
+  return (
+    <div className={`ndmx-kpi ${tone || ""}`}>
+      <span className="k">{label}</span>
+      <b className="v">{dash(value)}</b>
+      {bar !== undefined && (
+        <div className="ndmx-bar" aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(100, bar))}%` }} /></div>
+      )}
+      {sub && <span className="s">{sub}</span>}
+    </div>
+  );
+}
+
+/**
+ * One device row. Dense by default; expands in place for the detail an engineer
+ * needs during triage (why it is down, when it last answered) WITHOUT a page
+ * load. The full drawer/page stays one click away for everything else.
+ */
+function DeviceRow({ d, busy, selected, expanded, onSelect, onExpand, onOpen, onCheck, onPatch, onDelete }: {
+  d: NdmDevice; busy: boolean; selected: boolean; expanded: boolean;
+  onSelect: () => void; onExpand: () => void; onOpen: () => void;
+  onCheck: () => void; onPatch: (b: any) => void; onDelete: () => void;
+}) {
+  const [menu, setMenu] = React.useState(false);
+  const st = deviceState(d);
+  const meta = STATE_META[st];
+  const portPct = d.portCount ? (d.upPorts / d.portCount) * 100 : 0;
+
+  return (
+    <>
+      <tr className={`${meta.cls} ${selected ? "sel" : ""}`}>
+        <td className="cbx">
+          <input type="checkbox" checked={selected} onChange={onSelect}
+            aria-label={`Select ${d.name}`} onClick={(e) => e.stopPropagation()} />
+        </td>
+        <td>
+          <span className={`ndmx-pill ${meta.cls}`}>
+            <i aria-hidden="true" /> {meta.label}
+          </span>
+        </td>
+        <td className="nm">
+          <button className="linkish" onClick={onExpand} aria-expanded={expanded}
+            title="Show quick details">{expanded ? "▾" : "▸"}</button>
+          <button className="linkish strong" onClick={onOpen} title="Open device">{dash(d.name)}</button>
+          {d.location && <span className="muted"> · {dash(d.location)}</span>}
+        </td>
+        <td className="mono">{dash(d.ip)}</td>
+        <td className="muted">{dash(d.deviceType || d.vendor)}{d.groupName ? ` · ${d.groupName}` : ""}</td>
+        <td>
+          {d.portCount ? (
+            <div className="ndmx-ports">
+              <span>{d.upPorts}/{d.portCount}</span>
+              <div className="ndmx-bar sm" aria-hidden="true"><i className={d.downPorts ? "warn" : ""} style={{ width: `${portPct}%` }} /></div>
+            </div>
+          ) : "—"}
+        </td>
+        <td className="mono">{d.uptimeSec ? fmtUptimeFull(d.uptimeSec) : "—"}</td>
+        <td className="muted">{d.lastSnmpPollAt ? fmtTime(d.lastSnmpPollAt) : "—"}</td>
+        <td>{d.openAlerts > 0 ? <span className="ndmx-alerts">{d.openAlerts}</span> : <span className="muted">—</span>}</td>
+        <td className="ta-r nowrap">
+          <button className="ndm-btn sm" onClick={onCheck} disabled={busy}>{busy ? "Checking…" : "Check now"}</button>
+          <span className="ndmx-menu">
+            <button className="ndm-btn sm" aria-haspopup="true" aria-expanded={menu}
+              onClick={() => setMenu((m) => !m)} aria-label={`More actions for ${d.name}`}>⋮</button>
+            {menu && (
+              <>
+                <span className="ndmx-menu-bg" onClick={() => setMenu(false)} />
+                <span className="ndmx-menu-pop" role="menu">
+                  <button role="menuitem" onClick={() => { setMenu(false); onOpen(); }}>Open details</button>
+                  <button role="menuitem" onClick={() => { setMenu(false); onPatch({ enabled: !d.enabled }); }}>
+                    {d.enabled ? "Pause polling" : "Resume polling"}
+                  </button>
+                  <button role="menuitem" onClick={() => { setMenu(false); onPatch({ soundEnabled: d.soundEnabled === false }); }}>
+                    {d.soundEnabled === false ? "Unmute alerts" : "Mute alerts"}
+                  </button>
+                  <button role="menuitem" onClick={() => { setMenu(false); onPatch({ soundUpEnabled: d.soundUpEnabled === false }); }}>
+                    {d.soundUpEnabled === false ? "Enable recovery sound" : "Silence recovery sound"}
+                  </button>
+                  <button role="menuitem" className="danger" onClick={() => { setMenu(false); onDelete(); }}>Delete device</button>
+                </span>
+              </>
+            )}
+          </span>
+        </td>
+      </tr>
+
+      {expanded && (
+        <tr className="ndmx-exp">
+          <td colSpan={10}>
+            <div className="ndmx-exp-grid">
+              <Field label="State" value={meta.label} />
+              <Field label="Vendor" value={dash(d.vendor)} />
+              <Field label="Group" value={dash(d.groupName)} />
+              <Field label="Location" value={dash(d.location)} />
+              <Field label="Ports up / total" value={d.portCount ? `${d.upPorts} / ${d.portCount}` : "—"} />
+              <Field label="Ports down" value={d.downPorts || 0} />
+              <Field label="Uptime (SNMP)" value={d.uptimeSec ? fmtUptimeFull(d.uptimeSec) : "—"} />
+              <Field label="Last SNMP poll" value={d.lastSnmpPollAt ? fmtTime(d.lastSnmpPollAt) : "Never"} />
+              <Field label="Last syslog" value={d.lastSyslogAt ? fmtTime(d.lastSyslogAt) : "No syslog received"} />
+              <Field label="Open alerts" value={d.openAlerts || 0} />
+              <Field label="Polling" value={d.enabled ? "Enabled" : "Paused"} />
+              <Field label="Alert sound" value={d.soundEnabled === false ? "Muted" : "On"} />
+            </div>
+            {d.lastError && (
+              <div className="ndmx-reason">
+                <b>Last failure:</b> {dash(d.lastError)}
+              </div>
+            )}
+            {d.description && <div className="ndmx-desc">{dash(d.description)}</div>}
+            <div className="ndmx-exp-actions">
+              <button className="ndm-btn pri sm" onClick={onOpen}>Open full details</button>
+              <button className="ndm-btn sm" onClick={onCheck} disabled={busy}>{busy ? "Checking…" : "Check now"}</button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function Field({ label, value }: { label: string; value: any }) {
+  return (
+    <div className="ndmx-field">
+      <span>{label}</span>
+      <b>{dash(value)}</b>
+    </div>
+  );
+}
+
+/** Scoped styles for the redesigned list. Uses the existing NDM CSS variables. */
+const DEVCSS = `
+.ndmx{--r:8px}
+.ndmx-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+.ndmx-crumb{font-size:11.5px;color:var(--muted);display:flex;gap:6px;align-items:center;margin-bottom:4px}
+.ndmx-crumb a{color:var(--muted);text-decoration:none}
+.ndmx-crumb a:hover{color:var(--accent,#3C50E0)}
+.ndmx-head-l h1{margin:0;font-size:20px;font-weight:800;letter-spacing:-.01em}
+.ndmx-head-l p{margin:4px 0 0;font-size:12.5px;color:var(--muted);max-width:70ch}
+.ndmx-head-r{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.ndmx-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:14px}
+.ndmx-tabs .tab{padding:8px 14px;font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;
+  border-bottom:2px solid transparent;margin-bottom:-1px}
+.ndmx-tabs .tab:hover{color:var(--text)}
+.ndmx-tabs .tab.active{color:var(--accent,#3C50E0);border-bottom-color:var(--accent,#3C50E0)}
+
+.ndmx-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.ndmx-kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;
+  display:flex;flex-direction:column;gap:3px}
+.ndmx-kpi .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}
+.ndmx-kpi .v{font-size:20px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.ndmx-kpi .s{font-size:11px;color:var(--muted)}
+.ndmx-kpi.ok .v{color:var(--online,#157F43)}
+.ndmx-kpi.bad{border-color:var(--danger,#B02A37)}
+.ndmx-kpi.bad .v{color:var(--danger,#B02A37)}
+.ndmx-bar{height:4px;background:var(--border);border-radius:99px;overflow:hidden;margin:3px 0 1px}
+.ndmx-bar i{display:block;height:100%;background:var(--online,#157F43)}
+.ndmx-bar i.warn{background:var(--warning,#B45309)}
+.ndmx-bar.sm{width:56px;margin:0}
+
+.ndmx-banner{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:13px}
+.ndmx-banner b{display:block}
+.ndmx-banner span{font-size:11.5px;color:var(--muted)}
+.ndmx-banner.bad{border-color:var(--danger,#B02A37);background:rgba(176,42,55,.06)}
+.ndmx-banner.bad b{color:var(--danger,#B02A37)}
+.ndmx-banner.ok{border-color:rgba(21,127,67,.35);background:rgba(21,127,67,.05)}
+.ndmx-banner.ok b{color:var(--online,#157F43)}
+.ndmx-banner-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+.ndmx-toolbar{position:sticky;top:0;z-index:20;background:var(--bg,var(--surface));padding:8px 0;
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:10px}
+.ndmx-search{position:relative;flex:1;min-width:240px;display:flex;align-items:center}
+.ndmx-search input{width:100%;border:1px solid var(--border);border-radius:var(--r);padding:8px 30px 8px 10px;
+  background:var(--surface);color:var(--text);font-size:13px}
+.ndmx-search input:focus{outline:none;border-color:var(--accent,#3C50E0);box-shadow:0 0 0 3px rgba(60,80,224,.12)}
+.ndmx-search .clr{position:absolute;right:6px;border:none;background:none;color:var(--muted);cursor:pointer}
+.ndmx-chips{display:flex;gap:5px;flex-wrap:wrap}
+.ndmx-chips .chip{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:99px;
+  padding:5px 11px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;gap:5px;align-items:center}
+.ndmx-chips .chip em{font-style:normal;opacity:.65;font-variant-numeric:tabular-nums}
+.ndmx-chips .chip:hover{border-color:var(--accent,#3C50E0);color:var(--accent,#3C50E0)}
+.ndmx-chips .chip.on{background:var(--accent,#3C50E0);border-color:var(--accent,#3C50E0);color:#fff}
+.ndmx-chips .chip.on em{opacity:.85}
+.ndmx-chips .chip.down.on{background:var(--danger,#B02A37);border-color:var(--danger,#B02A37)}
+.ndmx-chips .chip.up.on{background:var(--online,#157F43);border-color:var(--online,#157F43)}
+.ndmx-selects{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.ndmx-selects select{border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;background:var(--surface);
+  color:var(--text);font-size:12px;cursor:pointer}
+.ndmx-view{display:inline-flex;border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.ndmx-view button{border:none;background:var(--surface);color:var(--muted);font-size:12px;font-weight:600;
+  padding:6px 11px;cursor:pointer}
+.ndmx-view button.on{background:var(--accent,#3C50E0);color:#fff}
+
+.ndmx-bulk{display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--surface);
+  border:1px solid var(--accent,#3C50E0);border-radius:var(--r);padding:8px 12px;margin-bottom:10px;font-size:12.5px}
+.ndmx-error{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+
+.ndmx-section{margin-bottom:12px}
+.ndmx-section-h{display:flex;gap:8px;align-items:center;width:100%;text-align:left;background:none;border:none;
+  color:var(--text);font-size:13px;font-weight:700;padding:6px 2px;cursor:pointer}
+.ndmx-section-h em{font-style:normal;font-weight:600;color:var(--muted);font-size:11.5px}
+
+.ndmx-tablewrap{border:1px solid var(--border);border-radius:var(--r);overflow-x:auto;background:var(--surface)}
+.ndmx-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.ndmx-table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  font-weight:700;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;
+  position:sticky;top:0;background:var(--surface);z-index:1}
+.ndmx-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.ndmx-table tbody tr:hover{background:rgba(127,127,127,.05)}
+.ndmx-table tr.sel{background:rgba(60,80,224,.06)}
+.ndmx-table tr.st-down td{box-shadow:inset 3px 0 0 var(--danger,#B02A37)}
+.ndmx-table tr.st-warn td{box-shadow:inset 3px 0 0 var(--warning,#B45309)}
+.ndmx-table .cbx{width:30px}
+.ndmx-table .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+.ndmx-table .muted{color:var(--muted)}
+.ndmx-table .ta-r{text-align:right}
+.ndmx-table .nowrap{white-space:nowrap}
+.ndmx-table .nm{min-width:180px}
+.linkish{background:none;border:none;color:var(--text);cursor:pointer;font-size:12.5px;padding:0 2px}
+.linkish.strong{font-weight:700}
+.linkish:hover{color:var(--accent,#3C50E0);text-decoration:underline}
+
+.ndmx-pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.04em;border-radius:99px;padding:2px 9px;border:1px solid var(--border);color:var(--muted)}
+.ndmx-pill i{width:7px;height:7px;border-radius:99px;background:currentColor;display:inline-block}
+.ndmx-pill.st-down{color:var(--danger,#B02A37);border-color:rgba(176,42,55,.4);background:rgba(176,42,55,.08)}
+.ndmx-pill.st-warn{color:var(--warning,#B45309);border-color:rgba(180,83,9,.4);background:rgba(180,83,9,.08)}
+.ndmx-pill.st-up{color:var(--online,#157F43);border-color:rgba(21,127,67,.35);background:rgba(21,127,67,.07)}
+.ndmx-ports{display:flex;align-items:center;gap:7px;font-variant-numeric:tabular-nums}
+.ndmx-alerts{display:inline-block;min-width:20px;text-align:center;background:rgba(176,42,55,.12);
+  color:var(--danger,#B02A37);border:1px solid rgba(176,42,55,.35);border-radius:99px;padding:1px 7px;font-weight:800}
+
+.ndmx-menu{position:relative;display:inline-block;margin-left:4px}
+.ndmx-menu-bg{position:fixed;inset:0;z-index:30}
+.ndmx-menu-pop{position:absolute;right:0;top:calc(100% + 4px);z-index:31;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r);box-shadow:0 10px 30px rgba(0,0,0,.25);
+  display:flex;flex-direction:column;min-width:190px;padding:4px;text-align:left}
+.ndmx-menu-pop button{background:none;border:none;text-align:left;padding:7px 10px;font-size:12.5px;
+  color:var(--text);cursor:pointer;border-radius:6px;white-space:nowrap}
+.ndmx-menu-pop button:hover{background:rgba(127,127,127,.1)}
+.ndmx-menu-pop button.danger{color:var(--danger,#B02A37)}
+
+.ndmx-exp td{background:rgba(127,127,127,.04)}
+.ndmx-exp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 16px;padding:4px 0 8px}
+.ndmx-field{display:flex;flex-direction:column;gap:1px}
+.ndmx-field span{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}
+.ndmx-field b{font-size:12.5px;font-weight:600}
+.ndmx-reason{font-size:12px;color:var(--danger,#B02A37);background:rgba(176,42,55,.07);
+  border:1px solid rgba(176,42,55,.3);border-radius:6px;padding:6px 10px;margin-bottom:8px}
+.ndmx-desc{font-size:12px;color:var(--muted);margin-bottom:8px}
+.ndmx-exp-actions{display:flex;gap:6px;flex-wrap:wrap}
+.ndm-btn.sm{padding:4px 10px;font-size:11.5px}
+.ndm-btn.danger{color:var(--danger,#B02A37);border-color:rgba(176,42,55,.4)}
+
+.ndmx-skel .row{height:38px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px;
+  background:linear-gradient(90deg,rgba(127,127,127,.06),rgba(127,127,127,.14),rgba(127,127,127,.06));
+  background-size:200% 100%;animation:ndmxsk 1.2s ease-in-out infinite}
+@keyframes ndmxsk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+@media (max-width:900px){
+  .ndmx-table th:nth-child(5),.ndmx-table td:nth-child(5),
+  .ndmx-table th:nth-child(7),.ndmx-table td:nth-child(7){display:none}
+}
+@media (max-width:640px){
+  .ndmx-table th:nth-child(6),.ndmx-table td:nth-child(6),
+  .ndmx-table th:nth-child(8),.ndmx-table td:nth-child(8){display:none}
+  .ndmx-search{min-width:100%}
+  .ndmx-toolbar{position:static}
+}
+`;
 
 function DeviceCard({ d, onOpen, onRefresh }: { d: NdmDevice; onOpen: () => void; onRefresh: () => void }) {
   const [busy, setBusy] = React.useState(false);
