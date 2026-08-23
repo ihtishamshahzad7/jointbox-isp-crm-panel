@@ -153,6 +153,25 @@ export class NdmController {
   stats(@Req() req: any) { return this.ndm.stats(req.user); }
 
   // ── Listener settings (SUPER_ADMIN only) ─────────────────────
+  /**
+   * Syslog forwarding targets — relay received messages to another collector
+   * (SIEM, archive, head office). ISP-level only: a forward target sends this
+   * tenant's log stream off-box, which is a data-egress decision.
+   */
+  @Get('ndm/forward-targets')
+  forwardTargets(@Req() req: any) { return this.ndm.listForwardTargets(req.user); }
+
+  @Post('ndm/forward-targets')
+  createForwardTarget(@Body() body: any, @Req() req: any) { return this.ndm.saveForwardTarget(null, body, req.user); }
+
+  @Put('ndm/forward-targets/:id')
+  updateForwardTarget(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.ndm.saveForwardTarget(+id, body, req.user);
+  }
+
+  @Delete('ndm/forward-targets/:id')
+  deleteForwardTarget(@Param('id') id: string, @Req() req: any) { return this.ndm.deleteForwardTarget(+id, req.user); }
+
   @Get('ndm/settings')
   settings(@Req() req: any) { return this.ndm.getSettings(req.user); }
 

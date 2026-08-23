@@ -158,7 +158,14 @@ export const ndm = {
   createRule: (b: any) => req<NdmRule>("/monitoring/ndm/rules", { method: "POST", body: JSON.stringify(b) }),
   updateRule: (id: number, b: any) => req<NdmRule>(`/monitoring/ndm/rules/${id}`, { method: "PUT", body: JSON.stringify(b) }),
   deleteRule: (id: number) => req<any>(`/monitoring/ndm/rules/${id}`, { method: "DELETE" }),
-  ruleHelp: () => req<{ eventTypes: { type: string; label: string }[]; conditions: { value: string; label: string }[]; channels: string[] }>("/monitoring/ndm/rule-help"),
+  ruleHelp: () => req<{
+    eventTypes: { type: string; label: string }[];
+    conditions: { value: string; label: string }[];
+    /** Presets for SYSLOG_MATCH rules (free-text clause DSL, AND-ed with ";"). */
+    syslogConditions?: { value: string; label: string }[];
+    syslogHelp?: string;
+    channels: string[];
+  }>("/monitoring/ndm/rule-help"),
   settings: () => req<any>("/monitoring/ndm/settings"),
   updateSettings: (b: any) => req<any>("/monitoring/ndm/settings", { method: "PUT", body: JSON.stringify(b) }),
 };

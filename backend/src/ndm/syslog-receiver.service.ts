@@ -9,7 +9,7 @@ import { isPrimaryInstance } from '../common/cluster-util';
 import { NdmSyslogParserService } from './syslog-parser.service';
 import { NdmEventEngine } from './event-engine.service';
 import { NdmAlertEngine } from './alert-engine.service';
-import { parseCondition, type NdmEventType } from './ndm.constants';
+import { parseCondition, matchSyslogRule, type NdmEventType } from './ndm.constants';
 
 /**
  * Syslog receiver — real-time collection for switch/router logs.
@@ -168,6 +168,14 @@ export class NdmSyslogReceiverService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      /**
+       * Forward BEFORE the unknown-source return: a relay must pass on every
+       * line it receives, including from devices this panel does not manage.
+       * Filtering that by our own device list would silently drop traffic the
+       * downstream collector is expecting.
+       */
+      void this.forward(raw, parsed, srcIp, device);
+
       if (!device) return; // unknown source — feed only (avoids alert storms)
 
       // 2) Any line proves the device still talks → clear SYSLOG_STOPPED.
@@ -200,9 +208,187 @@ export class NdmSyslogReceiverService implements OnModuleInit, OnModuleDestroy {
           }
         }
       }
+
+      /**
+       * 4) OPERATOR-DEFINED SYSLOG RULES (the Kiwi capability).
+       *
+       * Step 3 only reacts to lines the PARSER recognises — LINK_DOWN, BGP_DOWN
+       * and friends. Everything else was stored and never evaluated, so there
+       * was no way to say "Error severity containing 'link down' → alert me".
+       * That is the whole point of a syslog server, and it is what this adds.
+       *
+       * Runs for EVERY message, including ones step 3 already handled: an
+       * operator may legitimately want their own rule (with their own severity
+       * and channels) on a line the parser also understands. Duplicate noise is
+       * prevented downstream by the alert engine's key-based dedup, not by
+       * skipping evaluation here.
+       */
+      await this.evaluateSyslogRules(parsed, device, srcIp);
+
       void row;
     } catch (e: any) {
       this.log.warn(`syslog line error: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * FORWARD a received line to every enabled target.
+   *
+   * Best-effort and deliberately fire-and-forget: a dead or slow collector must
+   * never stall the receiver or stop a message being stored locally. UDP has no
+   * delivery guarantee anyway, which is what syslog assumes; TCP opens a
+   * short-lived connection per batch of one, which is inefficient but correct
+   * and keeps a broken target from holding a socket open forever.
+   *
+   * Failures are counted on the target rather than logged per line — a
+   * collector that has been down for an hour would otherwise produce tens of
+   * thousands of identical log lines.
+   */
+  private fwdCache: { at: number; rows: any[] } = { at: 0, rows: [] };
+
+  private async forwardTargets() {
+    const now = Date.now();
+    if (now - this.fwdCache.at < 30_000) return this.fwdCache.rows;
+    const rows = await (this.prisma as any).syslogForwardTarget
+      ?.findMany({ where: { enabled: true } }).catch(() => []) ?? [];
+    this.fwdCache = { at: now, rows };
+    return rows;
+  }
+
+  private async forward(raw: string, parsed: any, srcIp: string, device: any) {
+    const targets = await this.forwardTargets();
+    if (!targets.length) return;
+
+    const input = {
+      severity: parsed.severityCode ?? null,
+      severityName: parsed.severity ?? null,
+      facility: parsed.facility ?? null,
+      tag: parsed.process ?? null,
+      message: String(parsed.message || raw || ''),
+      sourceIp: srcIp,
+      hostname: parsed.host || device?.name || null,
+    };
+
+    for (const t of targets) {
+      if (t.condition && !matchSyslogRule(t.condition, input)) continue;
+      const line = Buffer.from(raw.slice(0, 2048), 'utf8');
+      try {
+        if (String(t.protocol).toUpperCase() === 'TCP') {
+          const sock = net.createConnection({ host: t.host, port: t.port, timeout: 4000 });
+          sock.on('error', () => { void this.noteForward(t.id, false, 'TCP connect failed'); sock.destroy(); });
+          sock.on('timeout', () => { void this.noteForward(t.id, false, 'TCP timeout'); sock.destroy(); });
+          sock.on('connect', () => {
+            sock.write(line);
+            sock.write('\n');
+            sock.end();
+            void this.noteForward(t.id, true);
+          });
+        } else {
+          const sock = dgram.createSocket('udp4');
+          sock.send(line, t.port, t.host, (err) => {
+            void this.noteForward(t.id, !err, err ? String(err.message).slice(0, 200) : undefined);
+            try { sock.close(); } catch { /* already closed */ }
+          });
+        }
+      } catch (e: any) {
+        void this.noteForward(t.id, false, String(e?.message || e).slice(0, 200));
+      }
+    }
+  }
+
+  /**
+   * Update a target's counters. Throttled to one write per target per 10s: at
+   * syslog volumes a counter update per message would generate more database
+   * writes than the messages themselves.
+   */
+  private fwdStats = new Map<number, { sent: number; fail: number; lastErr?: string; flushedAt: number }>();
+
+  private async noteForward(id: number, ok: boolean, err?: string) {
+    const s = this.fwdStats.get(id) || { sent: 0, fail: 0, flushedAt: 0 };
+    if (ok) s.sent++; else { s.fail++; if (err) s.lastErr = err; }
+    const now = Date.now();
+    if (now - s.flushedAt < 10_000) { this.fwdStats.set(id, s); return; }
+    s.flushedAt = now;
+    const { sent, fail, lastErr } = s;
+    this.fwdStats.set(id, { sent: 0, fail: 0, flushedAt: now });
+    await (this.prisma as any).syslogForwardTarget?.update({
+      where: { id },
+      data: {
+        sentCount: { increment: sent }, failCount: { increment: fail },
+        ...(sent ? { lastSentAt: new Date() } : {}),
+        ...(lastErr ? { lastError: lastErr } : {}),
+      },
+    }).catch(() => null);
+  }
+
+  /**
+   * Evaluate the operator's own syslog rules against one message.
+   *
+   * Rules live in the existing AlertRule table with eventType `SYSLOG_MATCH`,
+   * so they inherit everything the alert engine already does — severity,
+   * per-rule channels (sound / desktop / email), dedup, acknowledge, resolve.
+   * Reusing it was deliberate: a second, parallel alerting path would drift
+   * from the first and double every notification.
+   *
+   * Rules are cached for 30s. Syslog can arrive thousands of lines a minute and
+   * a database read per line would make the receiver the bottleneck.
+   */
+  private rulesCache: { at: number; rows: Array<{ id: number; name: string; condition: string | null; severity: string; ownerId: number | null }> } = { at: 0, rows: [] };
+
+  private async syslogRules() {
+    const now = Date.now();
+    if (now - this.rulesCache.at < 30_000) return this.rulesCache.rows;
+    const rows = await this.prisma.alertRule.findMany({
+      where: { enabled: true, eventType: 'SYSLOG_MATCH' },
+      select: { id: true, name: true, condition: true, severity: true, ownerId: true },
+    }).catch(() => []);
+    this.rulesCache = { at: now, rows };
+    return rows;
+  }
+
+  private async evaluateSyslogRules(parsed: any, device: any, srcIp: string) {
+    const rules = await this.syslogRules();
+    if (!rules.length) return;
+
+    const input = {
+      severity: parsed.severityCode ?? null,
+      severityName: parsed.severity ?? null,
+      facility: parsed.facility ?? null,
+      tag: parsed.process ?? null,
+      message: String(parsed.message || parsed.raw || ''),
+      sourceIp: srcIp,
+      hostname: parsed.host || device?.name || null,
+    };
+
+    for (const rule of rules) {
+      // Tenant scoping: a rule only fires for devices in its own owner tree.
+      // Without this a reseller's rule would alert on the ISP's routers.
+      if (rule.ownerId != null && device?.ownerId != null && rule.ownerId !== device.ownerId) continue;
+      if (!matchSyslogRule(rule.condition, input)) continue;
+
+      try {
+        const ev = await this.events.record({
+          eventType: 'SYSLOG_MATCH' as any,
+          source: 'SYSLOG',
+          device: device ? { id: device.id, name: device.name } : undefined,
+          sourceIp: srcIp,
+          message: `${rule.name}: ${input.message}`.slice(0, 800),
+          severity: String(rule.severity || 'warning').toLowerCase(),
+        });
+        if (ev) {
+          await this.alerts.evaluate({
+            eventId: ev.id,
+            eventType: 'SYSLOG_MATCH' as any,
+            message: ev.message,
+            severity: ev.severity,
+            device: device ? { id: device.id, name: device.name, ownerId: device.ownerId } : undefined,
+            count: ev.count,
+          });
+        }
+      } catch (e: any) {
+        // One bad rule must never stop the receiver processing the next line.
+        this.log.warn(`syslog rule "${rule.name}" failed: ${e?.message || e}`);
+      }
     }
   }
 

@@ -3456,6 +3456,40 @@ model SyslogServerSetting {
   @@map("syslog_server_setting")
 }
 
+/// SYSLOG FORWARDING — relay received messages to another collector.
+///
+/// Standard practice in an ISP: the panel is where operators work, but a SIEM,
+/// a long-term archive or a head-office collector also needs the stream. Without
+/// this the panel is a dead end and operators end up pointing devices at two
+/// destinations, which doubles the load on the device and guarantees the two
+/// copies drift.
+///
+/// Forwarding is best-effort by design: a dead collector must never slow the
+/// receiver or drop a message from the local store. Delivery is fire-and-forget
+/// UDP unless TCP is chosen.
+model SyslogForwardTarget {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(120)
+  host      String   @db.VarChar(255)
+  port      Int      @default(514)
+  /// UDP | TCP
+  protocol  String   @db.VarChar(8) @default("UDP")
+  enabled   Boolean  @default(true)
+  /// Optional filter using the SAME clause DSL as syslog alert rules
+  /// (SEV<=3;CONTAINS:…). Empty = forward everything.
+  condition String?  @db.VarChar(240)
+  /// Counters so an operator can see it is actually working.
+  sentCount Int      @default(0)
+  failCount Int      @default(0)
+  lastSentAt DateTime?
+  lastError String?  @db.VarChar(300)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled])
+  @@map("syslog_forward_target")
+}
+
 /// CPU/memory/temperature series per network device (the Overview graphs).
 model DeviceHealthMetric {
   id       Int      @id @default(autoincrement())

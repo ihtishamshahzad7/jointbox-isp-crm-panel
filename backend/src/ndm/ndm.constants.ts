@@ -100,7 +100,11 @@ export type NdmEventType =
   | 'OSPF_DOWN' | 'OSPF_UP' | 'STP_CHANGE' | 'CPU_HIGH' | 'MEMORY_HIGH'
   | 'AUTH_FAILURE' | 'CONFIG_CHANGE' | 'LINK_FLAP' | 'DEVICE_REBOOT'
   | 'POWER_FAILURE' | 'SYSLOG_STOPPED' | 'DEVICE_DOWN' | 'DEVICE_UP'
-  | 'SYSLOG' | 'PORT_ERROR';
+  | 'SYSLOG' | 'PORT_ERROR'
+  // Raised when a message matches an operator-defined syslog rule. Distinct
+  // from 'SYSLOG' (the raw feed) so a matched line can carry the rule's own
+  // severity and channels without changing how unmatched traffic is stored.
+  | 'SYSLOG_MATCH';
 
 /** Human-friendly label for each event type (the table/UI text). */
 export const EVENT_LABELS: Record<string, string> = {
@@ -112,6 +116,7 @@ export const EVENT_LABELS: Record<string, string> = {
   LINK_FLAP: 'Link flapping', DEVICE_REBOOT: 'Device reboot', POWER_FAILURE: 'Power failure',
   SYSLOG_STOPPED: 'Syslog stopped', DEVICE_DOWN: 'Device DOWN', DEVICE_UP: 'Device UP',
   SYSLOG: 'Syslog', PORT_ERROR: 'Port errors',
+  SYSLOG_MATCH: 'Syslog rule matched',
 };
 
 /// Default event severity per type (used when a source doesn't say otherwise).
@@ -122,6 +127,9 @@ export const EVENT_DEFAULT_SEVERITY: Record<string, 'critical' | 'warning' | 'in
   AUTH_FAILURE: 'warning', CONFIG_CHANGE: 'info', LINK_FLAP: 'critical',
   DEVICE_REBOOT: 'warning', POWER_FAILURE: 'critical', SYSLOG_STOPPED: 'warning',
   DEVICE_DOWN: 'critical', DEVICE_UP: 'info', SYSLOG: 'info', PORT_ERROR: 'warning',
+  // Only a fallback: a matched line normally carries the RULE's severity, since
+  // the operator chose it. This applies if a rule somehow has none.
+  SYSLOG_MATCH: 'warning',
 };
 
 /// ── Alert-rule condition DSL ────────────────────────────────────────────
@@ -184,6 +192,117 @@ const IANA_IF_TYPE_CATEGORY: Record<number, InterfaceCategory> = {
  * (angle brackets, no digits) — the classifiers MUST treat any name
  * containing "pppoe" as a session, not just the `pppoe-`+digit shapes.
  */
+/**
+ * KIWI-STYLE SYSLOG RULE MATCHING.
+ *
+ * The alert engine matches on eventType — fine for PORT_DOWN, useless for
+ * syslog, where the whole point is "tell me when ANY message looks like this".
+ * Today a plain message is stored and never evaluated (syslog-receiver only
+ * raises events for lines the parser recognises), so an operator cannot say
+ * "Error severity containing 'link down' on C30 → alert + sound". This is that
+ * missing matcher.
+ *
+ * Condition DSL — clauses AND-ed, separated by `;`. Every clause is optional:
+ *
+ *   SEV:ERROR          severity by name (EMERGENCY…DEBUG)
+ *   SEV<=3             numeric RFC5424 severity, <= wins (0=emerg … 7=debug)
+ *   FACILITY:23        numeric facility
+ *   TAG:bgp            syslog tag / program name, case-insensitive substring
+ *   HOST:10.254.1.30   source IP or hostname, case-insensitive substring
+ *   CONTAINS:link down case-insensitive substring of the message
+ *   REGEX:^%LINK-3     regular expression against the message
+ *   NOT:heartbeat      message must NOT contain this (kills known noise)
+ *
+ * Example: `SEV<=3;CONTAINS:link down;HOST:10.254.1.30`
+ *
+ * An EMPTY condition matches every message — deliberately allowed, because
+ * "log everything to a channel" is a legitimate Kiwi setup, but it means a
+ * careless rule can be noisy, which is why the UI should say so.
+ */
+export const SYSLOG_SEVERITY_NUM: Record<string, number> = {
+  EMERGENCY: 0, EMERG: 0, ALERT: 1, CRITICAL: 2, CRIT: 2, ERROR: 3, ERR: 3,
+  WARNING: 4, WARN: 4, NOTICE: 5, INFORMATIONAL: 6, INFO: 6, DEBUG: 7,
+};
+
+export interface SyslogMatchInput {
+  severity?: number | null;      // numeric RFC5424 severity
+  severityName?: string | null;
+  facility?: number | null;
+  tag?: string | null;
+  message: string;
+  sourceIp?: string | null;
+  hostname?: string | null;
+}
+
+export function matchSyslogRule(condition: string | null | undefined, m: SyslogMatchInput): boolean {
+  const cond = String(condition || '').trim();
+  if (!cond) return true; // empty = match everything
+
+  const sevNum = m.severity != null
+    ? Number(m.severity)
+    : SYSLOG_SEVERITY_NUM[String(m.severityName || '').toUpperCase()] ?? null;
+  const msg = String(m.message || '');
+  const lower = msg.toLowerCase();
+
+  for (const rawClause of cond.split(';')) {
+    const clause = rawClause.trim();
+    if (!clause) continue;
+
+    // SEV<=3 / SEV<3 / SEV=3 — numeric comparison first (contains no ':').
+    const cmp = /^SEV\s*(<=|>=|<|>|=)\s*(\d)$/i.exec(clause);
+    if (cmp) {
+      if (sevNum == null) return false;
+      const want = Number(cmp[2]);
+      const ok =
+        cmp[1] === '<=' ? sevNum <= want : cmp[1] === '>=' ? sevNum >= want :
+        cmp[1] === '<' ? sevNum < want : cmp[1] === '>' ? sevNum > want : sevNum === want;
+      if (!ok) return false;
+      continue;
+    }
+
+    const idx = clause.indexOf(':');
+    if (idx < 0) continue;                       // not a recognised clause — ignore
+    const key = clause.slice(0, idx).trim().toUpperCase();
+    const val = clause.slice(idx + 1).trim();
+    if (!val) continue;
+
+    switch (key) {
+      case 'SEV': {
+        if (sevNum == null) return false;
+        const want = /^\d$/.test(val) ? Number(val) : SYSLOG_SEVERITY_NUM[val.toUpperCase()];
+        if (want == null || sevNum !== want) return false;
+        break;
+      }
+      case 'FACILITY':
+        if (m.facility == null || Number(m.facility) !== Number(val)) return false;
+        break;
+      case 'TAG':
+        if (!String(m.tag || '').toLowerCase().includes(val.toLowerCase())) return false;
+        break;
+      case 'HOST': {
+        const hay = `${m.sourceIp || ''} ${m.hostname || ''}`.toLowerCase();
+        if (!hay.includes(val.toLowerCase())) return false;
+        break;
+      }
+      case 'CONTAINS':
+        if (!lower.includes(val.toLowerCase())) return false;
+        break;
+      case 'NOT':
+        if (lower.includes(val.toLowerCase())) return false;
+        break;
+      case 'REGEX':
+        try { if (!new RegExp(val, 'i').test(msg)) return false; }
+        // A bad pattern must not match everything (or throw on every message);
+        // treat it as non-matching so a typo silences one rule, not the server.
+        catch { return false; }
+        break;
+      default:
+        break; // unknown key — ignored rather than failing the whole rule
+    }
+  }
+  return true;
+}
+
 export function classifyInterface(ifType: number | null | undefined, name: string | null | undefined): InterfaceCategory {
   // Strip Winbox-style brackets BEFORE matching; `<>` is how RouterOS names
   // dynamic tunnel/session interfaces.

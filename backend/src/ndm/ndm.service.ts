@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { SecretsService } from '../common/secrets.service';
@@ -710,6 +710,51 @@ export class NdmService {
   }
 
   // ── Rule preview helper (for the UI) ─────────────────────────
+  /**
+   * Syslog forward targets. ISP-level only — a forward target streams this
+   * tenant's logs to another machine, which is a data-egress decision, not a
+   * per-reseller preference.
+   */
+  private assertIsp(actor?: Actor) {
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      throw new ForbiddenException('Only ISP-level accounts can manage syslog forwarding.');
+    }
+  }
+
+  async listForwardTargets(actor?: Actor) {
+    this.assertIsp(actor);
+    return this.prisma.syslogForwardTarget.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  async saveForwardTarget(id: number | null, body: any, actor?: Actor) {
+    this.assertIsp(actor);
+    const host = String(body?.host || '').trim();
+    const name = String(body?.name || '').trim() || host;
+    if (!host) throw new BadRequestException('A destination host or IP is required.');
+    if (!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z0-9.-]{1,253}$/.test(host)) {
+      throw new BadRequestException('That destination host looks invalid.');
+    }
+    const port = Number(body?.port) || 514;
+    if (port < 1 || port > 65535) throw new BadRequestException('Port must be between 1 and 65535.');
+    const protocol = String(body?.protocol || 'UDP').toUpperCase();
+    if (!['UDP', 'TCP'].includes(protocol)) throw new BadRequestException('Protocol must be UDP or TCP.');
+
+    const data = {
+      name: name.slice(0, 120), host, port, protocol,
+      enabled: body?.enabled === undefined ? true : !!body.enabled,
+      condition: body?.condition ? String(body.condition).slice(0, 240) : null,
+    };
+    return id
+      ? this.prisma.syslogForwardTarget.update({ where: { id }, data })
+      : this.prisma.syslogForwardTarget.create({ data });
+  }
+
+  async deleteForwardTarget(id: number, actor?: Actor) {
+    this.assertIsp(actor);
+    await this.prisma.syslogForwardTarget.delete({ where: { id } }).catch(() => null);
+    return { deleted: true, id };
+  }
+
   async ruleHelp() {
     return {
       eventTypes: Object.entries(EVENT_LABELS).map(([type, label]) => ({ type, label })),
@@ -721,6 +766,27 @@ export class NdmService {
         { value: 'THRESHOLD:90:MEMORY', label: 'Device memory ≥ 90%' },
         { value: 'SYSLOG_SILENCE:300', label: 'No syslog for 5 min from a syslog-enabled device' },
       ],
+      /**
+       * Syslog matchers — only meaningful with eventType SYSLOG_MATCH, which
+       * evaluates EVERY incoming line rather than only the ones the parser
+       * recognises. Clauses are AND-ed with `;`.
+       */
+      syslogConditions: [
+        { value: 'SEV<=3', label: 'Error or worse (severity ≤ 3)' },
+        { value: 'SEV<=2', label: 'Critical or worse (severity ≤ 2)' },
+        { value: 'SEV:WARNING', label: 'Exactly Warning' },
+        { value: 'CONTAINS:link down', label: 'Message contains “link down”' },
+        { value: 'SEV<=3;CONTAINS:link down', label: 'Error+ AND contains “link down”' },
+        { value: 'REGEX:%LINK-[0-3]', label: 'Matches a regular expression' },
+        { value: 'TAG:bgp', label: 'From a specific process/tag' },
+        { value: 'HOST:10.254.1.30', label: 'From a specific host or IP' },
+        { value: 'FACILITY:23', label: 'From a specific facility' },
+        { value: 'SEV<=4;NOT:heartbeat', label: 'Warning+ but exclude known noise' },
+      ],
+      syslogHelp:
+        'Use eventType SYSLOG_MATCH to alert on ANY syslog message. Clauses are AND-ed with ";". ' +
+        'An empty condition matches every message, which is rarely what you want — narrow it with ' +
+        'SEV, CONTAINS or HOST. Severity is RFC5424: 0 emergency … 7 debug.',
       channels: ['discord', 'whatsapp', 'sms', 'email', 'sound', 'desktop'],
     };
   }

@@ -180,7 +180,14 @@ function RuleEditor({ rule, onClose, onSaved }: { rule: NdmRule | null; onClose:
       <div className="ndm-form">
         <div className="ndm-field"><label>Name *</label><input value={f.name} onChange={(e) => setF((p) => ({ ...p, name: e.target.value }))} placeholder="Core switch ports dead" /></div>
         <div className="ndm-field"><label>Trigger event</label>
-          <select value={f.eventType} onChange={(e) => setF((p) => ({ ...p, eventType: e.target.value }))}>
+          <select value={f.eventType} onChange={(e) => setF((p) => {
+            const next = e.target.value;
+            // The two modes use incompatible condition syntax — carrying
+            // "DURATION:120" into a syslog matcher (or vice versa) would save a
+            // rule that silently never matches.
+            const swapped = (p.eventType === "SYSLOG_MATCH") !== (next === "SYSLOG_MATCH");
+            return { ...p, eventType: next, condition: swapped ? "" : p.condition };
+          })}>
             {(help?.eventTypes || [
               { type: "PORT_DOWN", label: "Port DOWN" }, { type: "LINK_DOWN", label: "Link DOWN (syslog)" },
               { type: "DEVICE_DOWN", label: "Device unreachable" }, { type: "BGP_DOWN", label: "BGP neighbor down" },
@@ -188,19 +195,57 @@ function RuleEditor({ rule, onClose, onSaved }: { rule: NdmRule | null; onClose:
               { type: "MEMORY_HIGH", label: "High memory" }, { type: "AUTH_FAILURE", label: "Auth failure" },
               { type: "CONFIG_CHANGE", label: "Config change" }, { type: "SYSLOG", label: "Any syslog line" },
               { type: "SYSLOG_STOPPED", label: "Device went syslog-silent" },
+              { type: "SYSLOG_MATCH", label: "Syslog message matches a filter" },
             ]).map((e: any) => <option key={e.type} value={e.type}>{e.label}</option>)}
           </select></div>
-        <div className="ndm-field"><label>Condition <span className="ndm-hint">(leave empty = every occurrence)</span></label>
-          <select value={f.condition} onChange={(e) => setF((p) => ({ ...p, condition: e.target.value }))}>
-            <option value="">Every event of this type</option>
-            <option value="DURATION:120">Sustained 120s → escalate</option>
-            <option value="DURATION:300">Sustained 5min → escalate</option>
-            <option value="FLAP:5:600">Flapped 5× in 10 min → CRITICAL</option>
-            <option value="THRESHOLD:90:CPU">Device CPU ≥ 90%</option>
-            <option value="THRESHOLD:90:MEMORY">Device memory ≥ 90%</option>
-            <option value="SYSLOG_SILENCE:300">No syslog 5 min</option>
-          </select>
-          <div className="ndm-hint" style={{ marginTop: 4 }}>{condLabel(f.condition)}</div></div>
+        {/*
+          SYSLOG_MATCH is a different kind of rule: it evaluates EVERY incoming
+          syslog line against a text/severity filter, rather than reacting to an
+          event the parser already recognised. Its condition is free text (an
+          AND-ed clause list), so a fixed dropdown cannot express it — the field
+          switches to a combo of presets + free entry when that type is chosen.
+        */}
+        {f.eventType === "SYSLOG_MATCH" ? (
+          <div className="ndm-field">
+            <label>Match <span className="ndm-hint">(clauses AND-ed with “;”)</span></label>
+            <input
+              value={f.condition}
+              list="syslog-cond-presets"
+              placeholder="SEV&lt;=3;CONTAINS:link down"
+              onChange={(e) => setF((p) => ({ ...p, condition: e.target.value }))} />
+            <datalist id="syslog-cond-presets">
+              {(help?.syslogConditions || []).map((c: any) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </datalist>
+            <div className="ndm-hint" style={{ marginTop: 4, lineHeight: 1.6 }}>
+              {help?.syslogHelp ||
+                'Clauses are AND-ed with ";". Severity is RFC5424: 0 emergency … 7 debug.'}
+              <br />
+              <b>SEV&lt;=3</b> error or worse · <b>SEV:WARNING</b> exact ·{" "}
+              <b>CONTAINS:</b>text · <b>REGEX:</b>pattern · <b>NOT:</b>exclude ·{" "}
+              <b>HOST:</b>ip · <b>TAG:</b>process · <b>FACILITY:</b>n
+              {!f.condition.trim() && (
+                <div style={{ color: "var(--warning,#B45309)", marginTop: 4 }}>
+                  ⚠ An empty match fires on <b>every</b> syslog message. Narrow it with
+                  SEV, CONTAINS or HOST unless you really want that.
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="ndm-field"><label>Condition <span className="ndm-hint">(leave empty = every occurrence)</span></label>
+            <select value={f.condition} onChange={(e) => setF((p) => ({ ...p, condition: e.target.value }))}>
+              <option value="">Every event of this type</option>
+              <option value="DURATION:120">Sustained 120s → escalate</option>
+              <option value="DURATION:300">Sustained 5min → escalate</option>
+              <option value="FLAP:5:600">Flapped 5× in 10 min → CRITICAL</option>
+              <option value="THRESHOLD:90:CPU">Device CPU ≥ 90%</option>
+              <option value="THRESHOLD:90:MEMORY">Device memory ≥ 90%</option>
+              <option value="SYSLOG_SILENCE:300">No syslog 5 min</option>
+            </select>
+            <div className="ndm-hint" style={{ marginTop: 4 }}>{condLabel(f.condition)}</div></div>
+        )}
         <div className="ndm-field"><label>Severity</label>
           <select value={f.severity} onChange={(e) => setF((p) => ({ ...p, severity: e.target.value }))}>
             <option value="CRITICAL">CRITICAL</option><option value="WARNING">WARNING</option><option value="INFO">INFO</option>
@@ -289,7 +334,33 @@ function condLabel(c: string | null) {
   if (c.startsWith("FLAP:")) { const [, n, w] = c.split(":"); return `${n}× within ${w}s → CRITICAL`; }
   if (c.startsWith("THRESHOLD:")) { const [, v, m] = c.split(":"); return `${m} ≥ ${v}%`; }
   if (c.startsWith("SYSLOG_SILENCE:")) return `no syslog for ${Math.round(Number(c.split(":")[1]) / 60)} min`;
-  return c;
+
+  // Syslog matcher: render the AND-ed clauses in plain English rather than
+  // showing raw DSL in the rules table, where it reads as noise.
+  const SEV_NAME = ["emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"];
+  const parts = c.split(";").map((raw) => {
+    const s = raw.trim();
+    const cmp = /^SEV\s*(<=|>=|<|>|=)\s*(\d)$/i.exec(s);
+    if (cmp) {
+      const nm = SEV_NAME[Number(cmp[2])] ?? cmp[2];
+      return cmp[1] === "<=" ? `${nm} or worse` : cmp[1] === ">=" ? `${nm} or better`
+        : cmp[1] === "<" ? `worse than ${nm}` : cmp[1] === ">" ? `better than ${nm}` : `severity ${nm}`;
+    }
+    const i = s.indexOf(":");
+    if (i < 0) return "";
+    const k = s.slice(0, i).toUpperCase(), v = s.slice(i + 1);
+    switch (k) {
+      case "SEV": return `severity ${v.toLowerCase()}`;
+      case "CONTAINS": return `contains “${v}”`;
+      case "NOT": return `excluding “${v}”`;
+      case "REGEX": return `matching /${v}/`;
+      case "HOST": return `from ${v}`;
+      case "TAG": return `tag ${v}`;
+      case "FACILITY": return `facility ${v}`;
+      default: return "";
+    }
+  }).filter(Boolean);
+  return parts.length ? parts.join(" and ") : c;
 }
 function channelsLabel(ch: any) {
   const out: string[] = [];
