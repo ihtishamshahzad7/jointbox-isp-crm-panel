@@ -104,8 +104,15 @@ reported months later, you must still be able to say who held it at the time.
 
 ## Provisioning the next client
 
-Do **not** pick a block by eye from the table above — ask the register, which
-checks overlaps against both delegated prefixes and transit links:
+**Use the panel:** *Network → Prefix Register* (or the Network Center →
+Prefix Register tab). The pool cards show live utilisation and a "Next free"
+lookup that reserves nothing, and **Provision client** allocates the block and
+the transit /30 together, writes the record and hands back the router
+configuration and the client handover sheet.
+
+The curl equivalents below still work and are useful for scripting. Do **not**
+pick a block by eye from the table above — ask the register, which checks
+overlaps against both delegated prefixes and transit links:
 
 ```bash
 # 1. What is free?

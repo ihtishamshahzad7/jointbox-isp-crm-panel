@@ -136,6 +136,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/fiber', 'network'],
   ['/ip-pools', 'network'],
   ['/static-ips', 'network'],
+  ['/prefixes', 'network'],
   ['/outages', 'network'],
 
   // Plans & stock

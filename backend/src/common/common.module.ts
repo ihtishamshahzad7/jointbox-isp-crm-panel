@@ -9,6 +9,7 @@ import { BackupService } from './backup.service';
 import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
 import { SecretsService } from './secrets.service';
+import { CronGuardService } from './cron-guard.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -28,6 +29,9 @@ import { PrismaModule } from '../prisma/prisma.module';
     BackupService,
     EventsService,
     SecretsService,
+    // Runs at bootstrap on every process: strips scheduled jobs from non-primary
+    // instances so an unguarded @Cron cannot duplicate itself across the cluster.
+    CronGuardService,
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
   exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService, SecretsService],

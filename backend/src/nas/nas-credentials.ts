@@ -15,9 +15,14 @@ import { SecretsService } from '../common/secrets.service';
  *     RADIUS for the whole network. It is still MASKED in API responses so it
  *     never reaches the browser.
  *
- *   • apiPassword  → not yet encrypted: ten services read it (CoA, sync, IP
- *     pools, static IP, integrity checks…). It is masked in responses now, and
- *     encryption is a separate, deliberate step rather than a risky drive-by.
+ *   • apiPassword  → encrypted at rest. Roughly forty call sites across ten
+ *     services (CoA, sync, IP pools, static IP, integrity checks…) read this
+ *     column and pass it down, so rather than edit all of them — the risky
+ *     drive-by this comment used to warn about — decryption happens inside
+ *     MikrotikClient's constructor, the one point where the value is actually
+ *     used to authenticate. Callers hand us the column verbatim and are
+ *     indifferent to whether it is ciphertext.
+ *     Backfill existing plaintext rows with tools/encrypt-nas-passwords.js.
  *
  * Values already stored in plaintext keep working: decrypt() returns the input
  * unchanged when it is not an encrypted payload, so no data migration is needed.

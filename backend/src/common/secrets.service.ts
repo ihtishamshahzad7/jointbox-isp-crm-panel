@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { encryptSecret, decryptSecret } from './crypto-box';
 
 /**
  * SecretsService — operator-managed secrets, encrypted at rest.
@@ -19,33 +19,18 @@ export class SecretsService {
 
   constructor(private prisma: PrismaService) {}
 
-  private key(): Buffer {
-    const material = process.env.SECRETS_KEY || process.env.JWT_SECRET || 'jointbox-fallback-key';
-    return crypto.createHash('sha256').update(material).digest(); // 32 bytes
-  }
-
   /** Public wrappers so other services can store their own encrypted rows. */
   encryptValue(plain: string): string { return this.encrypt(plain); }
   decryptValue(payload: string): string | null { return this.decrypt(payload); }
   maskValue(v: string): string { return this.mask(v); }
 
-  private encrypt(plain: string): string {
-    const iv = crypto.randomBytes(12);
-    const c = crypto.createCipheriv('aes-256-gcm', this.key(), iv);
-    const enc = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
-    return `${iv.toString('base64')}:${c.getAuthTag().toString('base64')}:${enc.toString('base64')}`;
-  }
+  // The actual crypto lives in common/crypto-box.ts so that plain modules
+  // (the MikroTik client, which is not a Nest provider) can decrypt stored
+  // router credentials using the exact same key and payload format. Two copies
+  // of an encryption scheme is how you end up with data you cannot read back.
+  private encrypt(plain: string): string { return encryptSecret(plain); }
 
-  private decrypt(payload: string): string | null {
-    try {
-      const [ivB, tagB, dataB] = payload.split(':');
-      const d = crypto.createDecipheriv('aes-256-gcm', this.key(), Buffer.from(ivB, 'base64'));
-      d.setAuthTag(Buffer.from(tagB, 'base64'));
-      return Buffer.concat([d.update(Buffer.from(dataB, 'base64')), d.final()]).toString('utf8');
-    } catch {
-      return null; // wrong key or tampered value
-    }
-  }
+  private decrypt(payload: string): string | null { return decryptSecret(payload); }
 
   /** Show enough to recognise the value, never enough to use it. */
   private mask(v: string): string {

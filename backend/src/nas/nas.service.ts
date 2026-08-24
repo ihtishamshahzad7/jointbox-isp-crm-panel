@@ -372,7 +372,9 @@ export class NasService implements OnModuleInit {
         incomingPort: data.incomingPort ?? 3799,
         nasIdentifier: data.nasIdentifier?.trim() || null,
         apiUsername:  data.apiUsername,
-        apiPassword:  data.apiPassword,
+        // Encrypted at rest. Decryption happens inside MikrotikClient, so every
+        // existing consumer keeps passing this column through untouched.
+        apiPassword:  encField(this.secrets, data.apiPassword) ?? undefined,
         type:         this.resolveNasType(data.nasType),
         isActive:     data.isActive ?? true,
         description:  data.description,
@@ -445,7 +447,9 @@ export class NasService implements OnModuleInit {
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
     if (data.nasIdentifier !== undefined) updateData.nasIdentifier = (data.nasIdentifier || '').trim() || null;
     if (data.apiUsername !== undefined) updateData.apiUsername  = data.apiUsername;
-    if (data.apiPassword !== undefined && !isMask(data.apiPassword)) updateData.apiPassword = data.apiPassword;
+    if (data.apiPassword !== undefined && !isMask(data.apiPassword)) {
+      updateData.apiPassword = encField(this.secrets, data.apiPassword);
+    }
     if (data.nasType !== undefined)     updateData.type         = this.resolveNasType(data.nasType);
     if (data.isActive !== undefined)    updateData.isActive     = data.isActive;
     if (data.description !== undefined) updateData.description  = data.description;

@@ -64,6 +64,7 @@ export class PrefixAllocationService {
 
   // ── Pools ────────────────────────────────────────────────────────────────
   async listPools(actor?: Actor) {
+    this.assertAdmin(actor);
     const pools = await this.prisma.prefixPool.findMany({
       where: { isActive: true },
       orderBy: [{ kind: 'asc' }, { name: 'asc' }],
@@ -104,9 +105,17 @@ export class PrefixAllocationService {
     });
   }
 
+  /**
+   * Public address space is ISP-level infrastructure, not a per-reseller
+   * resource: the register lists every corporate client, their prefixes and
+   * their VLANs. A reseller reading it would see other branches' customers and
+   * the ISP's whole addressing plan, so READS are restricted as tightly as
+   * writes. This is deliberately stricter than IpPool, which IS shared
+   * downstream by design.
+   */
   private assertAdmin(actor?: Actor) {
     if (actor && !this.scope.isAdmin(actor.role)) {
-      throw new ForbiddenException('Only ISP-level accounts can manage address space.');
+      throw new ForbiddenException('Only ISP-level accounts can view or manage routed address space.');
     }
   }
 
@@ -122,7 +131,8 @@ export class PrefixAllocationService {
    * RELEASED allocations are ignored, so space genuinely returns to the pool,
    * while the historical row survives for the abuse-report case.
    */
-  async nextFree(poolId: number, sizeRaw?: number) {
+  async nextFree(poolId: number, sizeRaw?: number, actor?: Actor) {
+    this.assertAdmin(actor);
     const pool = await this.prisma.prefixPool.findUnique({ where: { id: poolId } });
     if (!pool) throw new NotFoundException(`Pool ${poolId} not found`);
     const size = Number(sizeRaw) || pool.defaultSize;
@@ -270,7 +280,8 @@ export class PrefixAllocationService {
   }
 
   // ── Register ─────────────────────────────────────────────────────────────
-  async list(query: any = {}) {
+  async list(query: any = {}, actor?: Actor) {
+    this.assertAdmin(actor);
     const where: any = {};
     if (query.status && query.status !== 'ALL') where.status = String(query.status).toUpperCase();
     else where.status = { not: 'RELEASED' };
@@ -290,7 +301,8 @@ export class PrefixAllocationService {
     });
   }
 
-  async getOne(id: number) {
+  async getOne(id: number, actor?: Actor) {
+    this.assertAdmin(actor);
     const row = await this.prisma.prefixAllocation.findUnique({
       where: { id }, include: { pool: true },
     });

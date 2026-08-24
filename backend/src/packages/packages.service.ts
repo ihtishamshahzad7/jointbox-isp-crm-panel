@@ -6,8 +6,6 @@ import { ScopeService, Actor } from '../common/scope.service';
 import { SecurityService } from '../security/security.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { NetworkService } from '../network/network.service';
-import * as fs from 'fs';
-import * as path from 'path';
 
 type TaxType = 'FIXED' | 'PERCENTAGE' | 'FORMULA';
 type AttributeType = 'TEXT' | 'NUMBER' | 'DATE' | 'BOOLEAN';
@@ -76,16 +74,13 @@ interface AllocationRule {
   createdAt: string;
 }
 
-interface PackagesStore {
-  packageSettings: PackageSettings[];
-  taxes: TaxFee[];
-  policies: PolicyRule[];
-  allocations: AllocationRule[];
-}
+// (The former PackagesStore interface described the shape of
+// data/packages-management.json. That file is no longer the source of truth —
+// see the PACKAGE MANAGEMENT STORE section below and the package_tax /
+// package_policy / package_allocation / package_setting tables.)
 
 @Injectable()
 export class PackagesService {
-  private readonly storeFilePath = path.join(process.cwd(), 'data', 'packages-management.json');
   private readonly logger = new Logger('Packages');
 
   constructor(
@@ -427,11 +422,17 @@ export class PackagesService {
    * until the package fields are corrected too. That is why nothing is
    * re-synced automatically.
    */
-  async rateLimitAudit() {
-    const packages = await this.prisma.package.findMany({
-      include: { _count: { select: { subscribers: true } } },
+  async rateLimitAudit(actor?: Actor) {
+    // SECURITY: this listed EVERY package regardless of caller — a reseller
+    // could read the whole ISP's plan catalogue, including packages sold by
+    // other branches, plus their subscriber counts. Scoped like findAll().
+    const all = await this.prisma.package.findMany({
+      include: { _count: { select: { subscribers: true } }, accessGroups: { select: { groupId: true } } },
       orderBy: { name: 'asc' },
     });
+    const packages = actor && !this.scope.isAdmin(actor.role)
+      ? await this.scopeToActor(all, actor)
+      : all;
 
     const legacy = (dl: number, ul: number, p: any) => {
       if (p.burstDownload && p.burstUpload) {
@@ -485,14 +486,22 @@ export class PackagesService {
    *
    * Read-only. It never writes radcheck/radreply and never touches a session.
    */
-  async testPackage(id: number, actor?: any) {
+  async testPackage(id: number, actor?: Actor) {
     const pkg = await this.prisma.package.findUnique({
       where: { id },
-      include: { pool: true, _count: { select: { subscribers: true } } },
+      include: { pool: true, _count: { select: { subscribers: true } }, accessGroups: { select: { groupId: true } } },
     });
     if (!pkg) throw new NotFoundException('Package not found');
 
-    const settings = this.getPackageSettingById(id);
+    // SECURITY: fetch-by-id bypasses the scoped list query, so without this a
+    // reseller could read any package's pricing, pool and subscriber count by
+    // guessing an id. NotFound (not Forbidden) so ids cannot be enumerated.
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const visible = await this.scopeToActor([pkg as any], actor);
+      if (!visible.length) throw new NotFoundException('Package not found');
+    }
+
+    const settings = await this.getPackageSettingById(id);
     const resellers = await this.prisma.resellerPackagePrice.count({ where: { packageId: id } });
     const merged: any = { ...pkg, settings };
     const checks = this.healthChecks(merged, {
@@ -579,69 +588,106 @@ export class PackagesService {
     };
   }
 
-  private defaultStore(): PackagesStore {
-    return {
-      packageSettings: [],
-      taxes: [],
-      policies: [],
-      allocations: [],
-    };
+  // ───────────────────────────────────────────────────────────────────────
+  // PACKAGE MANAGEMENT STORE
+  //
+  // This used to be backend/data/packages-management.json, read and rewritten
+  // in full on every change. That file was the single largest piece of
+  // architectural debt in the backend, for three reasons that all bit:
+  //
+  //   • Not transactional. Read-modify-write of the whole document from eleven
+  //     pm2 workers means two edits made seconds apart silently lose one — the
+  //     second worker writes back the copy it read before the first one saved.
+  //   • Not backed up. The nightly database dump did not contain it, so a
+  //     restore brought back everything except the tax and policy configuration.
+  //   • Not deploy-safe. Any deploy that replaced the working directory took
+  //     the operator's configuration with it.
+  //
+  // Postgres fixes all three. The methods below are now async — that is the
+  // one visible cost of the move, and it is contained to this service and its
+  // controller, both of which already returned promises everywhere else.
+  // ───────────────────────────────────────────────────────────────────────
+
+  /** Read a package's settings blob, or undefined if it has none. */
+  private async getPackageSettingById(packageId: number): Promise<PackageSettings | undefined> {
+    const row = await this.prisma.packageSetting.findUnique({ where: { packageId } });
+    return row ? ({ ...(row.settings as any), packageId } as PackageSettings) : undefined;
   }
 
-  private ensureStoreFile() {
-    const dir = path.dirname(this.storeFilePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(this.storeFilePath)) {
-      fs.writeFileSync(this.storeFilePath, JSON.stringify(this.defaultStore(), null, 2), 'utf-8');
+  /**
+   * Merge new values into a package's settings.
+   *
+   * Merge, not replace: callers pass only the fields they are changing, and the
+   * previous file-backed version behaved the same way. Replacing wholesale here
+   * would quietly wipe quota and expiry configuration on any partial update.
+   */
+  private async upsertPackageSettings(packageId: number, payload: any): Promise<PackageSettings> {
+    const existing = await this.prisma.packageSetting.findUnique({ where: { packageId } });
+    const next = { ...((existing?.settings as any) ?? {}), ...payload, packageId };
+    await this.prisma.packageSetting.upsert({
+      where: { packageId },
+      update: { settings: next },
+      create: { packageId, settings: next },
+    });
+    return next as PackageSettings;
+  }
+
+  /** Shape a tax row the way the API has always returned it. */
+  private taxOut = (t: any): TaxFee => ({
+    id: t.id,
+    groupName: t.groupName,
+    name: t.name,
+    type: t.type,
+    value: t.value,
+    description: t.description ?? undefined,
+    isActive: t.isActive,
+    createdAt: t.createdAt instanceof Date ? t.createdAt.toISOString() : t.createdAt,
+  });
+
+  private policyOut = (p: any): PolicyRule => ({
+    id: p.id,
+    groupName: p.groupName,
+    attributeName: p.attributeName,
+    attributeType: p.attributeType,
+    attributeOp: p.attributeOp,
+    attributeValue: p.attributeValue,
+    description: p.description ?? undefined,
+    createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : p.createdAt,
+  });
+
+  private allocationOut = (a: any): AllocationRule => ({
+    id: a.id,
+    groupName: a.groupName,
+    isActive: a.isActive,
+    days: Array.isArray(a.days) ? a.days : [],
+    startTime: a.startTime,
+    endTime: a.endTime,
+    policyId: a.policyId ?? null,
+    description: a.description ?? undefined,
+    createdAt: a.createdAt instanceof Date ? a.createdAt.toISOString() : a.createdAt,
+  });
+
+  /**
+   * Strip an id out of every package's taxIds/policyIds/allocationIds after it
+   * has been deleted.
+   *
+   * The file version did this by rewriting the whole document. Here it is a
+   * scan of the settings rows — still not elegant, but the ids live inside a
+   * JSON blob by design (see the schema comment on PackageSetting) and the row
+   * count is small. Leaving the dangling id behind would silently apply a tax
+   * that no longer exists, so it has to happen either way.
+   */
+  private async detachIdFromSettings(field: 'taxIds' | 'policyIds' | 'allocationIds', id: number) {
+    const rows = await this.prisma.packageSetting.findMany();
+    for (const row of rows) {
+      const s: any = row.settings ?? {};
+      const list: number[] = Array.isArray(s[field]) ? s[field] : [];
+      if (!list.includes(id)) continue;
+      await this.prisma.packageSetting.update({
+        where: { packageId: row.packageId },
+        data: { settings: { ...s, [field]: list.filter((x) => x !== id) } },
+      });
     }
-  }
-
-  private readStore(): PackagesStore {
-    this.ensureStoreFile();
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.storeFilePath, 'utf-8'));
-      return {
-        packageSettings: Array.isArray(parsed.packageSettings) ? parsed.packageSettings : [],
-        taxes: Array.isArray(parsed.taxes) ? parsed.taxes : [],
-        policies: Array.isArray(parsed.policies) ? parsed.policies : [],
-        allocations: Array.isArray(parsed.allocations) ? parsed.allocations : [],
-      };
-    } catch {
-      return this.defaultStore();
-    }
-  }
-
-  private writeStore(store: PackagesStore) {
-    this.ensureStoreFile();
-    fs.writeFileSync(this.storeFilePath, JSON.stringify(store, null, 2), 'utf-8');
-  }
-
-  private nextId(items: Array<{ id: number }>) {
-    if (items.length === 0) return 1;
-    return Math.max(...items.map((x) => x.id)) + 1;
-  }
-
-  private getPackageSettingById(packageId: number): PackageSettings | undefined {
-    const store = this.readStore();
-    return store.packageSettings.find((s) => s.packageId === packageId);
-  }
-
-  private upsertPackageSettings(packageId: number, payload: any): PackageSettings {
-    const store = this.readStore();
-    const index = store.packageSettings.findIndex((s) => s.packageId === packageId);
-    const current = index >= 0 ? store.packageSettings[index] : { packageId };
-    const next = {
-      ...current,
-      ...payload,
-      packageId,
-    };
-    if (index >= 0) {
-      store.packageSettings[index] = next;
-    } else {
-      store.packageSettings.push(next);
-    }
-    this.writeStore(store);
-    return next;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -668,7 +714,12 @@ export class PackagesService {
       }),
     );
 
-    const store = this.readStore();
+    // Every package's settings in ONE query, keyed by package id — the list
+    // renders hundreds of rows and a lookup per row would be N+1.
+    const settingRows = await this.prisma.packageSetting.findMany();
+    const settingsByPkg = new Map<number, any>(
+      settingRows.map((r) => [r.packageId, { ...(r.settings as any), packageId: r.packageId }]),
+    );
 
     // Reseller-assignment counts for every package in one query (not N+1), so
     // each row's health checks use the real number.
@@ -692,7 +743,7 @@ export class PackagesService {
 
     return visible
       .map((pkg) => {
-        const settings = store.packageSettings.find((s) => s.packageId === pkg.id);
+        const settings = settingsByPkg.get(pkg.id);
         // Per-row health so the table can show a real status badge — same
         // checks the detail drawer uses, from the same fields.
         const health = this.healthChecks(pkg, {
@@ -751,7 +802,7 @@ export class PackagesService {
       },
     });
     if (!pkg) throw new NotFoundException('Package not found');
-    const settings = this.getPackageSettingById(id);
+    const settings = await this.getPackageSettingById(id);
     return {
       ...pkg,
       serviceType: settings?.serviceType || 'RESIDENTIAL',
@@ -899,7 +950,7 @@ export class PackagesService {
       },
     });
 
-    const settings = this.upsertPackageSettings(created.id, {
+    const settings = await this.upsertPackageSettings(created.id, {
       invoiceDescription: data.invoiceDescription || null,
       serviceType: data.serviceType || 'RESIDENTIAL',
       durationType: data.durationType || 'MONTHLY',
@@ -1003,7 +1054,7 @@ export class PackagesService {
       },
     });
 
-    const settings = this.upsertPackageSettings(id, {
+    const settings = await this.upsertPackageSettings(id, {
       invoiceDescription: data.invoiceDescription,
       serviceType: data.serviceType,
       durationType: data.durationType,
@@ -1098,10 +1149,11 @@ export class PackagesService {
       );
     }
 
+    // The settings row is removed by the foreign key's ON DELETE CASCADE, so
+    // there is no manual cleanup step here any more — and, unlike the old
+    // filter-the-JSON approach, it also happens for packages deleted by any
+    // other route.
     const deleted = await this.prisma.package.delete({ where: { id } });
-    const store = this.readStore();
-    store.packageSettings = store.packageSettings.filter((s) => s.packageId !== id);
-    this.writeStore(store);
     this.invalidateCache();
     await this.audit('PACKAGE_DELETE', id, { name: deleted.name, price: deleted.price }, actor);
     return deleted;
@@ -1207,156 +1259,148 @@ export class PackagesService {
     return { subscribers: subs, total };
   }
 
-  getTaxes() {
-    return this.readStore().taxes;
+  // ── Taxes & fees ───────────────────────────────────────────────────────
+  async getTaxes(): Promise<TaxFee[]> {
+    const rows = await this.prisma.packageTax.findMany({ orderBy: { id: 'asc' } });
+    return rows.map(this.taxOut);
   }
 
-  createTax(payload: any) {
-    const store = this.readStore();
-    const tax: TaxFee = {
-      id: this.nextId(store.taxes),
-      groupName: payload.groupName || 'Default',
-      name: payload.name,
-      type: payload.type || 'FIXED',
-      value: String(payload.value ?? ''),
-      description: payload.description || '',
-      isActive: payload.isActive !== false,
-      createdAt: new Date().toISOString(),
-    };
-    store.taxes.push(tax);
-    this.writeStore(store);
-    return tax;
+  async createTax(payload: any): Promise<TaxFee> {
+    if (!String(payload?.name || '').trim()) throw new BadRequestException('A name is required.');
+    const row = await this.prisma.packageTax.create({
+      data: {
+        groupName: payload.groupName || 'Default',
+        name: String(payload.name),
+        type: payload.type || 'FIXED',
+        value: String(payload.value ?? ''),
+        description: payload.description || null,
+        isActive: payload.isActive !== false,
+      },
+    });
+    return this.taxOut(row);
   }
 
-  updateTax(id: number, payload: any) {
-    const store = this.readStore();
-    const idx = store.taxes.findIndex((t) => t.id === id);
-    if (idx < 0) throw new NotFoundException('Tax/Fee not found');
-    store.taxes[idx] = { ...store.taxes[idx], ...payload };
-    this.writeStore(store);
-    return store.taxes[idx];
+  async updateTax(id: number, payload: any): Promise<TaxFee> {
+    const existing = await this.prisma.packageTax.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Tax/Fee not found');
+    // Partial update: only fields actually supplied are touched, matching the
+    // spread-merge the file version did.
+    const data: any = {};
+    if (payload.groupName !== undefined) data.groupName = payload.groupName;
+    if (payload.name !== undefined) data.name = String(payload.name);
+    if (payload.type !== undefined) data.type = payload.type;
+    if (payload.value !== undefined) data.value = String(payload.value);
+    if (payload.description !== undefined) data.description = payload.description || null;
+    if (payload.isActive !== undefined) data.isActive = !!payload.isActive;
+    return this.taxOut(await this.prisma.packageTax.update({ where: { id }, data }));
   }
 
-  deleteTax(id: number) {
-    const store = this.readStore();
-    const exists = store.taxes.some((t) => t.id === id);
-    if (!exists) throw new NotFoundException('Tax/Fee not found');
-    store.taxes = store.taxes.filter((t) => t.id !== id);
-    store.packageSettings = store.packageSettings.map((s) => ({
-      ...s,
-      taxIds: (s.taxIds || []).filter((x) => x !== id),
-    }));
-    this.writeStore(store);
+  async deleteTax(id: number) {
+    const existing = await this.prisma.packageTax.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Tax/Fee not found');
+    await this.prisma.packageTax.delete({ where: { id } });
+    await this.detachIdFromSettings('taxIds', id);
     return { success: true };
   }
 
-  getPolicies() {
-    return this.readStore().policies;
+  // ── Policies ───────────────────────────────────────────────────────────
+  async getPolicies(): Promise<PolicyRule[]> {
+    const rows = await this.prisma.packagePolicy.findMany({ orderBy: { id: 'asc' } });
+    return rows.map(this.policyOut);
   }
 
-  createPolicy(payload: any) {
-    const store = this.readStore();
-    const policy: PolicyRule = {
-      id: this.nextId(store.policies),
-      groupName: payload.groupName || 'Default',
-      attributeName: payload.attributeName,
-      attributeType: payload.attributeType || 'TEXT',
-      attributeOp: payload.attributeOp || '=',
-      attributeValue: String(payload.attributeValue ?? ''),
-      description: payload.description || '',
-      createdAt: new Date().toISOString(),
-    };
-    store.policies.push(policy);
-    this.writeStore(store);
-    return policy;
+  async createPolicy(payload: any): Promise<PolicyRule> {
+    if (!String(payload?.attributeName || '').trim()) {
+      throw new BadRequestException('An attribute name is required.');
+    }
+    const row = await this.prisma.packagePolicy.create({
+      data: {
+        groupName: payload.groupName || 'Default',
+        attributeName: String(payload.attributeName),
+        attributeType: payload.attributeType || 'TEXT',
+        attributeOp: payload.attributeOp || '=',
+        attributeValue: String(payload.attributeValue ?? ''),
+        description: payload.description || null,
+      },
+    });
+    return this.policyOut(row);
   }
 
-  updatePolicy(id: number, payload: any) {
-    const store = this.readStore();
-    const idx = store.policies.findIndex((p) => p.id === id);
-    if (idx < 0) throw new NotFoundException('Policy not found');
-    store.policies[idx] = { ...store.policies[idx], ...payload };
-    this.writeStore(store);
-    return store.policies[idx];
+  async updatePolicy(id: number, payload: any): Promise<PolicyRule> {
+    const existing = await this.prisma.packagePolicy.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Policy not found');
+    const data: any = {};
+    if (payload.groupName !== undefined) data.groupName = payload.groupName;
+    if (payload.attributeName !== undefined) data.attributeName = String(payload.attributeName);
+    if (payload.attributeType !== undefined) data.attributeType = payload.attributeType;
+    if (payload.attributeOp !== undefined) data.attributeOp = payload.attributeOp;
+    if (payload.attributeValue !== undefined) data.attributeValue = String(payload.attributeValue);
+    if (payload.description !== undefined) data.description = payload.description || null;
+    return this.policyOut(await this.prisma.packagePolicy.update({ where: { id }, data }));
   }
 
-  deletePolicy(id: number) {
-    const store = this.readStore();
-    const exists = store.policies.some((p) => p.id === id);
-    if (!exists) throw new NotFoundException('Policy not found');
-    store.policies = store.policies.filter((p) => p.id !== id);
-    store.allocations = store.allocations.map((a) => ({
-      ...a,
-      policyId: a.policyId === id ? null : a.policyId,
-    }));
-    store.packageSettings = store.packageSettings.map((s) => ({
-      ...s,
-      policyIds: (s.policyIds || []).filter((x) => x !== id),
-    }));
-    this.writeStore(store);
+  async deletePolicy(id: number) {
+    const existing = await this.prisma.packagePolicy.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Policy not found');
+    await this.prisma.packagePolicy.delete({ where: { id } });
+    // Allocations point at a policy; leaving the id behind would make the
+    // allocation reference a policy that no longer exists.
+    await this.prisma.packageAllocation.updateMany({ where: { policyId: id }, data: { policyId: null } });
+    await this.detachIdFromSettings('policyIds', id);
     return { success: true };
   }
 
-  getAllocations() {
-    return this.readStore().allocations;
+  // ── Allocations (time windows) ─────────────────────────────────────────
+  async getAllocations(): Promise<AllocationRule[]> {
+    const rows = await this.prisma.packageAllocation.findMany({ orderBy: { id: 'asc' } });
+    return rows.map(this.allocationOut);
   }
 
-  createAllocation(payload: any) {
-    const store = this.readStore();
-    const allocation: AllocationRule = {
-      id: this.nextId(store.allocations),
-      groupName: payload.groupName || 'Default',
-      isActive: payload.isActive !== false,
-      days: Array.isArray(payload.days) ? payload.days : [],
-      startTime: payload.startTime || '00:00',
-      endTime: payload.endTime || '23:59',
-      policyId: payload.policyId ? Number(payload.policyId) : null,
-      description: payload.description || '',
-      createdAt: new Date().toISOString(),
-    };
-    store.allocations.push(allocation);
-    this.writeStore(store);
-    return allocation;
+  async createAllocation(payload: any): Promise<AllocationRule> {
+    const row = await this.prisma.packageAllocation.create({
+      data: {
+        groupName: payload.groupName || 'Default',
+        isActive: payload.isActive !== false,
+        days: Array.isArray(payload.days) ? payload.days : [],
+        startTime: payload.startTime || '00:00',
+        endTime: payload.endTime || '23:59',
+        policyId: payload.policyId ? Number(payload.policyId) : null,
+        description: payload.description || null,
+      },
+    });
+    return this.allocationOut(row);
   }
 
-  updateAllocation(id: number, payload: any) {
-    const store = this.readStore();
-    const idx = store.allocations.findIndex((a) => a.id === id);
-    if (idx < 0) throw new NotFoundException('Allocation not found');
-    store.allocations[idx] = {
-      ...store.allocations[idx],
-      ...payload,
-      policyId:
-        payload.policyId !== undefined
-          ? payload.policyId === null || payload.policyId === ''
-            ? null
-            : Number(payload.policyId)
-          : store.allocations[idx].policyId,
-    };
-    this.writeStore(store);
-    return store.allocations[idx];
+  async updateAllocation(id: number, payload: any): Promise<AllocationRule> {
+    const existing = await this.prisma.packageAllocation.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Allocation not found');
+    const data: any = {};
+    if (payload.groupName !== undefined) data.groupName = payload.groupName;
+    if (payload.isActive !== undefined) data.isActive = !!payload.isActive;
+    if (payload.days !== undefined) data.days = Array.isArray(payload.days) ? payload.days : [];
+    if (payload.startTime !== undefined) data.startTime = payload.startTime;
+    if (payload.endTime !== undefined) data.endTime = payload.endTime;
+    if (payload.description !== undefined) data.description = payload.description || null;
+    // Explicit null/'' clears the link; omitting the key leaves it alone.
+    if (payload.policyId !== undefined) {
+      data.policyId = payload.policyId === null || payload.policyId === '' ? null : Number(payload.policyId);
+    }
+    return this.allocationOut(await this.prisma.packageAllocation.update({ where: { id }, data }));
   }
 
-  deleteAllocation(id: number) {
-    const store = this.readStore();
-    const exists = store.allocations.some((a) => a.id === id);
-    if (!exists) throw new NotFoundException('Allocation not found');
-    store.allocations = store.allocations.filter((a) => a.id !== id);
-    store.packageSettings = store.packageSettings.map((s) => ({
-      ...s,
-      allocationIds: (s.allocationIds || []).filter((x) => x !== id),
-    }));
-    this.writeStore(store);
+  async deleteAllocation(id: number) {
+    const existing = await this.prisma.packageAllocation.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Allocation not found');
+    await this.prisma.packageAllocation.delete({ where: { id } });
+    await this.detachIdFromSettings('allocationIds', id);
     return { success: true };
   }
 
-  getManagementOptions() {
-    const store = this.readStore();
-    return {
-      taxes: store.taxes,
-      policies: store.policies,
-      allocations: store.allocations,
-    };
+  async getManagementOptions() {
+    const [taxes, policies, allocations] = await Promise.all([
+      this.getTaxes(), this.getPolicies(), this.getAllocations(),
+    ]);
+    return { taxes, policies, allocations };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1367,7 +1411,10 @@ export class PackagesService {
   async overview(id: number, actor?: Actor) {
     const pkg = await this.findOne(id);
     const settings: any = pkg.settings || {};
-    const store = this.readStore();
+    // Fetched once here and used for the pricing chain below. Only the ids this
+    // package references are needed, but the tables are tiny and one round trip
+    // beats three lookups per attached item.
+    const store = await this.getManagementOptions();
 
     // Visibility: a non-admin may only open the drawer for a package they can
     // actually see/sell — same rule as the list (owns it or has a direct price
@@ -1539,10 +1586,9 @@ export class PackagesService {
       include: { pool: true },
     });
     if (!pkg) return null;
-    const policyIds: number[] = this.getPackageSettingById(packageId)?.policyIds ?? [];
+    const policyIds: number[] = (await this.getPackageSettingById(packageId))?.policyIds ?? [];
     const policyAttributes = policyIds.length
-      ? this.readStore().policies
-          .filter((p) => policyIds.includes(p.id))
+      ? (await this.prisma.packagePolicy.findMany({ where: { id: { in: policyIds } } }))
           .map((p) => ({ attribute: p.attributeName, op: p.attributeOp, value: p.attributeValue }))
       : undefined;
     return policyAttributes && policyAttributes.length ? { ...pkg, policyAttributes } : pkg;

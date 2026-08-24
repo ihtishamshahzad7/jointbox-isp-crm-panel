@@ -709,6 +709,113 @@ export class NdmService {
     return this.getSettings(actor);
   }
 
+  /**
+   * Settings → diagnostics. Live health of every background subsystem.
+   *
+   * WHY THIS IS DERIVED FROM THE DATABASE, NOT FROM IN-MEMORY COUNTERS
+   *
+   * The obvious implementation is a counter on each engine — "alerts opened",
+   * "sounds sent" — incremented as work happens. Those numbers are worse than
+   * they look. They reset on every deploy, and in a pm2 cluster each of the
+   * eleven web workers has its own copy, so whichever process answers the
+   * request reports its own fraction of the truth. An operator comparing two
+   * refreshes would see the figure jump around and reasonably conclude the
+   * panel is broken.
+   *
+   * Counts taken from the tables are the same on every process, survive a
+   * restart, and mean exactly what they say. The only in-memory values kept
+   * here are the ones that are genuinely per-process and have no database
+   * equivalent — is the SNMP library loaded, is the poll loop beating, which
+   * syslog sockets are bound — and those are reported for THIS process, which
+   * is what "is this box healthy" is asking.
+   *
+   * Anything unavailable is null so the UI renders "—" rather than a zero that
+   * reads as "nothing is happening".
+   */
+  async getDiagnostics(actor?: Actor) {
+    this.canManageSettings(actor);
+    const since = new Date(Date.now() - 24 * 3600_000);
+
+    const [
+      deviceCount, snmpDevices, pingDevices,
+      openAlerts, alerts24h, events24h, openEvents,
+      rulesTotal, rulesEnabled,
+      soundDevices, mutedDevices, soundPorts,
+      monitoredIfaces, excludedIfaces,
+      syslog24h, listeners,
+    ] = await Promise.all([
+      this.prisma.networkDevice.count({ where: { enabled: true } }),
+      this.prisma.networkDevice.count({ where: { enabled: true, monitorMethod: 'SNMP' } }),
+      this.prisma.networkDevice.count({ where: { enabled: true, monitorMethod: { in: ['ICMP', 'HTTP'] } } }),
+      this.prisma.alert.count({ where: { status: 'OPEN' } }),
+      this.prisma.alert.count({ where: { openedAt: { gte: since } } }),
+      this.prisma.networkEvent.count({ where: { createdAt: { gte: since } } }),
+      this.prisma.networkEvent.count({ where: { status: 'OPEN' } }),
+      this.prisma.alertRule.count(),
+      this.prisma.alertRule.count({ where: { enabled: true } }),
+      this.prisma.networkDevice.count({ where: { enabled: true, soundEnabled: true } }),
+      this.prisma.networkDevice.count({ where: { enabled: true, soundEnabled: false } }),
+      this.prisma.networkInterface.count({ where: { soundEnabled: true } }),
+      this.prisma.networkInterface.count({ where: { monitoringEnabled: true } }),
+      this.prisma.networkInterface.count({ where: { monitoringEnabled: false } }),
+      this.prisma.syslogEvent.count({ where: { receivedAt: { gte: since } } }),
+      this.prisma.syslogServerSetting.findMany({ where: { enabled: true } }),
+    ]);
+
+    const poller = this.poller.health;
+
+    return {
+      asOf: new Date(),
+
+      // Per-process facts. On a web node the background work legitimately does
+      // not run here, so say so rather than reporting it as a fault.
+      process: {
+        role: process.env.JOINTBOX_ROLE || 'all',
+        instance: process.env.NODE_APP_INSTANCE ?? process.env.pm_id ?? null,
+        primary: poller.primary,
+        note: poller.primary
+          ? 'Background work runs on this process.'
+          : 'This is a web process — polling and syslog belong to the worker. Zeros below are expected here.',
+      },
+
+      snmp: {
+        connected: this.snmp.available,
+        deviceCount: snmpDevices,
+      },
+
+      poller: {
+        running: poller.running,
+        scheduled: poller.scheduled,
+        lastBeat: poller.lastBeat,
+        sweeps: poller.sweeps,
+        dueLastSweep: poller.lastSweepDue,
+        trackedDevices: poller.trackedDevices,
+      },
+
+      devices: { total: deviceCount, snmp: snmpDevices, ping: pingDevices },
+
+      // Named "engine" figures, but sourced from the tables the engines write
+      // to — the honest version of "is it working".
+      alertEngine: { openCount: openAlerts, last24h: alerts24h },
+      events: { open: openEvents, last24h: events24h },
+      rules: { total: rulesTotal, enabled: rulesEnabled },
+
+      sound: {
+        devicesOn: soundDevices,
+        devicesMuted: mutedDevices,
+        enabledInterfaces: soundPorts,
+      },
+
+      interfaces: { monitored: monitoredIfaces, excluded: excludedIfaces },
+
+      syslog: {
+        last24h: syslog24h,
+        configured: listeners.map((l) => `${l.protocol}/${l.port}`),
+        listening: this.receiver.activeProtocols,
+      },
+    };
+  }
+
   // ── Rule preview helper (for the UI) ─────────────────────────
   /**
    * Syslog forward targets. ISP-level only — a forward target streams this
@@ -720,6 +827,14 @@ export class NdmService {
       throw new ForbiddenException('Only ISP-level accounts can manage syslog forwarding.');
     }
   }
+
+  /**
+   * Public form of the same check, for the archive endpoints. The archive is
+   * the raw log stream on disk — a reseller must not be able to enumerate or
+   * download it, since it contains every tenant's device traffic, not just
+   * their own.
+   */
+  assertIspActor(actor?: Actor) { this.assertIsp(actor); }
 
   async listForwardTargets(actor?: Actor) {
     this.assertIsp(actor);

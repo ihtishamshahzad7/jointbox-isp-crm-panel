@@ -36,6 +36,31 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
+  /**
+   * Observable state for the Settings → diagnostics panel. Recorded here rather
+   * than inferred elsewhere, because "is the poller alive?" is a question only
+   * the poller can answer honestly. All start as null so the UI shows "no beat
+   * yet" instead of implying a healthy zero.
+   */
+  private lastBeatAt: Date | null = null;
+  private lastSweepDue = 0;
+  private sweepCount = 0;
+
+  /** Snapshot for diagnostics. Never throws; safe to call from a request. */
+  get health() {
+    return {
+      // On a web node the sweep returns immediately, so "scheduled" is the
+      // honest word — the work belongs to the worker process.
+      scheduled: this.timer !== null,
+      primary: isPrimaryInstance(),
+      running: this.running,
+      lastBeat: this.lastBeatAt,
+      lastSweepDue: this.lastSweepDue,
+      sweeps: this.sweepCount,
+      trackedDevices: this.last.size,
+    };
+  }
+
   constructor(
     private prisma: PrismaService,
     private snmp: NdmSnmpService,
@@ -115,6 +140,8 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
   private async tick() {
     if (!isPrimaryInstance() || this.running) return;
     this.running = true;
+    this.lastBeatAt = new Date();
+    this.sweepCount++;
     try {
       const devices = await this.prisma.networkDevice.findMany({
         where: { enabled: true },
@@ -131,6 +158,7 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
       const due = devices
         .filter((d) => (this.last.get(d.id) ?? 0) + d.pollIntervalSec * 1000 <= now)
         .slice(0, 40);
+      this.lastSweepDue = due.length;
       const BATCH = 8;
       for (let i = 0; i < due.length; i += BATCH) {
         await Promise.all(

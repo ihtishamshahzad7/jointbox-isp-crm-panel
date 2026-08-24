@@ -61,6 +61,9 @@ export const NDMCSS = `
 .ndm-field input, .ndm-field select, .ndm-field textarea { width: 100%; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; background: var(--surface); color: var(--text); }
 .ndm-field input:focus, .ndm-field select:focus { outline: none; border-color: var(--accent); }
 .ndm-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* Standalone input, for inline editors that are not inside a .ndm-field wrapper. */
+.ndm-in { border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; font-size: 12.5px; background: var(--surface); color: var(--text); }
+.ndm-in:focus { outline: none; border-color: var(--accent); }
 .ndm-hint { font-size: 11.5px; color: var(--muted); }
 .ndm-ok { color: var(--online); font-size: 12.5px; }
 .ndm-err { color: var(--danger); font-size: 12.5px; }

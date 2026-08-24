@@ -27,6 +27,7 @@ const DESTS: Dest[] = [
   { label: "NAS / Routers", href: "/nas", group: "Network", keys: "router mikrotik bng nas radius add device" },
   { label: "IP Pools", href: "/ip-pools", group: "Network", keys: "ip pool address range dynamic" },
   { label: "Static IPs", href: "/static-ips", group: "Network", keys: "static public fixed ip business" },
+  { label: "Prefix Register", href: "/prefixes", group: "Network", keys: "prefix subnet cidr vlan corporate p2p delegated block transit urpf acl allocate" },
   { label: "Outages", href: "/outages", group: "Network", keys: "outage power load shedding down" },
   { label: "Fiber (OLT/ONU)", href: "/fiber", group: "Network", keys: "fiber olt onu gpon optical splitter" },
   // Plans & stock

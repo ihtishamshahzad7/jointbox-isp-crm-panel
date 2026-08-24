@@ -1,7 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, Req, Res, UseGuards,
+} from '@nestjs/common';
+import { createReadStream } from 'fs';
+import { basename } from 'path';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { NdmService } from './ndm.service';
+import { NdmSyslogArchiveService } from './syslog-archive.service';
 
 /**
  * Network device monitoring — switches/routers over SNMP + syslog.
@@ -15,7 +20,10 @@ import { NdmService } from './ndm.service';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('monitoring')
 export class NdmController {
-  constructor(private readonly ndm: NdmService) {}
+  constructor(
+    private readonly ndm: NdmService,
+    private readonly archive: NdmSyslogArchiveService,
+  ) {}
 
   // ── Devices ──────────────────────────────────────────────────
   @Get('ndm/devices')
@@ -171,6 +179,50 @@ export class NdmController {
 
   @Delete('ndm/forward-targets/:id')
   deleteForwardTarget(@Param('id') id: string, @Req() req: any) { return this.ndm.deleteForwardTarget(+id, req.user); }
+
+  /**
+   * Syslog archive — the on-disk audit copy. ISP-level only, same reasoning as
+   * forwarding: these endpoints describe and hand out the raw log stream.
+   */
+  @Get('ndm/archive/status')
+  archiveStatus(@Req() req: any) {
+    this.ndm.assertIspActor(req.user);
+    return this.archive.status();
+  }
+
+  @Get('ndm/archive/files')
+  archiveFiles(@Req() req: any) {
+    this.ndm.assertIspActor(req.user);
+    return this.archive.listArchive();
+  }
+
+  /**
+   * Download one archive file. Streamed rather than read into memory: a day of
+   * syslog from a busy network is measured in gigabytes, and buffering that to
+   * serve one download would take the backend with it.
+   */
+  @Get('ndm/archive/download')
+  async archiveDownload(@Query('name') name: string, @Req() req: any, @Res() res: any) {
+    this.ndm.assertIspActor(req.user);
+    const full = this.archive.resolveArchiveFile(String(name || ''));
+    if (!full) throw new NotFoundException('Archive file not found');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${basename(full)}"`,
+    );
+    createReadStream(full).pipe(res);
+  }
+
+  /**
+   * Subsystem health for Settings → Diagnostics.
+   *
+   * This route did not exist, while the Settings page had been calling it since
+   * it was written — so that screen showed "Diagnostics are only visible to
+   * admins" to everyone, including admins, and every panel below it was dead.
+   */
+  @Get('ndm/diagnostics')
+  diagnostics(@Req() req: any) { return this.ndm.getDiagnostics(req.user); }
 
   @Get('ndm/settings')
   settings(@Req() req: any) { return this.ndm.getSettings(req.user); }

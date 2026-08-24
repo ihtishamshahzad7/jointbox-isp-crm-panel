@@ -1,4 +1,5 @@
 import * as net from 'net';
+import { maybeDecrypt } from '../common/crypto-box';
 
 export interface MikrotikConfig {
   host: string;
@@ -37,7 +38,14 @@ export class MikrotikClient {
   }> = [];
 
   constructor(config: MikrotikConfig) {
-    this.config = { timeout: 10000, ...config };
+    // Decrypt here, at the single point where the credential is actually USED,
+    // rather than at each of the ~40 places that read Nas.apiPassword out of
+    // the database and pass it down. Those callers keep handing us the column
+    // value verbatim and neither know nor care whether it is encrypted.
+    //
+    // maybeDecrypt returns plaintext unchanged, so routers whose passwords
+    // predate encryption keep connecting with no migration and no downtime.
+    this.config = { timeout: 10000, ...config, password: maybeDecrypt(config.password) };
   }
 
   private encodeLength(len: number): Buffer {

@@ -19,8 +19,6 @@ import {
 } from './panel-format';
 import { parseCursor, buildCursorPage } from '../common/pagination';
 import { terminateInfo } from '../common/radius-terminate';
-import * as fs from 'fs';
-import * as path from 'path';
 
 @Injectable()
 export class SubscribersService implements OnModuleInit {
@@ -112,29 +110,32 @@ export class SubscribersService implements OnModuleInit {
     });
     if (!pkg) return null;
 
-    // Resolve linked RADIUS policies from the packages-management.json store
+    // Resolve linked RADIUS policies. These used to be read out of
+    // data/packages-management.json on every single profile build — a
+    // synchronous file read on the path that runs for every activation, every
+    // renewal and every re-sync. They now live in package_setting /
+    // package_policy.
+    //
+    // The catch stays, and stays non-fatal for the same reason as before: a
+    // package's extra RADIUS attributes are an enhancement, and failing to read
+    // them must degrade to the speed fields rather than block the subscriber
+    // from getting a profile at all.
     let policyAttributes: RadiusPolicyAttr[] | undefined;
     try {
-      const storePath = path.join(process.cwd(), 'data', 'packages-management.json');
-      if (fs.existsSync(storePath)) {
-        const store = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
-        const settings = (store.packageSettings || []).find(
-          (s: any) => s.packageId === packageId,
-        );
-        const policyIds: number[] = settings?.policyIds ?? [];
-        if (policyIds.length > 0 && Array.isArray(store.policies)) {
-          const matched = store.policies.filter((p: any) => policyIds.includes(p.id));
-          if (matched.length > 0) {
-            policyAttributes = matched.map((p: any) => ({
-              attribute: p.attributeName,
-              op: p.attributeOp,
-              value: p.attributeValue,
-            }));
-          }
+      const setting = await this.prisma.packageSetting.findUnique({ where: { packageId } });
+      const policyIds: number[] = ((setting?.settings as any)?.policyIds ?? []) as number[];
+      if (policyIds.length > 0) {
+        const matched = await this.prisma.packagePolicy.findMany({ where: { id: { in: policyIds } } });
+        if (matched.length > 0) {
+          policyAttributes = matched.map((p) => ({
+            attribute: p.attributeName,
+            op: p.attributeOp,
+            value: p.attributeValue,
+          }));
         }
       }
     } catch {
-      // Non-critical — if the store cannot be read, fall back to speed fields
+      // Non-critical — fall back to the speed fields
     }
 
     return {

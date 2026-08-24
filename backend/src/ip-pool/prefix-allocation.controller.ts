@@ -27,17 +27,17 @@ export class PrefixAllocationController {
    * Read-only: it reserves nothing, so it is safe to call while planning.
    */
   @Get('pools/:id/next-free')
-  nextFree(@Param('id') id: string, @Query('size') size?: string) {
-    return this.svc.nextFree(+id, size ? Number(size) : undefined);
+  nextFree(@Param('id') id: string, @Req() req: any, @Query('size') size?: string) {
+    return this.svc.nextFree(+id, size ? Number(size) : undefined, req.user);
   }
 
   /** The register. Defaults to hiding RELEASED rows. */
   @Get()
-  list(@Query() query: any) { return this.svc.list(query); }
+  list(@Query() query: any, @Req() req: any) { return this.svc.list(query, req.user); }
 
   /** One allocation, with its generated router config and handover sheet. */
   @Get(':id')
-  getOne(@Param('id') id: string) { return this.svc.getOne(+id); }
+  getOne(@Param('id') id: string, @Req() req: any) { return this.svc.getOne(+id, req.user); }
 
   /**
    * Provision a client: allocate the block AND the transit /30, write the

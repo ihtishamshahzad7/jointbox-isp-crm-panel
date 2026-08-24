@@ -161,6 +161,26 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'PUT',    test: /^\/static-ips\/\d+$/,                     key: 'static-ips.write' },
   { method: 'DELETE', test: /^\/static-ips\/\d+$/,                     key: 'static-ips.delete' },
 
+  // ── ROUTED PREFIX ALLOCATION (corporate / P2P clients) ────────────────────
+  // The service also enforces ISP-only, in code. Both layers are deliberate:
+  // the map is what an operator reads to understand who can do what, and the
+  // in-service guard is what actually holds if a route is ever added without a
+  // matching entry here (which is exactly how gaps appear).
+  { method: 'POST',   test: /^\/prefixes\/provision\b/,                 key: 'ip-pools.write' },
+  { method: 'POST',   test: /^\/prefixes\/pools\b/,                     key: 'ip-pools.write' },
+  { method: 'DELETE', test: /^\/prefixes\/\d+$/,                        key: 'ip-pools.delete' },
+
+  // ── SUBSCRIBER OWNERSHIP REPAIR ───────────────────────────────────────────
+  // Assigning an owner to an OWNERLESS subscriber is a data repair, not a
+  // transfer — but it decides whose wallet pays from then on, so it is gated
+  // with the same key as a transfer rather than treated as a plain edit.
+  { method: 'POST',   test: /^\/subscribers\/assign-owner\b/,           key: 'users.transferSubscribers' },
+
+  // ── BILLING CORRECTIONS ───────────────────────────────────────────────────
+  // Back-charging moves real money out of dealer wallets for service already
+  // delivered; the controller additionally restricts it to ISP-level accounts.
+  { method: 'POST',   test: /^\/organization\/pricing\/backcharge\b/,   key: 'organization.pricing' },
+
   // ── COMPLIANCE / KYC / FUP ────────────────────────────────────────────────
   { method: 'POST',   test: /^\/compliance\/kyc\/\d+\/cnic\b/,         key: 'compliance.updateKyc' },
   { method: 'POST',   test: /^\/compliance\/kyc\/users\/\d+\/cnic\b/,  key: 'compliance.updateKyc' },

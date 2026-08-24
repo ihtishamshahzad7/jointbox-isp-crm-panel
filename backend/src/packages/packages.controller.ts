@@ -120,8 +120,8 @@ export class PackagesController {
    * package affects. Read-only; re-sync nothing until this has been reviewed.
    */
   @Get('rate-limit/audit')
-  rateLimitAudit(): any {
-    return this.packagesService.rateLimitAudit();
+  rateLimitAudit(@Req() req: any): any {
+    return this.packagesService.rateLimitAudit(req.user);
   }
 
   /**

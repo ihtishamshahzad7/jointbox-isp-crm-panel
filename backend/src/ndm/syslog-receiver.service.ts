@@ -10,6 +10,7 @@ import { NdmSyslogParserService } from './syslog-parser.service';
 import { NdmEventEngine } from './event-engine.service';
 import { NdmAlertEngine } from './alert-engine.service';
 import { parseCondition, matchSyslogRule, type NdmEventType } from './ndm.constants';
+import { NdmSyslogArchiveService } from './syslog-archive.service';
 
 /**
  * Syslog receiver — real-time collection for switch/router logs.
@@ -39,6 +40,7 @@ export class NdmSyslogReceiverService implements OnModuleInit, OnModuleDestroy {
     private parser: NdmSyslogParserService,
     private events: NdmEventEngine,
     private alerts: NdmAlertEngine,
+    private archive: NdmSyslogArchiveService,
   ) {}
 
   async onModuleInit() {
@@ -143,7 +145,21 @@ export class NdmSyslogReceiverService implements OnModuleInit, OnModuleDestroy {
 
   // ── Per-line handling ──────────────────────────────────────────
   private async onMessage(raw: string, srcIp: string, via: 'UDP' | 'TCP' | 'TLS') {
-    if (!raw || raw.length > 4096) return; // lines are short by definition
+    if (!raw) return;
+
+    /**
+     * Archive FIRST, before every other check.
+     *
+     * The archive is the audit copy, so it has to be complete — including the
+     * lines we then reject as over-length, and the ones the parser cannot make
+     * sense of. Those are frequently the interesting ones: a malformed or
+     * unusually long line is either a device doing something unexpected or
+     * someone probing the collector, and neither should vanish because our
+     * parser shrugged at it.
+     */
+    this.archive.append(raw, srcIp);
+
+    if (raw.length > 4096) return; // beyond this it is not a syslog line we can use
     try {
       const parsed = this.parser.parse(raw);
       if (!parsed) return;

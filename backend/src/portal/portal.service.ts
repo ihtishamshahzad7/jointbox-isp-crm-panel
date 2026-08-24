@@ -333,10 +333,9 @@ export class PortalService {
       orderBy: { price: 'asc' },
     });
 
-    // Filter by selfActivation flag from the file-based settings store.
     // Only show packages where self-activation is explicitly enabled.
-    // Silently skip packages without self-activation settings.
-    const store = await this.readPackageStore();
+    // Packages with no settings row are skipped, not defaulted on.
+    const store = await this.packageSettingsById();
     return packages.filter((p) => store[p.id]?.selfActivation === true);
   }
 
@@ -365,7 +364,7 @@ export class PortalService {
     if (!pkg || !pkg.isActive) throw new BadRequestException('Package not found or inactive');
 
     // Check self-activation is enabled for this package
-    const store = await this.readPackageStore();
+    const store = await this.packageSettingsById();
     if (!store[pkg.id]?.selfActivation) {
       throw new BadRequestException('This package is not available for self-activation');
     }
@@ -537,18 +536,35 @@ export class PortalService {
   }
 
   /**
-   * Read the packages-management.json store for self-activation flags.
-   * Same mechanism used by PackagesService.
+   * Per-package settings, keyed by package id — currently only the
+   * self-activation flag is read here.
+   *
+   * TWO BUGS WERE FIXED WHEN THIS MOVED OFF THE JSON FILE.
+   *
+   * The previous version parsed data/packages-management.json and returned the
+   * whole document, then callers indexed it as `store[packageId]`. But the
+   * document's top level is `{ packageSettings, taxes, policies, allocations }`
+   * — there is no key that is a package id. So the lookup was always undefined,
+   * which means `getSelfActivationPackages()` always returned an empty list and
+   * `register()` rejected every package as "not available for self-activation",
+   * no matter how it was configured in the panel. Self-activation had never
+   * actually worked.
+   *
+   * Second, the settings lived in a file that no backup captured and any deploy
+   * could replace.
+   *
+   * Reading the real table fixes both: the flag an operator sets in the panel is
+   * now the flag the portal honours.
    */
-  private async readPackageStore(): Promise<Record<number, { selfActivation?: boolean }>> {
+  private async packageSettingsById(): Promise<Record<number, { selfActivation?: boolean }>> {
     try {
-      const fs = await import('fs');
-      const path = await import('path');
-      const storePath = path.resolve(process.cwd(), 'data', 'packages-management.json');
-      if (!fs.existsSync(storePath)) return {};
-      const raw = fs.readFileSync(storePath, 'utf-8');
-      return JSON.parse(raw);
+      const rows = await this.prisma.packageSetting.findMany();
+      const out: Record<number, any> = {};
+      for (const r of rows) out[r.packageId] = (r.settings as any) ?? {};
+      return out;
     } catch {
+      // Fail closed: if settings cannot be read we show nothing rather than
+      // opening self-activation on every package.
       return {};
     }
   }

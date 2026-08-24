@@ -14,6 +14,7 @@ import { NdmNotificationEngine } from '../ndm/notification-engine.service';
 import { NdmPortPollingService } from '../ndm/port-polling.service';
 import { NdmSyslogReceiverService } from '../ndm/syslog-receiver.service';
 import { NdmRetentionService } from '../ndm/retention.service';
+import { NdmSyslogArchiveService } from '../ndm/syslog-archive.service';
 
 @Module({
   imports: [PrismaModule, NotificationsModule],
@@ -29,6 +30,7 @@ import { NdmRetentionService } from '../ndm/retention.service';
     NdmAlertEngine,
     NdmNotificationEngine,
     NdmPortPollingService,
+    NdmSyslogArchiveService,
     NdmSyslogReceiverService,
     NdmRetentionService,
   ],

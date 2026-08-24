@@ -154,14 +154,60 @@ There is **no UI control for this yet** — see §5.
 
 Ordered by value.
 
-1. **`monitorMethod` selector** in the Add Device wizard and device settings. Without it, §4.4 is curl-only.
-2. **Syslog log-to-file archiving** — Kiwi writes dated files to disk. Needs path, rotation and retention policy.
-3. **Forwarding UI** — `SyslogForwardTarget` API works; no screen exists.
-4. **JSON package/policy store → PostgreSQL.** `backend/data/packages-management.json` holds package settings and RADIUS policies. No transactions, no audit, and it can race across the 11 pm2 instances. Highest-severity architectural debt.
-5. **Startup assertion for unguarded crons.** 25 cron jobs once ran on all 12 pm2 processes because `isPrimaryInstance()` was never called. Fixed, but nothing prevents a new cron from omitting it — make it structural.
-6. **Encrypt the router API password.** Ten consumers; the RADIUS shared secret must stay plaintext (FreeRADIUS reads the table directly).
-7. **Automated tests on the money paths.** `settleActivation` has specs; activation, RADIUS sync, disconnect and FUP rely on manual verification.
-8. **CI type-check.** `tsc` cannot run over the Windows mount from the dev sandbox, so the server is currently the first place code is compiled.
+Items 1–6 of the previous list are **done** — see §9 for what shipped and the
+deploy order it needs. What remains:
+
+1. **Automated tests on the money paths.** `settleActivation` has specs; activation, RADIUS sync, disconnect and FUP rely on manual verification.
+2. **CI type-check.** `tsc` cannot run over the Windows mount from the dev sandbox, so the server is currently the first place code is compiled. This is now the single largest risk in the workflow: every change since Phase 9 was written without a compiler.
+3. **Proper relational columns for `PackageSetting.settings`.** It is still a JSON blob, now inside Postgres (transactional, backed up, shared). That was the deliberate stopping point — see the schema comment. Splitting forty sparse optional switches into columns can wait until they stop changing.
+4. **Archive configuration in the UI.** Syslog archiving is env-driven; the panel shows real status but cannot change the retention or path.
+
+---
+
+## 9. PHASE 10 — WHAT SHIPPED, AND IN WHAT ORDER TO DEPLOY IT
+
+### 9.1 Deploy order (this one matters)
+
+```bash
+cd /opt/jointbox
+git pull                                  # verify it actually moved
+cd backend
+npx prisma generate
+npx prisma migrate deploy                 # creates the package_* tables
+node tools/import-packages-json.js        # dry run — read the counts
+node tools/import-packages-json.js --apply
+node tools/encrypt-nas-passwords.js       # dry run
+node tools/encrypt-nas-passwords.js --apply
+npm run build
+cd ../frontend && rm -rf .next && npm run build
+pm2 restart all
+```
+
+**Take a database backup before the two `--apply` steps.** Both are id- and
+key-sensitive: the package import preserves ids because settings reference
+taxes by id, and the password encryption is only reversible with the same
+`SECRETS_KEY`/`JWT_SECRET` the backend runs with. If router connections fail
+afterwards, that key is the first thing to check.
+
+Do **not** delete `backend/data/packages-management.json` until the panel shows
+the right taxes, policies and per-package settings. It is the only copy of that
+data that predates the move.
+
+### 9.2 What changed
+
+| Area | Change |
+|---|---|
+| Tenancy | `/prefixes` reads were ungated — any authenticated user could list every corporate client, their prefixes and VLANs. Now ISP-only, with the controller passing `req.user` (without which the guards were dead code). |
+| Tenancy | `packages.rateLimitAudit()` returned every package regardless of actor; `testPackage()` fetched by id with no scope check. Both now scope, and `testPackage` throws NotFound so ids cannot be enumerated. |
+| Permissions | Added the missing `ROUTE_PERMISSIONS` entries for `/prefixes/*`, `/subscribers/assign-owner`, `/organization/pricing/backcharge`. |
+| Secrets | `Nas.apiPassword` encrypted at rest. Decryption happens in `MikrotikClient`'s constructor — the one place the value is used — so the ~40 call sites that read the column are untouched. Plaintext passes through unchanged, so the deploy needs no downtime. |
+| Cluster | `CronGuardService` unregisters every scheduled job on non-primary processes at bootstrap. An unguarded `@Cron` can no longer duplicate across the cluster, because on a web node there is no job left to fire. Opt out per job with `CRON_ALWAYS`. |
+| Syslog | On-disk archive with daily files, buffered writes, retention by age **and** total size. Browsable and downloadable from Settings. |
+| Syslog | Forwarding UI (add/edit/delete targets, with sent/failed counters). |
+| Monitoring | **`/monitoring/ndm/diagnostics` did not exist**, while the Settings page had been calling it since it was written — that screen showed "Diagnostics are only visible to admins" to everyone, and every panel below it was dead. Implemented, sourced from the database rather than per-process counters. |
+| Network | Prefix Register UI — pool utilisation, next-free lookup, provision wizard, generated router config and client handover sheet, release with required reason. |
+| Packages | `data/packages-management.json` → `package_tax` / `package_policy` / `package_allocation` / `package_setting`. |
+| Portal | **Self-activation had never worked.** `readPackageStore()` returned the whole JSON document and callers indexed it as `store[packageId]`, which is always undefined — so the portal listed no packages and rejected every registration. Fixed as part of the move. |
 
 ---
 

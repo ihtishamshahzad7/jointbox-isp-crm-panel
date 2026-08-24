@@ -1194,6 +1194,10 @@ model Package {
   proRatedBilling ProRatedBilling?
   throttlePolicies PackageThrottlePolicy[]
   extraFees ExtraFeePackage[]
+  /// Quotas/expiry/attachment ids that used to live in packages-management.json.
+  /// Cascades on delete, replacing the manual "filter it out of the JSON" step
+  /// that had to be remembered in remove().
+  setting PackageSetting?
 
   createdAt DateTime @default(now())
 
@@ -3577,6 +3581,90 @@ model SyslogForwardTarget {
 
   @@index([enabled])
   @@map("syslog_forward_target")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// PACKAGE MANAGEMENT
+//
+// These four tables replace backend/data/packages-management.json.
+//
+// A JSON file on disk was the wrong home for them for three reasons that all
+// bit in production: it is not shared between the pm2 workers in any
+// transactional sense (two simultaneous edits silently lose one), it is not in
+// the database backup, and a deploy that replaces the working directory takes
+// the operator's tax and policy configuration with it.
+//
+// Ids are preserved verbatim by the migration, because packageSettings
+// references taxes/policies/allocations BY ID. Renumbering during the move
+// would silently re-point every package at the wrong tax.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Per-package configuration that has no column on Package itself — quotas,
+/// expiry behaviour, and the tax/policy/allocation ids attached to it.
+model PackageSetting {
+  id        Int      @id @default(autoincrement())
+  packageId Int      @unique
+  /// The whole settings object. Kept as JSON deliberately: it is a wide,
+  /// sparse, still-evolving bag of optional switches read and written as one
+  /// unit and never queried field-by-field. Splitting it into forty nullable
+  /// columns would buy nothing and cost a migration per new option.
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@map("package_setting")
+}
+
+/// Taxes and fees that can be attached to packages.
+model PackageTax {
+  id          Int      @id @default(autoincrement())
+  groupName   String   @db.VarChar(120) @default("")
+  name        String   @db.VarChar(120)
+  /// PERCENTAGE | FIXED
+  type        String   @db.VarChar(24) @default("PERCENTAGE")
+  value       String   @db.VarChar(32) @default("0")
+  description String?  @db.VarChar(300)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@map("package_tax")
+}
+
+/// RADIUS attribute rules applied to packages.
+model PackagePolicy {
+  id             Int      @id @default(autoincrement())
+  groupName      String   @db.VarChar(120) @default("")
+  attributeName  String   @db.VarChar(120)
+  attributeType  String   @db.VarChar(24)
+  attributeOp    String   @db.VarChar(8)
+  attributeValue String   @db.VarChar(240)
+  description    String?  @db.VarChar(300)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("package_policy")
+}
+
+/// Time-of-day / day-of-week windows in which a policy applies.
+model PackageAllocation {
+  id          Int      @id @default(autoincrement())
+  groupName   String   @db.VarChar(120) @default("")
+  isActive    Boolean  @default(true)
+  /// ["MON","TUE",…]
+  days        Json     @default("[]")
+  startTime   String   @db.VarChar(8) @default("00:00")
+  endTime     String   @db.VarChar(8) @default("23:59")
+  policyId    Int?
+  description String?  @db.VarChar(300)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@map("package_allocation")
 }
 
 /// CPU/memory/temperature series per network device (the Overview graphs).

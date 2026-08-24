@@ -166,9 +166,107 @@ export const ndm = {
     syslogHelp?: string;
     channels: string[];
   }>("/monitoring/ndm/rule-help"),
+  diagnostics: () => req<Diagnostics>("/monitoring/ndm/diagnostics"),
   settings: () => req<any>("/monitoring/ndm/settings"),
   updateSettings: (b: any) => req<any>("/monitoring/ndm/settings", { method: "PUT", body: JSON.stringify(b) }),
+
+  // ── Syslog relay + archive (ISP-level only; 403 for resellers) ───
+  forwardTargets: () => req<ForwardTarget[]>("/monitoring/ndm/forward-targets"),
+  createForwardTarget: (b: Partial<ForwardTarget>) =>
+    req<ForwardTarget>("/monitoring/ndm/forward-targets", { method: "POST", body: JSON.stringify(b) }),
+  updateForwardTarget: (id: number, b: Partial<ForwardTarget>) =>
+    req<ForwardTarget>(`/monitoring/ndm/forward-targets/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+  deleteForwardTarget: (id: number) =>
+    req<any>(`/monitoring/ndm/forward-targets/${id}`, { method: "DELETE" }),
+
+  archiveStatus: () => req<ArchiveStatus>("/monitoring/ndm/archive/status"),
+  archiveFiles: () => req<ArchiveFile[]>("/monitoring/ndm/archive/files"),
+  /**
+   * Download an archive file.
+   *
+   * Deliberately NOT a plain <a href> — the endpoint sits behind the JWT guard
+   * and a browser navigation would not carry the Authorization header, so the
+   * link would 401. Fetch it with the header, then hand the blob to a synthetic
+   * anchor. Streamed server-side, so a multi-gigabyte day does not sit in the
+   * backend's memory; it does still land in the browser's.
+   */
+  downloadArchive: async (name: string) => {
+    const r = await fetch(
+      `${API}/monitoring/ndm/archive/download?name=${encodeURIComponent(name)}`,
+      { headers: { Authorization: `Bearer ${token()}` } },
+    );
+    if (!r.ok) throw new Error(`Download failed (${r.status})`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name.replace(/\//g, "_");
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
+
+export interface Diagnostics {
+  asOf: string;
+  process: { role: string; instance: string | null; primary: boolean; note: string };
+  snmp: { connected: boolean; deviceCount: number };
+  poller: {
+    running: boolean; scheduled: boolean; lastBeat: string | null;
+    sweeps: number; dueLastSweep: number; trackedDevices: number;
+  };
+  devices: { total: number; snmp: number; ping: number };
+  alertEngine: { openCount: number; last24h: number };
+  events: { open: number; last24h: number };
+  rules: { total: number; enabled: number };
+  sound: { devicesOn: number; devicesMuted: number; enabledInterfaces: number };
+  interfaces: { monitored: number; excluded: number };
+  syslog: { last24h: number; configured: string[]; listening: string[] };
+}
+
+export interface ForwardTarget {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  protocol: "UDP" | "TCP";
+  enabled: boolean;
+  /**
+   * Optional filter, same clause DSL as SYSLOG_MATCH rules. Named `condition`
+   * to match the column and the alert-rule field — one name for one concept.
+   */
+  condition?: string | null;
+  sentCount?: number | null;
+  failCount?: number | null;
+  lastError?: string | null;
+  lastSentAt?: string | null;
+}
+
+export interface ArchiveStatus {
+  enabled: boolean;
+  readable?: boolean;
+  directory: string;
+  perSource?: boolean;
+  retentionDays?: number;
+  maxBytes?: number;
+  fileCount?: number;
+  totalBytes?: number;
+  oldestFile?: string | null;
+  newestFile?: string | null;
+  linesWritten?: number;
+  linesDropped?: number;
+  lastWriteAt?: string | null;
+  lastError?: string | null;
+  buffered?: number;
+  note?: string;
+}
+
+export interface ArchiveFile {
+  name: string;
+  size: number;
+  modifiedAt: string;
+}
 
 // ── Formatters ────────────────────────────────────────────────────
 export const fmtBits = (s: number) => {
