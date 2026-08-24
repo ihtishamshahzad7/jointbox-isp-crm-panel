@@ -10,3 +10,8 @@ update.log
 **/uploads/
 coverage/
 *.ova
+
+# ad-hoc backup/export archives — never commit these; they bloat the repo and
+# drift out of sync with source immediately (see ISP_CRM_COMPLETION_ROADMAP.md 0.4)
+*.zip
+backend-fixed/

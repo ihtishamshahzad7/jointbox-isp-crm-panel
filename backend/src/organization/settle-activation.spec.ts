@@ -190,13 +190,32 @@ describe('ResellerPricingService.settleActivation (money path)', () => {
     expect(new Date(res.settledAt).toISOString()).toBe('2026-08-14T10:00:00.000Z');
   });
 
-  it('does nothing when there is no reseller owner or package to bill', async () => {
+  it('does nothing when there is genuinely no owner and no package to bill', async () => {
     const prisma = makePrisma();
-    const svc = makeService(prisma, null); // quote() returns null
+    // quote() returns null AND the subscriber itself has no owner/package —
+    // the only combination that is legitimately a free activation.
+    prisma.subscriber = { findUnique: jest.fn().mockResolvedValue({ userId: null, packageId: null }) };
+    const svc = makeService(prisma, null);
 
     const res: any = await svc.settleActivation(101, {});
 
     expect(res.settled).toBe(false);
+    expect(res.reason).toContain('nothing to bill');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('THROWS instead of activating for free when a subscriber HAS an owner and package but no price resolved', async () => {
+    // Regression guard for the exact hole the comment above this code
+    // documents: "a customer owned by a RESELLER must produce a real debit."
+    // quote() can still return null here (e.g. no ResellerPackagePrice row
+    // configured yet) — that must now be a hard error, not a silent free ride.
+    const prisma = makePrisma();
+    prisma.subscriber = { findUnique: jest.fn().mockResolvedValue({ userId: 7, packageId: 3 }) };
+    const svc = makeService(prisma, null);
+
+    await expect(svc.settleActivation(101, {})).rejects.toBeInstanceOf(ForbiddenException);
+    // No money moved, and no ledger entry was written for a charge that
+    // never happened.
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
