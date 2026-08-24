@@ -6,6 +6,7 @@ import { ScopeService } from './scope.service';
 import { AuditInterceptor } from './audit.interceptor';
 import { DatabaseSetupService } from './database-setup.service';
 import { BackupService } from './backup.service';
+import { BackupController } from './backup.controller';
 import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
 import { SecretsService } from './secrets.service';
@@ -20,7 +21,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Global()
 @Module({
   imports: [PrismaModule],
-  controllers: [EventsController],
+  controllers: [EventsController, BackupController],
   providers: [
     CacheService,
     QueueService,

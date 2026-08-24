@@ -24,6 +24,8 @@ export default function SettingsPage() {
   const [pwSaving, setPwSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [gateways, setGateways] = useState<{ gateway: string; enabled: boolean; label: string }[]>([]);
+  const [backupStatus, setBackupStatus] = useState<any>(null);
+  const [backupRunning, setBackupRunning] = useState(false);
 
   const token = typeof window !== 'undefined' ? localStorage.getItem("token") : "";
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
@@ -70,6 +72,8 @@ export default function SettingsPage() {
       })
       .catch(() => {});
 
+    fetchBackupStatus();
+
     const tick = () => {
       const now = new Date();
       const h = now.getHours();
@@ -80,6 +84,30 @@ export default function SettingsPage() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, []);
+
+  const fetchBackupStatus = () => {
+    fetch(`${API}/backup/status`, { headers })
+      .then(res => res.ok ? res.json() : Promise.reject(res))
+      .then(data => setBackupStatus(data))
+      .catch(() => {}); // non-admin roles get a 403 here — leave the panel blank rather than erroring
+  };
+
+  const runBackupNow = () => {
+    if (backupRunning) return;
+    setBackupRunning(true);
+    fetch(`${API}/backup/run`, { method: "POST", headers })
+      .then(res => res.ok ? res.json() : Promise.reject(res))
+      .then(data => {
+        if (data?.ok) {
+          toast_(`Backup complete — ${data.sizeMb} MB`, "ok");
+        } else {
+          toast_(data?.error || "Backup failed — check server logs.", "err");
+        }
+        fetchBackupStatus();
+      })
+      .catch(() => toast_("Backup failed — check server logs.", "err"))
+      .finally(() => setBackupRunning(false));
+  };
 
   const getInitials = (name?: string) => {
     if (!name) return "U";
@@ -153,11 +181,39 @@ export default function SettingsPage() {
           }))
         : [{ label: "No gateways loaded", value: "—" }],
     },
+    {
+      title: "Database Backups",
+      icon: "💾",
+      fields: backupStatus
+        ? [
+            { label: "Status", value: backupStatus.healthy ? "🟢 Healthy" : `🔴 ${backupStatus.warning || "Needs attention"}` },
+            { label: "Backups stored", value: String(backupStatus.count ?? 0) },
+            {
+              label: "Newest backup",
+              value: backupStatus.latest
+                ? `${backupStatus.ageHours}h ago (${backupStatus.latest.sizeMb} MB)`
+                : "Never — one will be taken automatically, or click Backup Now below",
+            },
+            {
+              label: "Off-site copy",
+              value: backupStatus.offsite?.configured
+                ? "🟢 Configured"
+                : "🟡 Stored on this server only — set BACKUP_UPLOAD_CMD to protect against server loss",
+            },
+          ]
+        : [{ label: "Status", value: "Visible to ISP owner accounts only" }],
+    },
   ];
 
   const quickActions = [
     { label: "Clear System Cache", icon: "🗑️", color: t.red, bg: "#450a0a", action: () => alert("Cache cleared successfully!") },
-    { label: "Backup Database", icon: "💾", color: t.green, bg: "#14532d", action: () => alert("Database backup initiated. Download will start shortly.") },
+    {
+      label: backupRunning ? "Backing up…" : "Backup Database",
+      icon: "💾",
+      color: t.green,
+      bg: "#14532d",
+      action: runBackupNow,
+    },
     { label: "View System Logs", icon: "📋", color: t.accent, bg: "var(--surface)", action: () => router.push("/logs") },
     { label: "Generate Report", icon: "📈", color: t.purple, bg: "#3b0764", action: () => router.push("/reports") },
   ];

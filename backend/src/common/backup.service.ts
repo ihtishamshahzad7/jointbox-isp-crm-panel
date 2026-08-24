@@ -3,8 +3,8 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { promises as fs } from 'fs';
-import { join } from 'path';
+import { promises as fs, existsSync } from 'fs';
+import { join, resolve, sep } from 'path';
 import { isPrimaryInstance } from './cluster-util';
 
 const execAsync = promisify(exec);
@@ -230,6 +230,28 @@ export class BackupService implements OnModuleInit {
             : null,
       },
     };
+  }
+
+  /**
+   * Resolve a backup filename to its absolute path, for the download
+   * endpoint — or `null` if the name is anything other than a real file this
+   * service itself wrote into `this.dir`.
+   *
+   * Same defensive shape as NDM's `resolveArchiveFile`: reject via a resolved-
+   * path prefix check (not just a regex on the input) so `../../etc/passwd`
+   * or an absolute path handed in as `file` can never escape the backup
+   * directory, and require the exact naming/extension this service uses so a
+   * request can't be pointed at an arbitrary file that happens to live there.
+   */
+  resolveBackupFile(name: string): string | null {
+    if (!name) return null;
+    const full = resolve(this.dir, name);
+    const root = resolve(this.dir);
+    if (full !== root && !full.startsWith(root + sep)) return null;
+    // The stamp is an ISO timestamp with ":" and "." swapped for "-"
+    // (see `run()` above), so it keeps the "T" — e.g. jointbox-2026-08-24T10-00-00.dump.
+    if (!/^jointbox-[\dT-]+\.dump$/.test(name)) return null;
+    return existsSync(full) ? full : null;
   }
 
   /** The restore command for a given dump — shown in the UI, never auto-run. */
