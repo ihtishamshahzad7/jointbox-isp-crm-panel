@@ -3456,6 +3456,95 @@ model SyslogServerSetting {
   @@map("syslog_server_setting")
 }
 
+/// ────────────────────────────────────────────────────────────────────────
+/// ROUTED PREFIX ALLOCATION (corporate / P2P clients)
+/// ────────────────────────────────────────────────────────────────────────
+/// Distinct from IpPool (PPPoE address pools) and StaticIp (single addresses).
+/// This is prefix DELEGATION: a business client gets a VLAN, a /30 transit link
+/// to the router, and a routed block (e.g. /29) of their own, plus a static
+/// route, uRPF and an ingress ACL.
+///
+/// Kept in the database rather than a spreadsheet for the reason every ISP
+/// eventually learns: the spreadsheet is always one allocation out of date, two
+/// clients end up with the same block, and when abuse is reported six months
+/// later nobody can say who held the prefix at the time.
+model PrefixPool {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(120)
+  /// The block this pool hands out from, e.g. 103.115.196.0/24
+  cidr        String   @db.VarChar(64)
+  /// PUBLIC (routed customer space) | TRANSIT (P2P /30 link addressing)
+  kind        String   @db.VarChar(16) @default("PUBLIC")
+  /// Default size handed out from this pool (29 = /29, 30 = /30).
+  defaultSize Int      @default(29)
+  description String?  @db.VarChar(300)
+  ownerId     Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  allocations PrefixAllocation[]
+
+  @@index([kind])
+  @@index([isActive])
+  @@map("prefix_pool")
+}
+
+/// One client's provisioning record — the single source of truth for what was
+/// given to whom, when, and with which configuration.
+model PrefixAllocation {
+  id            Int      @id @default(autoincrement())
+  clientName    String   @db.VarChar(160)
+  /// Optional link to a subscriber record, when the client is also one.
+  subscriberId  Int?
+  poolId        Int?
+
+  vlanId        Int?
+  vlanName      String?  @db.VarChar(80)   // vlan651-Zubair
+  /// P2P | LAN | TRUNK
+  linkType      String   @db.VarChar(16) @default("P2P")
+
+  /// Transit /30: our side and the client side of the point-to-point link.
+  transitCidr   String?  @db.VarChar(64)   // 10.152.0.0/30
+  ourIp         String?  @db.VarChar(64)   // 10.152.0.1
+  clientIp      String?  @db.VarChar(64)   // 10.152.0.2
+
+  /// The ROUTED block delegated to the client.
+  allocatedCidr String   @db.VarChar(64)   // 103.115.196.8/29
+
+  /// Security posture actually applied on the router.
+  urpfEnabled   Boolean  @default(true)
+  ingressAcl    String?  @db.VarChar(120)  // ACL-CLIENT-ZUBAIR-IN
+  mtu           Int?     @default(1500)
+  description   String?  @db.VarChar(300)  // Client-Zubair-P2P-23Aug2026
+
+  /// Which device it was provisioned on (free text — not every box is a NAS).
+  deviceName    String?  @db.VarChar(120)
+  nasId         Int?
+
+  /// ACTIVE | RESERVED | RELEASED
+  status        String   @db.VarChar(16) @default("ACTIVE")
+  provisionedAt DateTime @default(now())
+  releasedAt    DateTime?
+  releaseReason String?  @db.VarChar(300)
+
+  notes         String?  @db.Text
+  createdById   Int?
+  ownerId       Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  pool PrefixPool? @relation(fields: [poolId], references: [id], onDelete: SetNull)
+
+  /// A prefix may only be live once. Historical (RELEASED) rows are kept, so
+  /// the uniqueness is enforced in code against ACTIVE rows rather than here.
+  @@index([allocatedCidr])
+  @@index([status])
+  @@index([vlanId])
+  @@index([clientName])
+  @@map("prefix_allocation")
+}
+
 /// SYSLOG FORWARDING — relay received messages to another collector.
 ///
 /// Standard practice in an ISP: the panel is where operators work, but a SIEM,

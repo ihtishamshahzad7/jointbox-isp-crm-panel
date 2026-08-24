@@ -1195,6 +1195,8 @@ function SeverityPill({ label, color }: { label: string; color: string }) {
 // ── Add-device wizard: details → test → discover → save ───────────
 type WizardState = {
   name: string; ip: string; vendor: string; deviceType: string; groupName: string; location: string; description: string;
+  /** SNMP | ICMP | HTTP — decides what is polled and which fields apply. */
+  monitorMethod: string;
   snmpVersion: string; snmpPort: string; pollIntervalSec: string; community: string;
   v3Username: string; v3AuthProto: string; v3AuthKey: string; v3PrivProto: string; v3PrivKey: string;
   syslogEnabled: boolean; syslogProtocol: string; syslogPort: string;
@@ -1204,6 +1206,7 @@ type WizardState = {
 function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [f, setF] = React.useState<WizardState>({
     name: "", ip: "", vendor: "OTHER", deviceType: "", groupName: "", location: "", description: "",
+    monitorMethod: "SNMP",
     snmpVersion: "V2C", snmpPort: "161", pollIntervalSec: "30", community: "public",
     v3Username: "", v3AuthProto: "SHA", v3AuthKey: "", v3PrivProto: "AES", v3PrivKey: "",
     syslogEnabled: false, syslogProtocol: "UDP", syslogPort: "514", snmpTimeoutMs: "5000", snmpRetries: "1",
@@ -1251,6 +1254,7 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
     try {
       await ndm.create({
         ...testBody(), name: f.name.trim() || f.ip.trim(),
+        monitorMethod: f.monitorMethod,
         vendor: f.vendor, deviceType: f.deviceType.trim() || null, groupName: f.groupName.trim() || null,
         location: f.location.trim() || null, description: f.description.trim() || null,
         pollIntervalSec: Number(f.pollIntervalSec) || 30,
@@ -1299,6 +1303,33 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
               <input placeholder="Anything worth knowing about this device" value={f.description} onChange={(e) => set("description", e.target.value)} /></div>
 
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 4 }} />
+
+            {/*
+              HOW this target is checked. Everything used to be SNMP-polled, so
+              adding an internet target (8.8.8.8, google.com) produced a device
+              that reported "SNMP timeout" forever while answering ping fine.
+              Choosing the method here is what stops that.
+            */}
+            <div className="ndm-field"><label>Monitoring method</label>
+              <select value={f.monitorMethod} onChange={(e) => set("monitorMethod", e.target.value)}>
+                <option value="SNMP">SNMP — switch, router, NAS (ports, traffic, uptime)</option>
+                <option value="ICMP">ICMP Ping — internet target or host without SNMP</option>
+                <option value="HTTP">HTTP/HTTPS endpoint</option>
+              </select>
+              <div className="ndm-hint" style={{ marginTop: 4 }}>
+                {f.monitorMethod === "SNMP"
+                  ? "Discovers interfaces and collects ports, traffic and device uptime."
+                  : f.monitorMethod === "ICMP"
+                    ? "Reachability and response time only — no ports, traffic or SNMP uptime. Nothing below is used."
+                    : "Checked for reachability; endpoint checking is polled as ICMP until HTTP probing ships."}
+              </div>
+            </div>
+
+            {/* SNMP credentials are meaningless for a ping target — hiding them
+                prevents an operator filling in a community string that will
+                never be used and then wondering why nothing polls. */}
+            {f.monitorMethod !== "SNMP" ? null : (
+            <>
             <div className="ndm-field"><label>SNMP version</label>
               <select value={f.snmpVersion} onChange={(e) => set("snmpVersion", e.target.value)}>
                 <option value="V2C">SNMPv2c (community string)</option>
@@ -1330,18 +1361,24 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
                 </div>
               </>
             )}
+            </>
+            )}
 
+            {/* Poll interval applies to EVERY method — a ping target is checked
+                on a schedule too. Timeout/retries are SNMP-specific. */}
             <div className="ndm-grid2">
-              <div className="ndm-field"><label>Poll interval</label>
+              <div className="ndm-field"><label>Check interval</label>
                 <select value={f.pollIntervalSec} onChange={(e) => set("pollIntervalSec", e.target.value)}>
                   <option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option>
                   <option value="60">Every minute</option><option value="300">Every 5 minutes</option>
                 </select></div>
-              <div className="ndm-field"><label>Timeout / retries</label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input type="number" value={f.snmpTimeoutMs} onChange={(e) => set("snmpTimeoutMs", e.target.value)} title="ms" style={{ width: "60%" }} />
-                  <input type="number" value={f.snmpRetries} onChange={(e) => set("snmpRetries", e.target.value)} title="retries" style={{ width: "40%" }} />
-                </div></div>
+              {f.monitorMethod === "SNMP" && (
+                <div className="ndm-field"><label>Timeout / retries</label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input type="number" value={f.snmpTimeoutMs} onChange={(e) => set("snmpTimeoutMs", e.target.value)} title="ms" style={{ width: "60%" }} />
+                    <input type="number" value={f.snmpRetries} onChange={(e) => set("snmpRetries", e.target.value)} title="retries" style={{ width: "40%" }} />
+                  </div></div>
+              )}
             </div>
 
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
@@ -1363,7 +1400,13 @@ function AddDeviceWizard({ onClose, onDone }: { onClose: () => void; onDone: () 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
             {err && <span className="ndm-err" style={{ marginRight: "auto" }}>{err}</span>}
             <button className="ndm-btn" onClick={onClose}>Cancel</button>
-            <button className="ndm-btn pri" disabled={!ipOk} onClick={() => { setStep(2); void test(); }}>Next — test SNMP →</button>
+            {/* Testing SNMP against a ping target is guaranteed to fail and
+                would block the wizard on a device that is perfectly fine. */}
+            {f.monitorMethod === "SNMP" ? (
+              <button className="ndm-btn pri" disabled={!ipOk} onClick={() => { setStep(2); void test(); }}>Next — test SNMP →</button>
+            ) : (
+              <button className="ndm-btn pri" disabled={!ipOk} onClick={() => setStep(3)}>Next →</button>
+            )}
           </div>
         </>
       )}
