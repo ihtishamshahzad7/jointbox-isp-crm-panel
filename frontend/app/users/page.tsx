@@ -60,6 +60,22 @@ export default function UsersPage() {
   });
   const [saving, setSaving] = useState(false);
 
+  /**
+   * Inline wallet top-up.
+   *
+   * This previously meant opening each account's own profile — at 60+ resellers
+   * it is the most repeated task in the panel. It moves REAL money out of the
+   * giver's wallet, so it is a small confirm form rather than a bare button: an
+   * accidental click must never transfer anything.
+   */
+  /** Only the fields the top-up form actually needs from the row. */
+  type TopUpTarget = { id: number; name: string; balance?: number };
+  const [topUpFor, setTopUpFor] = useState<TopUpTarget | null>(null);
+  const [topUpAmount, setTopUpAmount] = useState("");
+  const [topUpNote, setTopUpNote] = useState("");
+  const [topUpBusy, setTopUpBusy] = useState(false);
+  const [topUpErr, setTopUpErr] = useState("");
+
   const token = typeof window !== 'undefined' ? localStorage.getItem("token") : "";
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
@@ -211,6 +227,44 @@ export default function UsersPage() {
     } catch (err) {
       setError("Failed to update user status");
     }
+  };
+
+  const openTopUp = (u: TopUpTarget) => {
+    setTopUpFor(u);
+    setTopUpAmount("");
+    setTopUpNote("");
+    setTopUpErr("");
+  };
+
+  const submitTopUp = async () => {
+    if (!topUpFor) return;
+    const amount = Number(topUpAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setTopUpErr("Enter an amount greater than zero.");
+      return;
+    }
+    setTopUpBusy(true);
+    setTopUpErr("");
+    try {
+      const res = await fetch(`${API}/organization/resellers/${topUpFor.id}/wallet`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ amount, type: "TOPUP", notes: topUpNote || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Surface the server's reason verbatim — it explains an insufficient
+        // wallet or a scope refusal far better than a generic message could.
+        setTopUpErr(data?.message || "Could not transfer the balance.");
+        setTopUpBusy(false);
+        return;
+      }
+      setTopUpFor(null);
+      fetchUsers();
+    } catch {
+      setTopUpErr("Could not transfer the balance.");
+    }
+    setTopUpBusy(false);
   };
 
   const openEdit = (u: any) => {
@@ -478,6 +532,7 @@ export default function UsersPage() {
                       <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Email</th>
                       <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Role</th>
                       <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Phone</th>
+                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>NAS</th>
                       <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Balance</th>
                       <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Subs</th>
                       <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Downline</th>
@@ -519,6 +574,9 @@ export default function UsersPage() {
                             <Badge color={roleBadge.color} bg={roleBadge.bg}>{roleBadge.label}</Badge>
                           </td>
                           <td style={{ padding: "10px 14px", fontSize: 11 }}>{u.phone || "-"}</td>
+                          <td style={{ padding: "10px 14px", fontSize: 11.5, color: u.nasGroup ? t.textSub : t.textMuted }}>
+                            {u.nasGroup || "—"}
+                          </td>
                           <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>{money(u.balance || 0)}</td>
                           <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.ownedSubscribers ?? 0}</td>
                           <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.children ?? 0}</td>
@@ -539,6 +597,14 @@ export default function UsersPage() {
                           <td style={{ padding: "10px 14px", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                             <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                               <Btn onClick={() => openEdit(u)} variant="warning" size="xs"><Icons.Edit /> Edit</Btn>
+                              {/* Top up this account's wallet without leaving
+                                  the list. Staff accounts have no wallet of
+                                  their own, so the action is not offered. */}
+                              {u.role !== 'SALES' && u.role !== 'AUDITOR' && (
+                                <Btn onClick={() => openTopUp(u)} variant="success" size="xs" title="Transfer balance to this account">
+                                  <Icons.Payments /> Top up
+                                </Btn>
+                              )}
                               {/* Reseller pricing for this account — same tool as
                                   the Pricing page, opened focused on this user.
                                   Only when the current operator may set prices;
@@ -569,6 +635,64 @@ export default function UsersPage() {
           </div>
         </div>
       </div>
+
+      {/* Inline wallet top-up — a confirm form, because this moves real money
+          out of the logged-in account's own wallet. */}
+      {topUpFor && (
+        <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setTopUpFor(null)}>
+          <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: t.text, margin: 0 }}>Top up balance</h2>
+              <button onClick={() => setTopUpFor(null)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: t.textSub }}>×</button>
+            </div>
+            <p style={{ fontSize: 12, color: t.textMuted, marginBottom: 16, lineHeight: 1.7 }}>
+              Transferring to <strong style={{ color: t.text }}>{topUpFor.name}</strong>, who currently
+              holds <strong style={{ color: t.text }}>{money(topUpFor.balance || 0)}</strong>. The amount
+              comes out of your own wallet.
+            </p>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>
+                Amount ({currencySymbol()}) *
+              </label>
+              <input
+                type="number" min={0} step="0.01" autoFocus
+                value={topUpAmount}
+                onChange={(e) => setTopUpAmount(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submitTopUp(); }}
+                style={{ width: "100%", padding: "9px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 13, background: t.input, color: t.text }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Note (optional)</label>
+              <input
+                value={topUpNote}
+                onChange={(e) => setTopUpNote(e.target.value)}
+                placeholder="e.g. cash received 26 Aug"
+                style={{ width: "100%", padding: "9px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 13, background: t.input, color: t.text }}
+              />
+            </div>
+
+            {topUpErr && (
+              <div style={{ background: "rgba(239,68,68,.12)", border: "1px solid rgba(239,68,68,.4)", color: "#f87171", borderRadius: 8, padding: "8px 11px", fontSize: 12, marginBottom: 14, lineHeight: 1.6 }}>
+                {topUpErr}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => setTopUpFor(null)} style={{ flex: 1, background: t.cardBorder, color: t.text, border: "none", padding: "10px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              <button
+                onClick={submitTopUp}
+                disabled={topUpBusy || !topUpAmount.trim()}
+                style={{ flex: 1, background: t.green, color: "#fff", border: "none", padding: "10px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: topUpBusy ? "not-allowed" : "pointer", opacity: topUpBusy || !topUpAmount.trim() ? .6 : 1 }}
+              >
+                {topUpBusy ? "Transferring…" : "Transfer"}
+              </button>
+            </div>
+          </div>
+        </div></Portal>
+      )}
 
       {/* Add/Edit User Modal */}
       {showForm && (

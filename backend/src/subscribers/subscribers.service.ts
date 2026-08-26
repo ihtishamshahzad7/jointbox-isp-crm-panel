@@ -1001,6 +1001,24 @@ export class SubscribersService implements OnModuleInit {
     dayEnd.setHours(23, 59, 59, 999);
     const expiringEnd = new Date(now.getTime() + 7 * 86400_000);
 
+    /**
+     * Renewal WINDOWS, not one lookahead.
+     *
+     * A single "expiring in 7 days" figure is a forecast, not a work queue.
+     * Tomorrow's expiries are this morning's phone calls; a fortnight out is a
+     * planning number. Collections works those completely differently, so they
+     * are counted separately. The windows are cumulative (1d ⊂ 3d ⊂ 1w ⊂ 2w),
+     * which is what makes the short ones directly actionable.
+     */
+    const horizon = (days: number) => new Date(now.getTime() + days * 86400_000);
+    const expiringWithin = (days: number) =>
+      this.prisma.subscriber.count({
+        where: withScope({
+          status: 'ACTIVE',
+          serviceSettings: { is: { expiryDate: { gte: now, lte: horizon(days) } } },
+        }),
+      });
+
     const [
       total,
       active,
@@ -1009,6 +1027,11 @@ export class SubscribersService implements OnModuleInit {
       expired,
       todaySignups,
       expiring,
+      expiring1d,
+      expiring3d,
+      expiring2w,
+      pppoe,
+      hotspot,
       radiusOnlineRows,
     ] = await Promise.all([
       this.prisma.subscriber.count({ where: withScope({}) }),
@@ -1025,6 +1048,13 @@ export class SubscribersService implements OnModuleInit {
           serviceSettings: { is: { expiryDate: { gte: now, lte: expiringEnd } } },
         }),
       }),
+      expiringWithin(1),
+      expiringWithin(3),
+      expiringWithin(14),
+      // Connection mix. STATIC and DHCP exist too, but PPPoE vs Hotspot is the
+      // split that changes how a network is run and supported.
+      this.prisma.subscriber.count({ where: withScope({ authMethod: 'PPPOE' }) }),
+      this.prisma.subscriber.count({ where: withScope({ authMethod: 'HOTSPOT' }) }),
       this.prisma.$queryRaw<Array<{ username: string }>>`
         SELECT DISTINCT username
         FROM radacct
@@ -1078,6 +1108,33 @@ export class SubscribersService implements OnModuleInit {
 
     const offline = Math.max(total - onlineNow, 0);
 
+    /**
+     * EXPIRED BUT STILL ONLINE — service being given away.
+     *
+     * Every one of these is a customer past their expiry who is connected
+     * right now, so nobody is being billed for what they are using. Jointbox
+     * already CUTS them: integrity.service.ts reconcileRadiusState() runs
+     * nightly and disconnects any open session whose subscriber is not ACTIVE.
+     * But that runs once a day and nothing surfaced the number, so an operator
+     * could not confirm the mechanism was working or see the leak accumulating
+     * between runs — and a silently broken cron looks identical to a healthy
+     * one.
+     *
+     * Counted from the same online set as the tile above, so the two figures
+     * can never disagree.
+     */
+    const onlineUsernames = Array.from(
+      new Set([...Array.from(onlineSet), ...Array.from(routerOnline)]),
+    );
+    const expiredOnline = onlineUsernames.length
+      ? await this.prisma.subscriber.count({
+          where: withScope({
+            status: { not: 'ACTIVE' },
+            username: { in: onlineUsernames },
+          }),
+        })
+      : 0;
+
     return {
       total,
       active,
@@ -1085,7 +1142,17 @@ export class SubscribersService implements OnModuleInit {
       suspended,
       expired,
       expiring,
+      // Cumulative renewal windows — see expiringWithin() above.
+      expiring1d,
+      expiring3d,
+      expiring1w: expiring,
+      expiring2w,
       onlineNow,
+      // Connected but not ACTIVE: service being given away. Nightly enforcement
+      // cuts these; this figure is how you know it is working.
+      expiredOnline,
+      pppoe,
+      hotspot,
       stale: staleCount,
       offline,
       todaySignups,

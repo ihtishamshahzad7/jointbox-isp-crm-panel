@@ -363,6 +363,12 @@ export default function DashboardPage() {
     total?: number; active?: number; inactive?: number; suspended?: number;
     expired?: number; expiring?: number; onlineNow?: number; stale?: number;
     offline?: number; todaySignups?: number;
+    // Cumulative renewal windows (1d ⊂ 3d ⊂ 1w ⊂ 2w) — a short window is a
+    // call list, a long one is a forecast.
+    expiring1d?: number; expiring3d?: number; expiring1w?: number; expiring2w?: number;
+    // Connected with no active subscription: unbilled usage.
+    expiredOnline?: number;
+    pppoe?: number; hotspot?: number;
   };
   const overviewFetcher = async (url: string): Promise<SubscriberOverview | null> => {
     const res = await fetch(url, { headers });
@@ -466,6 +472,15 @@ export default function DashboardPage() {
       const dt = new Date(raw).getTime();
       return dt >= today.getTime() && dt <= today.getTime() + 7 * 86400_000;
     }).length;
+    // Renewal windows. Only the server can count these accurately (the list is
+    // paginated), so they show as null rather than a wrong number when the
+    // overview has not loaded — a fabricated collections figure is worse than
+    // no figure.
+    const expiring1d = overviewData?.expiring1d ?? null;
+    const expiring3d = overviewData?.expiring3d ?? null;
+    const expiring2w = overviewData?.expiring2w ?? null;
+    // Connected but not ACTIVE — service being given away right now.
+    const expiredOnline = overviewData?.expiredOnline ?? null;
     const totalNas = nas.length;
     const revenueToday = payments
       .filter((p) => {
@@ -473,7 +488,11 @@ export default function DashboardPage() {
         return dt ? new Date(dt) >= today : false;
       })
       .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-    return { totalSubscribers, activeSubscribers, todaySignups, revenueToday, onlineNow, expired, expiringSoon, totalNas };
+    return {
+      totalSubscribers, activeSubscribers, todaySignups, revenueToday, onlineNow,
+      expired, expiringSoon, totalNas,
+      expiring1d, expiring3d, expiring2w, expiredOnline,
+    };
   }, [subscribers, payments, overviewData, nas.length]);
 
   const activityFeed = useMemo(() => {
@@ -830,7 +849,24 @@ export default function DashboardPage() {
                 { icon: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, grad: "linear-gradient(135deg,#00C9FF,#22c55e)", glow: "rgba(34,197,94,.26)", scolor: "#22c55e", tag: `${activePct}%`, good: activePct >= 70, spark: "0,16 25,18 50,12 75,10 100,13" },
                 { icon: "M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01", label: "Online now", value: homeStats.onlineNow, cap: "Users connected right now in your account", grad: "linear-gradient(135deg,#06b6d4,#3b82f6)", glow: "rgba(59,130,246,.28)", scolor: "#38bdf8", tag: `${onlinePct}% of active`, good: homeStats.onlineNow > 0, spark: "0,16 25,10 50,18 75,9 100,15" },
                 { icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expired", value: homeStats.expired, cap: "Accounts past their expiry date", grad: "linear-gradient(135deg,#f97316,#ef4444)", glow: "rgba(239,68,68,.28)", scolor: "#ef4444", tag: `${expiredPct}% of base`, good: homeStats.expired === 0, spark: "0,14 25,16 50,12 75,15 100,10" },
+                // Connected but past expiry: service being given away right now.
+                // The nightly integrity job cuts these; this tile is how you
+                // know it is working, and shows the leak between runs.
+                ...(homeStats.expiredOnline !== null
+                  ? [{ icon: "M18.36 6.64A9 9 0 1 1 5.64 6.64 M12 2v10", label: "Expired but online", value: homeStats.expiredOnline, cap: "Connected right now with no active subscription — unbilled usage", grad: "linear-gradient(135deg,#dc2626,#7f1d1d)", glow: "rgba(220,38,38,.30)", scolor: "#ef4444", tag: homeStats.expiredOnline === 0 ? "clean" : "leaking", good: homeStats.expiredOnline === 0, spark: "0,10 25,14 50,11 75,15 100,9" }]
+                  : []),
+                // Renewal windows, shortest first — a 1-day list is today's
+                // phone calls, a 2-week list is a forecast.
+                ...(homeStats.expiring1d !== null
+                  ? [{ icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expiring tomorrow", value: homeStats.expiring1d, cap: "Call these first — service stops within 24 hours", grad: "linear-gradient(135deg,#f97316,#dc2626)", glow: "rgba(249,115,22,.30)", scolor: "#f97316", tag: "call today", good: homeStats.expiring1d === 0, spark: "0,12 25,15 50,11 75,14 100,9" }]
+                  : []),
+                ...(homeStats.expiring3d !== null
+                  ? [{ icon: "M8 2v4 M16 2v4 M3 10h18 M8 14h.01 M12 14h.01 M16 14h.01", label: "Expiring in 3 days", value: homeStats.expiring3d, cap: "This week's collections queue", grad: "linear-gradient(135deg,#f59e0b,#ea580c)", glow: "rgba(245,158,11,.28)", scolor: "#f59e0b", tag: "this week", good: homeStats.expiring3d === 0, spark: "0,13 25,16 50,12 75,15 100,10" }]
+                  : []),
                 { icon: "M8 2v4 M16 2v4 M3 10h18 M9 16l2 2 4-4", label: "Expiring in 1 week", value: homeStats.expiringSoon, cap: "ACTIVE accounts expiring within 7 days", grad: "linear-gradient(135deg,#fbbf24,#f59e0b)", glow: "rgba(245,158,11,.28)", scolor: "#fbbf24", tag: `${expiringPct}% of base`, good: homeStats.expiringSoon === 0, spark: "0,14 25,18 50,13 75,16 100,11" },
+                ...(homeStats.expiring2w !== null
+                  ? [{ icon: "M8 2v4 M16 2v4 M3 10h18 M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", label: "Expiring in 2 weeks", value: homeStats.expiring2w, cap: "Renewal forecast — plan capacity and cash", grad: "linear-gradient(135deg,#eab308,#ca8a04)", glow: "rgba(234,179,8,.24)", scolor: "#eab308", tag: "forecast", good: true, spark: "0,16 25,19 50,15 75,17 100,13" }]
+                  : []),
                 { icon: "M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z M9 6h.01 M9 15h.01", label: "Total NAS", value: homeStats.totalNas, cap: "Routers visible to your account", grad: "linear-gradient(135deg,#0ea5e9,#6366f1)", glow: "rgba(14,165,233,.28)", scolor: "#0ea5e9", tag: "routers", good: homeStats.totalNas > 0, spark: "0,18 25,14 50,10 75,12 100,8" },
                 ...(sys
                   ? [

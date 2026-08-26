@@ -243,6 +243,9 @@ export class UsersService {
         createdAt: true,
         updatedAt: true,
         parentId:  true,
+        // Shown as the NAS column on the reseller list. A scalar, so it costs
+        // no extra query — important here, because of the scale guard below.
+        nasGroup:  true,
         parent: {
           select: { id: true, name: true, email: true, role: true },
         },
@@ -676,6 +679,73 @@ export class UsersService {
     };
   }
 
+  /**
+   * The reseller ladder: each role may hold ONLY the role directly beneath its
+   * parent. ISP → Franchise → Dealer → Retailer.
+   */
+  private static readonly NEXT_ROLE: Record<string, string | null> = {
+    SUPER_ADMIN:  'RESELLER',      // ISP creates a Franchise
+    ADMIN:        'RESELLER',      // ISP creates a Franchise
+    RESELLER:     'SUB_RESELLER',  // Franchise creates a Dealer
+    SUB_RESELLER: 'RETAILER',      // Dealer creates a Retailer
+    RETAILER:     null,            // Retailer serves customers, not sub-accounts
+  };
+  private static readonly ROLE_LABEL: Record<string, string> = {
+    SUPER_ADMIN: 'ISP', ADMIN: 'ISP', RESELLER: 'Franchise',
+    SUB_RESELLER: 'Dealer', RETAILER: 'Retailer', SALES: 'Staff', AUDITOR: 'Auditor',
+  };
+
+  /**
+   * May an account directly under `parentRole` hold `desiredRole`?
+   *
+   * ONE WRITER FOR ONE RULE. This used to live only inside create(), so the
+   * ladder was enforced when an account was created and ignored when one was
+   * EDITED — and update() also accepts `password`. A franchise could therefore
+   * promote its own dealer to ADMIN, set that account's password, and log in
+   * with full ISP access, because isAdmin() bypasses every scope check in the
+   * product. Both paths now call this.
+   *
+   * Note the explicit `undefined` case. The old code read
+   * `const allowed = nextRole[parent.role]` and then tested `if (allowed && …)`,
+   * so a parent whose role was absent from the map (SALES, AUDITOR, or any
+   * role added later) produced `undefined` and silently passed validation —
+   * the exact shape of the escalation above. An unknown parent role now fails
+   * closed.
+   */
+  private assertRoleAllowedUnder(desiredRole: string, parentRole: string) {
+    const label = (r: string) => UsersService.ROLE_LABEL[r] || r;
+
+    // AUDITOR is a read-only books account. Only the ISP owner may mint one,
+    // placed anywhere in their tree — it sees that subtree but writes nothing.
+    if (desiredRole === 'AUDITOR') {
+      if (parentRole !== 'SUPER_ADMIN' && parentRole !== 'ADMIN') {
+        throw new BadRequestException('Only the ISP owner can create an auditor (read-only) account.');
+      }
+      return;
+    }
+
+    // STAFF (SALES) can be held under ANY account, to help run that business.
+    if (desiredRole === 'SALES') return;
+
+    if (!(parentRole in UsersService.NEXT_ROLE)) {
+      throw new BadRequestException(
+        `A ${label(parentRole)} account cannot have sub-accounts beneath it.`,
+      );
+    }
+
+    const allowed = UsersService.NEXT_ROLE[parentRole];
+    if (allowed === null) {
+      throw new BadRequestException(
+        `A ${label(parentRole)} can only have Staff accounts beneath it, not sub-resellers.`,
+      );
+    }
+    if (desiredRole !== allowed) {
+      throw new BadRequestException(
+        `A ${label(parentRole)} can only have a ${label(allowed)} or a Staff account beneath it.`,
+      );
+    }
+  }
+
   async create(data: {
     name:       string;
     email:      string;
@@ -710,38 +780,9 @@ export class UsersService {
       const parent = await this.prisma.user.findUnique({ where: { id: data.parentId } });
       if (!parent) throw new NotFoundException(`Parent user with ID ${data.parentId} not found`);
 
-      // Strict one-level-down creation. Each role may create ONLY the role directly
-      // beneath it: ISP → Franchise → Dealer → Retailer. This is what forces the
-      // ISP to switch into a franchise to create dealers, etc.
-      const nextRole: Record<string, string | null> = {
-        SUPER_ADMIN:  'RESELLER',      // ISP creates a Franchise
-        ADMIN:        'RESELLER',      // ISP creates a Franchise
-        RESELLER:     'SUB_RESELLER',  // Franchise creates a Dealer
-        SUB_RESELLER: 'RETAILER',      // Dealer creates a Retailer
-        RETAILER:     null,            // Retailer creates customers, not sub-accounts
-      };
-      const labels: Record<string, string> = {
-        RESELLER: 'Franchise', SUB_RESELLER: 'Dealer', RETAILER: 'Retailer', ADMIN: 'ISP',
-      };
-      // AUDITOR is a read-only books account. Only the ISP owner may mint one,
-      // placed anywhere in their tree — it sees that subtree but writes nothing.
-      if (data.role === 'AUDITOR') {
-        if (parent.role !== 'SUPER_ADMIN' && parent.role !== 'ADMIN') {
-          throw new BadRequestException('Only the ISP owner can create an auditor (read-only) account.');
-        }
-      }
-      // STAFF (SALES) can be created by ANY account to help run the business.
-      else if (data.role !== 'SALES') {
-        const allowed = nextRole[parent.role];
-        if (allowed === null) {
-          throw new BadRequestException(`A ${labels[parent.role] || parent.role} can only create Staff accounts, not sub-resellers.`);
-        }
-        if (allowed && data.role !== allowed) {
-          throw new BadRequestException(
-            `A ${labels[parent.role] || parent.role} can only create a ${labels[allowed] || allowed} or a Staff account.`,
-          );
-        }
-      }
+      // Strict one-level-down placement, shared with update() so a role can
+      // never be reached by editing that could not be reached by creating.
+      this.assertRoleAllowedUnder(data.role, parent.role);
     }
 
     // Phase 4A: password policy
@@ -841,6 +882,53 @@ export class UsersService {
           const currentParent = await this.prisma.user.findUnique({ where: { id: currentParentId } });
           currentParentId = currentParent?.parentId ?? null;
         }
+      }
+    }
+
+    /**
+     * A ROLE CHANGE IS A PRIVILEGE CHANGE — validate it like one.
+     *
+     * This was previously unguarded: `role` passed straight through in the
+     * spread below while create() enforced the ladder. Because update() also
+     * sets `password`, a franchise could promote its own dealer to ADMIN, set
+     * that account's password and sign in with full ISP access — isAdmin()
+     * bypasses every scope check in the product.
+     *
+     * The role is validated against the parent the account will actually have
+     * after this call (a request may move it and re-role it at once), using
+     * the same rule create() uses.
+     */
+    if (data.role !== undefined && data.role !== user.role) {
+      const effectiveParentId =
+        data.parentId !== undefined ? data.parentId : user.parentId;
+
+      if (!effectiveParentId) {
+        // A root account (the ISP itself) has no parent to judge against, so
+        // only an existing ISP owner may re-role it.
+        if (!this.scope.isAdmin(actor?.role)) {
+          throw new ForbiddenException('Only the ISP owner can change the role of a top-level account.');
+        }
+      } else {
+        const parent = await this.prisma.user.findUnique({
+          where: { id: effectiveParentId },
+          select: { role: true },
+        });
+        if (!parent) throw new NotFoundException(`Parent user with ID ${effectiveParentId} not found`);
+        this.assertRoleAllowedUnder(data.role, parent.role);
+      }
+
+      /**
+       * Promoting an account to a tier that has its own downline would leave
+       * that downline hanging beneath the wrong ladder rung. Demotion is the
+       * dangerous direction: a Franchise demoted to Retailer keeps dealers
+       * underneath it that it may no longer legitimately hold.
+       */
+      const childCount = await this.prisma.user.count({ where: { parentId: id } });
+      if (childCount > 0) {
+        throw new BadRequestException(
+          `This account has ${childCount} account${childCount === 1 ? '' : 's'} beneath it, so its role cannot be changed. ` +
+            `Move or remove them first — otherwise they would sit under the wrong tier and their pricing ladder would break.`,
+        );
       }
     }
 
