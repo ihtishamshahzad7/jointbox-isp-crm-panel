@@ -15,7 +15,7 @@
     "db:setup": "npm run db:push",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
-    "start:dev": "npm run build && node dist/main.js",
+    "start:dev": "prisma migrate deploy && npm run build && node dist/main.js",
     "start:watch": "npm run clean && nest start --watch",
     "start:debug": "npm run clean && nest start --debug --watch",
     "start:prod": "npm run build && node dist/main.js",

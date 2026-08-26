@@ -647,6 +647,8 @@ model User {
   inventoryItems   InventoryItem[]        @relation("InventoryOwner")
   fieldJobs        FieldJob[]             @relation("TechnicianJobs")
   groupMemberships AccessGroupMember[]
+  /// Prepaid cards this account is currently HOLDING as sellable stock.
+  voucherStock     Voucher[]              @relation("UserVoucherStock")
 
   @@index([parentId])
   @@index([role, isActive])
@@ -1627,6 +1629,20 @@ model Voucher {
   status       VoucherStatus @default(UNUSED)
   batchId      String?
   createdBy    Int?
+
+  /// Which account is currently HOLDING this card as sellable stock.
+  ///
+  /// An ISP prints cards and hands batches to a franchise or dealer to sell;
+  /// until the card is redeemed it is that account's inventory — and its
+  /// liability, because an unredeemed card is bearer value. Without this the
+  /// cards exist but belong to nobody, so there is no way to know what a
+  /// dealer is holding or to reconcile what they sold against what they owe.
+  ///
+  /// SetNull rather than Cascade: deleting a dealer account must not delete
+  /// cards that physically exist. They return to unassigned stock.
+  assignedToUserId Int?
+  assignedAt       DateTime?
+
   usedBy       Int?
   usedAt       DateTime?
   activatedAt  DateTime?
@@ -1635,10 +1651,13 @@ model Voucher {
   updatedAt    DateTime      @updatedAt
 
   subscriber Subscriber? @relation("SubscriberVouchers", fields: [usedBy], references: [id])
+  assignedTo User?       @relation("UserVoucherStock", fields: [assignedToUserId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([batchId])
   @@index([usedBy])
+  /// Stock lookups are always "what does this account hold, unredeemed".
+  @@index([assignedToUserId, status])
 }
 
 model Ticket {

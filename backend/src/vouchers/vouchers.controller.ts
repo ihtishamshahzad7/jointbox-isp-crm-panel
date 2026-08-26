@@ -21,9 +21,18 @@ export class VouchersController {
     return this.vouchersService.getStats(req.user);
   }
 
+  /**
+   * Card stock per reseller — what each account is holding and its unsold
+   * value. Declared before ':id' so "stock" is not read as an id.
+   */
+  @Get('stock')
+  stock(@Req() req: any) {
+    return this.vouchersService.stockByReseller(req.user);
+  }
+
   @Get('code/:code')
-  findByCode(@Param('code') code: string) {
-    return this.vouchersService.findByCode(code);
+  findByCode(@Param('code') code: string, @Req() req: any) {
+    return this.vouchersService.findByCode(code, req.user);
   }
 
   @Get(':id')
@@ -32,8 +41,20 @@ export class VouchersController {
   }
 
   @Post('bulk')
-  createBulk(@Body() body: any) {
-    return this.vouchersService.createBulk(body);
+  createBulk(@Body() body: any, @Req() req: any) {
+    return this.vouchersService.createBulk(body, req.user);
+  }
+
+  /**
+   * Hand cards to a reseller, or take them back with assignToUserId: null.
+   * Accepts either an explicit set of ids or a whole batch.
+   */
+  @Post('allocate')
+  allocate(
+    @Body() body: { voucherIds?: number[]; batchId?: string; assignToUserId: number | null },
+    @Req() req: any,
+  ) {
+    return this.vouchersService.allocate(body, req.user);
   }
 
   @Post('redeem')
@@ -42,7 +63,7 @@ export class VouchersController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.vouchersService.deleteVoucher(+id);
+  remove(@Param('id') id: string, @Req() req: any) {
+    return this.vouchersService.deleteVoucher(+id, req.user);
   }
 }
