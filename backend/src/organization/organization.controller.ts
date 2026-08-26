@@ -63,6 +63,33 @@ export class OrganizationController {
     return this.pricing.profitReport(req.user, { from, to, limit: limit ? +limit : undefined });
   }
 
+  /**
+   * Margin chain — one row per sale showing what each tier took, side by side.
+   *
+   * Answers "who absorbed the margin on this sale", which profit/report
+   * cannot: that one only ever reports the caller's own line. Tiers above the
+   * caller are withheld (a reseller's buy price is their supplier's margin),
+   * and the response reports how many were hidden rather than quietly
+   * returning a short chain.
+   */
+  @Get('profit/margin-chain')
+  marginChain(
+    @Request() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('packageId') packageId?: string,
+    @Query('sellerId') sellerId?: string,
+  ) {
+    return this.pricing.marginChain(req.user, {
+      from,
+      to,
+      limit: limit ? +limit : undefined,
+      packageId: packageId ? +packageId : undefined,
+      sellerId: sellerId ? +sellerId : undefined,
+    });
+  }
+
   @Get('profit/subscriber/:subscriberId')
   profitBySubscriber(@Param('subscriberId') subscriberId: string, @Request() req: any) {
     return this.pricing.profitBySubscriber(req.user, +subscriberId);

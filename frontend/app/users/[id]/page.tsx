@@ -6,6 +6,7 @@ import { fileUrl } from "../../components/image-upload";
 import { RecordNotes } from "../../components/record-notes";
 import { silent } from "../../components/silent";
 import API_BASE from "../../components/api";
+import { money as moneyWithCurrency } from "../../components/currency";
 import Portal from "../../components/portal";
 
 const API = API_BASE;
@@ -501,10 +502,10 @@ export default function UserProfilePage() {
                   <span>Description</span><span>Amount</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 600, color: T.text, padding: "6px 0" }}>
-                  <span>Internet Subscription — Monthly</span><span style={{ color: T.green }}>PKR 1,500</span>
+                  <span>Internet Subscription — Monthly</span><span style={{ color: T.green }}>{moneyWithCurrency(1500)}</span>
                 </div>
                 <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 6, paddingTop: 10, display: "flex", justifyContent: "space-between", fontSize: 16, fontWeight: 800, color: T.text }}>
-                  <span>Total Due</span><span style={{ color: T.green }}>PKR 1,500</span>
+                  <span>Total Due</span><span style={{ color: T.green }}>{moneyWithCurrency(1500)}</span>
                 </div>
               </div>
             </div>

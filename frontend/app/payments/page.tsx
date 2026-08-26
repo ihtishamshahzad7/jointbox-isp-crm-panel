@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import { money } from "../components/currency";
 
 interface Payment {
   id: number;
@@ -160,12 +161,12 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
 
   const statCards = [
     { label: "Total Payments", value: stats.total, sub: "transactions", icon: "💰", bg: "linear-gradient(135deg,#3b82f6,#2563eb)" },
-    { label: "Total Amount", value: `PKR ${stats.totalAmount.toLocaleString()}`, sub: "collected", icon: "💵", bg: "linear-gradient(135deg,#10b981,#059669)" },
+    { label: "Total Amount", value: money(stats.totalAmount), sub: "collected", icon: "💵", bg: "linear-gradient(135deg,#10b981,#059669)" },
     { label: "Card Payments", value: stats.cardCount, sub: "digital payments", icon: "💳", bg: "linear-gradient(135deg,#a855f7,#7c3aed)" },
     { label: "Cash Payments", value: stats.cashCount, sub: "physical payments", icon: "💵", bg: "linear-gradient(135deg,#f59e0b,#d97706)" },
   ];
 
-  const formatCurrency = (amount: number) => `PKR ${(amount || 0).toLocaleString()}`;
+  const formatCurrency = (amount: number) => money(amount);
 
   async function handleRefund(paymentId: number) {
     if (!refundReason.trim()) {
@@ -187,7 +188,7 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
         return;
       }
       if (data.pending) {
-        alert(`This refund (PKR ${Number(data.amount).toLocaleString()}) exceeds the approval limit of PKR ${Number(data.threshold).toLocaleString()} and has been sent to the ISP owner for sign-off.`);
+        alert(`This refund (${money(data.amount)}) exceeds the approval limit of ${money(data.threshold)} and has been sent to the ISP owner for sign-off.`);
       }
       setShowRefundModal(false);
       setSelectedPayment(null);
@@ -334,15 +335,15 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
               <button onClick={() => setShowRefundModal(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: t.textSub }}>×</button>
             </div>
             <p style={{ fontSize: 11, color: t.textMuted, marginBottom: 6 }}>
-              Refund payment <strong>{selectedPayment.paymentNo}</strong> — PKR {(selectedPayment.amount || 0).toLocaleString()}
+              Refund payment <strong>{selectedPayment.paymentNo}</strong> — {money(selectedPayment.amount || 0)}
               {((selectedPayment as any).refundedAmount || 0) > 0 && (
-                <> · already refunded PKR {((selectedPayment as any).refundedAmount).toLocaleString()}</>
+                <> · already refunded {money((selectedPayment as any).refundedAmount)}</>
               )}
             </p>
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Amount (leave blank for full refund)</label>
               <input type="number" min={0} step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)}
-                placeholder={`Full: PKR ${((selectedPayment.amount || 0) - ((selectedPayment as any).refundedAmount || 0)).toLocaleString()}`}
+                placeholder={`Full: ${money((selectedPayment.amount || 0) - ((selectedPayment as any).refundedAmount || 0))}`}
                 style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.card, color: t.text }} />
             </div>
             <div style={{ marginBottom: 16 }}>

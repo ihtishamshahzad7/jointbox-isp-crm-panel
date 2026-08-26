@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Wizard, Field } from "../components/wizard";
+import { currencySymbol } from "../components/currency";
 
 /**
  * UserWizard — Add User / reseller account, in steps.
@@ -36,7 +37,7 @@ const MY_LABEL: Record<string, string> = {
 };
 
 export function UserWizard({
-  form, setForm, onSave, onCancel, saving, currency = "PKR", myRole,
+  form, setForm, onSave, onCancel, saving, currency = currencySymbol(), myRole,
 }: {
   form: any;
   setForm: (fn: (p: any) => any) => void;

@@ -499,11 +499,11 @@ const [reverseReason, setReverseReason] = useState("");
                   <input type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0" style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.card, color: t.text }} />
                 </div>
                 <div>
-                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Tax/GST (PKR)</label>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Tax/GST ({currencySymbol()})</label>
                   <input type="number" value={form.tax} onChange={e => setForm({ ...form, tax: e.target.value })} placeholder="0" style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.card, color: t.text }} />
                 </div>
                 <div>
-                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Discount (PKR)</label>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Discount ({currencySymbol()})</label>
                   <input type="number" value={form.discount} onChange={e => setForm({ ...form, discount: e.target.value })} placeholder="0" style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.card, color: t.text }} />
                 </div>
               </div>
@@ -546,7 +546,7 @@ const [reverseReason, setReverseReason] = useState("");
               <h2 style={{ fontSize: 18, fontWeight: 700, color: t.text, margin: 0 }}>💰 Record Payment</h2>
               <button onClick={() => setShowPaymentModal(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: t.textSub }}>×</button>
             </div>
-            <p style={{ fontSize: 11, color: t.textMuted, marginBottom: 20 }}>Invoice: {selectedInvoice.invoiceNo} | Due: PKR {selectedInvoice.dueAmount}</p>
+            <p style={{ fontSize: 11, color: t.textMuted, marginBottom: 20 }}>Invoice: {selectedInvoice.invoiceNo} | Due: {money(selectedInvoice.dueAmount)}</p>
 
             <div style={{ marginBottom: 14 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Amount *</label>
@@ -630,8 +630,8 @@ const [reverseReason, setReverseReason] = useState("");
                       <tr key={i}>
                         <td style={{ padding: "6px 10px", fontSize: 11, borderBottom: `1px solid ${t.cardBorder}`, color: t.textSub }}>{item.description}</td>
                         <td style={{ padding: "6px 10px", fontSize: 11, textAlign: "center", borderBottom: `1px solid ${t.cardBorder}`, color: t.textSub }}>{item.quantity}</td>
-                        <td style={{ padding: "6px 10px", fontSize: 11, textAlign: "right", borderBottom: `1px solid ${t.cardBorder}`, color: t.textSub }}>PKR {item.unitPrice}</td>
-                        <td style={{ padding: "6px 10px", fontSize: 11, textAlign: "right", borderBottom: `1px solid ${t.cardBorder}`, color: t.textSub }}>PKR {item.total}</td>
+                        <td style={{ padding: "6px 10px", fontSize: 11, textAlign: "right", borderBottom: `1px solid ${t.cardBorder}`, color: t.textSub }}>{money(item.unitPrice)}</td>
+                        <td style={{ padding: "6px 10px", fontSize: 11, textAlign: "right", borderBottom: `1px solid ${t.cardBorder}`, color: t.textSub }}>{money(item.total)}</td>
                       </tr>
                     ))
                   ) : (
@@ -639,17 +639,17 @@ const [reverseReason, setReverseReason] = useState("");
                   )}
                 </tbody>
                 <tfoot>
-                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Subtotal:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.text }}>PKR {selectedInvoice.amount}</td></tr>
-                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Tax:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.text }}>PKR {selectedInvoice.tax}</td></tr>
-                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Discount:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.red }}>-PKR {selectedInvoice.discount}</td></tr>
+                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Subtotal:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.text }}>{money(selectedInvoice.amount)}</td></tr>
+                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Tax:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.text }}>{money(selectedInvoice.tax)}</td></tr>
+                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Discount:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.red }}>-{money(selectedInvoice.discount)}</td></tr>
                   <tr style={{ background: d ? "var(--bg)" : "#f8fafc", fontWeight: 700 }}>
                     <td colSpan={3} style={{ padding: "8px 10px", textAlign: "right", fontSize: 12, color: t.text }}>Total:</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: 700, color: t.accent }}>PKR {selectedInvoice.total}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: 700, color: t.accent }}>{money(selectedInvoice.total)}</td>
                   </tr>
-                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Paid:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.green }}>PKR {selectedInvoice.paidAmount}</td></tr>
+                  <tr><td colSpan={3} style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.textSub }}>Paid:</td><td style={{ padding: "6px 10px", textAlign: "right", fontSize: 11, color: t.green }}>{money(selectedInvoice.paidAmount)}</td></tr>
                   <tr style={{ background: d ? "#422006" : "#fef3c7" }}>
                     <td colSpan={3} style={{ padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: 700, color: t.text }}>Due:</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: 700, color: t.amber }}>PKR {selectedInvoice.dueAmount}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 12, fontWeight: 700, color: t.amber }}>{money(selectedInvoice.dueAmount)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -677,7 +677,17 @@ const [reverseReason, setReverseReason] = useState("");
               <button onClick={() => setShowReverseModal(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: t.textSub }}>×</button>
             </div>
             <p style={{ fontSize: 11, color: t.textMuted, marginBottom: 16 }}>
-              Reverse invoice <strong>{selectedInvoice.invoiceNo}</strong> — PKR {money(selectedInvoice.paidAmount)} will be refunded.
+              Reverse invoice <strong>{selectedInvoice.invoiceNo}</strong> — {money(selectedInvoice.total)} will be
+              written off the books.
+              {(selectedInvoice.paidAmount || 0) > 0 && (
+                <>
+                  {" "}
+                  <span style={{ color: t.amber }}>
+                    This invoice has {money(selectedInvoice.paidAmount)} in payments against it. Refund those from the
+                    Payments page first — an invoice with active payments cannot be reversed.
+                  </span>
+                </>
+              )}
             </p>
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5 }}>Reason for reversal *</label>

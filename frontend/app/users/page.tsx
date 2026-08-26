@@ -8,6 +8,7 @@ import Avatar from "../components/avatar";
 import { Icons as SIcons } from "../components/icons";
 import { GroupPanel } from "../components/group-panel";
 import API_BASE from "../components/api";
+import { money, currencySymbol } from "../components/currency";
 import Portal from "../components/portal";
 
 const API = API_BASE;
@@ -518,7 +519,7 @@ export default function UsersPage() {
                             <Badge color={roleBadge.color} bg={roleBadge.bg}>{roleBadge.label}</Badge>
                           </td>
                           <td style={{ padding: "10px 14px", fontSize: 11 }}>{u.phone || "-"}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>PKR {u.balance || 0}</td>
+                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>{money(u.balance || 0)}</td>
                           <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.ownedSubscribers ?? 0}</td>
                           <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.children ?? 0}</td>
                           <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{u.parent?.name || "—"}</td>
@@ -632,7 +633,7 @@ export default function UsersPage() {
 
               {isAdmin && !editingUser && (
                 <div style={{ marginBottom: 14 }}>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5, display: "block" }}>Initial Balance (PKR)</label>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5, display: "block" }}>Initial Balance ({currencySymbol()})</label>
                   <input type="number" value={form.balance} onChange={e => setForm({ ...form, balance: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.input, color: t.text }} />
                 </div>
               )}

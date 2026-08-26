@@ -2229,7 +2229,7 @@ export default function SubscribersPage() {
                   {packages.map((pk) => (
                     <option key={pk.id} value={pk.id}>
                       {pk.name}
-                      {pk.price ? ` — PKR ${pk.price}` : ""}
+                      {pk.price ? ` — ${money(pk.price)}` : ""}
                     </option>
                   ))}
                 </select>

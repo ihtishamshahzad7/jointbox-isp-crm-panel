@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import { money, currencySymbol } from "../components/currency";
 import Portal from "../components/portal";
 
 interface Voucher {
@@ -353,7 +354,7 @@ export default function VouchersPage() {
           {/* Total Redeemed Card */}
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: t.textMuted }}>💰 Total Redeemed Value</span>
-            <span style={{ fontSize: 22, fontWeight: 800, color: t.green }}>PKR {(stats.totalRedeemed || 0).toLocaleString()}</span>
+            <span style={{ fontSize: 22, fontWeight: 800, color: t.green }}>{money(stats.totalRedeemed || 0)}</span>
           </div>
 
           {/* Vouchers Table */}
@@ -398,7 +399,7 @@ export default function VouchersPage() {
                             {typeColors[v.type]?.label || v.type}
                           </Badge>
                         </td>
-                        <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>PKR {v.amount}</td>
+                        <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>{money(v.amount)}</td>
                         <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, color: t.textSub }}>{v.validityDays} days</td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
                           <Badge color={statusColors[v.status]?.color || t.textMuted} bg={statusColors[v.status]?.bg || t.cardBorder}>
@@ -469,7 +470,7 @@ export default function VouchersPage() {
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
                 <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5, display: "block" }}>Amount (PKR)</label>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: t.textSub, marginBottom: 5, display: "block" }}>Amount ({currencySymbol()})</label>
                   <input type="number" value={form.amount} onChange={e => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} min="0" required style={{ width: "100%", padding: "8px 12px", border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, background: t.input, color: t.text }} />
                 </div>
                 <div>

@@ -63,7 +63,16 @@ function validateEnv() {
 
 async function bootstrap() {
   validateEnv();
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  /**
+   * `rawBody: true` keeps the untouched request bytes on `req.rawBody`.
+   *
+   * Payment webhooks are signed over the EXACT bytes the provider sent. Once
+   * the JSON body parser has parsed and the object is re-serialised, key order
+   * and whitespace can differ, so the HMAC no longer matches and every
+   * legitimate webhook is rejected as a forgery. The parsed `body` is still
+   * available as usual — this only additionally retains the original buffer.
+   */
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 
   // Create the default admin on a fresh database (first Ubuntu install / new VM).
   await ensureDefaultAdmin(app);

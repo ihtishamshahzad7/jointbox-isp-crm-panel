@@ -12,6 +12,7 @@ import Reversals from "../reversals/page";
 import WalletManager from "../accounting/wallets";
 import Accountability from "../accounting/accountability";
 import ProfitReport from "../accounting/profit-report";
+import MarginChain from "../accounting/margin-chain";
 
 /**
  * Money in one place — the ledger, what was billed, what was collected, and
@@ -23,6 +24,7 @@ export default function BillingCenter() {
       storageKey="billing"
       tabs={[
         { id: "profit", label: "Profit Report", hint: "What you earned from your downline's activations — by day, week, month, year or a custom range, with the line items. Reporting only: profit never touches a wallet.", render: () => <ProfitReport /> },
+        { id: "margin-chain", label: "Margin Chain", hint: "Every sale, and what each tier took from it — so you can see where margin is being absorbed. Tiers above your account are not shown.", render: () => <MarginChain /> },
         { id: "accountability", label: "Profit & Accountability", hint: "Are you earning? Profit by day/week/month, balance flow, and what each child earns you.", render: () => <Accountability /> },
         { id: "accounting", label: "Accounting",         hint: "Wallets, ledger and reseller settlement.", render: () => <Accounting /> },
         { id: "wallets",    label: "Wallets",            hint: "Add or reclaim balance for a downline account — with the full transaction record of who moved what.", render: () => <WalletManager /> },

@@ -935,6 +935,180 @@ export class ResellerPricingService {
     };
   }
 
+  /**
+   * MARGIN CHAIN — one row per sale, with every tier's margin side by side.
+   *
+   * profitReport() answers "what did I earn". This answers the question an ISP
+   * owner actually asks: "on this sale, who took what?" Without it, a margin
+   * being absorbed by one tier — a franchise reselling at near cost, or a
+   * package whose ladder leaves the ISP almost nothing — is invisible unless
+   * someone reads the ledger row by row.
+   *
+   * No new writing is needed: ProfitEntry already records the whole chain,
+   * because every tier that earns on a settlement gets a row carrying the SAME
+   * `reference`. Grouping on `reference` reconstructs the sale.
+   *
+   * PRIVACY — the part that matters commercially. A reseller must never see
+   * what the tiers ABOVE them earn: that is their own buy price, and exposing
+   * it hands them their supplier's margin. Admins see the whole chain;
+   * everyone else sees themselves and their descendants only. `hiddenTiers`
+   * reports how many were withheld, so the UI can say "2 tiers above you"
+   * instead of presenting a truncated chain as if it were complete. Same rule
+   * profitBySubscriber() already applies.
+   */
+  async marginChain(
+    actor: Actor,
+    opts: { from?: string; to?: string; limit?: number; packageId?: number; sellerId?: number } = {},
+  ) {
+    const isAdmin = this.scope.isAdmin(actor?.role);
+    const meId = await this.scope.rootId(actor);
+
+    // Accounts whose margins this caller may see.
+    const visible: Set<number> | null = isAdmin
+      ? null
+      : new Set(await this.scope.descendantIds(meId));
+
+    const from = opts.from ? new Date(opts.from) : null;
+    const to = opts.to ? new Date(`${opts.to}T23:59:59`) : null;
+    const take = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+
+    /**
+     * Pick the SALES to show first, then fetch their tiers whole.
+     *
+     * Applying the limit to tier rows directly would slice a chain in half,
+     * and a tier that fell past the cut would render as if it had earned
+     * nothing — a reporting bug that understates someone's margin.
+     */
+    const refRows = await this.prisma.$queryRaw<Array<{ reference: string; at: Date }>>(Prisma.sql`
+      SELECT p."reference" AS reference, MAX(p."at") AS at
+      FROM "profit_entry" p
+      WHERE p."reference" IS NOT NULL
+        ${from ? Prisma.sql`AND p."at" >= ${from}` : Prisma.empty}
+        ${to ? Prisma.sql`AND p."at" <= ${to}` : Prisma.empty}
+        ${opts.packageId ? Prisma.sql`AND p."packageId" = ${opts.packageId}` : Prisma.empty}
+        ${opts.sellerId ? Prisma.sql`AND p."fromUserId" = ${opts.sellerId}` : Prisma.empty}
+        ${visible && visible.size
+          ? Prisma.sql`AND EXISTS (
+              SELECT 1 FROM "profit_entry" v
+              WHERE v."reference" = p."reference"
+                AND v."userId" IN (${Prisma.join([...visible])}))`
+          : Prisma.empty}
+      GROUP BY p."reference"
+      ORDER BY at DESC
+      LIMIT ${take}`);
+
+    const references = refRows.map((r) => r.reference);
+    if (!references.length) return { rows: [], tiers: [], totals: { sales: 0, profit: 0, count: 0 } };
+
+    const entries = await this.prisma.profitEntry.findMany({
+      where: { reference: { in: references } },
+      include: { subscriber: { select: { id: true, fullName: true, username: true } } },
+      orderBy: { at: 'asc' },
+    });
+
+    // Resolve names once, not per row.
+    const userIds = [
+      ...new Set(entries.flatMap((e) => [e.userId, e.fromUserId]).filter(Boolean) as number[]),
+    ];
+    const pkgIds = [...new Set(entries.map((e) => e.packageId).filter(Boolean) as number[])];
+    const [users, pkgs] = await Promise.all([
+      userIds.length
+        ? this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, role: true } })
+        : [],
+      pkgIds.length
+        ? this.prisma.package.findMany({ where: { id: { in: pkgIds } }, select: { id: true, name: true } })
+        : [],
+    ]);
+    const userBy = new Map(users.map((u) => [u.id, u]));
+    const pkgBy = new Map(pkgs.map((p) => [p.id, p.name]));
+
+    // The ladder is ISP → Franchise → Dealer → Retailer, so tiers sort by
+    // depth and the columns read in the direction the money travels.
+    const ROLE_ORDER: Record<string, number> = {
+      SUPER_ADMIN: 0, ADMIN: 0, RESELLER: 1, SUB_RESELLER: 2, RETAILER: 3, SALES: 4,
+    };
+    const ROLE_LABEL: Record<string, string> = {
+      SUPER_ADMIN: 'ISP', ADMIN: 'ISP', RESELLER: 'Franchise',
+      SUB_RESELLER: 'Dealer', RETAILER: 'Retailer', SALES: 'Staff',
+    };
+
+    const byRef = new Map<string, typeof entries>();
+    for (const e of entries) {
+      const list = byRef.get(e.reference!) ?? [];
+      list.push(e);
+      byRef.set(e.reference!, list);
+    }
+
+    const rows = refRows.map(({ reference }) => {
+      const all = byRef.get(reference) ?? [];
+      const shown = visible ? all.filter((e) => visible.has(e.userId)) : all;
+
+      const tiers = shown
+        .map((e) => {
+          const u = userBy.get(e.userId);
+          return {
+            userId: e.userId,
+            name: u?.name ?? `#${e.userId}`,
+            role: u?.role ?? null,
+            roleLabel: u?.role ? (ROLE_LABEL[u.role] ?? u.role) : '—',
+            // What the tier below paid this tier, what it paid upward, its margin.
+            sale: e.saleAmount,
+            cost: e.costAmount,
+            profit: e.profitAmount,
+            note: e.note,
+          };
+        })
+        .sort((a, b) => (ROLE_ORDER[a.role ?? ''] ?? 9) - (ROLE_ORDER[b.role ?? ''] ?? 9));
+
+      const first = all[0];
+      const seller = first?.fromUserId ? userBy.get(first.fromUserId) : null;
+      // The customer pays the bottom of the chain — the largest sale figure.
+      const customerPaid = all.length ? Math.max(...all.map((e) => e.saleAmount)) : 0;
+
+      return {
+        reference,
+        at: all.length ? all[all.length - 1].at : null,
+        subscriberId: first?.subscriberId ?? null,
+        subscriber: first?.subscriber
+          ? first.subscriber.fullName || first.subscriber.username
+          : '—',
+        packageName: first?.packageId ? (pkgBy.get(first.packageId) ?? `#${first.packageId}`) : '—',
+        seller: seller?.name ?? '—',
+        sellerRole: seller?.role ? (ROLE_LABEL[seller.role] ?? seller.role) : null,
+        // Reversals write mirror-image negative entries; flag them so a credit
+        // note is never read as a sale.
+        isReversal: reference.startsWith('REV#'),
+        customerPaid: Math.round(customerPaid * 100) / 100,
+        tiers,
+        // Margin visible to THIS caller, not necessarily the sale's total.
+        chainProfit: Math.round(tiers.reduce((s, t) => s + t.profit, 0) * 100) / 100,
+        hiddenTiers: all.length - shown.length,
+      };
+    });
+
+    // Only the tiers actually present in this result become columns, so the
+    // table shows "Franchise / Dealer" rather than every possible role.
+    const seen = new Map<string, { role: string; label: string }>();
+    for (const r of rows) {
+      for (const t of r.tiers) {
+        if (t.role && !seen.has(t.role)) seen.set(t.role, { role: t.role, label: t.roleLabel });
+      }
+    }
+    const tiers = [...seen.values()].sort(
+      (a, b) => (ROLE_ORDER[a.role] ?? 9) - (ROLE_ORDER[b.role] ?? 9),
+    );
+
+    return {
+      rows,
+      tiers,
+      totals: {
+        sales: Math.round(rows.reduce((s, r) => s + r.customerPaid, 0) * 100) / 100,
+        profit: Math.round(rows.reduce((s, r) => s + r.chainProfit, 0) * 100) / 100,
+        count: rows.length,
+      },
+    };
+  }
+
   /** Per-subscriber step-by-step breakdown: what each layer earned/paid on this sale. */
   async profitBySubscriber(actor: Actor, subscriberId: number) {
     await this.scope.assertSubscriber(actor, subscriberId);

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { createHmac, randomUUID } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
@@ -14,6 +14,12 @@ import { NotificationsService } from '../notifications/notifications.service';
  *   SSLCOMMERZ  — SSLCZ_STORE_ID, SSLCZ_STORE_PASS (+ SSLCZ_SANDBOX=1 for test mode)
  *   JAZZCASH    — JAZZCASH_MERCHANT_ID, JAZZCASH_PASSWORD, JAZZCASH_INTEGERITY_SALT (+ JAZZCASH_SANDBOX=0/1)
  *   EASYPAISA   — EASYPAISA_STORE_ID, EASYPAISA_STORE_PASS (+ EASYPAISA_SANDBOX=0/1)
+ *   PAYPAL      — PAYPAL_CLIENT_ID, PAYPAL_SECRET (+ PAYPAL_ENV=live)
+ *   RAZORPAY    — RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
+ *   PAYSTACK    — PAYSTACK_SECRET_KEY (+ PAYSTACK_PLACEHOLDER_DOMAIN)
+ *
+ * Which currencies each can settle is declared in GATEWAY_CURRENCIES and
+ * enforced at initiate(); see billingCurrency() for why that matters.
  *
  * Flow: initiate() → subscriber pays on gateway → callback → handleSuccess():
  *   record payment (ledger + notification) → extend expiry → reactivate → RADIUS re-add.
@@ -37,6 +43,86 @@ export class GatewayService {
     return process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
   }
 
+  /**
+   * The currencies each gateway can actually settle in. A gateway absent from
+   * this map is treated as unrestricted (Stripe, PayPal, SANDBOX).
+   *
+   * Charging a restricted gateway for an invoice priced in a currency it does
+   * not support converts nothing — it sends the same NUMBER with a different
+   * currency code attached, which is a real mischarge.
+   */
+  private static readonly GATEWAY_CURRENCIES: Record<string, string[]> = {
+    BKASH: ['BDT'],
+    SSLCOMMERZ: ['BDT'],
+    JAZZCASH: ['PKR'],
+    EASYPAISA: ['PKR'],
+    RAZORPAY: ['INR'],
+    // Paystack is multi-country (Nigeria, Ghana, South Africa, Kenya) and also
+    // settles USD, so it is a set rather than a single currency.
+    PAYSTACK: ['NGN', 'GHS', 'ZAR', 'KES', 'USD'],
+  };
+
+  /**
+   * The currency this deployment actually bills in.
+   *
+   * WHY THIS EXISTS — this was the most expensive bug in the product.
+   *
+   * Every amount in the system (invoice.total, payment.amount) is a bare
+   * number denominated in the operator's own currency: the `Isp.currency`
+   * field that the whole UI already renders through. Nothing converts it.
+   *
+   * The gateway drivers, however, each invented their own default when
+   * GATEWAY_CURRENCY was unset:
+   *   - the GatewayTransaction row defaulted to 'BDT'
+   *   - Stripe defaulted to 'usd'
+   *   - PayPal defaulted to 'USD'
+   * ...so on an unconfigured Pakistani deployment, a 1,500 PKR invoice was
+   * sent to Stripe as unit_amount=150000 with currency=usd — a charge of
+   * USD 1,500 for a bill worth about USD 5. The stored record then said BDT,
+   * agreeing with neither the invoice nor the actual charge.
+   *
+   * The currency is now taken from the ISP record, which is the only value
+   * the amounts are actually denominated in. GATEWAY_CURRENCY still works as
+   * an explicit override. If neither is available we refuse rather than
+   * guess: a wrong-but-plausible currency silently moves real money, and a
+   * failed checkout does not.
+   */
+  private async billingCurrency(): Promise<string> {
+    const override = (process.env.GATEWAY_CURRENCY || '').trim();
+    if (override) return override.toUpperCase();
+
+    // Same record the panel reads its currency from (frontend takes isps[0]).
+    const isp = await this.prisma.isp
+      .findFirst({ orderBy: { id: 'asc' }, select: { currency: true } })
+      .catch(() => null);
+    const code = (isp?.currency || '').trim();
+    if (code) return code.toUpperCase();
+
+    throw new BadRequestException(
+      'No billing currency is configured, so an online payment cannot be started safely. ' +
+        'Set the currency on the ISP record (Organization → ISPs), or set GATEWAY_CURRENCY in backend/.env.',
+    );
+  }
+
+  /**
+   * Refuse a checkout whose gateway cannot settle in the invoice's currency.
+   *
+   * Nothing in this product converts between currencies, so the alternative
+   * to refusing is sending the invoice's number to a provider that will read
+   * it as a different currency entirely.
+   */
+  private assertGatewaySupportsCurrency(gateway: string, currency: string) {
+    const supported = GatewayService.GATEWAY_CURRENCIES[gateway];
+    if (supported && !supported.includes(currency)) {
+      const list = supported.join(', ');
+      throw new BadRequestException(
+        `${gateway} can only take payments in ${list}, but this deployment bills in ${currency}. ` +
+          `Charging it would send the ${currency} amount as ${supported[0]} without converting it. ` +
+          `Use a gateway that supports ${currency}, or bill in ${list}.`,
+      );
+    }
+  }
+
   availableGateways() {
     const list: string[] = [];
     if ((process.env.NODE_ENV || 'development') !== 'production' || process.env.GATEWAY_SANDBOX === 'on') list.push('SANDBOX');
@@ -47,6 +133,7 @@ export class GatewayService {
     if (process.env.EASYPAISA_STORE_ID) list.push('EASYPAISA');
     if (process.env.PAYPAL_CLIENT_ID) list.push('PAYPAL');
     if (process.env.RAZORPAY_KEY_ID) list.push('RAZORPAY');
+    if (process.env.PAYSTACK_SECRET_KEY) list.push('PAYSTACK');
     return list;
   }
 
@@ -78,13 +165,18 @@ export class GatewayService {
       );
     }
 
+    // Resolve the real billing currency BEFORE creating the transaction row,
+    // so a misconfiguration fails without leaving an orphan record behind.
+    const currency = await this.billingCurrency();
+    this.assertGatewaySupportsCurrency(gateway, currency);
+
     const tx = await this.prisma.gatewayTransaction.create({
       data: {
         gateway,
         invoiceId,
         subscriberId: invoice.subscriberId,
         amount,
-        currency: process.env.GATEWAY_CURRENCY || 'BDT',
+        currency,
         idempotencyKey: randomUUID(),
       },
     });
@@ -114,6 +206,9 @@ export class GatewayService {
         break;
       case 'RAZORPAY':
         paymentUrl = await this.razorpayCheckout(tx, invoice);
+        break;
+      case 'PAYSTACK':
+        paymentUrl = await this.paystackCheckout(tx, invoice);
         break;
       default:
         throw new BadRequestException('Unknown gateway');
@@ -248,7 +343,10 @@ export class GatewayService {
   private async stripeCheckout(tx: any, invoice: any): Promise<string> {
     const params = new URLSearchParams({
       mode: 'payment',
-      'line_items[0][price_data][currency]': (process.env.GATEWAY_CURRENCY || 'usd').toLowerCase(),
+      // tx.currency is the resolved billing currency (see billingCurrency()).
+      // It must match the currency tx.amount is denominated in — defaulting
+      // this to 'usd' is what caused PKR invoices to be charged as dollars.
+      'line_items[0][price_data][currency]': String(tx.currency).toLowerCase(),
       'line_items[0][price_data][product_data][name]': `Invoice ${invoice.invoiceNo}`,
       'line_items[0][price_data][unit_amount]': String(Math.round(tx.amount * 100)),
       'line_items[0][quantity]': '1',
@@ -289,7 +387,9 @@ export class GatewayService {
   }
   private async paypalCheckout(tx: any, invoice: any): Promise<string> {
     const token = await this.paypalToken();
-    const currency = (process.env.PAYPAL_CURRENCY || process.env.GATEWAY_CURRENCY || 'USD').toUpperCase();
+    // PAYPAL_CURRENCY stays available as a deliberate override, but the
+    // fallback is now the deployment's real billing currency rather than USD.
+    const currency = (process.env.PAYPAL_CURRENCY || tx.currency).toUpperCase();
     const res = await fetch(`${this.paypalBase}/v2/checkout/orders`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -354,6 +454,102 @@ export class GatewayService {
     // We serve a small hosted page that opens Razorpay Checkout with this order.
     return `${this.backendUrl}/gateway/razorpay/form/${tx.idempotencyKey}`;
   }
+  // ─────────────────────────────────────────────────────────────
+  // DRIVER: PAYSTACK (Nigeria / Ghana / South Africa / Kenya)
+  // ─────────────────────────────────────────────────────────────
+  /**
+   * Paystack initialise → hosted checkout → callback → verify.
+   *
+   * Two things this API is strict about, both of which silently corrupt a
+   * charge if you get them wrong:
+   *
+   *   1. `amount` is in the currency's MINOR unit (kobo/pesewa/cent), so it is
+   *      the major-unit amount × 100. Sending the major unit undercharges by
+   *      100×; sending it to the wrong currency is the bug fixed in
+   *      billingCurrency(), so the currency is passed explicitly rather than
+   *      left to Paystack's account default.
+   *   2. `email` is REQUIRED and is what Paystack keys the customer record on.
+   *      A subscriber here may have no email (it is optional in the schema),
+   *      so a stable per-subscriber placeholder is used rather than a shared
+   *      constant — otherwise every such customer collapses into one Paystack
+   *      customer record and their payment history merges.
+   */
+  private async paystackCheckout(tx: any, invoice: any): Promise<string> {
+    const secret = process.env.PAYSTACK_SECRET_KEY || '';
+    const email =
+      invoice.subscriber?.email?.trim() ||
+      `subscriber-${tx.subscriberId}@${process.env.PAYSTACK_PLACEHOLDER_DOMAIN || 'no-email.invalid'}`;
+
+    const res = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        amount: Math.round(tx.amount * 100), // minor unit — see note above
+        currency: String(tx.currency).toUpperCase(),
+        reference: tx.idempotencyKey,
+        callback_url: `${this.backendUrl}/gateway/callback/paystack?key=${tx.idempotencyKey}`,
+        metadata: { invoiceNo: invoice.invoiceNo, subscriberId: tx.subscriberId },
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.status) {
+      throw new BadRequestException(`Paystack: ${data?.message || res.status}`);
+    }
+    const url = data?.data?.authorization_url;
+    if (!url) throw new BadRequestException('Paystack did not return a checkout URL');
+    await this.prisma.gatewayTransaction.update({
+      where: { id: tx.id },
+      data: { gatewayRef: data.data.reference || tx.idempotencyKey },
+    });
+    return url;
+  }
+
+  /**
+   * Confirm a Paystack payment by asking Paystack, never by trusting the
+   * redirect. A browser landing on our callback URL proves only that a
+   * browser landed there.
+   *
+   * The amount and currency Paystack reports are checked against what we
+   * asked for: a `success` for the wrong amount is not a paid invoice, and
+   * accepting it would mark the bill settled for less than it was worth.
+   */
+  async paystackVerify(key: string): Promise<boolean> {
+    const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+    if (!tx) return false;
+
+    const secret = process.env.PAYSTACK_SECRET_KEY || '';
+    const res = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    const data: any = await res.json().catch(() => ({}));
+    const paid = data?.data;
+
+    if (!res.ok || paid?.status !== 'success') {
+      await this.handleFailure(key, paid?.gateway_response || data?.message || 'paystack-not-completed');
+      return false;
+    }
+
+    const expected = Math.round(tx.amount * 100);
+    if (Number(paid.amount) !== expected) {
+      this.logger.error(
+        `Paystack amount mismatch on ${key}: charged ${paid.amount}, expected ${expected} (${tx.currency}). Not settling.`,
+      );
+      await this.handleFailure(key, `paystack-amount-mismatch:${paid.amount}!=${expected}`);
+      return false;
+    }
+    if (paid.currency && String(paid.currency).toUpperCase() !== String(tx.currency).toUpperCase()) {
+      this.logger.error(
+        `Paystack currency mismatch on ${key}: charged ${paid.currency}, expected ${tx.currency}. Not settling.`,
+      );
+      await this.handleFailure(key, `paystack-currency-mismatch:${paid.currency}!=${tx.currency}`);
+      return false;
+    }
+
+    await this.handleSuccess(key, paid.reference || key, JSON.stringify(paid).slice(0, 4000));
+    return true;
+  }
+
   /** Verify Razorpay's payment signature (HMAC-SHA256 of order_id|payment_id). */
   verifyRazorpaySignature(orderId: string, paymentId: string, signature: string): boolean {
     const secret = process.env.RAZORPAY_KEY_SECRET || '';
@@ -361,13 +557,136 @@ export class GatewayService {
     return expected === signature;
   }
 
-  /** Verify a Stripe webhook signature (t=...,v1=... header format). */
+  /**
+   * Constant-time hex-digest comparison.
+   *
+   * `===` on a digest leaks, byte by byte, how much of a guess was correct.
+   * timingSafeEqual also throws on a length mismatch, so that is checked
+   * first — a wrong-length digest is simply wrong.
+   */
+  private static digestsMatch(a: string, b: string): boolean {
+    if (!a || !b || a.length !== b.length) return false;
+    try {
+      return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Verify a Stripe webhook signature (`t=...,v1=...`).
+   *
+   * The timestamp is enforced, not merely parsed: without a freshness window
+   * a captured webhook stays replayable forever, and replaying a
+   * `checkout.session.completed` is an attempt to settle an invoice for free.
+   * handleSuccess() is idempotent, so a replay of an ALREADY-settled payment
+   * is harmless — but a replay aimed at a NEW transaction that reuses a
+   * captured body is not, and five minutes (Stripe's own recommendation) is
+   * ample for legitimate delivery and retries.
+   */
   verifyStripeSignature(rawBody: string, header: string): boolean {
     const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!secret) return false;
-    const parts = Object.fromEntries(header.split(',').map((p) => p.split('=') as [string, string]));
-    const expected = createHmac('sha256', secret).update(`${parts.t}.${rawBody}`).digest('hex');
-    return expected === parts.v1;
+    if (!secret || !header) return false;
+    const parts = Object.fromEntries(
+      header.split(',').map((p) => {
+        const i = p.indexOf('=');
+        return [p.slice(0, i).trim(), p.slice(i + 1).trim()] as [string, string];
+      }),
+    );
+    const ts = Number(parts.t);
+    if (!Number.isFinite(ts)) return false;
+    const ageSeconds = Math.abs(Date.now() / 1000 - ts);
+    const tolerance = Number(process.env.WEBHOOK_TOLERANCE_SECONDS || 300);
+    if (ageSeconds > tolerance) return false;
+
+    const expected = createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex');
+    return GatewayService.digestsMatch(expected, parts.v1);
+  }
+
+  /**
+   * Verify a Paystack webhook: HMAC-SHA512 of the raw body, keyed with the
+   * SECRET key (not a separate webhook secret), sent as `x-paystack-signature`.
+   */
+  verifyPaystackSignature(rawBody: string, header: string): boolean {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret || !header) return false;
+    const expected = createHmac('sha512', secret).update(rawBody).digest('hex');
+    return GatewayService.digestsMatch(expected, header.trim());
+  }
+
+  /**
+   * Verify a Razorpay webhook: HMAC-SHA256 of the raw body, keyed with the
+   * WEBHOOK secret — a different value from RAZORPAY_KEY_SECRET used for
+   * payment signatures, which is an easy and silent thing to mix up.
+   */
+  verifyRazorpayWebhook(rawBody: string, header: string): boolean {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!secret || !header) return false;
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+    return GatewayService.digestsMatch(expected, header.trim());
+  }
+
+  /**
+   * Settle a transaction from a webhook whose signature has ALREADY been
+   * verified by the caller.
+   *
+   * The amount and currency the provider reports are checked against what we
+   * asked for before anything settles — the same rule as paystackVerify().
+   * A webhook is a claim about money; a valid signature proves who sent it,
+   * not that it says what we expected.
+   *
+   * `minorUnits` says whether the provider quotes the amount in the
+   * currency's minor unit (Stripe, Paystack, Razorpay all do).
+   */
+  async settleFromWebhook(opts: {
+    key: string;
+    gateway: string;
+    amount?: number | null;
+    currency?: string | null;
+    reference?: string | null;
+    payload?: string;
+    minorUnits?: boolean;
+  }): Promise<{ ok: boolean; reason?: string }> {
+    const { key, gateway } = opts;
+    if (!key) return { ok: false, reason: 'no-transaction-key' };
+
+    const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+    if (!tx) {
+      this.logger.warn(`${gateway} webhook referenced unknown transaction ${key}`);
+      return { ok: false, reason: 'unknown-transaction' };
+    }
+    // Already settled — a duplicate delivery or a retry. handleSuccess() is
+    // idempotent, but returning early keeps the logs honest about what
+    // actually happened.
+    if (tx.status === 'SUCCESS') return { ok: true, reason: 'already-settled' };
+
+    if (opts.amount != null) {
+      const expected = opts.minorUnits ? Math.round(tx.amount * 100) : tx.amount;
+      const reported = Number(opts.amount);
+      // Compare with a cent of slack for the non-minor-unit (float) case.
+      const differs = opts.minorUnits
+        ? Math.round(reported) !== expected
+        : Math.abs(reported - expected) > 0.005;
+      if (differs) {
+        this.logger.error(
+          `${gateway} webhook amount mismatch on ${key}: reported ${reported}, expected ${expected}. Not settling.`,
+        );
+        await this.handleFailure(key, `${gateway.toLowerCase()}-webhook-amount-mismatch`);
+        return { ok: false, reason: 'amount-mismatch' };
+      }
+    }
+
+    if (opts.currency && String(opts.currency).toUpperCase() !== String(tx.currency).toUpperCase()) {
+      this.logger.error(
+        `${gateway} webhook currency mismatch on ${key}: reported ${opts.currency}, expected ${tx.currency}. Not settling.`,
+      );
+      await this.handleFailure(key, `${gateway.toLowerCase()}-webhook-currency-mismatch`);
+      return { ok: false, reason: 'currency-mismatch' };
+    }
+
+    await this.handleSuccess(key, opts.reference || key, opts.payload);
+    this.logger.log(`${gateway} webhook settled transaction ${key}`);
+    return { ok: true };
   }
 
   // ─────────────────────────────────────────────────────────────

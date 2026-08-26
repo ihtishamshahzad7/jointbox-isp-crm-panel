@@ -1,9 +1,23 @@
-import { Body, Controller, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { createHmac } from 'crypto';
 import { GatewayService } from './gateway.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+
+/**
+ * Parse a webhook body without letting malformed JSON become a 500.
+ *
+ * A provider retries on 5xx, so throwing here would turn one bad delivery
+ * into an indefinite retry loop.
+ */
+function safeJson(raw: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 @Controller('gateway')
 export class GatewayController {
@@ -83,6 +97,119 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
     }
     const ok = await this.gateway.paypalCapture(key);
     return res.redirect(`${frontend}/portal?paid=${ok ? 1 : 0}`);
+  }
+
+  /**
+   * Paystack return callback. Paystack appends its own `reference` and
+   * `trxref` to the redirect, but neither is trusted: paystackVerify() asks
+   * Paystack's API what actually happened, and checks the amount and
+   * currency against what we asked for before settling anything.
+   *
+   * A customer who pays and then closes the browser never reaches this route,
+   * so that payment stays INITIATED until `GET /gateway/reconcile` surfaces
+   * it — the same characteristic as the other redirect-based gateways here.
+   */
+  @Get('callback/paystack')
+  async paystackCallback(@Query('key') key: string, @Res() res: Response) {
+    const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    const ok = await this.gateway.paystackVerify(key);
+    return res.redirect(`${frontend}/portal?paid=${ok ? 1 : 0}`);
+  }
+
+  // ── Webhooks (server-to-server, signature-verified) ───────────
+  //
+  // WHY THESE EXIST
+  //
+  // Every gateway integration here was redirect-only: the invoice was settled
+  // when the payer's BROWSER came back to /gateway/callback/*. A customer who
+  // pays and then closes the tab, loses signal, or gets a failed redirect
+  // never delivers that callback — so their money left their account while
+  // the invoice stayed unpaid, and it was only noticed if someone happened to
+  // run GET /gateway/reconcile. Webhooks are the provider telling us
+  // server-to-server, independent of the payer's browser.
+  //
+  // These routes are deliberately unauthenticated — the provider has no JWT.
+  // The signature IS the authentication, so an unverified body is rejected
+  // and never acted on. They return 200 on "verified but not settled" (e.g.
+  // an event type we ignore) so the provider does not retry forever; 400 is
+  // reserved for a body we could not authenticate.
+
+  /**
+   * Stripe: `checkout.session.completed` carries client_reference_id, which
+   * stripeCheckout() sets to the transaction's idempotency key.
+   */
+  @Post('webhook/stripe')
+  async stripeWebhook(@Req() req: any, @Headers('stripe-signature') sig: string, @Res() res: Response) {
+    const raw = req.rawBody?.toString('utf8') ?? '';
+    if (!this.gateway.verifyStripeSignature(raw, sig || '')) {
+      return res.status(400).json({ received: false, error: 'invalid-signature' });
+    }
+    const event = safeJson(raw);
+    if (event?.type !== 'checkout.session.completed') {
+      return res.status(200).json({ received: true, ignored: event?.type ?? 'unparseable' });
+    }
+    const session = event.data?.object ?? {};
+    const result = await this.gateway.settleFromWebhook({
+      key: session.client_reference_id,
+      gateway: 'STRIPE',
+      amount: session.amount_total,
+      currency: session.currency,
+      reference: session.id,
+      payload: raw.slice(0, 4000),
+      minorUnits: true,
+    });
+    return res.status(200).json({ received: true, ...result });
+  }
+
+  /** Paystack: `charge.success`; `data.reference` is our idempotency key. */
+  @Post('webhook/paystack')
+  async paystackWebhook(@Req() req: any, @Headers('x-paystack-signature') sig: string, @Res() res: Response) {
+    const raw = req.rawBody?.toString('utf8') ?? '';
+    if (!this.gateway.verifyPaystackSignature(raw, sig || '')) {
+      return res.status(400).json({ received: false, error: 'invalid-signature' });
+    }
+    const event = safeJson(raw);
+    if (event?.event !== 'charge.success') {
+      return res.status(200).json({ received: true, ignored: event?.event ?? 'unparseable' });
+    }
+    const d = event.data ?? {};
+    const result = await this.gateway.settleFromWebhook({
+      key: d.reference,
+      gateway: 'PAYSTACK',
+      amount: d.amount,
+      currency: d.currency,
+      reference: d.reference,
+      payload: raw.slice(0, 4000),
+      minorUnits: true,
+    });
+    return res.status(200).json({ received: true, ...result });
+  }
+
+  /**
+   * Razorpay: `payment.captured`. razorpayCheckout() puts the idempotency key
+   * in the ORDER's notes, and Razorpay copies order notes onto the payment.
+   */
+  @Post('webhook/razorpay')
+  async razorpayWebhook(@Req() req: any, @Headers('x-razorpay-signature') sig: string, @Res() res: Response) {
+    const raw = req.rawBody?.toString('utf8') ?? '';
+    if (!this.gateway.verifyRazorpayWebhook(raw, sig || '')) {
+      return res.status(400).json({ received: false, error: 'invalid-signature' });
+    }
+    const event = safeJson(raw);
+    if (event?.event !== 'payment.captured') {
+      return res.status(200).json({ received: true, ignored: event?.event ?? 'unparseable' });
+    }
+    const payment = event.payload?.payment?.entity ?? {};
+    const result = await this.gateway.settleFromWebhook({
+      key: payment.notes?.key,
+      gateway: 'RAZORPAY',
+      amount: payment.amount,
+      currency: payment.currency,
+      reference: payment.id,
+      payload: raw.slice(0, 4000),
+      minorUnits: true,
+    });
+    return res.status(200).json({ received: true, ...result });
   }
 
   /** Razorpay hosted checkout page — opens the Razorpay modal for this order. */
