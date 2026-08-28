@@ -702,6 +702,17 @@ enum OutageSource {
   MANUAL         // logged by staff
 }
 
+/// Root cause of an outage, inferred by correlating device-level (NDM) signals
+/// against the outage window. Only NETWORK_DEVICE / PORT counts against the
+/// ISP's uptime; POWER / ACCESS are WAPDA/subscriber-side, not our fault.
+enum OutageCause {
+  NETWORK_DEVICE // a core device (NAS/switch/OLT) went down — our fault
+  PORT           // a port/link dropped on a device — device-side
+  POWER          // device reported power failure, or scheduled/unscheduled WAPDA
+  ACCESS         // no core device offline — subscriber/antenna/feeder level
+  UNKNOWN        // not enough signal to infer a cause
+}
+
 /// A published load-shedding window for an area.
 ///
 /// In Pakistan most "internet is down" calls are actually WAPDA. Knowing the
@@ -747,8 +758,44 @@ model PowerOutage {
   notes     String?
   createdBy Int?
 
+  attribution OutageAttribution?
+
   @@index([areaId, startedAt])
   @@index([endedAt])
+}
+
+/// Root-cause intelligence for one outage (Outage Intelligence).
+///
+/// Populated by OutagesService.attribute() by correlating device-level NDM
+/// signals (POWER_FAILURE / DEVICE_DOWN / PORT_DOWN / LINK_DOWN events+alerts,
+/// plus device reachability) against the outage window. `cause` separates
+/// WAPDA/subscriber-side power from a fault in the operator's own core, so the
+/// uptime report can honestly say "this part was our network" vs "this part
+/// was WAPDA".
+model OutageAttribution {
+  id       Int @id @default(autoincrement())
+  outageId Int @unique
+  outage   PowerOutage @relation(fields: [outageId], references: [id], onDelete: Cascade)
+
+  /// Inferred root cause (see OutageCause).
+  cause      OutageCause @default(UNKNOWN)
+  /// 0–100. How strongly the coincident signals support this cause.
+  confidence Int         @default(0)
+  /// Short human label, e.g. "NAS-CCR-01 unreachable since 09:42".
+  summary    String?     @db.VarChar(240)
+  /// JSON array of coincident signals this inference rests on:
+  /// [{eventType, deviceId, deviceName, severity, at, message, nasAreaMatch}].
+  evidence   Json        @default("[]")
+  /// Implicated device ids — subset of the ids found in evidence.
+  deviceIds  Json        @default("[]")
+  /// Operator has confirmed or manually corrected the inference.
+  confirmed  Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([cause])
+  @@index([confirmed])
+  @@map("outage_attribution")
 }
 
 enum StaticIpStatus {

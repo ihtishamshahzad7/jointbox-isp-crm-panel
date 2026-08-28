@@ -20,6 +20,15 @@ const TYPE: Record<string, { c: string; bg: string; label: string }> = {
   UNKNOWN:     { c: "#94a3b8", bg: "rgba(148,163,184,.14)",label: "Unclassified" },
 };
 
+// Outage Intelligence — root-cause attribution (the OutageAttribution.cause).
+const CAUSE: Record<string, { c: string; bg: string; icon: string; label: string }> = {
+  NETWORK_DEVICE: { c: "#ef4444", bg: "rgba(239,68,68,.14)", icon: "⬇", label: "Core device down" },
+  PORT:           { c: "#f97316", bg: "rgba(249,115,22,.14)", icon: "⇅", label: "Port / link" },
+  POWER:          { c: "#f59e0b", bg: "rgba(245,158,11,.14)", icon: "⚡", label: "Power" },
+  ACCESS:         { c: "#0ea5e9", bg: "rgba(14,165,233,.14)", icon: "⛒", label: "Access / subscriber" },
+  UNKNOWN:        { c: "#94a3b8", bg: "rgba(148,163,184,.14)", icon: "?", label: "No signal" },
+};
+
 const DAYS = ["Every day", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const fdt = (d?: string | null) =>
   d ? new Date(d).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "—";
@@ -201,7 +210,7 @@ export default function OutagesPage() {
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
               <thead>
                 <tr style={{ background: T.row }}>
-                  {["Area", "Started", "Ended", "Affected", "Cause", "Reclassify"].map((h) => (
+                  {["Area", "Started", "Ended", "Affected", "Cause", "Root cause", "Reclassify"].map((h) => (
                     <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, color: T.muted, textTransform: "uppercase" }}>{h}</th>
                   ))}
                 </tr>
@@ -221,6 +230,40 @@ export default function OutagesPage() {
                         <span style={{ fontSize: 10, fontWeight: 700, color: t.c, background: t.bg, padding: "3px 9px", borderRadius: 20 }}>
                           {t.label}
                         </span>
+                      </td>
+                      <td style={{ padding: "10px 12px", minWidth: 230 }}>
+                        {o.attribution ? (() => {
+                          const c = CAUSE[o.attribution.cause] || CAUSE.UNKNOWN;
+                          return (
+                            <div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 10, fontWeight: 800, color: c.c, background: c.bg, padding: "3px 9px", borderRadius: 20 }}>
+                                  {c.icon} {c.label}
+                                </span>
+                                <span style={{ fontSize: 9.5, color: T.muted }}>
+                                  {o.attribution.confidence}%
+                                </span>
+                              </div>
+                              {o.attribution.summary && (
+                                <div style={{ fontSize: 11, color: T.muted, marginTop: 4, lineHeight: 1.35 }}>
+                                  {o.attribution.summary}
+                                </div>
+                              )}
+                              {o.attribution.evidence?.length > 0 && (
+                                <div style={{ fontSize: 10, color: T.muted, marginTop: 3, opacity: .85 }}>
+                                  {o.attribution.evidence.length} device signal(s) · {o.attribution.confirmed ? "confirmed" : "auto"}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })() : (
+                          <span style={{ fontSize: 11, color: T.muted }}>Not analysed yet</span>
+                        )}
+                        <button style={{ ...btn(T.accent, true), padding: "2px 8px", fontSize: 10, marginTop: 4 }}
+                          disabled={busy}
+                          onClick={() => call(`/outages/${o.id}/attribution/refresh`, "POST", undefined, "Root cause re-analysed")}>
+                          ↻ {o.attribution ? "Re-analyse" : "Analyse"}
+                        </button>
                       </td>
                       <td style={{ padding: "10px 12px" }}>
                         <select style={{ ...input, width: 150, fontSize: 11, padding: "5px 8px" }} value=""

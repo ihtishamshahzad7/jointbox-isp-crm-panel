@@ -53,6 +53,25 @@ export class OutagesController {
     return this.outages.notifyArea(+id, body?.message);
   }
 
+  // ── Outage Intelligence (root-cause attribution) ────────────
+  /** Read the persisted root-cause attribution for an outage. */
+  @Get(':id/attribution')
+  attribution(@Param('id') id: string) {
+    return this.outages.getAttribution(+id);
+  }
+
+  /** Recompute attribution from current NDM signals and persist. */
+  @Post(':id/attribution/refresh')
+  refreshAttribution(@Param('id') id: string) {
+    return this.outages.attribute(+id);
+  }
+
+  /** Operator confirms (optionally correcting) the attribution. */
+  @Patch(':id/attribution/confirm')
+  confirmAttribution(@Param('id') id: string, @Body() body: { cause?: string }) {
+    return this.outages.confirmAttribution(+id, body?.cause);
+  }
+
   // ── Load-shedding timetable ─────────────────────────────────
   @Get('schedules/all')
   listSchedules(@Query('areaId') areaId?: string) {

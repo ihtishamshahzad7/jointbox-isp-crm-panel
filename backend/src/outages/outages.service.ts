@@ -198,6 +198,11 @@ export class OutagesService {
             Type: type,
           },
         }).catch(() => null);
+
+        // Outage Intelligence: correlate device-level signals now and persist a
+        // root-cause attribution, so the operator sees *why* before dispatching.
+        await this.attribute(outage.id).catch((e) =>
+          this.logger.warn(`Attribution for outage ${outage.id} failed: ${e?.message || e}`));
       }
 
       await this.closeRecovered();
@@ -254,7 +259,10 @@ export class OutagesService {
     }
     return this.prisma.powerOutage.findMany({
       where,
-      include: { area: { select: { id: true, name: true, city: true } } },
+      include: {
+        area: { select: { id: true, name: true, city: true } },
+        attribution: true,
+      },
       orderBy: { startedAt: 'desc' },
       take: Number(query.limit) || 200,
     });
@@ -368,21 +376,27 @@ export class OutagesService {
 
   // ── Actions ──────────────────────────────────────────────────
   async classify(id: number, type: string, notes?: string) {
-    return this.prisma.powerOutage.update({
+    const updated = await this.prisma.powerOutage.update({
       where: { id },
       data: { type: type as any, notes: notes ?? undefined },
     });
+    // Re-run attribution so evidence/confidence reflect the classified window.
+    await this.attribute(id).catch(() => null);
+    return updated;
   }
 
   async close(id: number) {
-    return this.prisma.powerOutage.update({
+    const updated = await this.prisma.powerOutage.update({
       where: { id },
       data: { endedAt: new Date() },
     });
+    // Final attribution over the complete window.
+    await this.attribute(id).catch(() => null);
+    return updated;
   }
 
   async createManual(data: any, actor?: Actor) {
-    return this.prisma.powerOutage.create({
+    const outage = await this.prisma.powerOutage.create({
       data: {
         areaId: data.areaId ? Number(data.areaId) : null,
         type: data.type || 'UNSCHEDULED',
@@ -391,6 +405,8 @@ export class OutagesService {
         createdBy: actor ? this.scope.actorId(actor) : null,
       },
     });
+    await this.attribute(outage.id).catch(() => null);
+    return outage;
   }
 
   /**
@@ -435,6 +451,263 @@ export class OutagesService {
     await this.prisma.powerOutage.update({ where: { id }, data: { notified: true } });
     this.logger.log(`Outage ${id}: notified ${sent}/${subs.length} customers`);
     return { notified: sent, total: subs.length };
+  }
+
+  // ── Outage Intelligence (root-cause attribution) ─────────────
+  //
+  // Outages are detected at AREA level from subscriber disconnects; the NDM
+  // layer records device-level signals on NetworkDevice (POWER_FAILURE /
+  // DEVICE_DOWN / PORT_DOWN / LINK_DOWN events + alerts). No foreign key joins
+  // the two, so we bridge by TIME + TENANT: within [startedAt, endedAt || now]
+  // we scan the operator's OWN core boxes (Area.ownerId → NetworkDevice.ownerId
+  // — the same tenant the area belongs to) for critical coincident signals,
+  // preferring devices whose IP matches a NAS serving the affected area.
+  //
+  // This never claims certainty — it surfaces evidence the operator confirms —
+  // but it turns "45% of Area 3 dropped" into "NAS-CCR-01 unreachable since
+  // 09:42, coincident with the outage." Signals, strongest first:
+  //   POWER_FAILURE     → POWER           (a device reports power went out)
+  //   DEVICE_DOWN / unreachable → NETWORK_DEVICE (core box dropped → our fault)
+  //   PORT_DOWN/LINK_DOWN → PORT          (a link dropped on a device)
+  //   nothing above      → POWER or ACCESS (load-shedding, or subscriber side)
+  private async inferAttribution(outage: any): Promise<{
+    cause: string; confidence: number; summary: string; evidence: any[]; deviceIds: number[];
+  }> {
+    const start = new Date(outage.startedAt);
+    const end = outage.endedAt ?? new Date();
+
+    // Tenant scope — the operator who owns the affected area.
+    let ownerId: number | null = null;
+    if (outage.areaId) {
+      const area = await this.prisma.area.findUnique({
+        where: { id: outage.areaId },
+        select: { ownerId: true },
+      });
+      ownerId = area?.ownerId ?? null;
+    }
+
+    // NAS IPs serving the affected area → strong device matches.
+    const servingNasIps = new Set<string>();
+    if (outage.areaId) {
+      const subs = await this.prisma.subscriber.findMany({
+        where: { areaId: outage.areaId },
+        select: { nasId: true },
+        distinct: ['nasId'],
+      });
+      const nasIds = subs.map((s) => s.nasId).filter((n): n is number => n != null);
+      if (nasIds.length) {
+        const nases = await this.prisma.nas.findMany({
+          where: { id: { in: nasIds } },
+          select: { nasIp: true },
+        });
+        nases.forEach((n) => n.nasIp && servingNasIps.add(n.nasIp));
+      }
+    }
+
+    // Candidate core boxes: the area owner's, or all enabled if owner unknown.
+    const devices = await this.prisma.networkDevice.findMany({
+      where: ownerId ? { enabled: true, ownerId } : { enabled: true },
+      select: {
+        id: true, name: true, ip: true,
+        isReachable: true, downSince: true, lastError: true,
+      },
+    });
+    const deviceById = new Map(devices.map((d) => [d.id, d]));
+    const inArea = (d: any) => !!(d?.ip && servingNasIps.has(d.ip));
+
+    const evidence: any[] = [];
+    const seen = new Set<string>();
+
+    const push = (sig: any) => {
+      const key = `${sig.eventType}|${sig.deviceId}|${new Date(sig.at).getTime()}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const d = sig.deviceId != null ? deviceById.get(sig.deviceId) : null;
+      evidence.push({ ...sig, nasAreaMatch: d ? inArea(d) : false });
+    };
+
+    // 1) Unreachable core boxes that went down inside the window.
+    for (const d of devices) {
+      if (d.isReachable === false && d.downSince) {
+        const ds = new Date(d.downSince);
+        if (ds >= start && ds <= end) {
+          push({
+            eventType: 'DEVICE_DOWN', deviceId: d.id, deviceName: d.name,
+            severity: 'critical', at: d.downSince,
+            message: d.lastError || `Device unreachable since ${ds.toISOString()}`,
+          });
+        }
+      }
+    }
+
+    // 2) NDM events in the window on the candidate boxes.
+    if (devices.length) {
+      const evs = await this.prisma.networkEvent.findMany({
+        where: {
+          deviceId: { in: devices.map((d) => d.id) },
+          createdAt: { gte: start, lte: end },
+          eventType: {
+            in: ['POWER_FAILURE', 'DEVICE_DOWN', 'PORT_DOWN', 'LINK_DOWN', 'LINK_FLAP', 'DEVICE_REBOOT'],
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 60,
+      });
+      for (const e of evs) {
+        push({
+          eventType: e.eventType, deviceId: e.deviceId, interfaceName: e.interfaceName,
+          deviceName: e.deviceId != null ? deviceById.get(e.deviceId)?.name : null,
+          severity: e.severity, at: e.createdAt, message: e.message,
+        });
+      }
+    }
+
+    // 3) Alerts OPENED in the window on the candidate boxes.
+    if (devices.length) {
+      const alerts = await this.prisma.alert.findMany({
+        where: {
+          deviceId: { in: devices.map((d) => d.id) },
+          openedAt: { gte: start, lte: end },
+          eventType: {
+            in: ['POWER_FAILURE', 'DEVICE_DOWN', 'PORT_DOWN', 'LINK_DOWN', 'LINK_FLAP', 'PORT_ERROR'],
+          },
+        },
+        orderBy: { openedAt: 'asc' },
+        take: 60,
+      });
+      for (const a of alerts) {
+        push({
+          eventType: a.eventType, deviceId: a.deviceId, interfaceName: a.interfaceName,
+          deviceName: a.deviceId != null ? deviceById.get(a.deviceId)?.name : null,
+          severity: a.severity, at: a.openedAt, message: a.message, fireCount: a.fireCount,
+        });
+      }
+    }
+
+    // Implicated device ids (deduped, area-matched first).
+    const areaHits = new Set<number>();
+    const deviceIds: number[] = [];
+    for (const e of evidence) {
+      if (e.deviceId == null) continue;
+      if (e.nasAreaMatch) areaHits.add(e.deviceId);
+      if (!deviceIds.includes(e.deviceId)) deviceIds.push(e.deviceId);
+    }
+    deviceIds.sort((a, b) =>
+      (areaHits.has(b) ? 1 : 0) - (areaHits.has(a) ? 1 : 0));
+
+    // 4) Infer a cause.
+    const power = evidence.filter((e) => e.eventType === 'POWER_FAILURE');
+    const deviceDown = evidence.filter(
+      (e) => e.eventType === 'DEVICE_DOWN' || e.eventType === 'DEVICE_REBOOT');
+    const portDown = evidence.filter(
+      (e) => ['PORT_DOWN', 'LINK_DOWN', 'LINK_FLAP', 'PORT_ERROR'].includes(e.eventType));
+
+    const areaEvidenceCount = evidence.filter((e) => e.nasAreaMatch).length;
+    const scheduled = outage.areaId ? await this.isAreaScheduledOff(outage.areaId, start) : false;
+
+    let cause: string;
+    let confidence: number;
+    let summary: string;
+
+    if (power.length >= (power.some((p) => p.nasAreaMatch) ? 1 : 2)) {
+      cause = 'POWER';
+      confidence = Math.min(95, 55 + power.filter((p) => p.nasAreaMatch).length * 12);
+      const p = power.find((x) => x.nasAreaMatch) || power[0];
+      summary = `${p.deviceName || 'A device'} reported power failure — WAPDA/access power, not our core.`;
+    } else if (deviceDown.some((d) => d.nasAreaMatch) || deviceDown.length >= 2) {
+      cause = 'NETWORK_DEVICE';
+      confidence = 75;
+      const dd = deviceDown.find((x) => x.nasAreaMatch) || deviceDown[0];
+      const t = dd.at ? new Date(dd.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+      summary = `${dd.deviceName || 'A core device'} down since ${t} — our network, dispatch.`;
+    } else if (portDown.some((d) => d.nasAreaMatch) || portDown.length >= 2) {
+      cause = 'PORT';
+      confidence = 65;
+      const pd = portDown.find((x) => x.nasAreaMatch) || portDown[0];
+      summary = `Link/port drop on ${pd.deviceName || 'a device'}${pd.interfaceName ? ' (' + pd.interfaceName + ')' : ''} — device-side fault.`;
+    } else if (scheduled) {
+      cause = 'POWER';
+      confidence = 80;
+      summary = 'Matches the published load-shedding timetable — scheduled power cut.';
+    } else if (evidence.length) {
+      cause = 'ACCESS';
+      confidence = 45;
+      summary = 'No core device offline in the window — consistent with subscriber/antenna/feeder side fault.';
+    } else {
+      cause = 'UNKNOWN';
+      confidence = 0;
+      summary = 'No coincident device signal found in the outage window.';
+    }
+
+    evidence.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+    return {
+      cause, confidence,
+      summary,
+      evidence: evidence.slice(0, 30),
+      deviceIds,
+    };
+  }
+
+  /**
+   * Compute (or recompute) root-cause attribution for an outage and persist it.
+   * Public entry point — also used by the refresh endpoint.
+   */
+  async attribute(id: number) {
+    const outage = await this.prisma.powerOutage.findUnique({
+      where: { id },
+      include: { area: { select: { name: true } } },
+    });
+    if (!outage) throw new NotFoundException('Outage not found');
+
+    const a = await this.inferAttribution(outage);
+
+    const att = await this.prisma.outageAttribution.upsert({
+      where: { outageId: id },
+      create: {
+        outageId: id,
+        cause: a.cause as any,
+        confidence: a.confidence,
+        summary: a.summary,
+        evidence: a.evidence,
+        deviceIds: a.deviceIds,
+      },
+      update: {
+        cause: a.cause as any,
+        confidence: a.confidence,
+        summary: a.summary,
+        evidence: a.evidence,
+        deviceIds: a.deviceIds,
+      },
+    });
+
+    if (outage.type === 'UNKNOWN' && a.cause !== 'UNKNOWN') {
+      // A conclusive attribution can triage a still-unknown outage automatically:
+      // network faults count against uptime; power/access do not.
+      const suggested = a.cause === 'NETWORK_DEVICE' || a.cause === 'PORT' ? 'NETWORK' : null;
+      if (suggested) {
+        await this.prisma.powerOutage.update({ where: { id }, data: { type: suggested as any } }).catch(() => null);
+      }
+    }
+
+    this.logger.log(`Outage ${id} attributed → ${a.cause} (${a.confidence}%) from ${a.evidence.length} signal(s)`);
+    return att;
+  }
+
+  /** Operator confirms (or corrects) the persisted attribution. */
+  async confirmAttribution(id: number, cause?: string) {
+    const data: any = { confirmed: true, updatedAt: new Date() };
+    if (cause) data.cause = cause;
+    return this.prisma.outageAttribution.update({ where: { outageId: id }, data });
+  }
+
+  /** Read the persisted attribution, computing it first if absent. */
+  async getAttribution(id: number) {
+    const existing = await this.prisma.outageAttribution.findUnique({
+      where: { outageId: id },
+    });
+    if (existing) return existing;
+    return this.attribute(id);
   }
 
   // ── helpers ──────────────────────────────────────────────────
