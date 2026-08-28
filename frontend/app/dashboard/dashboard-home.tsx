@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { fadeUp, staggerChildren } from "../../lib/motion";
 import API_BASE from "../components/api";
+import CountUp from "../components/count-up";
 
 const API =
   API_BASE;
@@ -49,29 +52,38 @@ export default function DashboardHome({ homeStats, currency = "Rs", refreshKey =
   );
 
   const kpis = [
-    { icon: "👥", bg: "rgba(124,92,255,.16)", c: "#a996ff", val: fmt(homeStats.totalSubscribers), label: "Total subscribers", cap: "All customers on record", tag: "▲", good: true, spark: "0,24 25,20 50,15 75,10 100,6", scolor: "#7c5cff" },
-    { icon: "🟢", bg: "rgba(34,197,94,.16)", c: "#22c55e", val: fmt(online), label: "Online now", cap: `${onlinePct}% of active are connected`, tag: `${onlinePct}% up`, good: true, spark: "0,16 25,18 50,12 75,10 100,13", scolor: "#22c55e" },
-    { icon: "💳", bg: "rgba(233,64,139,.16)", c: "#f06aa5", val: `${currency} ${fmt(homeStats.revenueToday)}`, label: "Revenue today", cap: "Payments received today", tag: "▲", good: true, spark: "0,24 25,20 50,17 75,12 100,7", scolor: "#e0408b" },
-    { icon: "⚠️", bg: "rgba(245,158,11,.16)", c: "#f59e0b", val: fmt(attention), label: "Needs attention", cap: "Weak signal, flapping, expired, outage", tag: attention > 0 ? "action" : "clear", good: attention === 0, spark: "0,20 25,22 50,17 75,18 100,14", scolor: "#f59e0b" },
+    { icon: "👥", bg: "rgba(124,92,255,.16)", c: "#a996ff", val: homeStats.totalSubscribers, label: "Total subscribers", cap: "All customers on record", tag: "▲", good: true, spark: "0,24 25,20 50,15 75,10 100,6", scolor: "#7c5cff" },
+    { icon: "🟢", bg: "rgba(34,197,94,.16)", c: "#22c55e", val: online, label: "Online now", cap: `${onlinePct}% of active are connected`, tag: `${onlinePct}% up`, good: true, spark: "0,16 25,18 50,12 75,10 100,13", scolor: "#22c55e" },
+    { icon: "💳", bg: "rgba(233,64,139,.16)", c: "#f06aa5", val: homeStats.revenueToday, prefix: `${currency} `, label: "Revenue today", cap: "Payments received today", tag: "▲", good: true, spark: "0,24 25,20 50,17 75,12 100,7", scolor: "#e0408b" },
+    { icon: "⚠️", bg: "rgba(245,158,11,.16)", c: "#f59e0b", val: attention, label: "Needs attention", cap: "Weak signal, flapping, expired, outage", tag: attention > 0 ? "action" : "clear", good: attention === 0, spark: "0,20 25,22 50,17 75,18 100,14", scolor: "#f59e0b" },
   ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* KPI ROW */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
+      {/* KPI ROW — staggered in on mount; each number counts up from 0 */}
+      <motion.div
+        style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}
+        variants={staggerChildren}
+        initial="hidden"
+        animate="show"
+      >
         {kpis.map((k) => (
-          <div key={k.label} style={card}>
+          <motion.div key={k.label} variants={fadeUp} style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div style={chip(k.bg, k.c)}>{k.icon}</div>
               <span style={trend(k.good)}>{k.tag}</span>
             </div>
-            <div style={{ fontSize: 28, fontWeight: 850, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}>{k.val}</div>
+            <CountUp
+              value={k.val}
+              prefix={k.prefix}
+              style={{ fontSize: 28, fontWeight: 850, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}
+            />
             <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 5, fontWeight: 600 }}>{k.label}</div>
             <div style={{ fontSize: 11, color: "var(--muted)", opacity: 0.8, marginTop: 8, marginBottom: 6 }}>{k.cap}</div>
             <Spark color={k.scolor} pts={k.spark} />
-          </div>
+          </motion.div>
         ))}
-      </div>
+      </motion.div>
 
       {/* NETWORK HEALTH ROW */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12 }}>

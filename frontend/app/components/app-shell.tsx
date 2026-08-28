@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
+import { SPRING } from '../../lib/motion';
 import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
 import CommandPalette from './command-palette';
@@ -727,6 +729,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     }}
                     title={rail ? item.label : ''}
                   >
+                    {isActive && (
+                      <motion.span
+                        className="nav-indicator"
+                        layoutId="active-nav"
+                        transition={SPRING}
+                      />
+                    )}
                     <span className="nav-icon"><Icon /></span>
                     {!rail && <span>{t(item.label)}</span>}
                     {item.id === 'billing' && pendingApprovals > 0 && (

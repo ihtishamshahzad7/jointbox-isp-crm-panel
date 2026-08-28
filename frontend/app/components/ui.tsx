@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 
 /**
  * NOVA UI KIT
@@ -385,9 +386,27 @@ export function useToast() {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setToast(null), 4000);
   };
-  const node = toast ? (
-    <div className={`nv-toast ${toast.tone}`} role="status">{toast.msg}</div>
-  ) : null;
+  // Spring in from the right, spring out on dismiss (motion #8). The inner
+  // .nv-toast-bar is a 4s progress bar that shrinks in step with the auto-
+  // dismiss timeout, so the exit always reads as "the countdown ran out".
+  const node = (
+    <AnimatePresence>
+      {toast && (
+        <motion.div
+          key={`${toast.msg}:${toast.tone}`}
+          className={`nv-toast ${toast.tone}`}
+          role="status"
+          initial={{ opacity: 0, x: 40, scale: 0.96 }}
+          animate={{ opacity: 1, x: 0, scale: 1 }}
+          exit={{ opacity: 0, x: 40, scale: 0.96 }}
+          transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+        >
+          {toast.msg}
+          <span className="nv-toast-bar" />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
   return { show, node };
 }
 
@@ -592,9 +611,14 @@ html:not([data-theme="light"]) .nv-callout{background:rgba(255,255,255,.04);back
 
 /* toast */
 .nv-toast{position:fixed;bottom:24px;right:24px;z-index:200;padding:12px 18px;border-radius:14px;
-  font-size:12.5px;font-weight:600;max-width:400px;backdrop-filter:blur(18px);
-  box-shadow:0 16px 44px rgba(0,0,0,.45);animation:nvToast .3s cubic-bezier(.2,.8,.2,1)}
-@keyframes nvToast{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+  font-size:12.5px;font-weight:600;max-width:400px;backdrop-filter:blur(18px);overflow:hidden;
+  box-shadow:0 16px 44px rgba(0,0,0,.45)}
+/* enter/exit handled by framer-motion (motion #8); 4s bar shrinks in step with the
+   auto-dismiss timeout so the exit reads as "the countdown ran out" */
+.nv-toast-bar{position:absolute;left:0;bottom:0;height:2px;width:100%;transform-origin:left;
+  background:currentColor;opacity:.55;animation:nvToastBar 4s linear forwards}
+@keyframes nvToastBar{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@media (prefers-reduced-motion:reduce){.nv-toast-bar{animation:none}}
 .nv-toast.ok{background:rgba(16,185,129,.14);border:1px solid #10B981;color:#6EE7B7}
 .nv-toast.bad{background:rgba(239,68,68,.14);border:1px solid #EF4444;color:#FCA5A5}
 .nv-toast.warn{background:rgba(245,158,11,.14);border:1px solid #F59E0B;color:#FCD34D}

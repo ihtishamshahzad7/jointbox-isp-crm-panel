@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Icons } from "./icons";
 import { subscribeSection, getSection, type Section } from "./section-nav";
@@ -93,7 +94,15 @@ function BottomNavInner({ onMore }: { onMore: () => void }) {
             aria-label={t.label}
             className={on ? "on" : ""}
           >
-            <span className="ico"><t.Icon width={20} height={20} /></span>
+            {/* Active icon springs 1 → 1.18 → 1 each time the tab is chosen
+                (framer replays the keyframes when the animate value flips). */}
+            <motion.span
+              className="ico"
+              animate={on ? { scale: [1, 1.18, 1] } : { scale: 1 }}
+              transition={{ duration: 0.3, ease: [0.34, 1.56, 0.64, 1] }}
+            >
+              <t.Icon width={20} height={20} />
+            </motion.span>
             <span className="lbl">{t.label}</span>
           </button>
         );

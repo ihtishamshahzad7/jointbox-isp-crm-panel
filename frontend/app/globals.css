@@ -1133,12 +1133,15 @@ body {
 .hub-underline {
   position: absolute;
   bottom: -1px;
+  left: 0;
+  right: 0;
   height: 2px;
   border-radius: 99px;
   background: var(--g-primary);
   box-shadow: 0 0 12px rgba(233, 64, 139, 0.5);
-  transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
-              width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* No left/width transition here: the underline is a framer `layoutId`
+     shared element now, so framer animates its box between tab buttons. A CSS
+     transition would fight the layout projection and double the motion. */
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -6172,4 +6175,69 @@ html .main .recharts-responsive-container { width: 100% !important; }
   /* Phone/tablet: behave like a normal sheet, with a dim so it reads as modal. */
   .jb-detail-backdrop { background: rgba(15, 23, 42, .55); pointer-events: auto; }
   .jb-detail-drawer { width: 100%; max-width: 100%; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SLIDING ACTIVE-NAV INDICATOR (framer-motion `layoutId="active-nav"`)
+   Added LAST so it wins the cascade over the static `.nav-item.active`
+   background. The indicator owns the active background, so it can slide
+   between nav items via layout animation rather than repainting.
+
+   • `.nav-item` becomes a positioning context for the blurred indicator.
+   • The indicator is the (only) .active background — the button's own is
+     disabled so there is no doubling while it travels.
+   • Icon + label sit above it (z-index 1).
+   ═══════════════════════════════════════════════════════════════════════ */
+.nav-item { position: relative; }
+
+.nav-item.active {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.nav-indicator {
+  position: absolute; inset: 0; z-index: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #6C3CE1, #E9408B, #F27121);
+  box-shadow: 0 6px 22px rgba(140, 60, 225, 0.32);
+}
+.nav-indicator::after {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: 12px;
+  border: 1px solid rgba(233, 64, 139, 0.25);
+}
+
+.nav-item > .nav-icon,
+.nav-item > span:not(.nav-indicator) {
+  position: relative; z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-indicator { box-shadow: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   LIVE FEED ROWS (motion #10)
+   Each row is a framer `motion.div` (slide in from top). This class carries
+   the flex layout it used to have inline, plus a colored left-border flash
+   that fades over 1.5s. The tint uses a CSS variable (--lv = the event's
+   level colour) so the flash is always the right colour for the event type.
+   ═══════════════════════════════════════════════════════════════════════ */
+.jb-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  border-left: 3px solid var(--lv);
+  animation: jb-feed-flash 1.5s ease-out both;
+}
+@keyframes jb-feed-flash {
+  0%   { background: color-mix(in srgb, var(--lv) 18%, transparent); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jb-feed-row { animation: none; }
 }

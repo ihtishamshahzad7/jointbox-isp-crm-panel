@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import API_BASE from "./api";
 
 const API = API_BASE;
@@ -71,7 +72,14 @@ export default function LiveFeed({ limit = 40 }: { limit?: number }) {
         {items.map((it) => {
           const lv = LEVEL[it.level] || LEVEL.info;
           return (
-            <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
+            <motion.div
+              key={it.id}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+              className="jb-feed-row"
+              style={{ "--lv": lv.dot } as React.CSSProperties}
+            >
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: lv.dot, flex: "0 0 auto" }} />
               <span style={{ width: 40, color: lv.dot, fontWeight: 700, fontSize: 10 }}>{lv.label}</span>
               <span style={{ color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -79,7 +87,7 @@ export default function LiveFeed({ limit = 40 }: { limit?: number }) {
               </span>
               <span style={{ color: "var(--muted)", fontSize: 11, flex: "0 0 auto" }}>{it.nasName}</span>
               <span style={{ color: "var(--muted)", fontSize: 11, width: 64, textAlign: "right", flex: "0 0 auto" }}>{ago(it.ts)}</span>
-            </div>
+            </motion.div>
           );
         })}
       </div>

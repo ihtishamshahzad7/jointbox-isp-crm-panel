@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef, Suspense } from "react";
+import { useEffect, useState, Suspense } from "react";
+import { motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SPRING } from "../../lib/motion";
 import { publishSection, clearSection } from "./section-nav";
 
 export type HubTab = {
@@ -94,15 +96,6 @@ function HubInner({
 
   const current = tabs.find((t) => t.id === active) ?? tabs[0];
 
-  // Sliding gradient underline (Nova design layer). Measured from the active
-  // button so it glides between tabs instead of jumping.
-  const barRef = useRef<HTMLDivElement>(null);
-  const [underline, setUnderline] = useState({ left: 0, width: 0 });
-  useEffect(() => {
-    const el = barRef.current?.querySelector<HTMLButtonElement>(".hub-tab.on");
-    if (el) setUnderline({ left: el.offsetLeft, width: el.offsetWidth });
-  }, [active, tabs.length]);
-
   return (
     <div>
       {/* On a phone these eight labels wrapped onto five rows and ate half the
@@ -110,7 +103,6 @@ function HubInner({
           drew itself under the wrong row. The mobile stylesheet turns this
           into a single swipeable row, which fixes both at once. */}
       <div
-        ref={barRef}
         className="hub-tabs"
         style={{
           display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center",
@@ -125,9 +117,15 @@ function HubInner({
             onClick={() => select(t.id)}
           >
             {t.label}
+            {t.id === current?.id && (
+              <motion.span
+                className="hub-underline"
+                layoutId="hub-underline"
+                transition={SPRING}
+              />
+            )}
           </button>
         ))}
-        <div className="hub-underline" style={{ left: underline.left, width: underline.width }} />
       </div>
 
       {current?.hint && (
