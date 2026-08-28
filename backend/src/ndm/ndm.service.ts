@@ -930,6 +930,8 @@ export interface NdmCreateBody extends NdmTestBody {
   groupName?: string;
   location?: string;
   description?: string;
+  /// SNMP | ICMP | HTTP — how this target is actually checked.
+  monitorMethod?: string;
   pollIntervalSec?: number;
   syslogEnabled?: boolean;
   syslogProtocol?: string;

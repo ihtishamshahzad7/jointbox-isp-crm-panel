@@ -107,8 +107,8 @@ export class MonitoringService {
         by: ['deviceId'], where: { deviceId: scoped, receivedAt: { gte: dayAgo } }, _count: { _all: true },
       }).catch(() => [] as any[]),
     ]);
-    const alertBy = new Map<number, number>(openAlerts.map((a: any) => [a.deviceId, a._count._all]));
-    const syslogBy = new Map<number, number>(syslog24h.map((s: any) => [s.deviceId, s._count._all]));
+    const alertBy = new Map<number, number>(openAlerts.map((a: any): [number, number] => [a.deviceId, a._count._all]));
+    const syslogBy = new Map<number, number>(syslog24h.map((s: any): [number, number] => [s.deviceId, s._count._all]));
 
     const byAddr = new Map<string, any>();
     const key = (s: string) => s.trim().toLowerCase();

@@ -910,8 +910,8 @@ export class ResellerPricingService {
       sellerIds.length ? this.prisma.user.findMany({ where: { id: { in: sellerIds } }, select: { id: true, name: true } }) : [],
       pkgIds.length ? this.prisma.package.findMany({ where: { id: { in: pkgIds } }, select: { id: true, name: true } }) : [],
     ]);
-    const sellerBy = new Map(sellers.map((s) => [s.id, s.name]));
-    const pkgBy = new Map(pkgs.map((p) => [p.id, p.name]));
+    const sellerBy = new Map<number, string>(sellers.map((s): [number, string] => [s.id, s.name]));
+    const pkgBy = new Map<number, string>(pkgs.map((p): [number, string] => [p.id, p.name]));
 
     return {
       periods: { today, week, month, year, total, custom },
@@ -1019,8 +1019,8 @@ export class ResellerPricingService {
         ? this.prisma.package.findMany({ where: { id: { in: pkgIds } }, select: { id: true, name: true } })
         : [],
     ]);
-    const userBy = new Map(users.map((u) => [u.id, u]));
-    const pkgBy = new Map(pkgs.map((p) => [p.id, p.name]));
+    const userBy = new Map<number, (typeof users)[number]>(users.map((u): [number, (typeof users)[number]] => [u.id, u]));
+    const pkgBy = new Map<number, string>(pkgs.map((p): [number, string] => [p.id, p.name]));
 
     // The ladder is ISP → Franchise → Dealer → Retailer, so tiers sort by
     // depth and the columns read in the direction the money travels.

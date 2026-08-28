@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
@@ -9,6 +9,7 @@ import { EventsService } from '../common/events.service';
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
   constructor(
     private prisma: PrismaService,
     private accounting: AccountingService,

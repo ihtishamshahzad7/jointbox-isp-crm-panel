@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards, Req, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards, Req, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -335,6 +335,7 @@ const resellerCapabilityChecklist = {
 
 @Controller()
 export class AppController {
+  private readonly logger = new Logger(AppController.name);
 
   @Get('health')
   health() {

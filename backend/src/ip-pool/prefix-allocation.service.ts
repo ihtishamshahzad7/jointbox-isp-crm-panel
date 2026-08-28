@@ -72,7 +72,7 @@ export class PrefixAllocationService {
     // Utilisation is computed, never stored — a cached count is exactly the
     // kind of thing that silently goes stale and re-creates the spreadsheet
     // problem this module exists to solve.
-    const out = [];
+    const out: any[] = [];
     for (const p of pools) {
       const used = await this.prisma.prefixAllocation.count({ where: { poolId: p.id, status: 'ACTIVE' } });
       const range = this.parseCidr(p.cidr);

@@ -69,7 +69,7 @@ export class SecretsService {
 
   /** Masked status for the UI: configured or not, plus where it came from. */
   async status(keys: Array<{ key: string; env?: string }>) {
-    const rows = await this.prisma.appSecret.findMany({ where: { key: { in: keys.map((k) => k.key) } } }).catch(() => []);
+    const rows: any[] = await this.prisma.appSecret.findMany({ where: { key: { in: keys.map((k) => k.key) } } }).catch(() => []);
     const byKey = new Map(rows.map((r) => [r.key, r]));
     return keys.map(({ key, env }) => {
       const row = byKey.get(key);
