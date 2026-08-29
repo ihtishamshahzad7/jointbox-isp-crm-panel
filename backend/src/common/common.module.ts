@@ -11,6 +11,7 @@ import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
 import { SecretsService } from './secrets.service';
 import { CronGuardService } from './cron-guard.service';
+import { CurrencyService } from './currency.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -30,11 +31,14 @@ import { PrismaModule } from '../prisma/prisma.module';
     BackupService,
     EventsService,
     SecretsService,
+    // The single authority on what currency money is in. Global, so every
+    // money-writing service can stamp without a module import.
+    CurrencyService,
     // Runs at bootstrap on every process: strips scheduled jobs from non-primary
     // instances so an unguarded @Cron cannot duplicate itself across the cluster.
     CronGuardService,
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
-  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService, SecretsService],
+  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService, SecretsService, CurrencyService],
 })
 export class CommonModule {}

@@ -62,23 +62,23 @@ export class NasController {
   importMany(@Body() body: any, @Req() req: any) { return this.nasService.importMany(body?.rows || [], req.user); }
 
   @Put(':id')
-  update(@Param('id') id: string, @Body() body: any) {
-    return this.nasService.update(+id, body);
+  update(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.nasService.update(+id, body, req.user);
   }
 
   @Patch(':id/toggle')
-  toggleStatus(@Param('id') id: string) {
-    return this.nasService.toggleStatus(+id);
+  toggleStatus(@Param('id') id: string, @Req() req: any) {
+    return this.nasService.toggleStatus(+id, req.user);
   }
 
   /** Register the interfaces/ports to monitor (empty array = monitor all). */
   @Patch(':id/monitored-ports')
-  setMonitoredPorts(@Param('id') id: string, @Body() body: { ports: string[] }) {
-    return this.nasService.setMonitoredPorts(+id, body?.ports || []);
+  setMonitoredPorts(@Param('id') id: string, @Body() body: { ports: string[] }, @Req() req: any) {
+    return this.nasService.setMonitoredPorts(+id, body?.ports || [], req.user);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) { return this.nasService.remove(+id); }
+  remove(@Param('id') id: string, @Req() req: any) { return this.nasService.remove(+id, req.user); }
 
   // ── MikroTik + RADIUS endpoints ─────────────────────────────
   @Get(':id/reachability')

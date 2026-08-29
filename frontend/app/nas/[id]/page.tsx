@@ -45,6 +45,9 @@ const ConfigTab = lazy(() => import("./tabs-config").then((m) => ({ default: m.C
 const TestCenter = lazy(() => import("./test-center").then((m) => ({ default: m.TestCenter })));
 const PermissionPanel = lazy(() => import("./permissions").then((m) => ({ default: m.PermissionPanel })));
 const AlertRules = lazy(() => import("./alert-rules").then((m) => ({ default: m.AlertRules })));
+// Lazy like the rest: a tunnel is provisioned once and then rarely looked at,
+// so its panel should not be in the bundle every other tab pays for.
+const TunnelPanel = lazy(() => import("../tunnel-panel").then((m) => ({ default: m.TunnelPanel })));
 
 const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "overview", label: "Overview", group: "Device" },
@@ -62,6 +65,9 @@ const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "audit", label: "Audit", group: "History" },
   { id: "diagnostics", label: "Diagnostics", group: "Device" },
   { id: "configuration", label: "Configuration", group: "Device" },
+  // Grouped under Services, not Device: a tunnel is how the panel REACHES this
+  // router, alongside RADIUS and SNMP — not a property of the hardware.
+  { id: "tunnel", label: "Tunnel", group: "Services" },
 ];
 
 export default function NasDetailPage() {
@@ -226,6 +232,7 @@ function DevicePage() {
           </div>
         )}
         {tab === "configuration" && <ConfigTab />}
+        {tab === "tunnel" && <TunnelPanel nasId={nasId} nasName={nas?.shortname || nas?.nasname} />}
       </Suspense>
 
       {openSession && (

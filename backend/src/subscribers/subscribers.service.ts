@@ -19,6 +19,7 @@ import {
 } from './panel-format';
 import { parseCursor, buildCursorPage } from '../common/pagination';
 import { terminateInfo } from '../common/radius-terminate';
+import { CurrencyService } from '../common/currency.service';
 
 @Injectable()
 export class SubscribersService implements OnModuleInit {
@@ -40,6 +41,7 @@ export class SubscribersService implements OnModuleInit {
     // Needed to kick a live PPPoE session off the router. Removing RADIUS
     // credentials alone stops only the next login, not the current session.
     private mikrotik: MikrotikSyncService,
+    private currency: CurrencyService,
   ) {}
 
   onModuleInit() {
@@ -3462,6 +3464,7 @@ if (!unpaid && data.username && data.password) {
           try {
             invoice = await tx.invoice.create({
               data: {
+                ...(await this.currency.invoiceStamp()),
                 invoiceNo,
                 subscriberId,
                 amount: total,
@@ -3518,6 +3521,7 @@ if (!unpaid && data.username && data.password) {
 
           payment = await tx.payment.create({
             data: {
+              ...(await this.currency.paymentStamp(total, { invoiceCurrency: invoice.currency })),
               paymentNo: `PAY-${Date.now()}`,
               invoiceId: invoice.id,
               subscriberId,

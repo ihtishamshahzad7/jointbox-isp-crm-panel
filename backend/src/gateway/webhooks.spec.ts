@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
 import { GatewayService } from './gateway.service';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * GATEWAY WEBHOOKS — signature verification and settlement guards.
@@ -36,7 +37,16 @@ describe('GatewayService — webhooks', () => {
         ),
       },
     };
-    const svc = new GatewayService(prisma, {} as any, {} as any, {} as any);
+    const svc = new GatewayService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      // The real CurrencyService, on the same mocked prisma: these specs exist
+      // to prove the currency RESOLUTION is right, so stubbing it out would
+      // hollow out the very thing under test.
+      new CurrencyService(prisma),
+    );
     const onSuccess = jest.spyOn(svc, 'handleSuccess').mockResolvedValue({ ok: true } as any);
     const onFailure = jest.spyOn(svc, 'handleFailure').mockResolvedValue({ ok: true } as any);
     return { prisma, svc, onSuccess, onFailure };

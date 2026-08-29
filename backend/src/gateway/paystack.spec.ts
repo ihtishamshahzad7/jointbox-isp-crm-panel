@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { GatewayService } from './gateway.service';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * PAYSTACK driver — money-path tests.
@@ -54,7 +55,16 @@ describe('GatewayService — Paystack', () => {
         }),
       },
     };
-    const svc = new GatewayService(prisma, {} as any, {} as any, {} as any);
+    const svc = new GatewayService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      // The real CurrencyService, on the same mocked prisma: these specs exist
+      // to prove the currency RESOLUTION is right, so stubbing it out would
+      // hollow out the very thing under test.
+      new CurrencyService(prisma),
+    );
     // handleSuccess/handleFailure are exercised by their own specs; here we
     // only care about which one this driver decides to call.
     const onSuccess = jest.spyOn(svc, 'handleSuccess').mockResolvedValue({ ok: true } as any);

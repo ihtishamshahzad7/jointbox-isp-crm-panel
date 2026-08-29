@@ -1,8 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
-import { SPRING } from '../../lib/motion';
 import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
 import CommandPalette from './command-palette';
@@ -12,6 +10,7 @@ import { silent } from './silent';
 import { Icons } from './icons';
 import API_BASE from "./api";
 import NotificationBell from './notification-bell';
+import { ThemeToggle } from './theme';
 import BottomNav from './bottom-nav';
 import Avatar from './avatar';
 import { BRAND } from '../../lib/brand';
@@ -729,13 +728,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     }}
                     title={rail ? item.label : ''}
                   >
-                    {isActive && (
-                      <motion.span
-                        className="nav-indicator"
-                        layoutId="active-nav"
-                        transition={SPRING}
-                      />
-                    )}
                     <span className="nav-icon"><Icon /></span>
                     {!rail && <span>{t(item.label)}</span>}
                     {item.id === 'billing' && pendingApprovals > 0 && (
@@ -1102,6 +1094,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 navigation. */}
             {/* Notification bell — the actor's photo on every row. Placed left
                 of the account avatar, matching the template's header order. */}
+            {/* Theme control. Sits beside the bell rather than being buried in
+                Settings: it is a comfort setting people change with the light
+                in the room, not a preference they configure once. */}
+            <ThemeToggle compact />
+
             <NotificationBell />
 
             <div style={{ position: 'relative' }}>
@@ -1181,7 +1178,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        <main className="app-shell-page-content">
+        {/* The skip link's target. tabIndex -1 makes it programmatically
+            focusable so focus actually MOVES here — without it the browser
+            scrolls but leaves focus behind, and the next Tab returns to the
+            navigation the user just skipped. */}
+        <main id="main" tabIndex={-1} className="app-shell-page-content">
           <div className="app-shell-page-inner">
             {/* Renders nothing unless there are static IP charges to chase. */}
             <StaticIpBanner />

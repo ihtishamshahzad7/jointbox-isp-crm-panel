@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ── Playwright ──────────────────────────────────────────────────
+# Traces and videos are large binaries regenerated on every run; a
+# committed report also makes every PR diff unreadable.
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

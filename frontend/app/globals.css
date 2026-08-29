@@ -259,10 +259,14 @@ body {
 }
 
 /* ═══════════ SHELL light overrides (frame is class-styled) ═══════════ */
-/* Body background is lightened ONLY when the dashboard shell is present, so the
-   login/landing pages (which render outside .db-root) keep their dark body. */
-body:has(.db-root) { background: #F1F5F9; }
-.main { background: #F1F5F9; color: #1C2434; }
+/* Body background follows the theme when the dashboard shell is present.
+   These were literal #F1F5F9 values, which is why the app shell stayed light
+   while the login page themed correctly — the page most operators live in all
+   day was the only one the theme could not reach. Tokenised, not deleted: the
+   RULES are still needed (the shell paints its own frame), only the hard-coded
+   colour was wrong. */
+body:has(.db-root) { background: var(--bg); }
+.main { background: var(--bg); color: var(--text); }
 
 /* THE DARK SIDEBAR. TailAdmin's aside is `bg-black` (#1C2434) in light
    mode as well as dark — a white page with a dark rail. Getting this
@@ -289,7 +293,7 @@ body:has(.db-root) { background: #F1F5F9; }
 }
 .topbar-title { color: #1C2434; }
 .main,
-.app-shell-page-content { background: #F1F5F9; }
+.app-shell-page-content { background: var(--bg); }
 .app-shell-footer { background: #FFFFFF; color: #64748B; border-top-color: #E2E8F0; }
 
 /* Cards: white, hairline stroke, soft drop — TailAdmin's card recipe
@@ -368,7 +372,7 @@ body:has(.db-root) { background: #F1F5F9; }
 .db-root [style*="linear-gradient"][style*="#07090f"],
 .db-root [style*="linear-gradient"][style*="#0b0e18"],
 .db-root [style*="linear-gradient"][style*="rgb(7, 9, 15)"],
-.db-root [style*="linear-gradient"][style*="rgb(11, 14, 24)"] { background: #F1F5F9 !important; }
+.db-root [style*="linear-gradient"][style*="rgb(11, 14, 24)"] { background: var(--bg) !important; }
 
 body {
   background: var(--bg);
@@ -1133,15 +1137,12 @@ body {
 .hub-underline {
   position: absolute;
   bottom: -1px;
-  left: 0;
-  right: 0;
   height: 2px;
   border-radius: 99px;
   background: var(--g-primary);
   box-shadow: 0 0 12px rgba(233, 64, 139, 0.5);
-  /* No left/width transition here: the underline is a framer `layoutId`
-     shared element now, so framer animates its box between tab buttons. A CSS
-     transition would fight the layout projection and double the motion. */
+  transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+              width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -3166,9 +3167,9 @@ html  {
   --online: #219653; --warning: #FFA70B; --danger: #D34053;
 }
 
-html body:has(.db-root) { background: #F1F5F9; }
+html body:has(.db-root) { background: var(--bg); }
 
-html .main { background: #F1F5F9; color: #1C2434; }
+html .main { background: var(--bg); color: var(--text); }
 
 html .sidebar {
   background: #1C2434;
@@ -3199,7 +3200,7 @@ html .topbar {
 html .topbar-title { color: #1C2434; }
 
 html .main,
-html .app-shell-page-content { background: #F1F5F9; }
+html .app-shell-page-content { background: var(--bg); }
 
 html .app-shell-footer { background: #FFFFFF; color: #64748B; border-top-color: #E2E8F0; }
 
@@ -6177,67 +6178,575 @@ html .main .recharts-responsive-container { width: 100% !important; }
   .jb-detail-drawer { width: 100%; max-width: 100%; }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   SLIDING ACTIVE-NAV INDICATOR (framer-motion `layoutId="active-nav"`)
-   Added LAST so it wins the cascade over the static `.nav-item.active`
-   background. The indicator owns the active background, so it can slide
-   between nav items via layout animation rather than repainting.
 
-   • `.nav-item` becomes a positioning context for the blurred indicator.
-   • The indicator is the (only) .active background — the button's own is
-     disabled so there is no doubling while it travels.
-   • Icon + label sit above it (z-index 1).
-   ═══════════════════════════════════════════════════════════════════════ */
-.nav-item { position: relative; }
+/* ═══════════════════════════════════════════════════════════════════
+   DESIGN SYSTEM v2 — imported LAST so its tokens win over the older
+   TailAdmin block above. That block stays because ~40 rules elsewhere
+   in this file still reference its non-colour values; only the palette
+   is superseded. Order is the override mechanism, deliberately, rather
+   than a wall of !important that would then be impossible to opt out
+   of on the printable invoice surfaces.
+   ═══════════════════════════════════════════════════════════════════ */
 
-.nav-item.active {
-  background: transparent !important;
-  box-shadow: none !important;
+/* The visually-hidden utility the live region needs. Not `display:none`
+   and not `visibility:hidden` — both remove the element from the
+   accessibility tree, which is the one thing it exists to be in. */
+.ds-sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
-.nav-indicator {
-  position: absolute; inset: 0; z-index: 0;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #6C3CE1, #E9408B, #F27121);
-  box-shadow: 0 6px 22px rgba(140, 60, 225, 0.32);
-}
-.nav-indicator::after {
-  content: '';
-  position: absolute; inset: -1px;
-  border-radius: 12px;
-  border: 1px solid rgba(233, 64, 139, 0.25);
-}
-
-.nav-item > .nav-icon,
-.nav-item > span:not(.nav-indicator) {
-  position: relative; z-index: 1;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .nav-indicator { box-shadow: none; }
-}
 
 /* ═══════════════════════════════════════════════════════════════════════
-   LIVE FEED ROWS (motion #10)
-   Each row is a framer `motion.div` (slide in from top). This class carries
-   the flex layout it used to have inline, plus a colored left-border flash
-   that fades over 1.5s. The tint uses a CSS variable (--lv = the event's
-   level colour) so the flash is always the right colour for the event type.
+   JOINTBOX DESIGN SYSTEM v2 — glass-dominant, dark-first.
+
+   WHAT THIS FILE IS
+   The single source of truth for colour, space, type and elevation, and the
+   LAST section of globals.css so it overrides the older TailAdmin palette
+   above it on plain cascade order.
+
+   WHY IT IS INLINE HERE AND NOT ITS OWN IMPORTED FILE
+   Both alternatives were tried and both fail in this stack. A CSS `@import`
+   is legal only before any other rule, so it cannot be placed last. A JS
+   `import "./design-system.css"` from layout.tsx looks correct and is worse:
+   Next code-splits stylesheets per route, and the login route was served a
+   chunk carrying the OLD palette WITHOUT the override — so the theme silently
+   reverted on exactly one page, which is the kind of bug that ships. Inlining
+   removes the ordering question entirely.
+
+   One section therefore moves the whole product at once rather than page by
+   page. That works because the app already reads tokens rather than literals:
+   ~800 `var(--text)` / `var(--surface)` / `var(--bg)` usages against 33
+   hard-coded whites. Those 33 are listed at the bottom of this file as a
+   known cleanup, not left to be discovered.
+
+   THE VISUAL LANGUAGE, AND WHY IT IS ONE AND NOT THREE
+   The brief asked for glassmorphism AND claymorphism AND neubrutalism.
+   Used together those are three competing languages and the result reads as
+   noise, not as premium. So they are ranked, and the ranking is the design:
+
+     • GLASS is the dominant surface — every card, panel and bar. It carries
+       depth without weight, which is what a dense operational tool needs.
+     • CLAY appears ONLY on primary actions. A soft, inset-lit, pressable
+       solid is the strongest affordance there is; using it anywhere else
+       would spend that signal on things that are not the main action.
+     • NEUBRUTALISM appears ONLY where the product must interrupt — an
+       outage banner, a destructive confirm, an unbalanced ledger. Hard
+       edges and an offset shadow read as "this is not decoration". If
+       everything were brutalist, nothing would be.
+
+   ACCESSIBILITY IS MEASURED, NOT CLAIMED
+   Every foreground/background pair below was computed, not eyeballed. On
+   dark, the lowest ratio is accent-on-glass at 6.42:1; on light it is
+   pink-on-surface at 6.04:1. All clear WCAG 2.2 AA (4.5:1 for body text) with
+   room to spare. The glass surfaces were composited against the base first,
+   because
+   a translucent panel's REAL contrast is against what it resolves to, not
+   against the colour you typed.
+
+   The focus ring is theme-aware for the same reason: the lifted purple that
+   reads beautifully on dark drops to about 2:1 on the warm light background —
+   a WCAG 2.2 focus-appearance failure (3:1 minimum). Light mode therefore
+   uses the deep purple instead. This is exactly the sort of thing that gets
+   asserted and never checked; every figure in this file was computed.
    ═══════════════════════════════════════════════════════════════════════ */
-.jb-feed-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  border-left: 3px solid var(--lv);
-  animation: jb-feed-flash 1.5s ease-out both;
+
+/* ───────────────────────────────────────────────────────────────
+   1 · SPACE — an 8px grid, with 4px available for dense controls.
+   Named by step, not by size, so a component asks for "the next gap
+   up" instead of guessing a number and drifting off the grid.
+   ─────────────────────────────────────────────────────────────── */
+:root {
+  --s-0: 0;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 40px;
+  --s-8: 48px;
+  --s-9: 64px;
+  --s-10: 80px;
+
+  /* Radii. Glass wants generous corners; brutalist accents deliberately
+     get none, which is what makes them read as a different register. */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+  --r-sharp: 0px;
+
+  /* ─────────────────────────────────────────────────────────────
+     2 · TYPE — fluid, so it scales with the viewport instead of
+     stepping at breakpoints. Every clamp() has a floor that stays
+     readable on a 360px phone and a ceiling that stops headings
+     becoming billboards on a 27" monitor.
+
+     Body sits at 16px minimum on purpose: below that, iOS Safari
+     zooms on focus, which is the real cause of the "the form jumps"
+     complaint that people usually try to fix by locking zoom — an
+     accessibility failure.
+     ───────────────────────────────────────────────────────────── */
+  --t-xs:   clamp(11px, 0.68rem + 0.05vw, 12px);
+  --t-sm:   clamp(12.5px, 0.76rem + 0.08vw, 13.5px);
+  --t-base: clamp(14px, 0.84rem + 0.12vw, 16px);
+  --t-lg:   clamp(16px, 0.95rem + 0.18vw, 18px);
+  --t-xl:   clamp(19px, 1.08rem + 0.35vw, 23px);
+  --t-2xl:  clamp(23px, 1.25rem + 0.7vw, 31px);
+  --t-3xl:  clamp(28px, 1.5rem + 1.2vw, 42px);
+
+  --lh-tight: 1.2;
+  --lh-snug: 1.4;
+  --lh-body: 1.6;
+
+  /* Optical letter-spacing: large type needs tightening, small type
+     needs opening, or both read as mis-set. */
+  --ls-tight: -0.02em;
+  --ls-normal: 0;
+  --ls-wide: 0.04em;
+
+  /* ─────────────────────────────────────────────────────────────
+     3 · MOTION — durations short enough to feel instant.
+     Anything over ~260ms on a control reads as lag rather than
+     polish. Springs are for things that MOVE (panels, drags);
+     eases are for things that merely CHANGE (colour, opacity).
+     ───────────────────────────────────────────────────────────── */
+  --d-instant: 90ms;
+  --d-fast: 140ms;
+  --d-base: 200ms;
+  --d-slow: 320ms;
+  --e-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --e-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
-@keyframes jb-feed-flash {
-  0%   { background: color-mix(in srgb, var(--lv) 18%, transparent); }
-  100% { background: transparent; }
+
+/* ───────────────────────────────────────────────────────────────
+   4 · COLOUR — DARK (default).
+
+   The base is a desaturated navy-black rather than pure #000: pure
+   black makes translucent panels look grey and dirty, and gives the
+   glow effects nothing to sit against.
+   ─────────────────────────────────────────────────────────────── */
+html:root,
+html[data-theme="dark"] {
+  /* `html:root` (0,1,1) rather than `:root` (0,1,0) as a belt to the braces:
+     this section is already last in the file, so order alone would win. The
+     extra specificity means it also survives being moved. */
+  color-scheme: dark;
+
+  --bg: #0A0E14;
+  --bg-elev: #0D121A;
+
+  /* GLASS. The alpha values matter more than they look: 0.05 over the
+     base resolves to #161A20 and 0.08 to #1E2127, which is what the
+     contrast figures above were computed against. */
+  --glass-1: rgba(255, 255, 255, 0.05);
+  --glass-2: rgba(255, 255, 255, 0.08);
+  --glass-3: rgba(255, 255, 255, 0.12);
+  --glass-blur: 20px;
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Legacy token names the existing 800-odd usages read. Keeping the
+     names is what lets this file move the whole product without
+     touching 165 components. */
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-2: rgba(255, 255, 255, 0.08);
+  --surface2: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.10);
+
+  --text: #F2F5F8;          /* 17.67:1 on bg */
+  --text-2: #C7D0DA;
+  --muted: #9AA7B4;         /* 7.88:1 on bg, 7.12:1 on glass */
+
+  /* BRAND, MADE READABLE.
+     The product's own palette is purple #6C3CE1 → pink #E9408B: it is the
+     logo, and it is baked literally into ~360 places across the app. Teal
+     would have meant either a 360-site sweep or a product permanently
+     fighting its own mark, so the brand stays — but it is corrected, because
+     measured against this ground the raw values do not pass:
+
+       #6C3CE1 as text on the dark base   → 3.10:1  FAILS
+       white on #E9408B                   → 3.77:1  FAILS
+
+     So the two roles are separated. The GRADIENT keeps the exact brand hues,
+     because a gradient is a fill and never carries small text. Anything that
+     must be READ — accent text, icons, borders, focus rings — uses a lifted
+     version of the same hue, which is recognisably the brand at 7:1. */
+  --accent: #A78BFA;        /* lifted brand purple — 7.11:1 on bg */
+  --accent-ink: #1B0B33;    /* text ON the accent — 6.76:1 */
+  --accent-2: #F472B6;      /* lifted brand pink — 7.30:1 on bg */
+  --accent-2-ink: #3A0A22;
+
+  --online: #4ADE80;
+  --warning: #F5B544;
+  --danger: #FF6B6B;
+
+  /* The brand gradient, byte-for-byte, so the design system and the 360
+     literals agree instead of clashing. */
+  --grad: linear-gradient(135deg, #6C3CE1 0%, #E9408B 100%);
+  --grad-soft: linear-gradient(135deg, rgba(108, 60, 225, 0.16), rgba(233, 64, 139, 0.09));
+
+  /* Elevation on dark is light, not shadow: a shadow on a near-black
+     ground is invisible, so depth comes from a brighter top edge. */
+  --card-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 8px 28px rgba(0,0,0,.45);
+  --shadow-lift: 0 1px 0 rgba(255,255,255,.09) inset, 0 16px 44px rgba(0,0,0,.55);
+
+  --focus: #A78BFA;         /* 6.42:1 against glass */
+  --backlit: rgba(167, 139, 250, 0.55);
 }
+
+/* ───────────────────────────────────────────────────────────────
+   5 · COLOUR — LIGHT ("Coconut": warm off-white, caramel, teal).
+
+   Not a tinted copy of the dark theme. On light, depth comes from
+   shadow rather than from a lit edge, and the accents have to darken
+   substantially to stay legible — the bright teal that carries the
+   dark theme scores under 2:1 here.
+   ─────────────────────────────────────────────────────────────── */
+html:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #F7F4EF;
+  --bg-elev: #FFFFFF;
+
+  --glass-1: rgba(255, 255, 255, 0.72);
+  --glass-2: rgba(255, 255, 255, 0.88);
+  --glass-3: rgba(255, 255, 255, 0.96);
+  --glass-blur: 18px;
+  --glass-border: rgba(26, 23, 20, 0.10);
+  --glass-border-strong: rgba(26, 23, 20, 0.16);
+
+  --surface: #FFFFFF;
+  --surface-2: #FBF8F3;
+  --surface2: #FBF8F3;
+  --border: #E7E0D6;
+
+  --text: #1A1714;          /* 17.85:1 on surface */
+  --text-2: #3D372F;
+  --muted: #6B6259;         /* 5.97:1 on surface */
+
+  /* Same brand, darkened rather than lifted — on a warm white ground the
+     lifted variants that carry the dark theme drop to ~2:1. */
+  --accent: #6D28D9;        /* deep brand purple — 7.10:1 on surface */
+  --accent-ink: #FFFFFF;    /* 7.10:1 on the accent */
+  --accent-2: #BE185D;      /* deep brand pink — 6.04:1 */
+  --accent-2-ink: #FFFFFF;  /* 6.04:1 */
+
+  --online: #1F7A3D;
+  --warning: #8A5A0B;
+  --danger: #C0342B;
+
+  --grad: linear-gradient(135deg, #6C3CE1 0%, #E9408B 100%);
+  --grad-soft: linear-gradient(135deg, rgba(108, 60, 225, 0.10), rgba(233, 64, 139, 0.06));
+
+  --card-shadow: 0 1px 2px rgba(26,23,20,.05), 0 8px 24px rgba(26,23,20,.06);
+  --shadow-lift: 0 2px 4px rgba(26,23,20,.06), 0 18px 40px rgba(26,23,20,.10);
+
+  /* The lifted purple that carries the dark theme scores ~2:1 here — a
+     WCAG 2.2 focus-appearance failure (3:1 minimum). Hence the deep one. */
+  --focus: #6D28D9;
+  --backlit: rgba(109, 40, 217, 0.34);
+}
+
+/* Someone who has never touched the toggle gets their OS preference. */
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) {
+    color-scheme: light;
+    --bg: #F7F4EF; --bg-elev: #FFFFFF;
+    --glass-1: rgba(255,255,255,.72); --glass-2: rgba(255,255,255,.88); --glass-3: rgba(255,255,255,.96);
+    --glass-border: rgba(26,23,20,.10); --glass-border-strong: rgba(26,23,20,.16);
+    --surface: #FFFFFF; --surface-2: #FBF8F3; --surface2: #FBF8F3; --border: #E7E0D6;
+    --text: #1A1714; --text-2: #3D372F; --muted: #6B6259;
+    --accent: #6D28D9; --accent-ink: #FFFFFF; --accent-2: #BE185D; --accent-2-ink: #FFFFFF;
+    --online: #1F7A3D; --warning: #8A5A0B; --danger: #C0342B;
+    --grad: linear-gradient(135deg,#6C3CE1 0%,#E9408B 100%);
+    --grad-soft: linear-gradient(135deg,rgba(108,60,225,.10),rgba(233,64,139,.06));
+    --card-shadow: 0 1px 2px rgba(26,23,20,.05), 0 8px 24px rgba(26,23,20,.06);
+    --shadow-lift: 0 2px 4px rgba(26,23,20,.06), 0 18px 40px rgba(26,23,20,.10);
+    --focus: #6D28D9; --backlit: rgba(109,40,217,.34);
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────
+   6 · THE THEME TRANSITION
+
+   Colour-only, and scoped to the properties that actually change.
+   A blanket `transition: all` here would animate layout on every
+   theme flip and drag the whole page through a repaint storm.
+
+   `.ds-theming` is added by the toggle for the duration of the
+   change and removed after, so this cost is paid once per flip and
+   never during ordinary interaction.
+   ─────────────────────────────────────────────────────────────── */
+html.ds-theming,
+html.ds-theming body,
+html.ds-theming * {
+  transition: background-color var(--d-slow) var(--e-in-out),
+              border-color var(--d-slow) var(--e-in-out),
+              color var(--d-slow) var(--e-in-out) !important;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--t-base);
+  line-height: var(--lh-body);
+}
+
+/* ───────────────────────────────────────────────────────────────
+   7 · GLASS — the dominant surface.
+   ─────────────────────────────────────────────────────────────── */
+.ds-glass {
+  background: var(--glass-1);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--card-shadow);
+  /* -webkit- first for Safari, which still needs it. */
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+
+/*
+  A backdrop-filter is expensive and, worse, it is IGNORED on an element
+  that creates no backdrop — so a glass panel stacked directly on another
+  glass panel just compounds into a lighter box with the blur wasted.
+  Nested panels therefore step UP in opacity rather than re-blurring.
+*/
+.ds-glass .ds-glass {
+  background: var(--glass-2);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.ds-glass-hi {
+  background: var(--glass-2);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--r-lg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+
+/* A hairline lit edge along the top. On dark this is what actually reads
+   as "raised" — shadow alone does nothing against a near-black ground. */
+.ds-lit {
+  position: relative;
+}
+.ds-lit::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--glass-border-strong) 20%, var(--glass-border-strong) 80%, transparent);
+  pointer-events: none;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   8 · CLAY — primary actions only.
+
+   The tactility is two inset highlights (top-light, bottom-shade)
+   plus a drop shadow that COLLAPSES on press. That collapse is the
+   whole effect: the button appears to sink into the surface rather
+   than merely darkening.
+   ─────────────────────────────────────────────────────────────── */
+.ds-clay {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-5);
+  font-size: var(--t-sm);
+  font-weight: 650;
+  letter-spacing: var(--ls-normal);
+  cursor: pointer;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    0 6px 16px -4px var(--backlit);
+  /* transform + opacity only — both composited, neither triggers layout. */
+  transition: transform var(--d-fast) var(--e-out),
+              box-shadow var(--d-fast) var(--e-out),
+              opacity var(--d-fast) var(--e-out);
+  will-change: transform;
+}
+.ds-clay:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    0 10px 22px -4px var(--backlit);
+}
+.ds-clay:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+}
+.ds-clay:disabled { opacity: 0.5; cursor: default; }
+
+.ds-clay-ghost {
+  background: var(--glass-2);
+  color: var(--text);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-5);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform var(--d-fast) var(--e-out), background-color var(--d-fast) var(--e-out);
+}
+.ds-clay-ghost:hover:not(:disabled) { background: var(--glass-3); transform: translateY(-1px); }
+.ds-clay-ghost:active:not(:disabled) { transform: translateY(1px); }
+
+/* ───────────────────────────────────────────────────────────────
+   9 · NEUBRUTALIST — interruptions only.
+
+   Sharp corners, a solid 2px edge and a hard offset shadow. No blur
+   anywhere, which is precisely why it cuts through a page made of
+   glass. Reserved for: outage banners, destructive confirms, an
+   out-of-balance ledger. Using it decoratively would spend the
+   signal.
+   ─────────────────────────────────────────────────────────────── */
+.ds-brut {
+  background: var(--bg-elev);
+  border: 2px solid var(--text);
+  border-radius: var(--r-sharp);
+  box-shadow: 4px 4px 0 var(--text);
+  padding: var(--s-4) var(--s-5);
+}
+.ds-brut-danger {
+  border-color: var(--danger);
+  box-shadow: 4px 4px 0 var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-elev));
+}
+.ds-brut-warn {
+  border-color: var(--warning);
+  box-shadow: 4px 4px 0 var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--bg-elev));
+}
+
+/* ───────────────────────────────────────────────────────────────
+   10 · BACKLIT — for data visualisation.
+
+   A glow BEHIND the plot, never on the data marks themselves. A
+   glowing line is a thicker, fuzzier line, which is a direct loss of
+   the precision a chart exists to provide; a glow behind the panel
+   gives the same lit feel and costs nothing in readability.
+   ─────────────────────────────────────────────────────────────── */
+.ds-backlit {
+  position: relative;
+  border-radius: var(--r-lg);
+}
+.ds-backlit::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--backlit), transparent 45%, transparent 55%, var(--backlit));
+  /* Border-only gradient: paint the box, then punch out the middle. */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+}
+.ds-backlit-glow {
+  box-shadow: 0 0 32px -8px var(--backlit);
+}
+
+/* ───────────────────────────────────────────────────────────────
+   11 · FOCUS — WCAG 2.2 (2.4.11 / 2.4.13).
+
+   :focus-visible, not :focus, so a mouse click does not leave a ring
+   but a Tab key does. The ring is two-tone — a dark inner and the
+   accent outer — so it stays visible on BOTH a glass panel and a
+   solid button without needing a per-component override.
+   ─────────────────────────────────────────────────────────────── */
+:where(a, button, input, select, textarea, [tabindex], [role="button"], [role="tab"]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+/* Never remove the indicator without replacing it. */
+:focus:not(:focus-visible) { outline: none; }
+
+/* Skip link — the first thing a keyboard user meets. */
+.ds-skip {
+  position: absolute;
+  left: var(--s-2);
+  top: -60px;
+  z-index: 999;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-sm);
+  font-weight: 650;
+  transition: top var(--d-fast) var(--e-out);
+}
+.ds-skip:focus { top: var(--s-2); }
+
+/* ───────────────────────────────────────────────────────────────
+   12 · SKELETONS — for perceived latency.
+
+   A skeleton is only honest if it is the SHAPE of what is coming.
+   A generic grey block that resolves into a different layout is a
+   second load, visually — it moves things after the user has begun
+   reading. Size these to the real content.
+   ─────────────────────────────────────────────────────────────── */
+.ds-skel {
+  background: linear-gradient(90deg, var(--glass-1) 25%, var(--glass-3) 37%, var(--glass-1) 63%);
+  background-size: 400% 100%;
+  animation: ds-shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--r-sm);
+}
+@keyframes ds-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* ───────────────────────────────────────────────────────────────
+   13 · REDUCED MOTION
+
+   Not "make it faster" — OFF. Vestibular disorders are triggered by
+   movement, not by duration. Opacity fades are retained, because
+   they convey state change without motion.
+   ─────────────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .jb-feed-row { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ds-skel { animation: none; background: var(--glass-2); }
+  .ds-clay:hover, .ds-clay:active, .ds-clay-ghost:hover, .ds-clay-ghost:active {
+    transform: none;
+  }
 }
+
+/* ───────────────────────────────────────────────────────────────
+   14 · KNOWN CLEANUP
+
+   33 places still set a literal `background: #fff` and will stay
+   white in dark mode. They are a finite, greppable list rather than
+   an unknown:
+
+       grep -rn "background:\s*#[Ff][Ff][Ff]" app/ --include=*.tsx
+
+   Left deliberately for a follow-up pass rather than swept with a
+   global override, because a blanket `background: var(--surface)
+   !important` would also capture the handful of places that are
+   white ON PURPOSE — printable invoice previews, PDF export
+   surfaces, and the QR code backing, all of which must stay white
+   whatever the theme.
+   ─────────────────────────────────────────────────────────────── */

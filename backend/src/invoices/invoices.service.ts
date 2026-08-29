@@ -6,6 +6,7 @@ import { OrganizationService } from '../organization/organization.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
 import { renderInvoiceHtml } from './invoice-pdf-template';
+import { CurrencyService } from '../common/currency.service';
 
 @Injectable()
 export class InvoicesService {
@@ -16,6 +17,7 @@ export class InvoicesService {
     private organization: OrganizationService,
     private scope: ScopeService,
     private events: EventsService,
+    private currency: CurrencyService,
   ) {}
 
   /**
@@ -94,9 +96,39 @@ export class InvoicesService {
     const paid    = await this.prisma.invoice.count({ where: w({ status: 'PAID' }) });
     const overdue = await this.prisma.invoice.count({ where: w({ status: 'OVERDUE' }) });
 
-    const totalAmount = await this.prisma.invoice.aggregate({ _sum: { total: true }, where: w() });
-    const totalPaid   = await this.prisma.invoice.aggregate({ _sum: { paidAmount: true }, where: w() });
-    const totalDue    = await this.prisma.invoice.aggregate({ _sum: { dueAmount: true }, where: w() });
+    /**
+     * Money totals are grouped BY CURRENCY, in one query rather than three.
+     *
+     * Adding a 100 USD invoice to a 100 PKR one produces 200 of nothing. On a
+     * single-currency deployment — which is every deployment until an operator
+     * starts taking foreign payments — this returns exactly one group and the
+     * headline figures are unchanged, so nothing about the existing screens
+     * moves. The moment a second currency appears, `mixedCurrency` says so
+     * instead of the panel quietly reporting a meaningless sum.
+     */
+    const grouped = await this.prisma.invoice.groupBy({
+      by: ['currency'],
+      _sum: { total: true, paidAmount: true, dueAmount: true },
+      where: w(),
+    });
+
+    const currencies = grouped
+      .map((g) => ({
+        currency: g.currency || null,
+        totalAmount: g._sum.total ?? 0,
+        totalPaid: g._sum.paidAmount ?? 0,
+        totalDue: g._sum.dueAmount ?? 0,
+      }))
+      .sort((a, b) => (b.totalAmount ?? 0) - (a.totalAmount ?? 0));
+
+    /**
+     * The scalar fields keep the existing API shape, and describe the LARGEST
+     * currency by value — on a single-currency deployment, the only one.
+     * Deliberately not a cross-currency sum: a labelled slice is honest and a
+     * caller can see `mixedCurrency` and read `currencies`, whereas a summed
+     * scalar is a number that looks authoritative and means nothing.
+     */
+    const head = currencies[0] ?? { currency: null, totalAmount: 0, totalPaid: 0, totalDue: 0 };
 
     return {
       total,
@@ -104,9 +136,12 @@ export class InvoicesService {
       partial,
       paid,
       overdue,
-      totalAmount:  totalAmount._sum.total      ?? 0,
-      totalPaid:    totalPaid._sum.paidAmount    ?? 0,
-      totalDue:     totalDue._sum.dueAmount      ?? 0,
+      currency: head.currency,
+      mixedCurrency: currencies.length > 1,
+      currencies,
+      totalAmount: head.totalAmount,
+      totalPaid:   head.totalPaid,
+      totalDue:    head.totalDue,
     };
   }
 
@@ -122,6 +157,7 @@ export class InvoicesService {
 
     const invoice = await this.prisma.invoice.create({
       data: {
+        ...(await this.currency.invoiceStamp()),
         invoiceNo,
         subscriberId: data.subscriberId,
         amount:       data.amount,
@@ -241,6 +277,7 @@ export class InvoicesService {
 
     const payment = await this.prisma.payment.create({
       data: {
+        ...(await this.currency.paymentStamp(data.amount, { invoiceCurrency: invoice.currency })),
         paymentNo,
         invoiceId,
         subscriberId: invoice.subscriberId,

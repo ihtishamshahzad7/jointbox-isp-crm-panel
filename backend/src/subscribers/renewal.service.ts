@@ -5,6 +5,7 @@ import { ScopeService, Actor } from '../common/scope.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { CurrencyService } from '../common/currency.service';
 
 export type RenewMode = 'FULL' | 'DAYS' | 'DATE' | 'BALANCE' | 'CREDIT';
 
@@ -35,6 +36,7 @@ export class RenewalService {
     private scope: ScopeService,
     private accounting: AccountingService,
     private notifications: NotificationsService,
+    private currency: CurrencyService,
   ) {}
 
   /**
@@ -302,6 +304,7 @@ export class RenewalService {
 
     const invoice = await this.prisma.invoice.create({
       data: {
+        ...(await this.currency.invoiceStamp()),
         invoiceNo: `CR-${Date.now()}-${credit.id}`,
         subscriberId: credit.subscriberId,
         amount: credit.amountDue,
@@ -323,6 +326,7 @@ export class RenewalService {
 
     const payment = await this.prisma.payment.create({
       data: {
+        ...(await this.currency.paymentStamp(credit.amountDue, { invoiceCurrency: invoice.currency })),
         paymentNo: `PAY-${Date.now()}`,
         invoiceId: invoice.id,
         subscriberId: credit.subscriberId,

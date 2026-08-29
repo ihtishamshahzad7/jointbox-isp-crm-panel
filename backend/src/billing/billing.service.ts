@@ -9,6 +9,7 @@ import { NetworkService } from '../network/network.service';
 import { WebhooksService } from '../integrations/webhooks.service';
 import { ProrationService } from './proration.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * Phase 1 billing automation.
@@ -34,6 +35,7 @@ export class BillingService {
     private webhooks: WebhooksService,
     // Daily-rate proration for partial-cycle billing.
     private proration: ProrationService,
+    private currency: CurrencyService,
   ) {
     this.queue.registerProcessor('billing-auto-invoice', (d) => this.runAutoInvoice(d?.dryRun === true));
     this.queue.registerProcessor('billing-auto-renewal', (d) => this.runAutoRenewal(d?.dryRun === true));
@@ -129,6 +131,7 @@ export class BillingService {
         const invoiceNo = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}-${sub.id}`;
         const invoice = await this.prisma.invoice.create({
           data: {
+            ...(await this.currency.invoiceStamp()),
             invoiceNo,
             subscriberId: sub.id,
             amount,
@@ -215,6 +218,7 @@ export class BillingService {
         newExpiry.setDate(newExpiry.getDate() + (sub.package!.duration || 30));
         const invoice = await this.prisma.invoice.create({
           data: {
+            ...(await this.currency.invoiceStamp()),
             invoiceNo,
             subscriberId: sub.id,
             amount: chargeAmount,
@@ -230,6 +234,7 @@ export class BillingService {
         });
         await this.prisma.payment.create({
           data: {
+            ...(await this.currency.paymentStamp(chargeAmount, { invoiceCurrency: invoice.currency })),
             paymentNo: `PAY-${Date.now()}-${sub.id}`,
             invoiceId: invoice.id,
             subscriberId: sub.id,

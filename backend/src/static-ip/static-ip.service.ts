@@ -9,6 +9,7 @@ import { NetworkService } from '../network/network.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * StaticIpService — allocation, billing and lifecycle of routable addresses.
@@ -32,6 +33,7 @@ export class StaticIpService {
     private network: NetworkService,
     private notifications: NotificationsService,
     private mikrotik: MikrotikSyncService,
+    private currency: CurrencyService,
   ) {}
 
   // ── Read ─────────────────────────────────────────────────────
@@ -776,6 +778,7 @@ export class StaticIpService {
           const price = Number(ip.monthlyPrice);
           const invoice = await this.prisma.invoice.create({
             data: {
+              ...(await this.currency.invoiceStamp()),
               invoiceNo: `SIP-${Date.now()}-${ip.id}`,
               subscriberId: ip.subscriberId!,
               amount: price,

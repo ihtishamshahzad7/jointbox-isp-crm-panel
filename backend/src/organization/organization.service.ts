@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { CurrencyService } from '../common/currency.service';
 
 const RESELLER_ROLES = ['RESELLER', 'SUB_RESELLER', 'RETAILER', 'SALES'];
 const round2 = (n: number) => Math.round(((n || 0) + Number.EPSILON) * 100) / 100;
@@ -20,6 +21,7 @@ export class OrganizationService {
     private prisma: PrismaService,
     private accounting: AccountingService,
     private scope: ScopeService,
+    private currency: CurrencyService,
   ) {}
 
   // ── ISPs ──────────────────────────────────────────────────────
@@ -417,11 +419,54 @@ export class OrganizationService {
     const symbol = (currencySymbol || code).trim().slice(0, 8);
     if (!code) throw new BadRequestException('Currency code is required (e.g. PKR, INR, USD).');
 
-    return this.prisma.isp.update({
+    /**
+     * CHANGING THE CURRENCY IS NOT A DISPLAY SETTING.
+     *
+     * It used to be: amounts were stored bare and rendered with whatever this
+     * field said, so flipping it silently reinterpreted the entire financial
+     * history — a 5,000 PKR invoice from last year read as 5,000 USD, in every
+     * report, with nothing anywhere recording what the money had actually been.
+     *
+     * Money rows now carry their own currency, so history is safe. But the
+     * consequence has simply moved: from today onward this deployment holds
+     * invoices in two currencies, and any report that wants one number has to
+     * pick one. The operator should learn that here, from the screen where
+     * they made the decision, rather than from a total that stops adding up.
+     */
+    const existing = await this.prisma.invoice.groupBy({
+      by: ['currency'],
+      _count: { _all: true },
+      where: { currency: { notIn: ['', code] } },
+    }).catch(() => [] as any[]);
+
+    const updated = await this.prisma.isp.update({
       where: { id: Number(ispId) },
       data: { currency: code, currencySymbol: symbol },
       select: { id: true, name: true, currency: true, currencySymbol: true },
     });
+
+    // The write path caches this; without the drop, invoices raised in the
+    // next minute would still be stamped with the old code.
+    this.currency.invalidate();
+
+    const priorCount = existing.reduce((n: number, g: any) => n + (g?._count?._all ?? 0), 0);
+    const priorCodes = existing.map((g: any) => g.currency).filter(Boolean);
+
+    return {
+      ...updated,
+      /**
+       * Present only when it matters. Existing history keeps its own currency
+       * — that is the point of stamping — so this is information, not a
+       * failure, and it must not read as though something broke.
+       */
+      ...(priorCount > 0
+        ? {
+            warning:
+              `${priorCount} existing invoice(s) are priced in ${priorCodes.join(', ')} and keep that currency. ` +
+              `New invoices will be in ${code}, so totals are now reported per currency rather than as one figure.`,
+          }
+        : {}),
+    };
   }
 
   /**

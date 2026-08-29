@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./dashboard.css";
 import { AppShellGate } from "./components/app-shell";
+import { THEME_BOOT_SCRIPT } from "./components/theme";
+import { NotifyProvider } from "./components/notify";
 import { I18nProvider } from "../lib/i18n";
 import { BRAND, DOC_TITLE } from "../lib/brand";
 
@@ -48,9 +50,32 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/*
+          Sets the theme attribute BEFORE the browser paints.
+
+          Without this the page renders the default theme, hydrates, reads
+          localStorage, and repaints — which on a dark-first app is a
+          full-brightness white flash on every single load. Worse than having
+          no toggle at all, and worst precisely for the people who chose dark
+          because they are working in the dark.
+
+          It has to be inline (an external file is another round-trip, during
+          which the page is already painting) and blocking (defer/async both
+          run after first paint), which is why it is dangerouslySetInnerHTML
+          rather than a component. The content is a compile-time constant from
+          our own module — no user input reaches it.
+        */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body className="app-font">
+        {/* The first stop for a keyboard user: skip the sidebar and land on
+            the content. Visually hidden until focused (see .ds-skip). */}
+        <a className="ds-skip" href="#main">Skip to main content</a>
         <I18nProvider>
-          <AppShellGate>{children}</AppShellGate>
+          <NotifyProvider>
+            <AppShellGate>{children}</AppShellGate>
+          </NotifyProvider>
         </I18nProvider>
       </body>
     </html>

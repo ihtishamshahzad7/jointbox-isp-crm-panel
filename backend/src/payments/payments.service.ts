@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
@@ -6,10 +6,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationService } from '../organization/organization.service';
 import { ScopeService } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
+import { CurrencyService } from '../common/currency.service';
 
 @Injectable()
 export class PaymentsService {
-  private readonly logger = new Logger(PaymentsService.name);
   constructor(
     private prisma: PrismaService,
     private accounting: AccountingService,
@@ -17,6 +17,7 @@ export class PaymentsService {
     private organization: OrganizationService,
     private scope: ScopeService,
     private events: EventsService,
+    private currency: CurrencyService,
   ) {}
 
   /**
@@ -203,10 +204,26 @@ export class PaymentsService {
       }
     }
 
+    /**
+     * The invoice decides the currency this payment is measured against.
+     *
+     * `paymentStamp` needs it to know whether any conversion happened at all:
+     * money that arrived in the invoice's own currency is recorded at a rate
+     * of exactly 1, with no multiplication, which is what keeps ordinary cash
+     * payments free of rounding.
+     */
+    const targetInvoice = data.invoiceId
+      ? await this.prisma.invoice.findUnique({
+          where: { id: data.invoiceId },
+          select: { currency: true },
+        })
+      : null;
+
     const paymentNo = data.paymentNo || `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     const payment = await this.prisma.payment.create({
       data: {
+        ...(await this.currency.paymentStamp(data.amount, { invoiceCurrency: targetInvoice?.currency })),
         paymentNo,
         invoiceId: data.invoiceId,
         subscriberId: data.subscriberId,

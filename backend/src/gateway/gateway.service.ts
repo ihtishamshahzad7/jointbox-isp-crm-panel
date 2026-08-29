@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * Phase 3 payment gateway engine.
@@ -34,6 +35,7 @@ export class GatewayService {
     private invoices: InvoicesService,
     private radiusSync: RadiusSyncService,
     private notifications: NotificationsService,
+    private currency: CurrencyService,
   ) {}
 
   private get backendUrl() {
@@ -87,21 +89,18 @@ export class GatewayService {
    * guess: a wrong-but-plausible currency silently moves real money, and a
    * failed checkout does not.
    */
-  private async billingCurrency(): Promise<string> {
-    const override = (process.env.GATEWAY_CURRENCY || '').trim();
-    if (override) return override.toUpperCase();
-
-    // Same record the panel reads its currency from (frontend takes isps[0]).
-    const isp = await this.prisma.isp
-      .findFirst({ orderBy: { id: 'asc' }, select: { currency: true } })
-      .catch(() => null);
-    const code = (isp?.currency || '').trim();
-    if (code) return code.toUpperCase();
-
-    throw new BadRequestException(
-      'No billing currency is configured, so an online payment cannot be started safely. ' +
-        'Set the currency on the ISP record (Organization → ISPs), or set GATEWAY_CURRENCY in backend/.env.',
-    );
+  /**
+   * Delegates to CurrencyService, which is now the single authority.
+   *
+   * This method used to carry its own copy of the precedence rule. A second
+   * copy of a precedence rule is how the original bug happened — three drivers
+   * each with their own idea of the default, disagreeing invisibly until a
+   * charge went out roughly 278x wrong. Keeping the method as a thin wrapper
+   * rather than deleting it leaves every call site below untouched, while
+   * making it impossible for the two rules to drift apart.
+   */
+  private billingCurrency(): Promise<string> {
+    return this.currency.billingCurrency();
   }
 
   /**

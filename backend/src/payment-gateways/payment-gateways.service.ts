@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * Payment Gateways
@@ -16,7 +17,10 @@ import * as crypto from 'crypto';
  */
 @Injectable()
 export class PaymentGatewaysService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private currency: CurrencyService,
+  ) {}
 
   // ─── PUBLIC ──────────────────────────────────────────────────────────
 
@@ -193,6 +197,11 @@ export class PaymentGatewaysService {
       await this.prisma.$transaction(async (db) => {
         const payment = await db.payment.create({
           data: {
+            // The gateway settled in a currency it chose; `tx.currency` is the
+            // record of which. Stating it here rather than falling back to the
+            // deployment default is the difference between recording what
+            // arrived and relabelling it as local money.
+            ...(await this.currency.paymentStamp(tx.amount, { paidIn: tx.currency })),
             paymentNo: `PAY-${Date.now()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
             invoiceId: tx.invoiceId!,
             subscriberId: tx.subscriberId ?? null,

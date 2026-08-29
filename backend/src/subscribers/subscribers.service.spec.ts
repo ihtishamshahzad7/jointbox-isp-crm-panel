@@ -77,6 +77,19 @@ describe('SubscribersService.activateRenewal', () => {
       {} as any,      // security
       renewal,
       {} as any,      // mikrotik
+      // Currency stamping. Real money rows carry the currency they are
+      // denominated in; here it only has to be present, because what these
+      // tests are about is the charge-once guarantee, not the label.
+      {
+        invoiceStamp: jest.fn().mockResolvedValue({ currency: 'PKR' }),
+        paymentStamp: jest
+          .fn()
+          .mockImplementation(async (amount: number) => ({
+            currency: 'PKR',
+            baseAmount: amount,
+            fxRate: 1,
+          })),
+      } as any,      // currency
     );
     return { prisma, radiusSync, accounting, notifications, pricing, renewal };
   }

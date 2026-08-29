@@ -4,6 +4,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { CurrencyService } from '../common/currency.service';
 
 /** Round money to 2dp so partial-refund arithmetic never drifts on floats. */
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -31,6 +32,7 @@ export class AccountingService {
     private prisma: PrismaService,
     private cache: CacheService,
     private scope: ScopeService,
+    private currency: CurrencyService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────
@@ -44,9 +46,25 @@ export class AccountingService {
     if (Math.abs(debits - credits) > 0.005) {
       throw new BadRequestException(`Unbalanced ledger posting: debits ${debits} ≠ credits ${credits}`);
     }
+    /**
+     * Every line of a posting carries the currency it is denominated in.
+     *
+     * A trial balance that sums across currencies is not a smaller error than
+     * a wrong number — it is a meaningless one. And amounts stored bare are
+     * reinterpreted the moment somebody edits `Isp.currency`, which silently
+     * rewrites the meaning of the entire ledger.
+     *
+     * Resolved once for the whole posting rather than per line: a single
+     * balanced posting is by definition one transaction in one currency, and
+     * per-line resolution could in principle straddle a currency change made
+     * mid-posting, producing a set of lines that no longer balance.
+     */
+    const currency = await this.currency.billingCurrencyOrBlank();
+
     await client.ledgerEntry.createMany({
       data: lines.map((l) => ({
         account: l.account,
+        currency,
         debit: l.debit || 0,
         credit: l.credit || 0,
         description: l.description,
@@ -129,12 +147,23 @@ export class AccountingService {
   /** Per-account totals + net position (cached 30s). */
   async getLedgerSummary() {
     return this.cache.wrap('accounting:summary', 30, async () => {
+      /**
+       * Grouped by CURRENCY as well as account.
+       *
+       * Summing debits across currencies does not produce a slightly wrong
+       * trial balance — it produces a meaningless one, and worse, a balanced
+       * ledger can appear unbalanced (or an unbalanced one appear fine)
+       * purely because two currencies were added together. Every row here is
+       * therefore denominated in exactly one currency, and a caller that
+       * wants a single figure has to say which currency it means.
+       */
       const grouped = await this.prisma.ledgerEntry.groupBy({
-        by: ['account'],
+        by: ['account', 'currency'],
         _sum: { debit: true, credit: true },
       });
       return grouped.map((g) => ({
         account: g.account,
+        currency: g.currency || null,
         debit: g._sum.debit ?? 0,
         credit: g._sum.credit ?? 0,
         net: (g._sum.debit ?? 0) - (g._sum.credit ?? 0),
@@ -152,10 +181,57 @@ export class AccountingService {
   async getTrialBalance() {
     return this.cache.wrap('accounting:trial-balance', 30, async () => {
       const rows = await this.getLedgerSummary();
-      const totalDebit = round2(rows.reduce((s, r) => s + (r.debit || 0), 0));
-      const totalCredit = round2(rows.reduce((s, r) => s + (r.credit || 0), 0));
-      const difference = round2(totalDebit - totalCredit);
-      const balanced = Math.abs(difference) < 0.005;
+
+      /**
+       * A trial balance is PER CURRENCY, always.
+       *
+       * Debits and credits only offset each other within one currency. Summed
+       * across currencies the totals are not merely imprecise — they can
+       * report a genuinely broken ledger as balanced (a 100 USD error hidden
+       * by a 100 PKR error in the other direction) or a perfectly sound one as
+       * broken. Since a trial balance exists precisely to answer "do the books
+       * balance", a cross-currency total answers the one question it is for
+       * incorrectly.
+       *
+       * So the books balance only when EVERY currency balances on its own.
+       */
+      const byCurrency = new Map<string, { debit: number; credit: number }>();
+      for (const r of rows) {
+        const key = r.currency || 'UNSPECIFIED';
+        const acc = byCurrency.get(key) || { debit: 0, credit: 0 };
+        acc.debit += r.debit || 0;
+        acc.credit += r.credit || 0;
+        byCurrency.set(key, acc);
+      }
+
+      const currencies = [...byCurrency.entries()]
+        .map(([currency, v]) => {
+          const difference = round2(v.debit - v.credit);
+          return {
+            currency,
+            totalDebit: round2(v.debit),
+            totalCredit: round2(v.credit),
+            difference,
+            balanced: Math.abs(difference) < 0.005,
+          };
+        })
+        .sort((a, b) => a.currency.localeCompare(b.currency));
+
+      const balanced = currencies.every((c) => c.balanced);
+      const mixedCurrency = currencies.length > 1;
+
+      /**
+       * The scalar totals are kept for the existing UI, but they now describe
+       * ONE currency — the first, which on a single-currency deployment (all
+       * of them, until an operator starts taking foreign payments) is simply
+       * the only one. `mixedCurrency` is what tells a caller the headline
+       * figure is a slice rather than the whole, so the number is never
+       * silently passed off as a grand total.
+       */
+      const head = currencies[0] ?? { totalDebit: 0, totalCredit: 0, difference: 0, currency: null };
+      const totalDebit = head.totalDebit;
+      const totalCredit = head.totalCredit;
+      const difference = head.difference;
 
       // Also flag any individual ledger row that is itself unbalanced — a single
       // entry that carries both a debit and a credit, or neither, is malformed.
@@ -168,17 +244,33 @@ export class AccountingService {
         },
       });
 
+      const unbalanced = currencies.filter((c) => !c.balanced);
+
       return {
         balanced,
+        mixedCurrency,
+        currency: head.currency,
+        currencies,
         totalDebit,
         totalCredit,
         difference,
         malformedEntries: malformed,
-        accounts: rows.sort((a, b) => a.account.localeCompare(b.account)),
+        accounts: rows.sort(
+          (a, b) =>
+            a.account.localeCompare(b.account) ||
+            String(a.currency ?? '').localeCompare(String(b.currency ?? '')),
+        ),
         checkedAt: new Date().toISOString(),
         message: balanced
-          ? 'Books balance — total debits equal total credits.'
-          : `Ledger is out of balance by ${difference}. Debits ${totalDebit} ≠ credits ${totalCredit}.`,
+          ? mixedCurrency
+            ? `Books balance in each of ${currencies.length} currencies.`
+            : 'Books balance — total debits equal total credits.'
+          : unbalanced
+              .map(
+                (c) =>
+                  `${c.currency} is out of balance by ${c.difference} (debits ${c.totalDebit} ≠ credits ${c.totalCredit}).`,
+              )
+              .join(' '),
       };
     });
   }

@@ -460,8 +460,73 @@ model Nas {
   accessGroups  AccessGroupNas[] @relation("AccessGroupNasRel")
   linkSignals   LinkSignal[]  @relation("NasLinkSignals")
 
+  /// The management tunnel, when this router has been provisioned for one.
+  /// Optional: a router on a public IP does not need one.
+  tunnel        NasTunnel?    @relation("NasTunnel")
+
   @@index([nasname])
   @@map("nas")
+}
+
+/// A WireGuard management tunnel to one router.
+///
+/// THE PROBLEM THIS SOLVES
+/// Most small ISPs sit behind CGNAT. Their routers have no reachable public
+/// address, so the panel can poll SNMP, call the RouterOS API, or send a CoA
+/// disconnect only when it happens to be on the same network. Everything the
+/// panel does TO a router — disconnect a defaulter, push a speed change, read
+/// an interface counter — silently stops working the moment the router is
+/// remote. WireGuard inverts the direction: the router dials OUT to the panel
+/// (which CGNAT permits) and holds the tunnel open, giving the panel a stable
+/// overlay address it can reach at any time.
+///
+/// WHY THERE IS NO PRIVATE KEY COLUMN
+/// WireGuard peers are authenticated by public key; the hub never needs the
+/// peer's private key. Storing it anyway would mean one database dump hands an
+/// attacker the identity of every router on the network. So the private key is
+/// generated, shown ONCE in the provisioning config, and discarded. Losing it
+/// is recovered by rotating the tunnel, not by re-reading it — the same
+/// bargain as an API token, and for the same reason.
+model NasTunnel {
+  id     Int @id @default(autoincrement())
+  nasId  Int @unique
+  nas    Nas @relation("NasTunnel", fields: [nasId], references: [id], onDelete: Cascade)
+
+  /// The router's WireGuard public key (base64, 44 chars). This is what gets
+  /// written into the panel's `wg` peer list.
+  publicKey String @unique @db.VarChar(64)
+
+  /// The router's address INSIDE the tunnel — what the panel dials for API,
+  /// SNMP and CoA once the tunnel is up.
+  ///
+  /// Unique is the whole integrity story: two routers sharing an overlay IP
+  /// does not error, it silently routes one router's traffic to the other, so
+  /// a disconnect meant for a defaulter in one town lands on a customer in
+  /// another. The constraint is what makes concurrent provisioning safe.
+  overlayIp String @unique @db.VarChar(45)
+
+  /// Endpoint the router should dial, captured at provisioning time so the
+  /// config we hand out and the peer we store cannot drift apart.
+  serverEndpoint  String  @db.VarChar(255)
+  serverPublicKey String  @db.VarChar(64)
+
+  enabled   Boolean @default(true)
+
+  /// Liveness, refreshed from `wg show`. A WireGuard peer has no "connected"
+  /// state — the only evidence a tunnel works is a recent handshake, so this
+  /// timestamp IS the health check.
+  lastHandshake DateTime?
+  rxBytes       BigInt    @default(0)
+  txBytes       BigInt    @default(0)
+
+  /// Who provisioned it, for the audit trail — a tunnel is remote access to
+  /// somebody's network.
+  createdBy Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  rotatedAt DateTime?
+
+  @@index([enabled])
 }
 
 /// A temporary speed change for a subscriber. Two modes:
@@ -1545,6 +1610,16 @@ model Invoice {
   /// Who this was billed to, captured at issue time. Survives the delete.
   subscriberName String?
 
+  /// The currency this invoice is PRICED in, captured at issue time.
+  ///
+  /// Stamped rather than looked up, because `Isp.currency` is an editable
+  /// field: without this column, changing it re-reads all of history in the
+  /// new currency and a 5,000 PKR invoice silently becomes 5,000 USD in every
+  /// report. The stamp is what makes a past invoice mean today what it meant
+  /// when it was issued. Filled automatically on create — see the currency
+  /// middleware in PrismaService.
+  currency String @default("")
+
   amount   Float
   tax      Float @default(0)
   discount Float @default(0)
@@ -1623,7 +1698,28 @@ model Payment {
 
   transactions PaymentTransaction[]
 
+  /// The currency the money ACTUALLY ARRIVED IN — not the invoice's.
+  ///
+  /// These are usually the same and `fxRate` is 1. They differ when a gateway
+  /// settles in its own currency: `assertGatewaySupportsCurrency()` already
+  /// allows that, and without these three columns the panel would record the
+  /// foreign NUMBER against a local invoice as though it were local money.
+  currency String @default("")
+
   amount      Float
+
+  /// `amount` expressed in the INVOICE's currency. This is what is applied to
+  /// `Invoice.paidAmount`, and what any report may safely sum.
+  ///
+  /// Nullable only so existing rows migrate cleanly; the middleware fills it
+  /// with `amount` whenever the two currencies match, which is nearly always.
+  baseAmount  Float?
+
+  /// baseAmount / amount, recorded so the conversion is auditable and can be
+  /// reproduced years later. A rate looked up at read time is not evidence of
+  /// anything — the rate that mattered is the one used on the day.
+  fxRate      Float?
+
   method      PaymentMethod @default(CASH)
   referenceNo String?
   notes       String?
@@ -2233,6 +2329,13 @@ model Notice {
 model LedgerEntry {
   id           Int      @id @default(autoincrement())
   account      String
+
+  /// The currency of this posting. A trial balance that sums across
+  /// currencies is not a smaller error than a wrong number — it is a
+  /// meaningless one, so every line has to say what it is denominated in
+  /// before any total can be trusted.
+  currency     String   @default("")
+
   debit        Float    @default(0)
   credit       Float    @default(0)
   description  String?

@@ -136,6 +136,61 @@ export class NasService implements OnModuleInit {
   }
 
   /**
+   * WRITE GUARD — the router must be YOURS, not merely visible to you.
+   *
+   * The Nas model has said "Only the owner may edit or delete it" since it was
+   * written; nothing enforced it. `update()`, `remove()`, `toggleStatus()` and
+   * `setMonitoredPorts()` took no actor at all, so any account holding the
+   * `nas.write` permission could edit or delete ANY router in the database by
+   * id — including a sibling franchise's, or the ISP's own.
+   *
+   * That is worse than an ordinary data leak, because a NAS row is live
+   * network configuration. Changing `secret` or `nasIp` on someone else's
+   * router de-authenticates every subscriber behind it; deleting the row takes
+   * the whole site off FreeRADIUS. It is a one-request outage of a network you
+   * do not own.
+   *
+   * READ scope and WRITE scope are deliberately different here. `nasWhere()`
+   * is broad on purpose — it includes routers shared down to you and those
+   * owned by your ancestors, because you need to SEE a router to put
+   * subscribers on it. Reusing it for writes would let a dealer who was lent a
+   * router re-key it out from under the franchise that owns it. So ownership,
+   * not visibility, is the test: admins always pass, everyone else must be the
+   * recorded owner.
+   *
+   * The NotFound/Forbidden split is intentional: a router you cannot see at
+   * all reports "not found" (the same message findOne gives, so ids stay
+   * unenumerable), while one you can see but do not own says plainly that it
+   * is not yours — which is actionable, not a leak.
+   */
+  /**
+   * Public alias, for callers outside this service (the tunnel controller).
+   * Named separately so the private guard stays private and every external
+   * ownership check is greppable.
+   */
+  async assertOwnerPublic(id: number, actor?: any) {
+    return this.assertNasOwner(id, actor);
+  }
+
+  private async assertNasOwner(id: number, actor?: any) {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+
+    const visible = await this.scope.nasWhere(actor);
+    const nas = await this.prisma.nas.findFirst({
+      where: Object.keys(visible).length ? { AND: [visible, { id }] } : { id },
+      select: { id: true, ownerId: true, shortname: true },
+    });
+    if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
+
+    if (nas.ownerId !== this.scope.actorId(actor)) {
+      throw new ForbiddenException(
+        `This router belongs to another account. You can use it for your subscribers, ` +
+          `but only its owner can change or remove it.`,
+      );
+    }
+  }
+
+  /**
    * Assign a router to a downline account so their subscribers can use it.
    *
    * `propagate` controls reach:
@@ -250,7 +305,8 @@ export class NasService implements OnModuleInit {
    * interface names or ifIndexes; only these are polled by the SNMP monitor.
    * An empty array clears the restriction (monitor all again).
    */
-  async setMonitoredPorts(id: number, ports: string[]) {
+  async setMonitoredPorts(id: number, ports: string[], actor?: any) {
+    await this.assertNasOwner(id, actor);
     const clean = (ports || []).map((p) => String(p).trim()).filter(Boolean);
     await this.prisma.nas.update({
       where: { id },
@@ -420,7 +476,8 @@ export class NasService implements OnModuleInit {
     apiEnabled?: boolean; apiPollSec?: number;
     snmpEnabled?: boolean; snmpPort?: number; snmpCommunity?: string; snmpVersion?: string; snmpPollSec?: number;
     syslogEnabled?: boolean; syslogPort?: number;
-  }) {
+  }, actor?: any) {
+    await this.assertNasOwner(id, actor);
     const existingNas = await this.prisma.nas.findUnique({ where: { id } });
     if (!existingNas) throw new NotFoundException(`NAS with ID ${id} not found`);
 
@@ -493,7 +550,8 @@ export class NasService implements OnModuleInit {
    * Remove a NAS device with proper cascade deletion
    * Handles related records: network logs, sessions, and subscribers
    */
-  async remove(id: number) {
+  async remove(id: number, actor?: any) {
+    await this.assertNasOwner(id, actor);
     try {
       // First, check if the NAS exists and get related record counts
       const nas = await this.prisma.nas.findUnique({
@@ -611,7 +669,8 @@ export class NasService implements OnModuleInit {
     }
   }
 
-  async toggleStatus(id: number) {
+  async toggleStatus(id: number, actor?: any) {
+    await this.assertNasOwner(id, actor);
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
     return this.prisma.nas.update({ where: { id }, data: { isActive: !nas.isActive } });

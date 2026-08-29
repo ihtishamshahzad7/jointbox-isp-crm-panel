@@ -379,13 +379,40 @@ export default function AccountingPage() {
           <span style={{ fontSize: 18 }}>{trial.balanced ? "⚖️" : "⚠️"}</span>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: trial.balanced ? T.text : T.red }}>
-              {trial.balanced ? "Books balance" : "Ledger out of balance"}
+              {trial.balanced
+                ? trial.mixedCurrency ? "Books balance in every currency" : "Books balance"
+                : "Ledger out of balance"}
             </div>
-            <div style={{ fontSize: 11, color: T.muted }}>
-              Debits {fmt(trial.totalDebit)} · Credits {fmt(trial.totalCredit)}
-              {!trial.balanced && ` · off by ${fmt(Math.abs(trial.difference))}`}
-              {trial.malformedEntries > 0 && ` · ${trial.malformedEntries} malformed entr${trial.malformedEntries === 1 ? "y" : "ies"}`}
-            </div>
+            {/*
+              Debits and credits only offset each other WITHIN one currency, so
+              once this deployment holds more than one the card shows a line
+              per currency instead of a single pair of totals. A combined
+              figure would not be slightly wrong — it could report genuinely
+              broken books as balanced, because an error in one currency can
+              cancel an error in another.
+            */}
+            {trial.mixedCurrency && Array.isArray(trial.currencies) ? (
+              <div style={{ fontSize: 11, color: T.muted, display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
+                {trial.currencies.map((c: any) => (
+                  <div key={c.currency} style={{ color: c.balanced ? T.muted : T.red }}>
+                    <b style={{ fontWeight: 700 }}>{c.currency}</b>
+                    {" — "}
+                    Debits {fmt(c.totalDebit)} · Credits {fmt(c.totalCredit)}
+                    {!c.balanced && ` · off by ${fmt(Math.abs(c.difference))}`}
+                  </div>
+                ))}
+                {trial.malformedEntries > 0 && (
+                  <div>{`${trial.malformedEntries} malformed entr${trial.malformedEntries === 1 ? "y" : "ies"}`}</div>
+                )}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: T.muted }}>
+                {trial.currency ? `${trial.currency} — ` : ""}
+                Debits {fmt(trial.totalDebit)} · Credits {fmt(trial.totalCredit)}
+                {!trial.balanced && ` · off by ${fmt(Math.abs(trial.difference))}`}
+                {trial.malformedEntries > 0 && ` · ${trial.malformedEntries} malformed entr${trial.malformedEntries === 1 ? "y" : "ies"}`}
+              </div>
+            )}
           </div>
           {!trial.balanced && (
             <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>Investigate — a posting was written unbalanced</span>

@@ -6,6 +6,7 @@ import { GatewayService } from '../gateway/gateway.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { FupService } from '../compliance/fup.service';
+import { CurrencyService } from '../common/currency.service';
 
 /**
  * Phase 3 subscriber self-service portal API.
@@ -28,6 +29,7 @@ export class PortalService {
     private radiusSync: RadiusSyncService,
     private vouchers: VouchersService,
     private fup: FupService,
+    private currency: CurrencyService,
   ) {}
 
   // ── Auth ──────────────────────────────────────────────────────
@@ -421,6 +423,7 @@ export class PortalService {
     const invoiceNo = `ACT-${Date.now()}-${sub.id}`;
     const invoice = await this.prisma.invoice.create({
       data: {
+        ...(await this.currency.invoiceStamp()),
         invoiceNo,
         subscriberId: sub.id,
         subscriberName: sub.fullName,
