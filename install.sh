@@ -63,6 +63,42 @@ step "3/9  PostgreSQL"
 apt-get install -y -qq postgresql postgresql-contrib >/dev/null
 systemctl enable --now postgresql >/dev/null 2>&1
 
+# -----------------------------------------------------------------------------
+# TimescaleDB — OPTIONAL. Partitions the telemetry tables (monitor_sample,
+# device_health_metric) by time, so range queries touch only the relevant
+# chunks and retention drops whole chunks instead of deleting rows one by one.
+#
+# Never fatal. The panel is fully functional without it — the migration that
+# creates the hypertables checks for the extension and skips cleanly when it is
+# absent, so a server that fails this step just keeps ordinary tables.
+# Set JOINTBOX_TIMESCALEDB=0 to skip deliberately.
+# -----------------------------------------------------------------------------
+if [ "${JOINTBOX_TIMESCALEDB:-1}" = "1" ]; then
+  PGMAJ="$(psql --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+  if [ -n "$PGMAJ" ] && ! sudo -u postgres psql -tAc \
+       "SELECT 1 FROM pg_available_extensions WHERE name='timescaledb'" 2>/dev/null | grep -q 1; then
+    (
+      apt-get install -y -qq gnupg postgresql-common apt-transport-https lsb-release wget >/dev/null 2>&1
+      echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/timescaledb.list
+      wget --quiet -O - https://packagecloud.io/timescale/timescaledb/gpgkey \
+        | gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg 2>/dev/null
+      apt-get update -qq >/dev/null 2>&1
+      apt-get install -y -qq "timescaledb-2-postgresql-$PGMAJ" >/dev/null 2>&1
+      # The extension is a shared library: it must be preloaded to be usable.
+      sudo -u postgres psql -qc \
+        "ALTER SYSTEM SET shared_preload_libraries = 'timescaledb';" >/dev/null 2>&1
+      systemctl restart postgresql >/dev/null 2>&1
+    ) || true
+  fi
+  if sudo -u postgres psql -tAc \
+       "SELECT 1 FROM pg_available_extensions WHERE name='timescaledb'" 2>/dev/null | grep -q 1; then
+    ok "TimescaleDB available — telemetry will use hypertables"
+  else
+    ok "TimescaleDB not installed — telemetry uses ordinary tables (fine)"
+  fi
+fi
+
 if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
   ok "Role '$DB_USER' exists"
   sudo -u postgres psql -qc "ALTER ROLE $DB_USER WITH PASSWORD '$DB_PASS';" >/dev/null

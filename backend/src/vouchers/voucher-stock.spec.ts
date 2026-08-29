@@ -56,7 +56,10 @@ describe('VouchersService — reseller card stock', () => {
       rootId: jest.fn().mockResolvedValue(5),
       descendantIds: jest.fn().mockResolvedValue(opts.descendants ?? [5, 6, 7]),
     };
-    return { prisma, scope, svc: new VouchersService(prisma, scope) };
+    // RADIUS is reached only by the hotspot redeem path (covered in
+    // hotspot-redeem.spec.ts); a stub keeps these stock tests off the network.
+    const radius: any = { syncSubscriberProfile: jest.fn().mockResolvedValue(undefined) };
+    return { prisma, scope, radius, svc: new VouchersService(prisma, scope, radius) };
   }
 
   // ───────────────────────────────────────────────────────────────

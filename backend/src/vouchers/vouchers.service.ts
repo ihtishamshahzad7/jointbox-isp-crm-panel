@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -7,10 +8,19 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { RadiusSyncService } from '../nas/radius-sync.service';
 
 @Injectable()
 export class VouchersService {
-  constructor(private prisma: PrismaService, private scope: ScopeService) {}
+  private readonly logger = new Logger(VouchersService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private scope: ScopeService,
+    // Hotspot redemption pushes credentials straight to FreeRADIUS — the
+    // customer has no account, so the card itself becomes the login.
+    private radius: RadiusSyncService,
+  ) {}
 
   /**
    * Vouchers this account may see.
@@ -379,6 +389,129 @@ export class VouchersService {
     }
 
     return this.prisma.voucher.findUnique({ where: { id: voucher.id } });
+  }
+
+  /**
+   * HOTSPOT REDEMPTION — a card in someone's hand becomes internet access.
+   *
+   * redeemVoucher() above requires an existing subscriberId, which is exactly
+   * what a hotspot customer does not have: they walked into a cafe, bought a
+   * card, and want to get online. There was no path from card to access
+   * without first creating an account for them, so cards could be sold but not
+   * used at a hotspot at all.
+   *
+   * This runs UNAUTHENTICATED by necessity — the customer has no login, the
+   * card IS the credential — which makes the guarantees below the whole
+   * security boundary:
+   *
+   *   NON-ENUMERABLE. Every failure returns the SAME message. Distinguishing
+   *     "no such code" from "wrong PIN" turns the endpoint into an oracle for
+   *     harvesting valid codes, and a valid code is bearer value.
+   *   ATOMIC. The same conditional claim redeemVoucher() uses, so one card
+   *     cannot be spent twice by two people tapping at once.
+   *   RATE LIMITED at the controller. A stolen code leaves only a 6-digit PIN,
+   *     which is brute-forceable in a million tries — the global 600/min limit
+   *     is far too generous for that, so this route carries its own.
+   *
+   * The credential handed back is the card itself: username = code,
+   * password = PIN. The customer is already holding both, so there is nothing
+   * new to remember, and the router authenticates them against FreeRADIUS like
+   * any other user.
+   */
+  async redeemAtHotspot(
+    code: string,
+    pin: string,
+    opts: { macAddress?: string | null } = {},
+  ): Promise<{ username: string; password: string; minutes: number | null; dataQuota: string | null }> {
+    // ONE message for every failure — see NON-ENUMERABLE above.
+    const refuse = () =>
+      new BadRequestException('That card is not valid, has already been used, or has expired.');
+
+    const cleanCode = String(code || '').trim().toUpperCase();
+    const cleanPin = String(pin || '').trim();
+    if (!cleanCode || !cleanPin) throw refuse();
+
+    const voucher = await this.prisma.voucher.findUnique({
+      where: { code: cleanCode },
+      include: { package: true },
+    });
+
+    // Deliberately identical outcomes: unknown code, wrong PIN, already used,
+    // expired. A caller learns only "no".
+    if (!voucher) throw refuse();
+    if (voucher.pin !== cleanPin) throw refuse();
+    if (voucher.status !== 'UNUSED') throw refuse();
+    if (voucher.expireDate && new Date() > voucher.expireDate) {
+      await this.prisma.voucher
+        .update({ where: { id: voucher.id }, data: { status: 'EXPIRED' } })
+        .catch(() => null);
+      throw refuse();
+    }
+
+    /**
+     * A hotspot card must grant a SPEED. Without a plan the router would
+     * authenticate the user and then apply no rate limit at all — an unlimited
+     * session sold as a one-hour card. Refuse rather than give that away.
+     */
+    const pkg = voucher.package;
+    if (!pkg) {
+      this.logger.error(
+        `Card ${voucher.code} was redeemed at a hotspot but has no package — ` +
+          `it cannot grant a speed. Set a plan on this batch.`,
+      );
+      throw new BadRequestException(
+        'This card is not set up for hotspot use. Please ask the staff to help.',
+      );
+    }
+
+    // ATOMIC CLAIM — same guard as redeemVoucher(): only the row that is still
+    // UNUSED flips, so two people redeeming the same card race for one win.
+    const claim = await this.prisma.voucher.updateMany({
+      where: {
+        id: voucher.id,
+        status: 'UNUSED',
+        OR: [{ expireDate: null }, { expireDate: { gt: new Date() } }],
+      },
+      data: { status: 'USED', usedAt: new Date(), activatedAt: new Date() },
+    });
+    if (claim.count === 0) throw refuse();
+
+    /**
+     * Push credentials to FreeRADIUS so the router can authenticate them.
+     *
+     * Time limits are what a hotspot actually sells, so validityDays becomes a
+     * Session-Timeout. If this push fails the customer has paid and cannot get
+     * online, so the card is released back to UNUSED rather than being burned
+     * for nothing.
+     */
+    const minutes = voucher.validityDays > 0 ? voucher.validityDays * 24 * 60 : null;
+    try {
+      await this.radius.syncSubscriberProfile(voucher.code, voucher.pin, pkg as any, {
+        serviceType: 'HOTSPOT',
+        macAddress: opts.macAddress ?? null,
+        sessionTimeout: minutes ? minutes * 60 : null,
+        idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
+      });
+    } catch (e: any) {
+      await this.prisma.voucher
+        .update({
+          where: { id: voucher.id },
+          data: { status: 'UNUSED', usedAt: null, activatedAt: null },
+        })
+        .catch(() => null);
+      this.logger.error(`Hotspot activation failed for ${voucher.code}: ${e?.message || e}`);
+      throw new BadRequestException(
+        'Could not activate your card just now. Please try again, or ask the staff for help.',
+      );
+    }
+
+    this.logger.log(`Hotspot card ${voucher.code} activated on ${pkg.name}`);
+    return {
+      username: voucher.code,
+      password: voucher.pin,
+      minutes,
+      dataQuota: voucher.dataQuota ?? null,
+    };
   }
 
   /**

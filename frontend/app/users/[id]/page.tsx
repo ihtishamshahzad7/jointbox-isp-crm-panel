@@ -20,7 +20,7 @@ const money = (n: number) => new Intl.NumberFormat().format(Math.round((n || 0) 
 const fdt = (d?: string | null) => (d ? new Date(d).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—");
 const isAdminRole = (role?: string) => role === "ADMIN" || role === "SUPER_ADMIN";
 
-type Tab = "profile" | "reports" | "packages" | "ledgers" | "subscribers" | "documents" | "invoice" | "nas-bindings";
+type Tab = "profile" | "reports" | "packages" | "ledgers" | "subscribers" | "documents" | "invoice" | "nas-bindings" | "activity";
 
 export default function UserProfilePage() {
   const router = useRouter();
@@ -74,6 +74,36 @@ export default function UserProfilePage() {
   }, [id, token]);
 
   useEffect(() => { if (tab === "packages") loadPkgs(); }, [tab]);
+
+  /**
+   * What this account has actually been doing.
+   *
+   * The endpoint already supported `forUser`, but only the central Logs page
+   * consumed it — so answering "what did this dealer change last week" meant
+   * leaving the profile, opening Logs, and filtering. Loaded lazily: an audit
+   * trail is worth a query only when someone asks for it.
+   */
+  const [activity, setActivity] = useState<any[]>([]);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+  const [activityErr, setActivityErr] = useState("");
+
+  const loadActivity = useCallback(async () => {
+    setLoadingActivity(true);
+    setActivityErr("");
+    try {
+      const r = await fetch(`${API}/logs/activity?limit=100&forUser=${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { setActivityErr("Could not load this account's activity."); setLoadingActivity(false); return; }
+      const d = await r.json();
+      setActivity(Array.isArray(d?.logs) ? d.logs : []);
+    } catch {
+      setActivityErr("Could not load this account's activity.");
+    }
+    setLoadingActivity(false);
+  }, [id, token]);
+
+  useEffect(() => { if (tab === "activity") loadActivity(); }, [tab, loadActivity]);
 
   const savePkgPrice = async (pkgId: number, field: string, value: number | null) => {
     const pkg = userPkgs.find((p: any) => p.id === pkgId);
@@ -132,6 +162,7 @@ export default function UserProfilePage() {
     { key: "documents", label: "Documents" },
     { key: "invoice", label: "Invoice Template" },
     { key: "nas-bindings", label: "Interface/NAS Bindings" },
+    { key: "activity", label: "Activity" },
   ];
 
   return (
@@ -568,6 +599,86 @@ export default function UserProfilePage() {
           ) : (
             <div style={{ textAlign: "center", padding: 40, color: T.muted }}>
               No NAS devices assigned to this account.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ACTIVITY ── what this account has been doing ── */}
+      {tab === "activity" && (
+        <div style={card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Activity by this account</div>
+            <button
+              onClick={loadActivity}
+              disabled={loadingActivity}
+              style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.sub, borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: loadingActivity ? "not-allowed" : "pointer" }}
+            >
+              {loadingActivity ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+
+          {activityErr ? (
+            <div style={{ textAlign: "center", padding: 40, color: T.muted }}>{activityErr}</div>
+          ) : loadingActivity && activity.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: T.muted }}>Loading…</div>
+          ) : activity.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: T.muted }}>
+              Nothing recorded for this account yet.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <th style={th}>When</th>
+                    <th style={th}>Action</th>
+                    <th style={th}>On</th>
+                    <th style={th}>Details</th>
+                    <th style={th}>IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activity.map((a: any) => (
+                    <tr key={a.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                      <td style={{ ...td, color: T.sub, whiteSpace: "nowrap" }}>{fdt(a.createdAt)}</td>
+                      <td style={td}>
+                        <span style={{
+                          padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+                          // Destructive and money-moving actions read differently
+                          // from routine ones — this is an audit trail, and the
+                          // eye should land on what changed something.
+                          background: /DELETE|REVERSE|REFUND|REVOKE|DISCONNECT/i.test(a.action || "")
+                            ? "rgba(239,68,68,0.15)"
+                            : /CREATE|TOPUP|ACTIVAT/i.test(a.action || "")
+                              ? "rgba(34,197,94,0.15)"
+                              : "rgba(148,163,184,0.15)",
+                          color: /DELETE|REVERSE|REFUND|REVOKE|DISCONNECT/i.test(a.action || "")
+                            ? T.red
+                            : /CREATE|TOPUP|ACTIVAT/i.test(a.action || "")
+                              ? T.green
+                              : T.sub,
+                        }}>
+                          {a.action || "—"}
+                        </span>
+                      </td>
+                      <td style={{ ...td, color: T.sub }}>
+                        {a.entity ? `${a.entity}${a.entityId ? ` #${a.entityId}` : ""}` : "—"}
+                      </td>
+                      <td style={{ ...td, color: T.sub, maxWidth: 340, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.details || ""}>
+                        {a.details || "—"}
+                      </td>
+                      <td style={{ ...td, color: T.muted, whiteSpace: "nowrap" }}>{a.ipAddress || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {activity.length >= 100 && (
+                <div style={{ fontSize: 11, color: T.muted, marginTop: 10, lineHeight: 1.7 }}>
+                  Showing the 100 most recent entries. Use Logs &rarr; Activity for the full
+                  history and filtering.
+                </div>
+              )}
             </div>
           )}
         </div>

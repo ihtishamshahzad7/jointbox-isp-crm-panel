@@ -702,15 +702,23 @@ enum OutageSource {
   MANUAL         // logged by staff
 }
 
-/// Root cause of an outage, inferred by correlating device-level (NDM) signals
-/// against the outage window. Only NETWORK_DEVICE / PORT counts against the
-/// ISP's uptime; POWER / ACCESS are WAPDA/subscriber-side, not our fault.
+/// WHY an outage happened, scored automatically from telemetry.
+///
+/// `OutageType` above answers "was this inside a load-shedding window"; this
+/// answers the operational question that decides what anyone DOES about it.
+/// Deliberately separate rather than folded into OutageType, because the two
+/// are independent: an unscheduled outage can still be a power failure.
+///
+/// The discriminators are real signals the ONUs already report, not guesses:
+/// a dying gasp is the ONU's final message as its mains supply fails, and LOS
+/// is loss of the optical signal itself. One means power, the other means
+/// fibre, and they are not ambiguous.
 enum OutageCause {
-  NETWORK_DEVICE // a core device (NAS/switch/OLT) went down — our fault
-  PORT           // a port/link dropped on a device — device-side
-  POWER          // device reported power failure, or scheduled/unscheduled WAPDA
-  ACCESS         // no core device offline — subscriber/antenna/feeder level
-  UNKNOWN        // not enough signal to infer a cause
+  POWER_RELATED     // mains failure — dying gasp, or a known load-shedding window
+  FIBER_CUT         // optical loss of signal with no dying gasp
+  EQUIPMENT_FAILURE // the NAS/OLT serving the area is itself down
+  UPSTREAM_ISP      // several independent areas dropped together
+  UNKNOWN           // nothing conclusive — do NOT guess
 }
 
 /// A published load-shedding window for an area.
@@ -746,6 +754,16 @@ model PowerOutage {
   type   OutageType   @default(UNKNOWN)
   source OutageSource @default(MASS_DISCONNECT)
 
+  /// Scored automatically when the outage opens — see OutageCause and
+  /// OutageClassifierService. `causeConfidence` is 0–1; anything below ~0.5
+  /// should be presented as a suggestion, not a finding, because telling an
+  /// operator the wrong cause sends a technician to the wrong place.
+  cause           OutageCause @default(UNKNOWN)
+  causeConfidence Float       @default(0)
+  /// The signals behind the verdict, in plain language, so the operator can
+  /// judge it rather than trust it blindly.
+  causeReasons    String?     @db.VarChar(600)
+
   startedAt DateTime  @default(now())
   endedAt   DateTime?
 
@@ -758,44 +776,8 @@ model PowerOutage {
   notes     String?
   createdBy Int?
 
-  attribution OutageAttribution?
-
   @@index([areaId, startedAt])
   @@index([endedAt])
-}
-
-/// Root-cause intelligence for one outage (Outage Intelligence).
-///
-/// Populated by OutagesService.attribute() by correlating device-level NDM
-/// signals (POWER_FAILURE / DEVICE_DOWN / PORT_DOWN / LINK_DOWN events+alerts,
-/// plus device reachability) against the outage window. `cause` separates
-/// WAPDA/subscriber-side power from a fault in the operator's own core, so the
-/// uptime report can honestly say "this part was our network" vs "this part
-/// was WAPDA".
-model OutageAttribution {
-  id       Int @id @default(autoincrement())
-  outageId Int @unique
-  outage   PowerOutage @relation(fields: [outageId], references: [id], onDelete: Cascade)
-
-  /// Inferred root cause (see OutageCause).
-  cause      OutageCause @default(UNKNOWN)
-  /// 0–100. How strongly the coincident signals support this cause.
-  confidence Int         @default(0)
-  /// Short human label, e.g. "NAS-CCR-01 unreachable since 09:42".
-  summary    String?     @db.VarChar(240)
-  /// JSON array of coincident signals this inference rests on:
-  /// [{eventType, deviceId, deviceName, severity, at, message, nasAreaMatch}].
-  evidence   Json        @default("[]")
-  /// Implicated device ids — subset of the ids found in evidence.
-  deviceIds  Json        @default("[]")
-  /// Operator has confirmed or manually corrected the inference.
-  confirmed  Boolean     @default(false)
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-
-  @@index([cause])
-  @@index([confirmed])
-  @@map("outage_attribution")
 }
 
 enum StaticIpStatus {
@@ -1243,6 +1225,9 @@ model Package {
   proRatedBilling ProRatedBilling?
   throttlePolicies PackageThrottlePolicy[]
   extraFees ExtraFeePackage[]
+  /// Prepaid cards sold against this plan — a hotspot card has to grant a
+  /// speed, and a card without a plan cannot say what it is selling.
+  vouchers Voucher[] @relation("PackageVouchers")
   /// Quotas/expiry/attachment ids that used to live in packages-management.json.
   /// Cascades on delete, replacing the manual "filter it out of the JSON" step
   /// that had to be remembered in remove().
@@ -1673,6 +1658,16 @@ model Voucher {
   amount       Float
   dataQuota    String?
   validityDays Int           @default(30)
+
+  /// The plan this card sells.
+  ///
+  /// A hotspot card has to grant a SPEED — "1 hour of internet" means nothing
+  /// to a router without a rate limit behind it. Nullable so every existing
+  /// card keeps working: those were top-up/credit cards where the plan comes
+  /// from the subscriber's own package, and only a card redeemed at a hotspot
+  /// (where there is no subscriber yet) actually needs one.
+  packageId    Int?
+  package      Package?      @relation("PackageVouchers", fields: [packageId], references: [id], onDelete: SetNull)
   status       VoucherStatus @default(UNUSED)
   batchId      String?
   createdBy    Int?
@@ -3030,7 +3025,7 @@ model MonitorTarget {
 /// One recorded ping result for a MonitorTarget — the persisted history behind
 /// the per-host charts (latency/loss/availability over time).
 model MonitorSample {
-  id        Int      @id @default(autoincrement())
+  id        Int      @default(autoincrement())
   targetId  Int
   at        DateTime @default(now())
   up        Boolean
@@ -3039,6 +3034,14 @@ model MonitorSample {
 
   target MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
 
+  /// Composite with the time column because this table is a TimescaleDB
+  /// hypertable where the extension is installed, and a hypertable requires
+  /// its partitioning column in every unique index. Declared unconditionally
+  /// so the model matches the database on BOTH kinds of server — otherwise the
+  /// `prisma db push` that db-deploy.sh runs after every migration would keep
+  /// reverting the key and silently undo the hypertable.
+  /// Harmless without TimescaleDB: `id` is still a sequence.
+  @@id([id, at])
   @@index([targetId, at])
   @@map("monitor_sample")
 }
@@ -3735,7 +3738,7 @@ model PackageAllocation {
 
 /// CPU/memory/temperature series per network device (the Overview graphs).
 model DeviceHealthMetric {
-  id       Int      @id @default(autoincrement())
+  id       Int      @default(autoincrement())
   deviceId Int
   ts       DateTime @default(now())
   metric   String   @db.VarChar(24) // cpu | memory | temperature
@@ -3743,6 +3746,10 @@ model DeviceHealthMetric {
 
   device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
 
+  /// Composite with the time column — same reason as MonitorSample above:
+  /// a TimescaleDB hypertable needs its partitioning column in every unique
+  /// index, and the model must describe one shape for both kinds of server.
+  @@id([id, ts])
   @@index([deviceId, metric, ts])
   @@index([deviceId, ts])
   @@map("device_health_metric")

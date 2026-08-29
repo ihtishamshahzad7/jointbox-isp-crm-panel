@@ -13,7 +13,7 @@ const T = {
   accent: "#0ea5e9", green: "#22c55e", red: "#ef4444", amber: "#f59e0b",
 };
 
-const TABS = ["Permissions", "Child Permissions", "Two-Factor Auth", "Active Sessions"] as const;
+const TABS = ["Permissions", "Child Permissions", "Two-Factor Auth", "Active Sessions", "API Keys"] as const;
 type Tab = (typeof TABS)[number];
 
 const fdt = (d: string) => new Date(d).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
@@ -48,6 +48,26 @@ export default function SecurityPage() {
   // expanded "more actions" rows in the role matrix
   const [expandedRes, setExpandedRes] = useState<Record<string, boolean>>({});
   const [resourceActions, setResourceActions] = useState<Record<string, any[]>>({});
+  /**
+   * API keys. The backend for these was complete — create, list, revoke, and a
+   * guard enforcing them on the public API — but nothing in the panel ever
+   * mentioned it, so the capability effectively did not exist for anyone who
+   * could not use curl.
+   *
+   * `justCreated` holds the one and only time the plaintext key is visible:
+   * the server stores a SHA-256 hash and cannot show it again.
+   */
+  type ApiKey = {
+    id: number; name: string; prefix: string; scopes: string;
+    isActive: boolean; lastUsedAt: string | null; lastUsedIp: string | null;
+    expiresAt: string | null; createdAt: string; ownerId: number | null;
+  };
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [keyName, setKeyName] = useState("");
+  const [keyScopes, setKeyScopes] = useState("read");
+  const [keyExpiry, setKeyExpiry] = useState("");
+  const [justCreated, setJustCreated] = useState<{ key: string; name: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -77,7 +97,61 @@ export default function SecurityPage() {
       get("/security/child-permissions/catalog").then((d) => setCatalog(Array.isArray(d) ? d : [])).catch(silent("loadChildPermCatalog"));
       get("/users").then((d) => setChildList(Array.isArray(d) ? d : [])).catch(silent("loadChildUserList"));
     }
+    if (tab === "API Keys") loadApiKeys();
   }, [tab]);
+
+  const loadApiKeys = useCallback(() => {
+    get("/integrations/api-keys")
+      .then((d) => setApiKeys(Array.isArray(d) ? d : []))
+      .catch(silent("loadApiKeys"));
+  }, [get]);
+
+  async function createApiKey() {
+    if (!keyName.trim()) { setMsg("Give the key a name so you can recognise it later."); return; }
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/integrations/api-keys`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          name: keyName.trim(),
+          scopes: keyScopes.split(",").map((s) => s.trim()).filter(Boolean),
+          expiresInDays: keyExpiry ? Number(keyExpiry) : undefined,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(d?.message || "Could not create the key."); setBusy(false); return; }
+      // The ONLY moment the plaintext exists — the server keeps a hash.
+      setJustCreated({ key: d.key, name: d.name });
+      setCopied(false);
+      setKeyName(""); setKeyExpiry("");
+      setMsg("");
+      loadApiKeys();
+    } catch {
+      setMsg("Could not create the key.");
+    }
+    setBusy(false);
+  }
+
+  async function revokeApiKey(id: number, name: string) {
+    // confirm2, not confirm: a local confirm() (2FA activation) shadows the
+    // global one in this file, which is why that alias exists.
+    if (!confirm2(`Revoke "${name}"? Anything using this key stops working immediately.`)) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/integrations/api-keys/${id}`, { method: "DELETE", headers });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setMsg(d?.message || "Could not revoke the key.");
+      } else {
+        setMsg("");
+        loadApiKeys();
+      }
+    } catch {
+      setMsg("Could not revoke the key.");
+    }
+    setBusy(false);
+  }
 
   async function loadChildPerms(userId: string) {
     setSelChild(userId);
@@ -491,6 +565,122 @@ export default function SecurityPage() {
               {sessions.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={5}>No active sessions.</td></tr>}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── API KEYS ── */}
+      {tab === "API Keys" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ ...card, fontSize: 12, lineHeight: 1.8, color: T.sub }}>
+            Keys let another system talk to your panel without a person logging in — a
+            reseller&rsquo;s own billing software, a mobile app backend, an automation script.
+            Each key carries scopes and an optional expiry, and every use is recorded, so an
+            abandoned key is visible and revocable.
+          </div>
+
+          {/* The plaintext key exists exactly once. */}
+          {justCreated && (
+            <div style={{ ...card, borderColor: T.green, background: "rgba(34,197,94,.08)" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+                &ldquo;{justCreated.name}&rdquo; created — copy it now
+              </div>
+              <div style={{ fontSize: 12, color: T.sub, marginBottom: 10, lineHeight: 1.7 }}>
+                This is the only time this key can be shown. Only a hash is stored, so it cannot
+                be recovered — if you lose it, revoke this key and make another.
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <code style={{ flex: 1, minWidth: 260, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "9px 11px", fontSize: 12, wordBreak: "break-all", fontFamily: "ui-monospace, monospace" }}>
+                  {justCreated.key}
+                </code>
+                <button
+                  style={btn(copied ? T.green : T.accent)}
+                  onClick={() => {
+                    navigator.clipboard?.writeText(justCreated.key).then(
+                      () => setCopied(true),
+                      // Clipboard access can be denied (insecure origin, permissions).
+                      // Say so rather than showing a success that did not happen.
+                      () => setMsg("Could not copy automatically — select the key and copy it by hand."),
+                    );
+                  }}
+                >
+                  {copied ? "Copied" : "Copy"}
+                </button>
+                <button style={btn(T.border)} onClick={() => setJustCreated(null)}>Done</button>
+              </div>
+            </div>
+          )}
+
+          {/* Create */}
+          <div style={card}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>New key</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 200px" }}>
+                <span style={{ fontSize: 11, color: T.muted }}>Name</span>
+                <input style={input} value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="e.g. Dealer mobile app" />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 160px" }}>
+                <span style={{ fontSize: 11, color: T.muted }}>Scopes</span>
+                <select style={input} value={keyScopes} onChange={(e) => setKeyScopes(e.target.value)}>
+                  <option value="read">read — look, never change</option>
+                  <option value="read,write">read + write</option>
+                  <option value="*">everything</option>
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "0 1 150px" }}>
+                <span style={{ fontSize: 11, color: T.muted }}>Expires in (days)</span>
+                <input style={input} type="number" min={1} value={keyExpiry} onChange={(e) => setKeyExpiry(e.target.value)} placeholder="never" />
+              </label>
+              <button style={btn(T.accent)} disabled={busy} onClick={createApiKey}>Create key</button>
+            </div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 9, lineHeight: 1.7 }}>
+              Give each integration its own key. Then revoking one stops that integration and
+              nothing else — with a shared key you have to re-issue to everybody.
+            </div>
+          </div>
+
+          {/* Existing */}
+          <div style={card}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <th style={th}>Name</th><th style={th}>Key</th><th style={th}>Scopes</th>
+                  <th style={th}>Last used</th><th style={th}>Expires</th>
+                  <th style={{ ...th, textAlign: "right" }} />
+                </tr>
+              </thead>
+              <tbody>
+                {apiKeys.map((k) => {
+                  const expired = !!k.expiresAt && new Date(k.expiresAt) < new Date();
+                  const dead = !k.isActive || expired;
+                  return (
+                    <tr key={k.id} style={{ opacity: dead ? 0.55 : 1 }}>
+                      <td style={td}>
+                        {k.name}
+                        {!k.isActive && <span style={{ marginLeft: 6, fontSize: 10, color: T.red }}>revoked</span>}
+                        {k.isActive && expired && <span style={{ marginLeft: 6, fontSize: 10, color: T.amber }}>expired</span>}
+                      </td>
+                      <td style={{ ...td, color: T.sub, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{k.prefix}…</td>
+                      <td style={{ ...td, color: T.sub }}>{k.scopes}</td>
+                      <td style={{ ...td, color: T.sub }}>
+                        {k.lastUsedAt
+                          ? <>{fdt(k.lastUsedAt)}{k.lastUsedIp ? <span style={{ color: T.muted }}> · {k.lastUsedIp}</span> : null}</>
+                          : <span style={{ color: T.muted }}>never used</span>}
+                      </td>
+                      <td style={{ ...td, color: T.sub }}>{k.expiresAt ? fdt(k.expiresAt) : <span style={{ color: T.muted }}>never</span>}</td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        {k.isActive && (
+                          <button style={btn(T.red)} disabled={busy} onClick={() => revokeApiKey(k.id, k.name)}>Revoke</button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {apiKeys.length === 0 && (
+                  <tr><td style={{ ...td, color: T.muted }} colSpan={6}>No keys yet. Create one above to let another system reach your panel.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

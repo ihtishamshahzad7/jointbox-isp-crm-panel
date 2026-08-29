@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Portal from "../components/portal";
+import API_BASE from "../components/api";
 
 /**
  * Global quick-launcher (Ctrl/⌘+K). Type to find and jump to ANY feature or
@@ -11,6 +12,12 @@ import Portal from "../components/portal";
  * hunting the menu. Role-gated: ISP-owner-only items are hidden for others.
  */
 type Dest = { label: string; href: string; group: string; keys: string; ispOnly?: boolean };
+
+/** Account results are grouped by what the operator calls that tier. */
+const ROLE_GROUP: Record<string, string> = {
+  SUPER_ADMIN: "ISP", ADMIN: "ISP", RESELLER: "Franchise",
+  SUB_RESELLER: "Dealer", RETAILER: "Retailer", SALES: "Staff", AUDITOR: "Auditor",
+};
 
 const DESTS: Dest[] = [
   // Daily
@@ -92,10 +99,47 @@ export default function CommandPalette() {
 
   useEffect(() => { if (open) { setQ(""); setSel(0); setTimeout(() => inputRef.current?.focus(), 20); } }, [open]);
 
+  /**
+   * Accounts, so the palette can jump straight to a reseller's profile.
+   *
+   * Reaching one account used to mean Users → scan or filter a list of every
+   * franchise, dealer and retailer. Now typing a name goes there directly.
+   *
+   * Fetched ONCE per open rather than per keystroke: the list is already
+   * capped server-side and the app shell loads it anyway, so filtering in
+   * memory costs nothing while a request per character would be wasteful.
+   */
+  const [accounts, setAccounts] = useState<Dest[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+    if (!token) return;
+    let cancelled = false;
+    fetch(`${API_BASE}/users`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => {
+        if (cancelled || !Array.isArray(list)) return;
+        setAccounts(
+          list.map((u: { id: number; name?: string; email?: string; role?: string; phone?: string }) => ({
+            label: u.name || u.email || `#${u.id}`,
+            href: `/users/${u.id}`,
+            group: ROLE_GROUP[u.role || ""] || "Account",
+            // Searchable by email, phone and role too — an operator often has
+            // a contact detail to hand rather than the exact spelling of a name.
+            keys: [u.email, u.phone, u.role].filter(Boolean).join(" ").toLowerCase(),
+          })),
+        );
+      })
+      .catch(() => { /* the palette still works as a route launcher without accounts */ });
+    return () => { cancelled = true; };
+  }, [open]);
+
   const results = useMemo(() => {
-    const pool = DESTS.filter((d) => !d.ispOnly || isOwner);
+    const pool = [...DESTS.filter((d) => !d.ispOnly || isOwner), ...accounts];
     const s = q.trim().toLowerCase();
-    if (!s) return pool;
+    // With no query, show routes only — listing every account up front would
+    // bury the navigation the palette exists for.
+    if (!s) return pool.filter((d) => !d.href.startsWith("/users/"));
     const terms = s.split(/\s+/);
     return pool
       .map((d) => {
@@ -107,7 +151,7 @@ export default function CommandPalette() {
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((r) => r.d);
-  }, [q, isOwner]);
+  }, [q, isOwner, accounts]);
 
   useEffect(() => { setSel(0); }, [q]);
 
