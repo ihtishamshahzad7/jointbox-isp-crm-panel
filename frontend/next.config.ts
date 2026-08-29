@@ -13,22 +13,29 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
 
+  // Prevent an ISP operator's browser/proxy from keeping the old prerendered
+  // application shell after a deployment. Next's hashed JS/CSS assets remain
+  // safely cacheable; only application HTML is revalidated on every visit.
+  async headers() {
+    return [
+      {
+        source: "/((?!_next/static|_next/image|favicon.ico|icon.svg).*)",
+        headers: [
+          { key: "Cache-Control", value: "no-store, no-cache, must-revalidate, proxy-revalidate" },
+          { key: "Pragma", value: "no-cache" },
+          { key: "Expires", value: "0" },
+        ],
+      },
+    ];
+  },
+
   // NOTE: standalone output was reverted — its first deploy failed to serve
   // /_next/static chunks, leaving the UI stuck on "Loading…". We run the normal
   // `next start` (see ecosystem.config.js) which serves everything reliably.
   // Re-enable output:"standalone" only after verifying static serving end-to-end.
-  // Allow the dev server to be opened from these LAN hosts (add more IPs as needed)
   allowedDevOrigins: ["192.168.51.253"],
 
   // Do not fail the PRODUCTION BUILD on type/lint errors.
-  //
-  // Next 16 type-checks the whole app during `next build`; this app has many
-  // pre-existing, harmless latent type issues (runtime-only fields on strict
-  // interfaces, an optional form field, a colour-key typo) that never affected
-  // `next dev` or runtime. Blocking the build on them gates shipping on a
-  // 2-minute compile per error. They STILL show live in your editor and in
-  // `next dev`, so nothing is hidden — the build just stops refusing to produce
-  // output over them. Fix them at your own pace.
   typescript: { ignoreBuildErrors: true },
 };
 
