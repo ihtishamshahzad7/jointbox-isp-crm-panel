@@ -1,0 +1,76 @@
+.workspace {
+  --jb-glass: color-mix(in srgb, var(--surface) 88%, transparent);
+  --jb-ring: color-mix(in srgb, var(--accent) 18%, transparent);
+  container-type: inline-size;
+}
+
+.workspace :global(.hub-tabs) {
+  position: sticky !important;
+  top: 0;
+  z-index: 12;
+  padding: 6px 6px 0 !important;
+  margin-bottom: 14px !important;
+  background: var(--jb-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border) !important;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .06);
+}
+
+.workspace :global(.hub-tab) {
+  position: relative;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px 9px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px/1 Satoshi, Inter, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workspace :global(.hub-tab:hover) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.workspace :global(.hub-tab.on) {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.workspace :global(.hub-tab:focus-visible) {
+  outline: 2px solid var(--jb-ring);
+  outline-offset: 2px;
+}
+
+.workspace :global(.hub-underline) {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+@container (max-width: 640px) {
+  .workspace :global(.hub-tab) {
+    min-height: 36px;
+    padding-inline: 11px;
+    font-size: 12px;
+  }
+
+  .workspace :global(.hub-tabs) {
+    border-radius: 10px;
+    margin-inline: -4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace :global(*) {
+    scroll-behavior: auto !important;
+  }
+}
