@@ -96,25 +96,53 @@ function HubInner({
 
   const current = tabs.find((t) => t.id === active) ?? tabs[0];
 
+  const selectByOffset = (offset: number) => {
+    if (!tabs.length || !current) return;
+    const index = tabs.findIndex((t) => t.id === current.id);
+    const next = (index + offset + tabs.length) % tabs.length;
+    select(tabs[next].id);
+  };
+
   return (
     <div>
-      {/* On a phone these eight labels wrapped onto five rows and ate half the
-          screen — and the sliding underline, measured with offsetLeft, then
-          drew itself under the wrong row. The mobile stylesheet turns this
-          into a single swipeable row, which fixes both at once. */}
+      {/* Responsive tab rail: one compact row on mobile, full row on desktop.
+          It stays keyboard accessible and uses a real scroll container rather
+          than wrapping, so the hub never pushes the main content downward. */}
       <div
         className="hub-tabs"
+        role="tablist"
+        aria-label="Section navigation"
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight") { e.preventDefault(); selectByOffset(1); }
+          if (e.key === "ArrowLeft") { e.preventDefault(); selectByOffset(-1); }
+          if (e.key === "Home") { e.preventDefault(); if (tabs[0]) select(tabs[0].id); }
+          if (e.key === "End") { e.preventDefault(); if (tabs.at(-1)) select(tabs.at(-1)!.id); }
+        }}
         style={{
-          display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center",
-          borderBottom: "1px solid var(--border)", marginBottom: 18,
+          display: "flex",
+          gap: 4,
+          flexWrap: "nowrap",
+          alignItems: "center",
+          overflowX: "auto",
+          overscrollBehaviorX: "contain",
+          WebkitOverflowScrolling: "touch",
+          scrollbarWidth: "none",
+          borderBottom: "1px solid var(--border)",
+          marginBottom: 18,
           position: "relative",
+          padding: "2px 2px 0",
         }}
       >
         {tabs.map((t) => (
           <button
             key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={t.id === current?.id}
+            tabIndex={t.id === current?.id ? 0 : -1}
             className={`hub-tab ${t.id === current?.id ? "on" : ""}`}
             onClick={() => select(t.id)}
+            onFocus={(e) => e.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })}
           >
             {t.label}
             {t.id === current?.id && (
