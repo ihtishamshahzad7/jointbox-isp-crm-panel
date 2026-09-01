@@ -5,18 +5,15 @@ cd "$(dirname "$0")/.."
 
 node scripts/fix-db-ownership.js || true
 
-echo "  • applying RADIUS schema boundary…"
 if ! bash scripts/radius-schema-apply.sh; then
   echo "  ✗ RADIUS schema separation failed; refusing to continue."
   exit 1
 fi
 
-echo "  • applying application migrations (prisma migrate deploy)…"
 MLOG="$(mktemp 2>/dev/null || echo "./.jb_migrate.log")"
 trap 'rm -f "$MLOG"' EXIT
 if ! npx prisma migrate deploy 2>"$MLOG"; then
   cat "$MLOG"
-  echo "  • deploy needs baselining — marking committed migrations as applied…"
   for d in prisma/migrations/*/; do
     [ -f "$d/migration.sql" ] || continue
     name="$(basename "$d")"
@@ -29,5 +26,4 @@ if ! npx prisma migrate deploy 2>"$MLOG"; then
 fi
 
 npx prisma generate >/dev/null
-
 echo "  ✓ application migrations deployed; RADIUS schema remains separately owned"
