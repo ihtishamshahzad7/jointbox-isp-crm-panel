@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# RADIUS schema ownership is deliberately outside Prisma migrations.
-# The real tables live in PostgreSQL schema `radius`; public compatibility
-# views keep existing Prisma/raw-SQL application code working during rollout.
-
 : "${DATABASE_URL:?DATABASE_URL is required}"
 
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
@@ -38,9 +34,7 @@ BEGIN
   FOREACH t IN ARRAY tables LOOP
     IF to_regclass('radius.' || t) IS NOT NULL
        AND to_regclass('public.' || t) IS NULL THEN
-      EXECUTE format(
-        'CREATE VIEW public.%I AS SELECT * FROM radius.%I', t, t
-      );
+      EXECUTE format('CREATE VIEW public.%I AS SELECT * FROM radius.%I', t, t);
     END IF;
   END LOOP;
 END $$;
