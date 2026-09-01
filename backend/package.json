@@ -10,7 +10,7 @@
     "build": "npm run clean && prisma generate && nest build && node scripts/flatten-dist.js",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "db:fix-ownership": "node scripts/fix-db-ownership.js",
-    "db:push": "node scripts/fix-db-ownership.js && prisma db push --accept-data-loss && prisma generate",
+    "db:push": "node scripts/db-push-safe.js",
     "db:deploy": "bash scripts/db-deploy.sh",
     "db:setup": "npm run db:push",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -62,11 +62,10 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
-    "@nestjs/cli": "^11.0.0",
     "@swc/cli": "^0.5.2",
     "@swc/core": "^1.10.1",
     "@nestjs/schematics": "^11.0.0",
-    "@nestjs/testing": "^11.0.1",
+    "@nestjs/testing": "^11.0.0",
     "@types/bcrypt": "^6.0.0",
     "@types/compression": "^1.7.5",
     "@types/express": "^5.0.0",
@@ -91,19 +90,11 @@
     "typescript-eslint": "^8.20.0"
   },
   "jest": {
-    "moduleFileExtensions": [
-      "js",
-      "json",
-      "ts"
-    ],
+    "moduleFileExtensions": ["js", "json", "ts"],
     "rootDir": ".",
     "testRegex": "src/.*\\.spec\\.ts$",
-    "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
-    },
-    "collectCoverageFrom": [
-      "src/**/*.(t|j)s"
-    ],
+    "transform": {"^.+\\.(t|j)s$": "ts-jest"},
+    "collectCoverageFrom": ["src/**/*.(t|j)s"],
     "coverageDirectory": "./coverage",
     "testEnvironment": "node"
   }
