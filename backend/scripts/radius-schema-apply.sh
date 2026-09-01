@@ -10,14 +10,10 @@ CREATE SCHEMA IF NOT EXISTS radius;
 DO $$
 DECLARE
   t text;
-  tables text[] := ARRAY[
-    'radcheck','radreply','radacct','radgroupcheck','radgroupreply',
-    'radusergroup','radpostauth','nas','nasreload'
-  ];
+  tables text[] := ARRAY['radcheck','radreply','radacct','radgroupcheck','radgroupreply','radusergroup','radpostauth','nas','nasreload'];
 BEGIN
   FOREACH t IN ARRAY tables LOOP
-    IF to_regclass('radius.' || t) IS NULL
-       AND to_regclass('public.' || t) IS NOT NULL THEN
+    IF to_regclass('radius.' || t) IS NULL AND to_regclass('public.' || t) IS NOT NULL THEN
       EXECUTE format('ALTER TABLE public.%I SET SCHEMA radius', t);
     END IF;
   END LOOP;
@@ -26,23 +22,17 @@ END $$;
 DO $$
 DECLARE
   t text;
-  tables text[] := ARRAY[
-    'radcheck','radreply','radacct','radgroupcheck','radgroupreply',
-    'radusergroup','radpostauth','nas','nasreload'
-  ];
+  tables text[] := ARRAY['radcheck','radreply','radacct','radgroupcheck','radgroupreply','radusergroup','radpostauth','nas','nasreload'];
 BEGIN
   FOREACH t IN ARRAY tables LOOP
-    IF to_regclass('radius.' || t) IS NOT NULL
-       AND to_regclass('public.' || t) IS NULL THEN
+    IF to_regclass('radius.' || t) IS NOT NULL AND to_regclass('public.' || t) IS NULL THEN
       EXECUTE format('CREATE VIEW public.%I AS SELECT * FROM radius.%I', t, t);
     END IF;
   END LOOP;
 END $$;
 SQL
 
-for f in \
-  /etc/freeradius/3.0/mods-config/sql/main/postgresql/queries.conf \
-  /etc/freeradius/3.0/mods-enabled/sql; do
+for f in /etc/freeradius/3.0/mods-config/sql/main/postgresql/queries.conf /etc/freeradius/3.0/mods-enabled/sql; do
   if [[ -f "$f" ]]; then
     sed -i \
       -e 's/^[[:space:]]*authcheck_table[[:space:]]*=.*/    authcheck_table  = "radius.radcheck"/' \
@@ -56,8 +46,7 @@ for f in \
   fi
 done
 
-if command -v systemctl >/dev/null 2>&1 \
-   && systemctl list-unit-files freeradius.service >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files freeradius.service >/dev/null 2>&1; then
   systemctl restart freeradius || true
 fi
 
