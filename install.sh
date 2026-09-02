@@ -323,16 +323,68 @@ REDIS_URL=redis://127.0.0.1:6379
 EOF
 chmod 600 .env
 
-# Full install (dev deps included) — nest/swc/prisma CLI are devDependencies and
-# are needed to migrate and build. Runtime is still lean because we build to dist.
-npm ci >/dev/null 2>&1 || npm install >/dev/null 2>&1
+# Full install INCLUDING devDependencies — the nest CLI, swc and the prisma CLI
+# all live there and are required to migrate and build. Runtime stays lean
+# because we build to dist/ and pm2 runs that.
+#
+# --include=dev is not optional: npm silently omits devDependencies whenever
+# NODE_ENV=production is set in the environment, and this script is often run
+# on a box where it is. Without the flag the install "succeeds" and the build
+# then fails for want of a compiler.
+#
+# Output goes to a log rather than /dev/null. It used to be discarded, which
+# meant a failed dependency install was completely invisible and only surfaced
+# later as a mysterious "nest: not found".
+NPM_LOG=/tmp/jointbox-backend-npm.log
+if ! { npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund; } >"$NPM_LOG" 2>&1; then
+  err "Backend dependency install FAILED — see $NPM_LOG"
+  tail -20 "$NPM_LOG"
+fi
+
+# The nest binary is what `npm run build` calls. Verify it exists rather than
+# assuming, because a missing compiler is the single failure that leaves a
+# fresh install with no dist/main.js and therefore no backend at all.
+if [ ! -x node_modules/.bin/nest ]; then
+  warn "nest CLI missing after install — fetching it explicitly…"
+  npm install --no-audit --no-fund --no-save @nestjs/cli@^11 >>"$NPM_LOG" 2>&1 || true
+fi
 # Ownership first — anything created earlier as the postgres superuser would
 # otherwise make Prisma fail with "permission denied for table ...".
 sudo -u postgres psql -d "$DB_NAME" -qc "REASSIGN OWNED BY postgres TO $DB_USER;" >/dev/null 2>&1
 # Versioned migrations + idempotent reconcile. Same command every server runs,
 # so a fresh clone ends up byte-identical to an updated one. See MIGRATIONS.md.
-npm run db:deploy >/dev/null 2>&1 && ok "Schema migrated & in sync" || warn "db:deploy had warnings — run: cd $APP_DIR/backend && npm run db:deploy"
-npm run build >/dev/null 2>&1 && ok "Backend built"
+DB_LOG=/tmp/jointbox-db-deploy.log
+if npm run db:deploy >"$DB_LOG" 2>&1; then
+  ok "Schema migrated & in sync"
+else
+  warn "db:deploy had warnings — last lines follow (full log: $DB_LOG)"
+  tail -15 "$DB_LOG"
+fi
+
+# Belt and braces. db:deploy ends in `prisma db push`, so after it the schema
+# must exist. Checking a real table is the only honest confirmation: a fresh
+# database whose tables were never created takes FreeRADIUS down with
+# `relation "nas" does not exist`, and that error appears three steps later
+# where it looks like a RADIUS fault rather than a database one.
+if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='nas'" 2>/dev/null | grep -q 1; then
+  warn "Tables still missing — forcing a schema push…"
+  npx prisma db push --accept-data-loss >>"$DB_LOG" 2>&1 \
+    && ok "Schema created by db push" \
+    || { err "Could not create the schema — see $DB_LOG"; tail -20 "$DB_LOG"; }
+fi
+# `... >/dev/null 2>&1 && ok "Backend built"` was the bug that made a broken
+# install look clean: on failure the && simply did not fire, so NEITHER a tick
+# nor a warning was printed and the step vanished from the output entirely.
+# Now a failure is loud, and dist/main.js is verified — pm2 launches that exact
+# path, so if it is absent the backend can never start.
+BUILD_LOG=/tmp/jointbox-backend-build.log
+if npm run build >"$BUILD_LOG" 2>&1 && [ -f dist/main.js ]; then
+  ok "Backend built"
+else
+  err "BACKEND BUILD FAILED — the API will not start. Full log: $BUILD_LOG"
+  tail -25 "$BUILD_LOG"
+  [ -f dist/main.js ] || err "dist/main.js was not produced"
+fi
 
 # Create the uploads dirs (CNIC/photos/documents) writable by the app, or the
 # backend fails at boot with EACCES mkdir .../uploads. Owned by the repo's user
@@ -348,8 +400,19 @@ step "7/9  Frontend"
 if [ -d "$APP_DIR/frontend" ]; then
   cd "$APP_DIR/frontend"
   echo "NEXT_PUBLIC_BACKEND_URL=http://$SERVER_IP:$API_PORT" > .env.local
-  npm ci >/dev/null 2>&1 || npm install >/dev/null 2>&1
-  npm run build >/dev/null 2>&1 && ok "Frontend built"
+  FE_LOG=/tmp/jointbox-frontend.log
+  # --include=dev for the same reason as the backend: next build needs
+  # TypeScript, which is a devDependency.
+  if ! { npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund; } >"$FE_LOG" 2>&1; then
+    err "Frontend dependency install FAILED — see $FE_LOG"
+    tail -20 "$FE_LOG"
+  fi
+  if npm run build >>"$FE_LOG" 2>&1 && [ -d .next ]; then
+    ok "Frontend built"
+  else
+    err "FRONTEND BUILD FAILED — the panel will not load. Full log: $FE_LOG"
+    tail -25 "$FE_LOG"
+  fi
   # Assemble the standalone server bundle (output:'standalone').
   if [ -d "$APP_DIR/frontend/.next/standalone" ]; then
     mkdir -p "$APP_DIR/frontend/.next/standalone/.next"
@@ -408,7 +471,12 @@ fi
 
 # -----------------------------------------------------------------------------
 step "8/9  Firewall"
-if ufw status | grep -q inactive; then
+# `ufw status` on a box without ufw printed a raw
+# "install.sh: line NNN: ufw: command not found" into the middle of the
+# install. Not fatal, but it reads like a crash; check for the binary first.
+if ! command -v ufw >/dev/null 2>&1; then
+  warn "ufw not installed — skipping (apt install ufw if you want a firewall)"
+elif ufw status | grep -q inactive; then
   warn "ufw inactive — skipping (enable it yourself if you want a firewall)"
 else
   ufw allow 22/tcp   >/dev/null 2>&1
