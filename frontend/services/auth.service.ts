@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = (typeof window!=="undefined"?`http://${window.location.hostname}:3001`:'http://localhost:3001');
+const API_URL = (typeof window!=="undefined"?`${window.location.origin}/api`:`http://localhost:3001`);
 
 class AuthService {
   private refreshTimeout: NodeJS.Timeout | null = null;
@@ -12,29 +12,24 @@ class AuthService {
   }
 
   async login(email: string, password: string) {
+    const normalizedEmail = email.trim().toLowerCase();
     try {
       const response = await axios.post(`${API_URL}/auth/login`, {
-        email,
-        password
+        email: normalizedEmail,
+        password,
       });
 
       if (response.data.token) {
         localStorage.setItem('token', response.data.token);
         localStorage.setItem('user', JSON.stringify(response.data.user));
-        
-        // Add to login history
-        this.addToLoginHistory(email, 'SUCCESS');
-        
+        this.addToLoginHistory(normalizedEmail, 'SUCCESS');
         this.setupAutoRefresh();
         return { success: true, user: response.data.user };
       }
       return { success: false, message: 'No token received' };
     } catch (error: any) {
       console.error('Login error:', error);
-      
-      // Add failed login attempt to history
-      this.addToLoginHistory(email, 'FAILED', error.response?.data?.message);
-      
+      this.addToLoginHistory(normalizedEmail, 'FAILED', error.response?.data?.message);
       return {
         success: false,
         message: error.response?.data?.message || 'Login failed'
@@ -46,10 +41,10 @@ class AuthService {
     const history = JSON.parse(localStorage.getItem('login_history') || '[]');
     history.unshift({
       id: Date.now(),
-      email: email,
+      email,
       user: { name: email.split('@')[0] },
       ipAddress: '127.0.0.1',
-      status: status,
+      status,
       failReason: reason,
       createdAt: new Date().toISOString()
     });
@@ -69,16 +64,12 @@ class AuthService {
     } finally {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      if (this.refreshTimeout) {
-        clearTimeout(this.refreshTimeout);
-      }
+      if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
     }
   }
 
   getToken(): string | null {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('token');
-    }
+    if (typeof window !== 'undefined') return localStorage.getItem('token');
     return null;
   }
 
@@ -93,13 +84,10 @@ class AuthService {
   isAuthenticated(): boolean {
     const token = this.getToken();
     if (!token) return false;
-    
     try {
       const payload = JSON.parse(atob(token.split('.')[1]));
       const isValid = payload.exp * 1000 > Date.now();
-      if (!isValid) {
-        this.logout();
-      }
+      if (!isValid) this.logout();
       return isValid;
     } catch {
       return false;
@@ -109,12 +97,8 @@ class AuthService {
   async refreshToken(): Promise<boolean> {
     const currentToken = this.getToken();
     if (!currentToken) return false;
-
     try {
-      const response = await axios.post(`${API_URL}/auth/refresh`, {
-        token: currentToken
-      });
-
+      const response = await axios.post(`${API_URL}/auth/refresh`, { token: currentToken });
       if (response.data.token) {
         localStorage.setItem('token', response.data.token);
         this.setupAutoRefresh();
@@ -129,22 +113,14 @@ class AuthService {
   }
 
   private setupAutoRefresh() {
-    if (this.refreshTimeout) {
-      clearTimeout(this.refreshTimeout);
-    }
-
+    if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
     const token = this.getToken();
     if (token) {
       try {
         const payload = JSON.parse(atob(token.split('.')[1]));
         const expiresIn = payload.exp * 1000 - Date.now();
-        const refreshTime = expiresIn - 5 * 60 * 1000; // Refresh 5 minutes before expiry
-        
-        if (refreshTime > 0) {
-          this.refreshTimeout = setTimeout(() => {
-            this.refreshToken();
-          }, refreshTime);
-        }
+        const refreshTime = expiresIn - 5 * 60 * 1000;
+        if (refreshTime > 0) this.refreshTimeout = setTimeout(() => this.refreshToken(), refreshTime);
       } catch (error) {
         console.error('Error setting up auto-refresh:', error);
       }
@@ -154,7 +130,6 @@ class AuthService {
   async verifyToken(): Promise<boolean> {
     const token = this.getToken();
     if (!token) return false;
-
     try {
       const response = await axios.post(`${API_URL}/auth/verify`, { token });
       return response.data.valid === true;
@@ -166,7 +141,6 @@ class AuthService {
   async getProfile() {
     const token = this.getToken();
     if (!token) return null;
-
     try {
       const response = await axios.get(`${API_URL}/auth/profile`, {
         headers: { Authorization: `Bearer ${token}` }
