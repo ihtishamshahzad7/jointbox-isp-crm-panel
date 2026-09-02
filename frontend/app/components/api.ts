@@ -38,6 +38,23 @@ function resolveApiBase(): string {
       return `${window.location.origin}/api`;
     }
     /**
+     * Third trap, and the one that actually bit a customer: the override names
+     * a PRIVATE address (install.sh writes the server's own LAN IP) and the
+     * panel is then reached through NAT from outside. The bundle tells every
+     * browser on the internet to call 10.x.x.x:3001, which it cannot route to,
+     * so the login page renders and signing in fails.
+     *
+     * If the override points somewhere OTHER than the origin the page was
+     * served from, the same-origin proxy is the safer answer: it is reachable
+     * by definition, because the page itself just came through it.
+     */
+    try {
+      const u = new URL(override, window.location.origin);
+      if (u.host !== window.location.host) {
+        return `${window.location.origin}/api`;
+      }
+    } catch { /* unparsable — fall through */ }
+    /**
      * Second trap: someone sets the override to the site root
      * (https://<ip>) instead of https://<ip>/api. Requests then land on the
      * frontend and 404. If the override points at THIS origin with no path
@@ -55,8 +72,19 @@ function resolveApiBase(): string {
   // Served over HTTPS → same-origin, proxied. Never cross-protocol.
   if (secure) return `${window.location.origin}/api`;
 
-  // Plain HTTP (LAN / direct IP, no TLS yet) → the backend port directly.
-  return `http://${window.location.hostname}:3001`;
+  /**
+   * Plain HTTP → the same-origin proxy, NOT the backend port.
+   *
+   * This used to return `http://<hostname>:3001`, which works on a LAN and
+   * breaks the moment the panel is reached through NAT: the browser can get to
+   * the panel's port because that is the one forwarded, and nothing else. The
+   * page loads and every API call fails.
+   *
+   * `/api` is rewritten to the backend inside next.config.ts, so it needs no
+   * second port, no second NAT rule, and no CORS — the request never leaves
+   * the origin the page came from.
+   */
+  return `${window.location.origin}/api`;
 }
 
 const API_BASE = resolveApiBase();
