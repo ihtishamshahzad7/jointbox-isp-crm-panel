@@ -577,3 +577,23 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Chart data tables for screen readers ────────────────────────────
+   Every Nova chart renders its numbers as a real <table> alongside the
+   SVG. An SVG is a picture: without this a chart announces as nothing,
+   and a role="img" label would say "revenue chart" and then withhold
+   the actual data.
+
+   Clipped rather than display:none or visibility:hidden — both of those
+   remove the element from the accessibility tree, which is the one place
+   it needs to exist. */
+.nv-chart-sr {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

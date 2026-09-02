@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useId } from "react";
+import {
+  AnimatedLine, AnimatedArea, AnimatedBar, barDelay,
+  useSeriesCursor, pointerIndex, ChartData, LivePulse, useCalm, motion,
+} from "./chart-motion";
 
 /**
  * NOVA CHART SYSTEM
@@ -74,24 +78,37 @@ export function NoData({ title, hint, height = 180 }: { title: string; hint?: st
    AREA / LINE — trend over a continuous axis
    ══════════════════════════════════════════════════════════════════ */
 export function NovaArea({
-  data, height = 200, gradient = NOVA.primary, prefix = "", emptyHint,
+  data, height = 200, gradient = NOVA.primary, prefix = "", emptyHint, live = false, caption,
 }: {
   data: Array<{ label: string; value: number }>;
   height?: number; gradient?: string[]; prefix?: string; emptyHint?: string;
+  /** Pulses the newest point, for a series that is still updating. */
+  live?: boolean;
+  /** Screen-reader caption for the data table. Defaults to a generic one. */
+  caption?: string;
 }) {
-  const [hi, setHi] = useState<number | null>(null);
-  const id = useMemo(() => `na${Math.random().toString(36).slice(2, 8)}`, []);
+  /**
+   * useId, NOT Math.random.
+   *
+   * These ids are referenced by url(#…) from fill and stroke. Generated
+   * randomly they differ between the server render and the client hydration,
+   * so React discards the markup and — in the window before it does — the
+   * gradients point at ids that do not exist and the chart paints black or
+   * blank. useId is stable across both, which is exactly what it is for.
+   */
+  const uid = useId().replace(/[:]/g, "");
+  const id = `na${uid}`;
 
-  // A single point cannot form a trend line — treat it as nothing to plot
-  // rather than drawing a misleading flat line across the panel.
+  const { active: hi, setActive: setHi, interactionProps } = useSeriesCursor(data.length);
+
   if (!data.length || data.every((d) => d.value === 0)) {
     return <NoData title="No activity in this period" hint={emptyHint} height={height} />;
   }
 
-  const W = 600, H = height, PAD_L = 44, PAD_B = 26, PAD_T = 12;
+  const W = 600, H = height, PAD_L = 44, PAD_R = 12, PAD_B = 26, PAD_T = 12;
   const max = Math.max(1, ...data.map((d) => d.value));
   const niceMax = Math.ceil(max / 4) * 4 || 4;
-  const plotW = W - PAD_L - 12, plotH = H - PAD_B - PAD_T;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_B - PAD_T;
   const x = (i: number) => PAD_L + (data.length === 1 ? plotW / 2 : (i / (data.length - 1)) * plotW);
   const y = (v: number) => PAD_T + plotH - (v / niceMax) * plotH;
 
@@ -100,10 +117,31 @@ export function NovaArea({
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(niceMax * f));
   const step = Math.max(1, Math.ceil(data.length / 7));
 
+  /**
+   * Tooltip x, clamped away from both edges.
+   *
+   * It is translateX(-50%) centred, so at the first and last point half of it
+   * used to sit outside the panel and get clipped — the two values people most
+   * often want (now, and the start of the range) were the two hardest to read.
+   */
+  const tipPct = Math.min(88, Math.max(12, (x(hi ?? 0) / W) * 100));
+
+  const track = (clientX: number, el: SVGSVGElement) =>
+    setHi(pointerIndex(clientX, el, data.length, PAD_L, PAD_R, W));
+
   return (
     <div style={{ position: "relative" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height, display: "block" }}
-        onMouseLeave={() => setHi(null)}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        aria-label={caption ?? "Trend over the selected period. Use arrow keys to read values."}
+        {...interactionProps}
+        style={{ width: "100%", height, display: "block", touchAction: "pan-y", ...interactionProps.style }}
+        onMouseMove={(e) => track(e.clientX, e.currentTarget)}
+        // Pointer events cover touch and pen as well as mouse. Without this the
+        // chart was unreadable on a phone: onMouseEnter never fires there.
+        onPointerDown={(e) => track(e.clientX, e.currentTarget)}
+        onPointerMove={(e) => { if (e.pressure > 0 || e.pointerType === "mouse") track(e.clientX, e.currentTarget); }}
+      >
         <defs>
           <linearGradient id={`${id}s`} x1="0" y1="0" x2="1" y2="0">
             {gradient.map((c, i) => <stop key={i} offset={`${(i / (gradient.length - 1)) * 100}%`} stopColor={c} />)}
@@ -118,49 +156,65 @@ export function NovaArea({
           const yy = y(t);
           return (
             <g key={i}>
-              <line x1={PAD_L} x2={W - 12} y1={yy} y2={yy} stroke="var(--border)" strokeWidth="1" opacity="0.55" />
+              <line x1={PAD_L} x2={W - PAD_R} y1={yy} y2={yy} stroke="var(--border)" strokeWidth="1" opacity="0.55" />
               <text x={PAD_L - 8} y={yy + 3.5} textAnchor="end"
                 style={{ fill: "var(--muted)", fontSize: 9.5 }}>{prefix}{fmt(t)}</text>
             </g>
           );
         })}
 
-        <path d={area} fill={`url(#${id}f)`} />
-        <path d={line} fill="none" stroke={`url(#${id}s)`} strokeWidth="2.5"
-          strokeLinejoin="round" strokeLinecap="round" />
+        <AnimatedArea d={area} fill={`url(#${id}f)`} />
+        <AnimatedLine d={line} stroke={`url(#${id}s)`} />
 
+        {/* Labels only — the hit testing is done against the pointer, not
+            against per-point rectangles, so edge points are full width. */}
         {data.map((d, i) => (
-          <g key={i}>
-            <rect x={x(i) - plotW / data.length / 2} y={PAD_T} width={plotW / data.length} height={plotH}
-              fill="transparent" onMouseEnter={() => setHi(i)} />
-            <circle cx={x(i)} cy={y(d.value)} r={hi === i ? 5 : 3}
-              fill={gradient[1] ?? gradient[0]} stroke="rgba(255,255,255,.9)" strokeWidth="1.4"
-              style={{ transition: "r .15s" }} />
-            {i % step === 0 && (
-              <text x={x(i)} y={H - 8} textAnchor="middle" style={{ fill: "var(--muted)", fontSize: 9.5 }}>
-                {d.label}
-              </text>
-            )}
-          </g>
+          i % step === 0 ? (
+            <text key={i} x={x(i)} y={H - 8} textAnchor="middle" style={{ fill: "var(--muted)", fontSize: 9.5 }}>
+              {d.label}
+            </text>
+          ) : null
         ))}
 
+        {/* Only the active point gets a marker. Drawing all of them turned a
+            90-day series into a bead necklace that hid the trend line. */}
         {hi !== null && (
-          <line x1={x(hi)} x2={x(hi)} y1={PAD_T} y2={PAD_T + plotH}
-            stroke={gradient[1] ?? gradient[0]} strokeWidth="1" strokeDasharray="3 3" opacity=".65" />
+          <>
+            <line x1={x(hi)} x2={x(hi)} y1={PAD_T} y2={PAD_T + plotH}
+              stroke={gradient[1] ?? gradient[0]} strokeWidth="1" strokeDasharray="3 3" opacity=".65" />
+            <motion.circle
+              cx={x(hi)} cy={y(data[hi].value)} r={5}
+              fill={gradient[1] ?? gradient[0]} stroke="rgba(255,255,255,.9)" strokeWidth="1.4"
+              initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.14 }}
+              style={{ transformOrigin: `${x(hi)}px ${y(data[hi].value)}px` }}
+            />
+          </>
+        )}
+
+        {live && (
+          <LivePulse cx={x(data.length - 1)} cy={y(data[data.length - 1].value)}
+            color={gradient[1] ?? gradient[0]} />
         )}
       </svg>
 
       {hi !== null && (
-        <div style={{
-          position: "absolute", left: `${(x(hi) / W) * 100}%`, top: 4, transform: "translateX(-50%)",
-          padding: "7px 12px", borderRadius: 12, pointerEvents: "none", whiteSpace: "nowrap",
-          background: "rgba(20,24,45,.86)", border: "1px solid rgba(140,90,255,.45)",
-          backdropFilter: "blur(14px)", boxShadow: "0 10px 30px rgba(0,0,0,.5)", fontSize: 11.5,
-        }}>
-          <span style={{ color: "var(--muted)" }}>{data[hi].label}</span>{" · "}
+        <div
+          role="status"
+          style={{
+            position: "absolute", left: `${tipPct}%`, top: 4, transform: "translateX(-50%)",
+            padding: "7px 12px", borderRadius: 12, pointerEvents: "none", whiteSpace: "nowrap",
+            background: "rgba(20,24,45,.86)", border: "1px solid rgba(140,90,255,.45)",
+            backdropFilter: "blur(14px)", boxShadow: "0 10px 30px rgba(0,0,0,.5)", fontSize: 11.5,
+          }}
+        >
+          <span style={{ color: "rgba(255,255,255,.7)" }}>{data[hi].label}</span>{" \u00b7 "}
           <b style={{ color: "#fff" }}>{prefix}{new Intl.NumberFormat().format(data[hi].value)}</b>
         </div>
       )}
+
+      <ChartData caption={caption ?? "Trend data"} data={data}
+        format={(n) => `${prefix}${new Intl.NumberFormat().format(n)}`} />
     </div>
   );
 }
@@ -169,12 +223,13 @@ export function NovaArea({
    BARS — categorical, with axis and value on hover
    ══════════════════════════════════════════════════════════════════ */
 export function NovaBars({
-  data, height = 200, prefix = "", emptyHint,
+  data, height = 200, prefix = "", emptyHint, caption,
 }: {
   data: Array<{ label: string; value: number }>;
-  height?: number; prefix?: string; emptyHint?: string;
+  height?: number; prefix?: string; emptyHint?: string; caption?: string;
 }) {
   const [hi, setHi] = useState<number | null>(null);
+  const calm = useCalm();
 
   if (!data.length || data.every((d) => d.value === 0)) {
     return <NoData title="Nothing recorded yet" hint={emptyHint} height={height} />;
@@ -186,27 +241,57 @@ export function NovaBars({
 
   return (
     <div>
-      <div style={{ height: 20, marginBottom: 6, fontSize: 11.5, color: "var(--muted)" }}>
+      {/*
+        The readout is a fixed-height row that is ALWAYS present, holding a
+        hint when nothing is selected. Rendering it conditionally made the
+        whole chart jump 20px up and down as the pointer crossed it — the
+        chart moving away from the cursor that is trying to read it.
+      */}
+      <div style={{ height: 20, marginBottom: 6, fontSize: 11.5, color: "var(--muted)" }} role="status">
         {hi !== null
-          ? <><b style={{ color: "var(--text)" }}>{data[hi].label}</b> · {prefix}{new Intl.NumberFormat().format(data[hi].value)}</>
-          : "Hover a bar for its exact value"}
+          ? <><b style={{ color: "var(--text)" }}>{data[hi].label}</b> {"\u00b7"} {prefix}{new Intl.NumberFormat().format(data[hi].value)}</>
+          : "Hover, tap or use arrow keys for exact values"}
       </div>
       <div style={{ display: "flex", gap: 10 }}>
-        {/* Y axis */}
         <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between",
           height, fontSize: 9.5, color: "var(--muted)", textAlign: "right", minWidth: 30 }}>
           {[1, 0.75, 0.5, 0.25, 0].map((f) => <span key={f}>{prefix}{fmt(niceMax * f)}</span>)}
         </div>
 
         <div style={{ flex: 1 }}>
-          <div style={{ position: "relative", height, display: "flex", alignItems: "flex-end",
-            gap: `${Math.max(2, 30 / data.length)}%` }}>
+          <div
+            role="application"
+            tabIndex={0}
+            aria-label={caption ?? "Bar chart. Use arrow keys to read each value."}
+            onKeyDown={(e) => {
+              const cur = hi ?? -1;
+              let next: number | null = null;
+              if (e.key === "ArrowRight") next = Math.min(data.length - 1, cur + 1);
+              else if (e.key === "ArrowLeft") next = Math.max(0, cur <= 0 ? 0 : cur - 1);
+              else if (e.key === "Home") next = 0;
+              else if (e.key === "End") next = data.length - 1;
+              else if (e.key === "Escape") next = null;
+              else return;
+              e.preventDefault();
+              setHi(next);
+            }}
+            onBlur={() => setHi(null)}
+            onMouseLeave={() => setHi(null)}
+            style={{ position: "relative", height, display: "flex", alignItems: "flex-end",
+              gap: `${Math.max(2, 30 / data.length)}%`, outlineOffset: 2 }}
+          >
             {[0, 0.25, 0.5, 0.75, 1].map((f) => (
               <div key={f} style={{ position: "absolute", left: 0, right: 0, bottom: `${f * 100}%`,
                 borderTop: "1px solid var(--border)", opacity: 0.55 }} />
             ))}
             {data.map((d, i) => (
-              <div key={i} onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)}
+              <AnimatedBar
+                key={i}
+                delay={barDelay(i, data.length)}
+                onMouseEnter={() => setHi(i)}
+                // Pointer, so a tap on a phone selects the bar. Previously the
+                // values were simply unreachable on touch.
+                onPointerDown={() => setHi(i)}
                 style={{
                   flex: 1, position: "relative", zIndex: 1,
                   height: `${Math.max(1.5, (d.value / niceMax) * 100)}%`,
@@ -216,21 +301,45 @@ export function NovaBars({
                     : "linear-gradient(180deg,#E9408B,#6C3CE1)",
                   opacity: hi === null || hi === i ? 1 : 0.42,
                   filter: hi === i ? "brightness(1.25)" : "none",
-                  transition: "opacity .15s, filter .15s",
+                  transition: calm ? "none" : "opacity .15s, filter .15s",
                   cursor: "default",
-                }} />
+                }}
+              />
             ))}
           </div>
           <div style={{ display: "flex", gap: `${Math.max(2, 30 / data.length)}%`, marginTop: 7 }}>
+            {/*
+              Every bar gets a cell so the labels stay aligned to the bars, but
+              only every `step`-th cell carries text — which means the label
+              must be allowed to OVERFLOW into its empty neighbours.
+
+              Clipping each cell (overflow:hidden + ellipsis) was the bug: with
+              thirty bars a cell is about eighteen pixels wide, so "1 Aug"
+              rendered as "1.." and the axis became unreadable. The width limit
+              was never real — the space either side is blank.
+            */}
             {data.map((d, i) => (
-              <span key={i} style={{ flex: 1, textAlign: "center", fontSize: 9.5, color: "var(--muted)",
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span
+                key={i}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  textAlign: "center",
+                  fontSize: 9.5,
+                  color: "var(--muted)",
+                  whiteSpace: "nowrap",
+                  overflow: "visible",
+                }}
+              >
                 {i % step === 0 ? d.label : ""}
               </span>
             ))}
           </div>
         </div>
       </div>
+
+      <ChartData caption={caption ?? "Chart data"} data={data}
+        format={(n) => `${prefix}${new Intl.NumberFormat().format(n)}`} />
     </div>
   );
 }
@@ -245,7 +354,9 @@ export function NovaDonut({
   size?: number; emptyHint?: string; unit?: string;
 }) {
   const [hi, setHi] = useState<number | null>(null);
-  const id = useMemo(() => `nd${Math.random().toString(36).slice(2, 8)}`, []);
+  // useId, not Math.random — see the note in NovaArea: a random id differs
+  // between server and client, so url(#…) references break during hydration.
+  const id = `nd${useId().replace(/[:]/g, "")}`;
   const rows = data.filter((d) => d.value > 0);
   const total = rows.reduce((s, d) => s + d.value, 0);
 
@@ -254,13 +365,23 @@ export function NovaDonut({
   }
 
   const R = size / 2 - 14, C = 2 * Math.PI * R;
-  let acc = 0;
-  const segs = rows.map((d, i) => {
-    const len = (d.value / total) * C;
-    const seg = { ...d, len, offset: -acc, i };
-    acc += len;
-    return seg;
-  });
+  /**
+   * Running offsets via reduce rather than a mutated closure variable.
+   *
+   * The `let acc` version worked, but React's compiler cannot prove a callback
+   * that writes to an outer binding is pure, so it opts the component out of
+   * memoisation — and on a dashboard that re-renders on every poll, that is a
+   * real cost. Same maths, same output, no mutation.
+   */
+  const segs = rows.reduce<Array<(typeof rows)[number] & { len: number; offset: number; i: number }>>(
+    (out, d, i) => {
+      const len = (d.value / total) * C;
+      const acc = out.length ? -out[out.length - 1].offset + out[out.length - 1].len : 0;
+      out.push({ ...d, len, offset: -acc, i });
+      return out;
+    },
+    [],
+  );
 
   const shown = hi !== null ? rows[hi] : null;
 
@@ -339,7 +460,9 @@ export function NovaRadial({
   size?: number; centreValue?: React.ReactNode; centreLabel?: string;
 }) {
   const [hi, setHi] = useState<number | null>(null);
-  const id = useMemo(() => `nr${Math.random().toString(36).slice(2, 8)}`, []);
+  // useId, not Math.random — see the note in NovaArea: a random id differs
+  // between server and client, so url(#…) references break during hydration.
+  const id = `nr${useId().replace(/[:]/g, "")}`;
 
   if (!rings.length || rings.every((r) => r.total === 0)) {
     return <NoData title="No data to chart yet" height={size} />;
