@@ -1512,6 +1512,26 @@ model ServiceSettings {
 
   quotaResetDate DateTime?
   expiryDate     DateTime?
+
+  /// Whether the nightly job may renew this subscriber from their wallet.
+  ///
+  /// WHY THIS EXISTS
+  /// `runAutoRenewal` selected every subscriber with `balance > 0` and a
+  /// lapsed expiry, charged the wallet and set them ACTIVE. There was no
+  /// per-subscriber opt-out anywhere — `autoRenew` existed only on User and
+  /// StaticIp — so an operator could not stop it.
+  ///
+  /// That made one workflow impossible: expiring a customer and refunding
+  /// them. Staff expire the account, the refund credits the wallet, and at
+  /// 01:00 the job sees credit plus a lapsed expiry and reactivates them,
+  /// charging the wallet again. The refund re-arms the very thing it was
+  /// meant to undo, and from the operator's side the customer "goes active
+  /// by itself" no matter what they do.
+  ///
+  /// Defaults to true so existing installs behave exactly as before —
+  /// auto-renew from wallet is a real feature, the missing opt-out was the
+  /// bug.
+  autoRenew      Boolean   @default(true)
   // Per-subscriber grace: keep this customer online until this moment even
   // though their paid period has ended (operator goodwill / awaiting payment).
   gracePeriodUntil DateTime?

@@ -168,7 +168,23 @@ export class BillingService {
         status: { in: ['ACTIVE', 'EXPIRED', 'SUSPENDED'] },
         packageId: { not: null },
         balance: { gt: 0 },
-        serviceSettings: { is: { expiryDate: { not: null, lte: now } } },
+        /**
+         * `autoRenew: true` is the opt-out this query used to lack.
+         *
+         * Without it every subscriber holding any wallet credit was renewed
+         * and set ACTIVE at expiry, with no way for an operator to prevent
+         * it. That made "expire this customer and refund them" impossible:
+         * the refund credits the wallet, and the next nightly run charges it
+         * again and reactivates them. Staff saw accounts coming back to life
+         * on their own.
+         *
+         * Checked in the WHERE clause rather than skipped in the loop so an
+         * excluded subscriber is never fetched, never counted, and cannot be
+         * charged by a later edit to the body below.
+         */
+        serviceSettings: {
+          is: { expiryDate: { not: null, lte: now }, autoRenew: true },
+        },
       },
       include: { package: { include: { pool: true } }, serviceSettings: true },
     });

@@ -108,6 +108,18 @@ export class ServiceSettingsService {
         isStaticIp:     data.isStaticIp  === 'true' || data.isStaticIp  === true,
         hasBackup:      data.hasBackup   === 'true' || data.hasBackup   === true,
         isBlocked:      data.isBlocked   === 'true' || data.isBlocked   === true,
+        /**
+         * Auto-renewal opt-in. Tri-state on purpose, unlike the booleans
+         * above: those coerce a missing value to `false`, which here would
+         * silently switch auto-renewal OFF for a subscriber every time any
+         * unrelated field was saved from a form that does not include it.
+         * `undefined` leaves the column alone; only an explicit value changes
+         * it.
+         */
+        autoRenew:
+          data.autoRenew === undefined
+            ? undefined
+            : data.autoRenew === 'true' || data.autoRenew === true,
       },
     });
     await this.syncAfterWrite(subscriberId);
@@ -146,6 +158,18 @@ export class ServiceSettingsService {
         isStaticIp:     data.isStaticIp  === 'true' || data.isStaticIp  === true,
         hasBackup:      data.hasBackup   === 'true' || data.hasBackup   === true,
         isBlocked:      data.isBlocked   === 'true' || data.isBlocked   === true,
+        /**
+         * Auto-renewal opt-in. Tri-state on purpose, unlike the booleans
+         * above: those coerce a missing value to `false`, which here would
+         * silently switch auto-renewal OFF for a subscriber every time any
+         * unrelated field was saved from a form that does not include it.
+         * `undefined` leaves the column alone; only an explicit value changes
+         * it.
+         */
+        autoRenew:
+          data.autoRenew === undefined
+            ? undefined
+            : data.autoRenew === 'true' || data.autoRenew === true,
       },
     });
     await this.syncAfterWrite(subscriberId);
