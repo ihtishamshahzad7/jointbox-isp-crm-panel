@@ -7,10 +7,10 @@ import {
   HttpStatus,
   Req,
   Get,
-  UseGuards
+  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { JwtAuthGuard } from './auth.guard'; // Use JwtAuthGuard instead
+import { JwtAuthGuard } from './auth.guard';
 import { TokenBlacklistService } from './token-blacklist.service';
 
 @Controller('auth')
@@ -20,7 +20,6 @@ export class AuthController {
     private readonly tokenBlacklistService: TokenBlacklistService,
   ) {}
 
-  // Switch into a downstream user's profile ("act as").
   @Post('impersonate/:userId')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -28,7 +27,6 @@ export class AuthController {
     return this.authService.impersonate(req.user, +userId);
   }
 
-  // Return to the original operator's account.
   @Post('impersonate-stop')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -42,22 +40,23 @@ export class AuthController {
     @Body() loginDto: { email: string; password: string; code?: string },
     @Req() req: any,
   ) {
-    console.log('📝 Login attempt for email:', loginDto.email);
-    
-    const ip = req.headers['x-forwarded-for'] || 
-               req.socket?.remoteAddress || 
-               req.connection?.remoteAddress || 
-               'Unknown';
-    
+    // Keep authentication deterministic with the demo-account creator and
+    // with production accounts whose email may have been entered with spaces
+    // or different casing. Passwords are intentionally NOT trimmed/changed.
+    const email = String(loginDto?.email || '').trim().toLowerCase();
+    const password = String(loginDto?.password || '');
+    const code = loginDto?.code ? String(loginDto.code).trim() : undefined;
+
+    console.log('📝 Login attempt for email:', email);
+
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]?.trim()) ||
+      req.socket?.remoteAddress ||
+      req.connection?.remoteAddress ||
+      'Unknown';
     const userAgent = req.headers['user-agent'] || 'Unknown';
-    
-    return this.authService.login(
-      loginDto.email,
-      loginDto.password,
-      ip,
-      userAgent,
-      loginDto.code,
-    );
+
+    return this.authService.login(email, password, ip, userAgent, code);
   }
 
   @Get('profile')
@@ -84,9 +83,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: any) {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    if (token) {
-      this.tokenBlacklistService.add(token);
-    }
+    if (token) this.tokenBlacklistService.add(token);
     return { message: 'Logged out successfully' };
   }
 }
