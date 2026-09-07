@@ -365,6 +365,127 @@ export class NasMonitorService {
   }
 
   /**
+   * Aggregate network throughput across EVERY NAS — the whole-network MRTG
+   * series for the dashboard. Sums the cumulative octets of all whole-NAS
+   * samples (vlan = NULL) into aligned time buckets, then derives a bit-rate
+   * from the delta between consecutive buckets (counter resets clamped to 0).
+   *
+   * Bucketing makes the sum robust even though individual NAS samples land a
+   * few seconds apart on the same cron tick. Downsampling is automatic: the
+   * bucket size grows with the range (5m / 1h / 6h), so 30 days stays a
+   * handful of points instead of tens of thousands.
+   */
+  async networkTraffic(range = '1h'): Promise<{
+    range: string;
+    points: Array<{ ts: Date; inBps: number; outBps: number; online: number }>;
+    peakIn: number; peakOut: number; peakOnline: number; samples: number;
+  }> {
+    const { since, bucketSec } = this.rangeToInterval(range);
+    // Align buckets to the epoch floor of bucketSec so consecutive queries
+    // produce identical buckets (no drift from a moving window).
+    const startMs = Math.floor(since.getTime() / (bucketSec * 1000)) * bucketSec * 1000;
+    const startIso = new Date(startMs).toISOString();
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<Array<{
+        bucket: Date; inb: bigint; outb: bigint;
+      }>>(`
+        SELECT date_trunc('second', to_timestamp(
+                 floor(EXTRACT(EPOCH FROM ts) / ${bucketSec}) * ${bucketSec}
+               )) AS bucket,
+               SUM(in_bytes)::bigint AS inb,
+               SUM(out_bytes)::bigint AS outb
+          FROM nas_traffic_sample
+         WHERE vlan IS NULL AND ts >= $1::timestamptz
+         GROUP BY 1
+         ORDER BY 1 ASC`,
+        startIso,
+      );
+
+      const points: Array<{ ts: Date; inBps: number; outBps: number; online: number }> = [];
+      for (let i = 1; i < rows.length; i++) {
+        const a = rows[i - 1], b = rows[i];
+        const secs = (b.bucket.getTime() - a.bucket.getTime()) / 1000;
+        if (secs <= 0) continue;
+        const din = Number(b.inb - a.inb);
+        const dout = Number(b.outb - a.outb);
+        points.push({
+          ts: b.bucket,
+          inBps: Math.max(0, din) * 8 / secs,
+          outBps: Math.max(0, dout) * 8 / secs,
+          online: 0, // not tracked at network level here
+        });
+      }
+
+      const peakIn = points.reduce((m, p) => Math.max(m, p.inBps), 0);
+      const peakOut = points.reduce((m, p) => Math.max(m, p.outBps), 0);
+      return { range, points, peakIn, peakOut, peakOnline: 0, samples: rows.length };
+    } catch (e: any) {
+      this.log.warn(`networkTraffic failed: ${e?.message || e}`);
+      return { range, points: [], peakIn: 0, peakOut: 0, peakOnline: 0, samples: 0 };
+    }
+  }
+
+  /**
+   * Top-N subscribers by live throughput — the "who's pulling bandwidth now"
+   * list for the dashboard.
+   *
+   * Current bit-rate comes from the two most recent entries in
+   * subscriber_traffic_sample (per online subscriber, refreshed every 10 min),
+   * so it is an honest 10-minute average, not a fabricated instantaneous value.
+   * A subscriber with a single sample (session just started) is included at
+   * zero. Returns download and upload directions separately; sort is by total
+   * (down+up) descending.
+   */
+  async topSubscribers(limit = 8) {
+    try {
+      const cap = Math.min(Math.max(limit, 1), 25);
+      const rows = await this.prisma.$queryRawUnsafe<Array<{
+        subscriber_id: number; name: string; username: string; full_name: string;
+        in_bps: number; out_bps: number;
+      }>>(`
+        WITH ranked AS (
+          SELECT s."subscriber_id", s."ts", s."in_bytes", s."out_bytes",
+                 ROW_NUMBER() OVER (PARTITION BY s."subscriber_id" ORDER BY s."ts" DESC) AS rn
+            FROM subscriber_traffic_sample s
+        ),
+        latest AS (SELECT * FROM ranked WHERE rn <= 2)
+        SELECT l."subscriber_id",
+               COALESCE(sub."fullName", sub."username") AS full_name,
+               sub."username",
+               COALESCE(
+                 CASE WHEN prev."ts" IS NOT NULL
+                      AND prev."ts" <> l."ts"
+                      AND EXTRACT(EPOCH FROM (l."ts" - prev."ts")) > 0
+                 THEN GREATEST(0, (l."in_bytes" - prev."in_bytes"))
+                    * 8 / EXTRACT(EPOCH FROM (l."ts" - prev."ts"))
+                 END, 0)::float8 AS in_bps,
+               COALESCE(
+                 CASE WHEN prev."ts" IS NOT NULL
+                      AND prev."ts" <> l."ts"
+                      AND EXTRACT(EPOCH FROM (l."ts" - prev."ts")) > 0
+                 THEN GREATEST(0, (l."out_bytes" - prev."out_bytes"))
+                    * 8 / EXTRACT(EPOCH FROM (l."ts" - prev."ts"))
+                 END, 0)::float8 AS out_bps
+          FROM (SELECT * FROM latest WHERE rn = 1) l
+          LEFT JOIN (SELECT * FROM latest WHERE rn = 2) prev
+                 ON prev."subscriber_id" = l."subscriber_id"
+          JOIN "Subscriber" sub ON sub.id = l."subscriber_id"
+         ORDER BY (in_bps + out_bps) DESC
+         LIMIT ${cap}`);
+      return rows.map((r) => ({
+        subscriberId: Number(r.subscriber_id),
+        name: r.full_name || r.username,
+        username: r.username,
+        downloadBps: Math.round(Number(r.out_bps)),
+        uploadBps: Math.round(Number(r.in_bps)),
+      }));
+    } catch (e: any) {
+      this.log.warn(`topSubscribers failed: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
    * Health of every NAS on one screen: online count, current in/out bit-rate
    * (from the two latest samples), and whether it's reporting (fresh sample).
    */
