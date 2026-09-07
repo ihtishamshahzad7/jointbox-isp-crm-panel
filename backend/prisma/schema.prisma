@@ -1,0 +1,3911 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//////////////////////////////////////
+// ENUMS
+//////////////////////////////////////
+
+enum Status {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  SUSPENDED
+}
+
+enum NasType {
+  MIKROTIK
+  CISCO
+  HUAWEI
+  OTHER
+}
+
+/// The physical medium the customer is connected over.
+enum ConnectionType {
+  FTTH
+  ADSL
+  G4_LTE
+  WIRELESS
+  FIBER
+}
+
+/// How the customer AUTHENTICATES — orthogonal to both the physical medium
+/// (ConnectionType) and the customer segment (ServiceType: RESIDENTIAL/BUSINESS…).
+/// A café on fibre may be a hotspot; a home on the same fibre is PPPoE.
+/// This decides which RADIUS attributes are written for them.
+enum AuthMethod {
+  PPPOE // dial-up session, credentials in the router
+  HOTSPOT // captive portal login, typically time/data limited
+  STATIC // fixed IP, no session auth (business customers)
+  DHCP // MAC-based, no login
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  SALES
+  RESELLER
+  SUB_RESELLER
+  RETAILER
+  /// Read-only books access. Can view everything in its subtree — ledger,
+  /// payments, subscribers, reports — but cannot write, edit, or move money.
+  /// Enforced globally in PermissionsGuard (every non-GET is refused).
+  AUDITOR
+}
+
+enum ServiceType {
+  RESIDENTIAL
+  BUSINESS
+  CORPORATE
+  EDUCATIONAL
+  GOVERNMENT
+}
+
+enum DurationType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+}
+
+enum IpType {
+  STATIC
+  DYNAMIC
+}
+
+enum DiscountType {
+  NONE
+  PERCENTAGE
+  FIXED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  UNPAID
+  PARTIAL
+  PAID
+  CANCELLED
+  OVERDUE
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHEQUE
+  CARD
+  ONLINE
+  VOUCHER
+  BALANCE
+}
+
+enum VoucherType {
+  PREPAID
+  TOPUP
+  DATA_BUNDLE
+  COMBO
+}
+
+enum VoucherStatus {
+  UNUSED
+  ACTIVE
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+enum TicketCategory {
+  TECHNICAL
+  BILLING
+  COMPLAINT
+  INSTALLATION
+  DISCONNECTION
+  OTHER
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  ESCALATED
+}
+
+/// What a technician is being sent out to do.
+enum FieldJobType {
+  INSTALLATION // new customer connection
+  FAULT_REPAIR // something is broken
+  MAINTENANCE // planned work
+  DISCONNECTION // remove service, recover hardware
+  SURVEY // feasibility check before selling
+  UPGRADE // package/hardware change
+  RELOCATION // customer moving premises
+}
+
+enum FieldJobStatus {
+  PENDING // created, nobody assigned
+  ASSIGNED // technician allocated
+  IN_PROGRESS // technician on site
+  COMPLETED
+  FAILED // attended but couldn't complete
+  CANCELLED
+}
+
+/// Lifecycle of a piece of hardware — ONU, router, cable drum, splitter.
+enum InventoryStatus {
+  IN_STOCK // sitting in the warehouse
+  ASSIGNED // issued to a reseller, not yet installed
+  INSTALLED // deployed at a customer premises
+  FAULTY // returned as defective
+  RETURNED // returned to stock / supplier
+  LOST // written off
+}
+
+enum InventoryType {
+  ONU
+  ROUTER
+  SWITCH
+  OLT
+  CABLE
+  SPLITTER
+  ANTENNA
+  OTHER
+}
+
+enum SenderType {
+  SUBSCRIBER
+  STAFF
+}
+
+enum NetworkEventType {
+  CONNECTION
+  DISCONNECTION
+  AUTH_SUCCESS
+  AUTH_FAIL
+  NAS_REBOOT
+  NAS_OFFLINE
+  NAS_ONLINE
+  RADIUS_TIMEOUT
+  // Link-tracing events (SNMP / Syslog)
+  LINK_UP
+  LINK_DOWN
+  LINK_FLAP
+  SIGNAL_WEAK
+  SIGNAL_CRITICAL
+  PORT_ERROR
+  SYSLOG
+}
+
+/// How the panel talks SNMP to a device. Optional per NAS.
+enum SnmpVersion {
+  V1
+  V2C
+  V3
+}
+
+/// What kind of box this NAS is — drives which SNMP OIDs and syslog parsers
+/// apply (e.g. OLT ONT-signal OIDs vs a plain switch's interface table).
+enum DeviceType {
+  MIKROTIK
+  OLT_VSOL
+  OLT_ZTE
+  OLT_HUAWEI
+  OLT_FIBERHOME
+  OLT_BDCOM
+  SWITCH
+  OTHER
+}
+
+//////////////////////////////////////
+// FREERADIUS MODELS
+//////////////////////////////////////
+
+model RadCheck {
+  id        Int    @id @default(autoincrement())
+  username  String @db.VarChar(64)
+  attribute String @db.VarChar(64)
+  op        String @db.VarChar(2)
+  value     String @db.VarChar(253)
+
+  subscriber Subscriber? @relation("radChecks", fields: [username], references: [username], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([username])
+  @@map("radcheck")
+}
+
+model RadReply {
+  id        Int    @id @default(autoincrement())
+  username  String @db.VarChar(64)
+  attribute String @db.VarChar(64)
+  op        String @db.VarChar(2)
+  value     String @db.VarChar(253)
+
+  subscriber Subscriber? @relation("radReplies", fields: [username], references: [username], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([username])
+  @@map("radreply")
+}
+
+model RadUserGroup {
+  id        Int    @id @default(autoincrement())
+  username  String @db.VarChar(64)
+  groupname String @db.VarChar(64)
+  priority  Int    @default(1)
+
+  subscriber Subscriber? @relation("radUserGroups", fields: [username], references: [username], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([username])
+  @@map("radusergroup")
+}
+
+model RadGroupCheck {
+  id        Int    @id @default(autoincrement())
+  groupname String @db.VarChar(64)
+  attribute String @db.VarChar(64)
+  op        String @db.VarChar(2)
+  value     String @db.VarChar(253)
+
+  @@index([groupname])
+  @@map("radgroupcheck")
+}
+
+model RadGroupReply {
+  id        Int    @id @default(autoincrement())
+  groupname String @db.VarChar(64)
+  attribute String @db.VarChar(64)
+  op        String @db.VarChar(2)
+  value     String @db.VarChar(253)
+
+  @@index([groupname])
+  @@map("radgroupreply")
+}
+
+model RadAcct {
+  radacctid          BigInt    @id @default(autoincrement())
+  acctsessionid      String    @db.VarChar(64)
+  acctuniqueid       String    @unique @db.VarChar(32)
+  username           String?   @db.VarChar(64)
+  realm              String?   @db.VarChar(64)
+  nasipaddress       String    @db.Inet
+  nasportid          String?   @db.VarChar(15)
+  nasporttype        String?   @db.VarChar(32)
+  acctstarttime      DateTime? @db.Timestamptz(6)
+  acctstoptime       DateTime? @db.Timestamptz(6)
+  acctsessiontime    Int?
+  acctauthentic      String?   @db.VarChar(32)
+  connectinfo_start  String?   @db.VarChar(50)
+  connectinfo_stop   String?   @db.VarChar(50)
+  acctinputoctets    BigInt?
+  acctoutputoctets   BigInt?
+  calledstationid    String?   @db.VarChar(50)
+  callingstationid   String?   @db.VarChar(50)
+  acctterminatecause String?   @db.VarChar(32)
+  servicetype        String?   @db.VarChar(32)
+  framedprotocol     String?   @db.VarChar(32)
+  framedipaddress    String?   @db.Inet
+
+  // Required by the stock FreeRADIUS PostgreSQL accounting queries
+  // (start / interim-update / stop / accounting-on / accounting-off).
+  // Without these the accounting INSERT fails and NO session is ever recorded.
+  acctupdatetime      DateTime? @db.Timestamptz(6)
+  acctinterval        BigInt?
+  framedipv6address   String?   @db.Inet
+  framedipv6prefix    String?   @db.Inet
+  framedinterfaceid   String?   @db.VarChar(44)
+  delegatedipv6prefix String?   @db.Inet
+
+  subscriber Subscriber? @relation("radAccts", fields: [username], references: [username], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([username])
+  @@index([acctstarttime])
+  @@index([acctstoptime])
+  @@map("radacct")
+}
+
+/// Written by FreeRADIUS on accounting-on/off (NAS reboot) and joined by the
+/// simul_count / simul_verify queries to ignore sessions orphaned by a reboot.
+model NasReload {
+  nasipaddress String   @id @db.Inet
+  reloadtime   DateTime @db.Timestamptz(6)
+
+  @@map("nasreload")
+}
+
+/// Periodic per-NAS throughput + online-count snapshot for MRTG-style graphs.
+/// inBytes/outBytes are the CUMULATIVE octet sums across the NAS's live sessions
+/// at sample time; the read side derives a bit-rate from the delta between two
+/// consecutive samples (counter resets are clamped to 0, like MRTG).
+model NasTrafficSample {
+  id       BigInt   @id @default(autoincrement())
+  nasId    Int
+  ts       DateTime @default(now())
+  inBytes  BigInt   @default(0)
+  outBytes BigInt   @default(0)
+  online   Int      @default(0)
+  vlan     String?  @db.VarChar(64) // null = whole NAS; set = per-VLAN sample
+
+  @@index([nasId, ts])
+  @@index([nasId, vlan, ts])
+  @@map("nas_traffic_sample")
+}
+
+/// Periodic per-subscriber throughput snapshot for MRTG-style per-user graphs.
+/// Same contract as NasTrafficSample: inBytes/outBytes are the CUMULATIVE
+/// octets across the subscriber's live accounting at sample time; the read
+/// side derives a bit-rate from the delta between consecutive samples
+/// (counter resets are clamped to 0, like MRTG).
+///
+/// Why this table exists: radacct keeps ONE row per session (interim updates
+/// overwrite it in place), so it can never yield an intra-session time-series
+/// — the subscriber bandwidth graph had nothing to plot for a live PPPoE user.
+/// This append-only sample table (written every 10 minutes for all ONLINE
+/// subscribers in a single INSERT) is what the graph actually draws from.
+model SubscriberTrafficSample {
+  id           BigInt   @id @default(autoincrement())
+  subscriberId Int
+  ts           DateTime @default(now())
+  inBytes      BigInt   @default(0) // cumulative octets FROM subscriber (upload)
+  outBytes     BigInt   @default(0) // cumulative octets TO subscriber (download)
+
+  subscriber Subscriber @relation("SubscriberTrafficSamples", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([subscriberId, ts])
+  @@map("subscriber_traffic_sample")
+}
+
+model RadPostAuth {
+  id               BigInt   @id @default(autoincrement())
+  username         String   @db.VarChar(64)
+  pass             String?  @db.VarChar(64)
+  reply            String?  @db.VarChar(32)
+  authdate         DateTime @default(now()) @db.Timestamptz(6)
+  // Captured directly by the FreeRADIUS post-auth query (see patch-postauth.sh)
+  // so EVERY attempt — including rejects — carries device/NAS context.
+  callingstationid String?  @db.VarChar(64)
+  calledstationid  String?  @db.VarChar(64)
+  nasipaddress     String?  @db.VarChar(64)
+  nasportid        String?  @db.VarChar(64)
+
+  subscriber Subscriber? @relation("radPostAuths", fields: [username], references: [username], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([username])
+  @@index([authdate])
+  @@map("radpostauth")
+}
+
+//////////////////////////////////////
+// NAS MODEL
+//////////////////////////////////////
+
+model Nas {
+  id          Int     @id @default(autoincrement())
+  nasname     String  @db.VarChar(128)
+  shortname   String? @db.VarChar(32)
+  type        String? @db.VarChar(30)
+  ports       Int?
+  secret      String? @db.VarChar(60)
+  server      String? @db.VarChar(64)
+  community   String? @db.VarChar(50)
+  description String? @db.VarChar(200)
+
+  nasIp         String? @unique @db.Inet
+  /// Value the BNG/router sends in the RADIUS NAS-Identifier attribute. Some
+  /// BNGs (vBNG/BiSON, etc.) match a CoA/Disconnect on this rather than on the
+  /// IP, so we include it in CoA requests when set.
+  nasIdentifier String?
+  apiPort       Int     @default(8728)
+  incomingPort  Int     @default(3799)
+  apiUsername   String?
+  apiPassword   String?
+  isActive      Boolean @default(true)
+
+  /// What kind of device this is — selects the right SNMP OIDs / syslog parser.
+  deviceType DeviceType @default(MIKROTIK)
+
+  /// --- Data collection methods, EACH optional and independent per NAS. ---
+  /// The panel only uses a method that is explicitly enabled here, so a plain
+  /// OLT can run on SNMP+Syslog alone with no MikroTik API, and vice-versa.
+  apiEnabled Boolean @default(true) // MikroTik RouterOS API polling
+  apiPollSec Int     @default(60)
+
+  snmpEnabled     Boolean     @default(false)
+  snmpPort        Int         @default(161)
+  /// v1/v2c community. Stored ENCRYPTED (enc:v1:… ) and never returned to the
+  /// browser — the API sends a mask. Legacy plaintext values still read fine.
+  snmpCommunity   String?     @default("public")
+  snmpVersion     SnmpVersion @default(V2C)
+  snmpPollSec     Int         @default(30)
+  snmpTimeoutMs   Int         @default(4000)
+  snmpRetries     Int         @default(1)
+  /// SNMPv3 (USM). Passwords are encrypted at rest, like the community.
+  snmpV3User      String?     @db.VarChar(64)
+  snmpV3SecLevel  String?     @db.VarChar(24) // noAuthNoPriv | authNoPriv | authPriv
+  snmpV3AuthProto String?     @db.VarChar(12) // MD5 | SHA
+  snmpV3AuthPass  String?
+  snmpV3PrivProto String?     @db.VarChar(12) // DES | AES
+  snmpV3PrivPass  String?
+  /// JSON array of interface names or ifIndexes to monitor, e.g.
+  /// ["ether1-wan","vlan100"] or ["1","3"]. When set (non-empty), ONLY these
+  /// registered ports/interfaces are polled; empty/null monitors all.
+  monitoredPorts  String?
+
+  syslogEnabled Boolean @default(false) // receive device syslog on UDP 514
+  syslogPort    Int     @default(514)
+
+  // Who owns this router. A NAS is visible to its owner, to everyone ABOVE the
+  // owner (the ISP can always see what a franchise added), and to any downline
+  // it has been explicitly assigned to. Only the owner may edit or delete it.
+  ownerId Int?
+  owner   User? @relation("NasOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  assignments      NasAssignment[]   @relation("NasAssignments")
+  staticIps        StaticIp[]        @relation("NasStaticIps")
+  subscribers      Subscriber[]      @relation("SubscriberNas")
+  networkLogs      NetworkLog[]      @relation("NetworkLogNas")
+  deviceMetrics    DeviceMetric[]
+  interfaceMetrics InterfaceMetric[]
+  routerLogs       RouterLog[]       @relation("NasRouterLogs")
+  olts             Olt[]             @relation("NasOlts")
+  pppoeSessions    PppoeSession[]    @relation("PppoeSessionNas")
+  ipPools          IpPool[]          @relation("IpPoolNas")
+  accessGroups     AccessGroupNas[]  @relation("AccessGroupNasRel")
+  linkSignals      LinkSignal[]      @relation("NasLinkSignals")
+
+  /// The management tunnel, when this router has been provisioned for one.
+  /// Optional: a router on a public IP does not need one.
+  tunnel NasTunnel? @relation("NasTunnel")
+
+  @@index([nasname])
+  @@map("nas")
+}
+
+/// A WireGuard management tunnel to one router.
+///
+/// THE PROBLEM THIS SOLVES
+/// Most small ISPs sit behind CGNAT. Their routers have no reachable public
+/// address, so the panel can poll SNMP, call the RouterOS API, or send a CoA
+/// disconnect only when it happens to be on the same network. Everything the
+/// panel does TO a router — disconnect a defaulter, push a speed change, read
+/// an interface counter — silently stops working the moment the router is
+/// remote. WireGuard inverts the direction: the router dials OUT to the panel
+/// (which CGNAT permits) and holds the tunnel open, giving the panel a stable
+/// overlay address it can reach at any time.
+///
+/// WHY THERE IS NO PRIVATE KEY COLUMN
+/// WireGuard peers are authenticated by public key; the hub never needs the
+/// peer's private key. Storing it anyway would mean one database dump hands an
+/// attacker the identity of every router on the network. So the private key is
+/// generated, shown ONCE in the provisioning config, and discarded. Losing it
+/// is recovered by rotating the tunnel, not by re-reading it — the same
+/// bargain as an API token, and for the same reason.
+model NasTunnel {
+  id    Int @id @default(autoincrement())
+  nasId Int @unique
+  nas   Nas @relation("NasTunnel", fields: [nasId], references: [id], onDelete: Cascade)
+
+  /// The router's WireGuard public key (base64, 44 chars). This is what gets
+  /// written into the panel's `wg` peer list.
+  publicKey String @unique @db.VarChar(64)
+
+  /// The router's address INSIDE the tunnel — what the panel dials for API,
+  /// SNMP and CoA once the tunnel is up.
+  ///
+  /// Unique is the whole integrity story: two routers sharing an overlay IP
+  /// does not error, it silently routes one router's traffic to the other, so
+  /// a disconnect meant for a defaulter in one town lands on a customer in
+  /// another. The constraint is what makes concurrent provisioning safe.
+  overlayIp String @unique @db.VarChar(45)
+
+  /// Endpoint the router should dial, captured at provisioning time so the
+  /// config we hand out and the peer we store cannot drift apart.
+  serverEndpoint  String @db.VarChar(255)
+  serverPublicKey String @db.VarChar(64)
+
+  enabled Boolean @default(true)
+
+  /// Liveness, refreshed from `wg show`. A WireGuard peer has no "connected"
+  /// state — the only evidence a tunnel works is a recent handshake, so this
+  /// timestamp IS the health check.
+  lastHandshake DateTime?
+  rxBytes       BigInt    @default(0)
+  txBytes       BigInt    @default(0)
+
+  /// Who provisioned it, for the audit trail — a tunnel is remote access to
+  /// somebody's network.
+  createdBy Int?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  rotatedAt DateTime?
+
+  @@index([enabled])
+}
+
+/// A temporary speed change for a subscriber. Two modes:
+///  • expiresAt = null → a permanent speed change (applied live, stays until changed).
+///  • expiresAt set    → a timed boost; a background job restores originalDown/Up
+///    (the plan's normal speed) automatically when it expires.
+model TemporaryBoost {
+  id           Int       @id @default(autoincrement())
+  subscriberId Int
+  boostDown    Int // Mbps applied now
+  boostUp      Int
+  originalDown Int // Mbps to restore on revert (the plan's normal speed)
+  originalUp   Int
+  reason       String?
+  charge       Float?    @default(0)
+  expiresAt    DateTime? // null = permanent (no auto-revert)
+  reverted     Boolean   @default(false)
+  createdById  Int?
+  createdAt    DateTime  @default(now())
+  revertedAt   DateTime?
+
+  subscriber Subscriber @relation("SubscriberBoosts", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([subscriberId])
+  @@index([reverted, expiresAt])
+}
+
+/// One optical/interface signal reading (SFP or ONT, Rx or Tx), captured by the
+/// SNMP poller or parsed from syslog. Kept as time-series so a subscriber's
+/// profile can chart dBm over the last 24h and the aggregator can spot a slow
+/// degradation before the link actually drops.
+model LinkSignal {
+  id           Int      @id @default(autoincrement())
+  nasId        Int
+  subscriberId Int?
+  username     String?
+  /// SFP_RX | SFP_TX | ONT_RX | ONT_TX
+  kind         String
+  ifIndex      Int?
+  /// Human port label, e.g. "sfp1", "pon3", "ge1/0/3".
+  port         String?
+  dbm          Float
+  /// GOOD | WEAK | CRITICAL — precomputed against the NAS thresholds.
+  status       String?
+  readAt       DateTime @default(now())
+
+  nas        Nas         @relation("NasLinkSignals", fields: [nasId], references: [id], onDelete: Cascade)
+  subscriber Subscriber? @relation("SubscriberLinkSignals", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([nasId])
+  @@index([subscriberId, readAt])
+  @@index([readAt])
+}
+
+//////////////////////////////////////
+// APPLICATION MODELS
+//////////////////////////////////////
+
+model User {
+  id          Int      @id @default(autoincrement())
+  name        String
+  email       String   @unique
+  password    String
+  role        UserRole @default(SALES)
+  phone       String?
+  address     String?
+  isActive    Boolean  @default(true)
+  balance     Float    @default(0)
+  /// How far this account may overdraw its wallet (post-paid headroom). 0 =
+  /// strict prepaid (default) — cannot spend below zero. 5000 = may go to
+  /// −5000 before activations are blocked. Set per dealer by their parent/ISP.
+  creditLimit Float    @default(0)
+  parentId    Int?
+
+  // Contact preferences and location (from the Zal Ultra user profile spec).
+  // Notification switches default on so existing accounts keep receiving what
+  // they did before; location fields are optional regional identification.
+  smsEnabled   Boolean @default(true)
+  emailEnabled Boolean @default(true)
+  country      String?
+  province     String?
+  city         String?
+
+  // Identity documents (uploaded images, stored as /uploads/... URLs)
+  photoUrl     String? // profile picture
+  cnicFrontUrl String? // CNIC / national ID — front
+  cnicBackUrl  String? // CNIC / national ID — back
+
+  // ── Demo / sandbox account. A demo user does real franchise work (create
+  // subscribers, users, NAS, billing…) but is blocked from console / RADIUS
+  // admin / logs, and the whole account + everything it created is auto-deleted
+  // after demoExpiresAt (7 days), so nothing it touches leaks or persists.
+  isDemo        Boolean   @default(false)
+  demoExpiresAt DateTime?
+
+  // ── KYC for the account holder (reseller / staff), mirroring Subscriber KYC.
+  // Regulators require a verified identity behind every account, not just every
+  // subscriber. Normalised digits for duplicate detection.
+  cnicNumber    String?
+  cnicExpiry    DateTime?
+  kycStatus     KycStatus @default(PENDING)
+  kycVerifiedBy Int?
+  kycVerifiedAt DateTime?
+  kycNotes      String?
+
+  // Extended profile fields from franchise user profile spec
+  identity         String? // National ID / CNIC number
+  zipCode          String?
+  dateOfBirth      DateTime?
+  about            String? // Bio / notes about this user
+  additionalPhones String? // JSON array of extra phone numbers
+  additionalEmails String? // JSON array of extra email addresses
+
+  /// Auto-renew: when enabled, the user's subscribers are renewed automatically.
+  autoRenew       Boolean @default(true)
+  /// Billing model this account uses for its subscribers.
+  billingType     String? @default("PREPAID") // PREPAID / POSTPAID
+  /// For staff: balance deducted on subscriber activation to track collections.
+  /// For reseller: maximum transaction limit for balance transfers.
+  accountingLimit Float?
+
+  // Group assignments for NAS and Area filtering.
+  nasGroup  String?
+  areaGroup String?
+
+  // Phase 4A: two-factor authentication (TOTP)
+  twoFactorSecret  String?
+  twoFactorEnabled Boolean @default(false)
+
+  // Phase 4B: multi-tenancy + reseller economics
+  branchId           Int?
+  commissionPercent  Float   @default(0)
+  // Permission to add balance (top up) to downline wallets. ISP/SUPER_ADMIN always may.
+  canTopupDownline   Boolean @default(false)
+  // Permission to register a router (NAS) themselves. When false the reseller
+  // can only use routers assigned to them by the ISP or their parent.
+  canAddNas          Boolean @default(false)
+  // Permission to set the SELLING price of a package to their own downline.
+  // The packages themselves are always inherited from the parent — this only
+  // controls the price passed further down, and therefore the child's margin.
+  // It never affects wallets, which remain parent-controlled.
+  //
+  // DEFAULTS TRUE. Pricing your own children is the core mechanic of the
+  // reseller model, not an advanced privilege: a franchise that cannot price
+  // its dealers cannot operate at all. Defaulting to false meant every new
+  // account was silently broken until someone found a switch they did not
+  // know existed. The ISP can still revoke it per account.
+  canSetPackagePrice Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// SetNull, NOT Cascade — deliberately.
+  ///
+  /// Cascading a parent delete down the tree would remove a whole franchise's
+  /// dealers, and their retailers, from one click on the wrong row. Detaching
+  /// instead leaves the children parentless and visible, so a mistake is
+  /// recoverable by reassigning them. The purge endpoint walks the subtree
+  /// explicitly when wiping an account is genuinely what was meant.
+  parent         User?                    @relation("UserParent", fields: [parentId], references: [id], onDelete: SetNull)
+  children       User[]                   @relation("UserParent")
+  branch         Branch?                  @relation("BranchUsers", fields: [branchId], references: [id])
+  walletTxs      UserBalanceTransaction[] @relation("UserBalanceTxs")
+  monitorTargets MonitorTarget[]          @relation("UserMonitorTargets")
+  networkDevices NetworkDevice[]          @relation("UserNetworkDevices")
+  profitEntries  ProfitEntry[]            @relation("UserProfitEntries")
+
+  ownedSubscribers  Subscriber[]           @relation("UserSubscribers")
+  salesSubscribers  Subscriber[]           @relation("SalespersonSubscribers")
+  payments          Payment[]              @relation("PaymentReceiver")
+  assignedTickets   Ticket[]               @relation("AssignedTickets")
+  activityLogs      ActivityLog[]          @relation("ActivityLogUser")
+  loginLogs         LoginLog[]             @relation("LoginLogUser")
+  sessionLogs       SessionLog[]           @relation("SessionLogUser")
+  packagePrices     ResellerPackagePrice[] @relation("UserPackagePrices")
+  permissions       UserPermission[]       @relation("UserPermissions")
+  ownedNas          Nas[]                  @relation("NasOwner")
+  ownedIpPools      IpPool[]               @relation("IpPoolOwner")
+  ownedAreas        Area[]                 @relation("AreaOwner")
+  nasAssignments    NasAssignment[]        @relation("UserNasAssignments")
+  ipPoolAssignments IpPoolAssignment[]     @relation("UserIpPoolAssignments")
+  ownedPackages     Package[]              @relation("PackageOwner")
+  inventoryItems    InventoryItem[]        @relation("InventoryOwner")
+  fieldJobs         FieldJob[]             @relation("TechnicianJobs")
+  groupMemberships  AccessGroupMember[]
+  /// Prepaid cards this account is currently HOLDING as sellable stock.
+  voucherStock      Voucher[]              @relation("UserVoucherStock")
+
+  @@index([parentId])
+  @@index([role, isActive])
+  @@index([branchId])
+}
+
+/**
+ * Delegated per-user permission override. A parent can DENY a specific
+ * capability for one of its children (e.g. "subscribers.changePassword").
+ * No row = allowed (inherits the role). allowed=false = explicitly blocked.
+ */
+model UserPermission {
+  id         Int     @id @default(autoincrement())
+  userId     Int
+  permission String // e.g. "subscribers.write", "subscribers.changePassword"
+  allowed    Boolean @default(true)
+
+  user User @relation("UserPermissions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permission])
+  @@index([userId])
+  @@map("user_permission")
+}
+
+/**
+ * Per-reseller package price (the wholesale ladder).
+ * `price` is what THIS user charges the tier directly BELOW it for `package`.
+ * Anyone in the chain can set their own price and resell downward; the gap
+ * between a tier's price and its parent's price is that tier's profit.
+ */
+/// Identity verification state for a connection.
+/// PTA licence conditions require a verified identity per subscriber, and
+/// duplicate CNICs are the usual signature of resale fraud.
+enum KycStatus {
+  PENDING // documents captured, not yet checked
+  VERIFIED // staff confirmed the CNIC matches the person
+  REJECTED // mismatch, forgery, or refused
+  EXPIRED // CNIC has passed its expiry date
+}
+
+enum OutageType {
+  SCHEDULED // matches a known load-shedding window
+  UNSCHEDULED // power gone outside the published schedule
+  NETWORK // our fault — fibre cut, NAS down, upstream
+  UNKNOWN // detected but not yet classified
+}
+
+enum OutageSource {
+  SCHEDULE // inferred from the load-shedding timetable
+  MASS_DISCONNECT // detected: many customers in one area dropped at once
+  MANUAL // logged by staff
+}
+
+/// WHY an outage happened, scored automatically from telemetry.
+///
+/// `OutageType` above answers "was this inside a load-shedding window"; this
+/// answers the operational question that decides what anyone DOES about it.
+/// Deliberately separate rather than folded into OutageType, because the two
+/// are independent: an unscheduled outage can still be a power failure.
+///
+/// The discriminators are real signals the ONUs already report, not guesses:
+/// a dying gasp is the ONU's final message as its mains supply fails, and LOS
+/// is loss of the optical signal itself. One means power, the other means
+/// fibre, and they are not ambiguous.
+enum OutageCause {
+  POWER_RELATED // mains failure — dying gasp, or a known load-shedding window
+  FIBER_CUT // optical loss of signal with no dying gasp
+  EQUIPMENT_FAILURE // the NAS/OLT serving the area is itself down
+  UPSTREAM_ISP // several independent areas dropped together
+  UNKNOWN // nothing conclusive — do NOT guess
+}
+
+/// A published load-shedding window for an area.
+///
+/// In Pakistan most "internet is down" calls are actually WAPDA. Knowing the
+/// timetable lets the panel tell the difference between a power cut and a fault
+/// — which decides whether a technician is dispatched, whether it counts
+/// against uptime, and what the customer is told.
+model PowerSchedule {
+  id     Int  @id @default(autoincrement())
+  areaId Int
+  area   Area @relation("AreaPowerSchedules", fields: [areaId], references: [id], onDelete: Cascade)
+
+  /// 0 = Sunday … 6 = Saturday. NULL means every day.
+  dayOfWeek Int?
+  startTime String // "HH:MM" local time
+  endTime   String // "HH:MM" — may wrap past midnight
+  isActive  Boolean @default(true)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([areaId, isActive])
+}
+
+/// An actual outage — detected automatically or logged by staff.
+model PowerOutage {
+  id     Int   @id @default(autoincrement())
+  areaId Int?
+  area   Area? @relation("AreaOutages", fields: [areaId], references: [id])
+
+  type   OutageType   @default(UNKNOWN)
+  source OutageSource @default(MASS_DISCONNECT)
+
+  /// Scored automatically when the outage opens — see OutageCause and
+  /// OutageClassifierService. `causeConfidence` is 0–1; anything below ~0.5
+  /// should be presented as a suggestion, not a finding, because telling an
+  /// operator the wrong cause sends a technician to the wrong place.
+  cause           OutageCause @default(UNKNOWN)
+  causeConfidence Float       @default(0)
+  /// The signals behind the verdict, in plain language, so the operator can
+  /// judge it rather than trust it blindly.
+  causeReasons    String?     @db.VarChar(600)
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  /// How many customers dropped, and how many were online just before —
+  /// the ratio is what distinguishes an outage from a few random faults.
+  affectedCount Int @default(0)
+  areaTotal     Int @default(0)
+
+  notified  Boolean @default(false)
+  notes     String?
+  createdBy Int?
+
+  @@index([areaId, startedAt])
+  @@index([endedAt])
+}
+
+enum StaticIpStatus {
+  AVAILABLE // free to allocate
+  ASSIGNED // in use by a customer
+  RESERVED // held back — gateway, servers, future use
+  BLOCKED // do not allocate (abuse, routing issue)
+  EXPIRED // allocation lapsed, awaiting reclaim
+}
+
+/// A single routable address the ISP can sell.
+///
+/// Static IPs are a real revenue line — businesses pay monthly for one — but
+/// they are usually tracked in a spreadsheet, so nobody knows which addresses
+/// are free, who is paying for which, or which allocations expired months ago
+/// and are still being used for free.
+model StaticIp {
+  id         Int            @id @default(autoincrement())
+  ipAddress  String         @unique @db.Inet
+  gateway    String?        @db.Inet
+  subnetMask String?        @default("255.255.255.255")
+  status     StaticIpStatus @default(AVAILABLE)
+
+  // Current allocation
+  subscriberId Int?
+  /// SetNull: the address is yours, not the customer's. Deleting a subscriber
+  /// hands it straight back to the pool instead of blocking the delete.
+  subscriber   Subscriber? @relation("SubscriberStaticIps", fields: [subscriberId], references: [id], onDelete: SetNull)
+  assignedAt   DateTime?
+  expiresAt    DateTime? // null = no end date
+  monthlyPrice Float? // what the customer is charged for it
+
+  // A static IP is sold as a recurring add-on, not a one-off. These drive the
+  // monthly charge and the "renewal due" banner. nextBillingDate is set when
+  // the address is assigned and advanced each time it is billed.
+  nextBillingDate DateTime?
+  lastBilledAt    DateTime?
+  autoRenew       Boolean   @default(true)
+
+  // Which router/segment it belongs to — an address is only routable on the
+  // NAS that owns its subnet.
+  nasId Int?
+  nas   Nas? @relation("NasStaticIps", fields: [nasId], references: [id])
+
+  notes     String?
+  ownerId   Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history StaticIpAssignment[] @relation("StaticIpHistory")
+
+  @@index([status])
+  @@index([subscriberId])
+  @@index([expiresAt])
+  @@index([nasId])
+  @@index([nextBillingDate])
+}
+
+/// Immutable record of every allocation — who held which address, when, and
+/// at what price. Needed for billing disputes and abuse investigations long
+/// after the address has been reassigned.
+model StaticIpAssignment {
+  id         Int      @id @default(autoincrement())
+  staticIpId Int
+  staticIp   StaticIp @relation("StaticIpHistory", fields: [staticIpId], references: [id], onDelete: Cascade)
+
+  subscriberId  Int
+  assignedAt    DateTime  @default(now())
+  releasedAt    DateTime?
+  monthlyPrice  Float?
+  assignedById  Int?
+  releaseReason String?
+
+  @@index([staticIpId])
+  @@index([subscriberId])
+  @@index([assignedAt])
+}
+
+/// A machine credential for the public API.
+///
+/// Only a HASH is stored — the plaintext key is shown once at creation and
+/// never again. If the database leaks, the keys in it are useless. `prefix`
+/// keeps the first few characters so a key can be identified in a list
+/// without being reconstructable.
+model ApiKey {
+  id       Int     @id @default(autoincrement())
+  name     String
+  keyHash  String  @unique
+  prefix   String // e.g. "jb_live_a1b2" — for display only
+  ownerId  Int?
+  scopes   String  @default("read") // csv: read,write,subscribers,billing
+  isActive Boolean @default(true)
+
+  lastUsedAt DateTime?
+  lastUsedIp String?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([ownerId])
+  @@index([isActive])
+}
+
+/// An outbound HTTP callback fired when something happens in the system.
+///
+/// This is how other software (a mobile app, an accounting package, a WhatsApp
+/// bot) reacts to events without polling the API every minute.
+model Webhook {
+  id       Int     @id @default(autoincrement())
+  name     String
+  url      String
+  secret   String // used to HMAC-sign each payload so the receiver can verify it
+  events   String  @default("*") // csv of event names, or * for everything
+  isActive Boolean @default(true)
+  ownerId  Int?
+
+  failureCount Int       @default(0)
+  lastError    String?
+  lastSuccess  DateTime?
+
+  deliveries WebhookDelivery[] @relation("WebhookDeliveries")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([ownerId])
+}
+
+/// One attempt to deliver one event. Kept so failures are visible and
+/// retryable rather than silently lost.
+model WebhookDelivery {
+  id        Int     @id @default(autoincrement())
+  webhookId Int
+  webhook   Webhook @relation("WebhookDeliveries", fields: [webhookId], references: [id], onDelete: Cascade)
+
+  event        String
+  payload      String
+  status       String    @default("PENDING") // PENDING | SUCCESS | FAILED
+  attempts     Int       @default(0)
+  responseCode Int?
+  responseBody String?
+  nextRetryAt  DateTime?
+  deliveredAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([webhookId])
+  @@index([status, nextRetryAt])
+  @@index([createdAt])
+}
+
+/// A job dispatched to a field technician.
+///
+/// This is the missing link between the office and the ground: a ticket says
+/// "internet is down", a job says "Ali is going there at 2pm with an ONU".
+/// Without it, dispatch lives in phone calls and nobody can answer "how many
+/// installations are pending?" or "which technician closes jobs fastest?".
+model FieldJob {
+  id    Int    @id @default(autoincrement())
+  jobNo String @unique
+
+  type     FieldJobType   @default(INSTALLATION)
+  status   FieldJobStatus @default(PENDING)
+  priority TicketPriority @default(MEDIUM)
+
+  // What it relates to. A job usually concerns a subscriber, and may have been
+  // raised from a support ticket.
+  subscriberId Int?
+  /// SetNull: the job record is the engineer's work history and survives.
+  subscriber   Subscriber? @relation("SubscriberFieldJobs", fields: [subscriberId], references: [id], onDelete: SetNull)
+  ticketId     Int?
+  ticket       Ticket?     @relation("TicketFieldJobs", fields: [ticketId], references: [id])
+
+  // Who is doing it.
+  assignedTo   Int?
+  technician   User?     @relation("TechnicianJobs", fields: [assignedTo], references: [id], onDelete: SetNull)
+  assignedById Int?
+  assignedAt   DateTime?
+
+  // When.
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  // Where — coordinates let you dispatch by proximity and prove attendance.
+  address   String?
+  latitude  Float?
+  longitude Float?
+
+  description     String
+  completionNotes String?
+  failureReason   String?
+  photoUrls       String? // comma-separated /uploads paths (proof of work)
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([assignedTo])
+  @@index([subscriberId])
+  @@index([scheduledAt])
+  @@index([type, status])
+}
+
+/// Hardware stock — ONUs, routers, cable, splitters.
+///
+/// An ISP issues equipment to resellers who install it at customer premises.
+/// Without tracking, hardware simply disappears: nobody can say which dealer
+/// holds twenty ONUs, or which unit is at which customer when it fails under
+/// warranty. Serial number is the identity that ties it all together.
+model InventoryItem {
+  id           Int             @id @default(autoincrement())
+  serialNumber String          @unique
+  macAddress   String?
+  type         InventoryType   @default(ONU)
+  brand        String?
+  model        String?
+  status       InventoryStatus @default(IN_STOCK)
+
+  // Purchase / warranty
+  purchasePrice Float?
+  purchaseDate  DateTime?
+  warrantyUntil DateTime?
+  supplier      String?
+
+  // Who currently holds it, and where it ended up.
+  ownerId      Int? // reseller holding the stock
+  owner        User?       @relation("InventoryOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  subscriberId Int? // set once installed at a customer
+  /// SetNull: a router in a customer's house is still your router after the
+  /// account closes. It returns to stock rather than vanishing with them.
+  subscriber   Subscriber? @relation("SubscriberInventory", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  installedAt DateTime?
+  notes       String?
+
+  movements InventoryMovement[] @relation("ItemMovements")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([ownerId])
+  @@index([subscriberId])
+  @@index([type])
+}
+
+/// Immutable audit of every hand-off: warehouse → dealer → customer → back.
+/// Answers "who had this ONU in March?" long after the fact.
+model InventoryMovement {
+  id     Int           @id @default(autoincrement())
+  itemId Int
+  item   InventoryItem @relation("ItemMovements", fields: [itemId], references: [id], onDelete: Cascade)
+
+  fromUserId   Int?
+  toUserId     Int?
+  subscriberId Int?
+  fromStatus   InventoryStatus?
+  toStatus     InventoryStatus
+  byUserId     Int?
+  notes        String?
+
+  createdAt DateTime @default(now())
+
+  @@index([itemId])
+  @@index([toUserId])
+  @@index([createdAt])
+}
+
+/// Every time a subscriber changes hands (dealer 1 → dealer 2, franchise
+/// rebalancing, staff reassignment) we keep an immutable record: who moved,
+/// from whom, to whom, why, and the pricing that applied at that moment.
+/// This is what makes a transfer auditable months later when someone asks
+/// "who was earning on this customer in August?".
+model SubscriberTransfer {
+  id           Int     @id @default(autoincrement())
+  subscriberId Int
+  fromUserId   Int?
+  toUserId     Int
+  byUserId     Int?
+  reason       String?
+
+  // Pricing snapshot at the moment of the move.
+  oldSellPrice Float?
+  oldCostPrice Float?
+  newSellPrice Float?
+  newCostPrice Float?
+
+  // Mid-period settlement. The customer's paid period does NOT restart on a
+  // transfer, so the outgoing owner is refunded the days they no longer serve
+  // and the incoming owner is charged only for the days remaining.
+  expiryDate    DateTime? // the customer's expiry at the time of the move (unchanged by it)
+  totalDays     Int?
+  usedDays      Int?
+  remainingDays Int?
+  refundToFrom  Float? // credited back to the previous owner
+  chargeToNew   Float? // debited from the new owner
+
+  createdAt DateTime @default(now())
+
+  subscriber Subscriber @relation("SubscriberTransfers", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([subscriberId])
+  @@index([fromUserId])
+  @@index([toUserId])
+  @@index([createdAt])
+}
+
+/// A NAS handed down to a specific reseller. The franchise's router is normally
+/// shared with all its dealers, but this lets you give one dealer its own NAS,
+/// or move a router between branches, without duplicating the record.
+model NasAssignment {
+  id           Int      @id @default(autoincrement())
+  nasId        Int
+  userId       Int
+  assignedById Int?
+  /// Whether this share cascades to the assignee's whole downline.
+  ///
+  ///   true  (default) — the assigned account AND every dealer/retailer beneath
+  ///                     it may use the router. "Give my franchise this NAS and
+  ///                     all its dealers get it too."
+  ///   false           — ONLY the exact assigned account may use it. Lets a
+  ///                     franchise hold a router and hand it to Booni alone
+  ///                     while Mastuj, a sibling dealer, never sees it.
+  ///
+  /// Default true keeps every existing share behaving exactly as before.
+  propagate    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  nas  Nas  @relation("NasAssignments", fields: [nasId], references: [id], onDelete: Cascade)
+  user User @relation("UserNasAssignments", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([nasId, userId])
+  @@index([userId])
+  @@index([nasId])
+}
+
+/// Sharing an address pool down the chain.
+///
+/// Mirrors NasAssignment deliberately: the two travel together in practice.
+/// A franchise put on the ISP's router almost always needs the ISP's pool as
+/// well, and giving it one without the other leaves them able to activate
+/// customers but unable to assign a static IP by hand.
+model IpPoolAssignment {
+  id           Int      @id @default(autoincrement())
+  poolId       Int
+  userId       Int
+  assignedById Int?
+  /// Same semantics as NasAssignment.propagate — a pool can be handed to one
+  /// dealer without every sibling dealer inheriting the address range.
+  propagate    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  pool IpPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  user User   @relation("UserIpPoolAssignments", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([poolId, userId])
+  @@index([userId])
+  @@index([poolId])
+}
+
+model ResellerPackagePrice {
+  id                Int      @id @default(autoincrement())
+  userId            Int
+  packageId         Int
+  /**
+   * What THIS account PAYS its parent per activation (its buy/wholesale cost).
+   */
+  price             Float
+  /**
+   * What this account charges its own END SUBSCRIBERS.
+   * Distinct from `price`, and the distinction matters: `price` is money moving
+   * between accounts inside the panel, settled through wallets. `retailPrice`
+   * is money collected from the customer outside the panel. A dealer with no
+   * downline still sells — they just sell to people, not to accounts — and had
+   * no way to record their own selling price at all, which made their real
+   * profit (retail − buy) invisible.
+   * Null means "not set" and the package's own price is used.
+   */
+  retailPrice       Float?
+  /**
+   * Profit margin for sub-resellers (how much this reseller's downline can earn).
+   */
+  subresellerProfit Float?
+  /**
+   * Reseller's profit per subscriber sold.
+   */
+  subscriberProfit  Float?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user    User    @relation("UserPackagePrices", fields: [userId], references: [id], onDelete: Cascade)
+  package Package @relation("PackageResellerPrices", fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, packageId])
+  @@index([userId])
+  @@index([packageId])
+  @@map("reseller_package_price")
+}
+
+model Package {
+  id          Int     @id @default(autoincrement())
+  name        String
+  price       Float
+  description String?
+  duration    Int     @default(30)
+  isActive    Boolean @default(true)
+
+  downloadSpeed Int @default(10)
+  uploadSpeed   Int @default(5)
+
+  // Speed applied AFTER the data quota is used up. Throttling keeps the
+  // customer connected (and billable) instead of cutting them off, which is
+  // standard practice locally. Null = no FUP, quota simply isn't enforced.
+  fupDownloadSpeed Int?
+  fupUploadSpeed   Int?
+  /**
+   * What happens when the data quota is exhausted:
+   * THROTTLE — reduce to fupDownloadSpeed/fupUploadSpeed (default).
+   * BLOCK    — suspend the connection until the cycle restarts / quota tops up.
+   * NONE     — measure and report usage, take no action.
+   * Null = follow the global FUP_MODE env (legacy behaviour). Kept nullable so
+   * existing packages keep working exactly as they do today until an operator
+   * explicitly picks an action in the editor.
+   */
+  fupAction        String?
+  // Data allowance in GB for one billing period. Null = unlimited, which is
+  // what most local packages are — FUP only bites where a quota is set.
+  // A per-subscriber ServiceSettings.quota overrides this.
+  dataQuotaGb      Int?
+  burstDownload    Int?
+  burstUpload      Int?
+  burstThreshold   Int?
+  burstTime        Int?
+
+  poolId Int?
+  pool   IpPool? @relation("IpPoolPackages", fields: [poolId], references: [id])
+
+  // Who created this package. The ISP's packages are assigned downstream via
+  // ResellerPackagePrice (one row per reseller = "assigned to them, at this
+  // price"). A reseller may also create private packages of its own.
+  ownerId Int?
+  owner   User? @relation("PackageOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  subscribers      Subscriber[]            @relation("PackageSubscribers")
+  resellerPrices   ResellerPackagePrice[]  @relation("PackageResellerPrices")
+  accessGroups     AccessGroupPackage[]    @relation("AccessGroupPackageRel")
+  proRatedBilling  ProRatedBilling?
+  throttlePolicies PackageThrottlePolicy[]
+  extraFees        ExtraFeePackage[]
+  /// Prepaid cards sold against this plan — a hotspot card has to grant a
+  /// speed, and a card without a plan cannot say what it is selling.
+  vouchers         Voucher[]               @relation("PackageVouchers")
+  /// Quotas/expiry/attachment ids that used to live in packages-management.json.
+  /// Cascades on delete, replacing the manual "filter it out of the JSON" step
+  /// that had to be remembered in remove().
+  setting          PackageSetting?
+
+  createdAt DateTime @default(now())
+
+  @@index([poolId])
+  @@index([isActive])
+  @@map("packages")
+}
+
+model IpPool {
+  id       Int       @id @default(autoincrement())
+  // No longer globally unique. Two franchises running independent networks
+  // will both have a pool called "pppoe-pool" on their own routers, and there
+  // is no reason one should block the other. Uniqueness is per owner.
+  name     String
+  network  String
+  subnet   String
+  nasId    Int?
+  nas      Nas?      @relation("IpPoolNas", fields: [nasId], references: [id])
+  packages Package[] @relation("IpPoolPackages")
+
+  /// Who created this pool. A franchise running its own OLT and its own
+  /// router needs its own address space, and must not see the ISP's — nor
+  /// the ISP see theirs cluttering its list. Null means ISP-owned (legacy).
+  ownerId Int?
+  owner   User? @relation("IpPoolOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  /// Accounts this pool has been shared down to, exactly like NasAssignment.
+  /// Ownership alone was too blunt: a franchise using the ISP's router needs
+  /// the ISP's address space too, but had no way to be given it — its pool
+  /// list was simply empty, so static IPs could not be assigned by hand.
+  assignments  IpPoolAssignment[]
+  accessGroups AccessGroupIpPool[] @relation("AccessGroupIpPoolRel")
+
+  createdAt DateTime @default(now())
+
+  @@unique([ownerId, name])
+  @@index([nasId])
+  @@index([ownerId])
+}
+
+model Subscriber {
+  id             Int            @id @default(autoincrement())
+  fullName       String
+  phone          String
+  email          String?
+  address        String?
+  /// Client-supplied idempotency key for the CREATE request. When present, a
+  /// retry / double-click carrying the same key returns the existing record
+  /// instead of creating a duplicate + double-charging.
+  idempotencyKey String?        @unique
+  username       String         @unique
+  password       String
+  // NOT unique. A CNIC is legitimately shared — a household on one document,
+  // a business with several lines. Real migration data proves it: one CNIC
+  // appearing 22 times is normal, not fraud.
+  //
+  // This was @unique, which would have rejected 141 of 407 rows in a genuine
+  // import with a constraint error and no explanation. Duplicate detection
+  // belongs in the KYC screen, where it can be reviewed by a person, rather
+  // than in a database constraint that fails the whole load.
+  identity       String?
+  connectionType ConnectionType @default(FTTH)
+  // How they authenticate. Drives which RADIUS attributes get written.
+  // (Distinct from Package.serviceType, which is the customer segment.)
+  authMethod     AuthMethod     @default(PPPOE)
+  status         Status         @default(ACTIVE)
+  balance        Float          @default(0)
+  branchId       Int?
+  packageId      Int?
+  areaId         Int?
+  nasId          Int?
+  userId         Int?
+  salespersonId  Int?
+  documentUrl    String?
+  photoUrl       String? // profile picture
+  cnicFrontUrl   String? // CNIC / national ID — front
+  cnicBackUrl    String? // CNIC / national ID — back
+
+  // ── KYC ──
+  // Stored WITHOUT dashes so duplicates can't hide behind formatting
+  // (3520112345671 vs 35201-1234567-1 are the same person).
+  cnicNumber    String?
+  cnicExpiry    DateTime?
+  kycStatus     KycStatus @default(PENDING)
+  kycVerifiedBy Int?
+  kycVerifiedAt DateTime?
+  kycNotes      String?
+
+  // ── Fair Usage Policy ──
+  // Set when the customer passes their quota and is throttled rather than cut
+  // off. Cleared on renewal.
+  fupApplied       Boolean   @default(false)
+  fupAppliedAt     DateTime?
+  /// Billing hold — while an open dispute is under review, the daily sweep must
+  /// NOT auto-suspend this subscriber for expiry. Cleared when the dispute is
+  /// resolved (reversed, or dismissed).
+  onHold           Boolean   @default(false)
+  onHoldReason     String?
+  installationDate DateTime?
+  latitude         Float?
+  longitude        Float?
+
+  // Simple prepaid accounting stamps (set at activation/renewal)
+  sellPrice Float? // what the END customer is charged (the activator's retail price)
+  costPrice Float? // what the activator paid its upline (its buy price)
+  profit    Float? // sellPrice - costPrice, the activator's margin on this customer
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  package     Package? @relation("PackageSubscribers", fields: [packageId], references: [id])
+  area        Area?    @relation("AreaSubscribers", fields: [areaId], references: [id])
+  nas         Nas?     @relation("SubscriberNas", fields: [nasId], references: [id])
+  user        User?    @relation("UserSubscribers", fields: [userId], references: [id], onDelete: SetNull)
+  salesperson User?    @relation("SalespersonSubscribers", fields: [salespersonId], references: [id], onDelete: SetNull)
+  branch      Branch?  @relation("BranchSubscribers", fields: [branchId], references: [id])
+
+  transfers        SubscriberTransfer[]      @relation("SubscriberTransfers")
+  inventory        InventoryItem[]           @relation("SubscriberInventory")
+  fieldJobs        FieldJob[]                @relation("SubscriberFieldJobs")
+  staticIps        StaticIp[]                @relation("SubscriberStaticIps")
+  credits          CreditExtension[]         @relation("SubscriberCredits")
+  onu              Onu?                      @relation("SubscriberOnu")
+  serviceSettings  ServiceSettings?          @relation("SubscriberServiceSettings")
+  balanceTxs       BalanceTransaction[]      @relation("SubscriberBalanceTxs")
+  invoices         Invoice[]                 @relation("SubscriberInvoices")
+  payments         Payment[]                 @relation("SubscriberPayments")
+  profitEntries    ProfitEntry[]
+  tickets          Ticket[]                  @relation("SubscriberTickets")
+  vouchers         Voucher[]                 @relation("SubscriberVouchers")
+  networkLogs      NetworkLog[]              @relation("SubscriberNetworkLogs")
+  pppoeSessions    PppoeSession[]            @relation("SubscriberPppoeSessions")
+  linkSignals      LinkSignal[]              @relation("SubscriberLinkSignals")
+  boosts           TemporaryBoost[]          @relation("SubscriberBoosts")
+  radUserGroups    RadUserGroup[]            @relation("radUserGroups")
+  radChecks        RadCheck[]                @relation("radChecks")
+  radReplies       RadReply[]                @relation("radReplies")
+  radAccts         RadAcct[]                 @relation("radAccts")
+  trafficSamples   SubscriberTrafficSample[] @relation("SubscriberTrafficSamples")
+  radPostAuths     RadPostAuth[]             @relation("radPostAuths")
+  billing          SubscriberBilling?
+  wallet           SubscriberBalance?
+  throttlePolicies SubscriberThrottle[]
+
+  @@index([status])
+  @@index([packageId])
+  @@index([areaId])
+  @@index([nasId])
+  @@index([userId])
+  @@index([salespersonId])
+  @@index([createdAt])
+  @@index([phone])
+  @@index([branchId])
+  @@index([cnicNumber])
+  @@index([kycStatus])
+}
+
+model Customer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  username  String   @unique
+  password  String
+  phone     String?
+  address   String?
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+}
+
+model Area {
+  id          Int     @id @default(autoincrement())
+  name        String
+  city        String?
+  description String?
+  isActive    Boolean @default(true)
+
+  /// Who this coverage area belongs to. A franchise operating in Chitral has
+  /// no use for a dealer's areas in Rawalpindi, and showing every area to
+  /// everyone made the dropdown useless as the tree grew.
+  ownerId Int?
+  owner   User? @relation("AreaOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  subscribers    Subscriber[]    @relation("AreaSubscribers")
+  powerSchedules PowerSchedule[] @relation("AreaPowerSchedules")
+  outages        PowerOutage[]   @relation("AreaOutages")
+  olts           Olt[]           @relation("AreaOlts")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ServiceSettings {
+  id           Int @id @default(autoincrement())
+  subscriberId Int @unique
+
+  /// Cascade: one row, one subscriber, no meaning without them.
+  subscriber Subscriber @relation("SubscriberServiceSettings", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  ipAddress  String?
+  ipType     IpType  @default(DYNAMIC)
+  macAddress String?
+
+  /// IPv6 dual-stack (standard RADIUS attributes, vendor-agnostic).
+  /// ipv6Prefix → Framed-IPv6-Prefix (the WAN /64); ipv6DelegatedPrefix →
+  /// Delegated-IPv6-Prefix for DHCPv6-PD (the /56–/60 routed to the customer LAN).
+  ipv6Prefix          String?
+  ipv6DelegatedPrefix String?
+
+  quota        String?
+  quotaUsed    Float?  @default(0)
+  /// Extra GB granted on top of the plan's allowance for the CURRENT cycle,
+  /// e.g. a top-up when a customer exceeds their cap. Added to the effective
+  /// quota so enforcement lifts once granted. Reset to 0 on renewal.
+  bonusQuotaGb Float?  @default(0)
+
+  quotaResetDate DateTime?
+  expiryDate     DateTime?
+
+  /// Whether the nightly job may renew this subscriber from their wallet.
+  ///
+  /// WHY THIS EXISTS
+  /// `runAutoRenewal` selected every subscriber with `balance > 0` and a
+  /// lapsed expiry, charged the wallet and set them ACTIVE. There was no
+  /// per-subscriber opt-out anywhere — `autoRenew` existed only on User and
+  /// StaticIp — so an operator could not stop it.
+  ///
+  /// That made one workflow impossible: expiring a customer and refunding
+  /// them. Staff expire the account, the refund credits the wallet, and at
+  /// 01:00 the job sees credit plus a lapsed expiry and reactivates them,
+  /// charging the wallet again. The refund re-arms the very thing it was
+  /// meant to undo, and from the operator's side the customer "goes active
+  /// by itself" no matter what they do.
+  ///
+  /// Defaults to true so existing installs behave exactly as before —
+  /// auto-renew from wallet is a real feature, the missing opt-out was the
+  /// bug.
+  autoRenew        Boolean   @default(true)
+  // Per-subscriber grace: keep this customer online until this moment even
+  // though their paid period has ended (operator goodwill / awaiting payment).
+  gracePeriodUntil DateTime?
+
+  duration Int?
+
+  discountType  DiscountType @default(NONE)
+  discountValue Float?       @default(0)
+
+  customPrice Float?
+
+  ontSerial String?
+  ontModel  String?
+
+  signalLevel Float?
+  rxPower     Float?
+  txPower     Float?
+
+  uploadSpeed   String?
+  downloadSpeed String?
+
+  // ── PHYSICAL INSTALLATION ──
+  //
+  // Where the customer's line physically runs. Previously these had nowhere to
+  // live, so the subscriber page was displaying `ontSerial` as "Box/POP Number"
+  // and `uploadSpeed` as "Uplink Port" — a field named for bandwidth holding a
+  // port number. That is confusing to read and impossible to query sensibly,
+  // and it meant a migration file carrying these columns had nothing to import
+  // into. They are now their own fields.
+  //
+  // This is the information a technician needs before leaving the office, and
+  // the information nobody can reconstruct once the installer has moved on.
+  boxNumber      String? // splitter / distribution box the drop comes from
+  boxAddress     String? // where that box physically is
+  switchBoard    String?
+  switchPort     String?
+  electricSocket String?
+  cableType      String?
+  uplinkPort     String?
+  fiberCode      String? // strand identifier
+  fiberColor     String? // colour code within the bundle
+  onuNote        String?
+
+  // Session allowance, the time-based counterpart to the data quota.
+  totalSession Float?
+  usedSession  Float? @default(0)
+
+  // Locks the connection to one MAC. Migration files carry it as a flag.
+  macLockEnabled Boolean @default(false)
+
+  /// SIMULTANEOUS-USE GUARD. When false (default) the account may only be
+  /// online once — RADIUS rejects a second concurrent dial-in via the
+  /// `Simultaneous-Use := 1` check, and any second session that slips through
+  /// is cut by the duplicate-session sweep. When true the user may dial in
+  /// from several devices at once (no Simultaneous-Use check is written).
+  allowMultipleSessions Boolean @default(false)
+
+  // Whether this customer receives SMS notifications.
+  smsEnabled Boolean @default(true)
+
+  vlanId Int?
+
+  pptpUsername String?
+  pptpPassword String?
+
+  notes          String?
+  technicalNotes String?
+
+  isStaticIp Boolean @default(false)
+  hasBackup  Boolean @default(false)
+  isBlocked  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiryDate])
+  @@index([isBlocked])
+}
+
+model Invoice {
+  id        Int    @id @default(autoincrement())
+  invoiceNo String @unique
+
+  /// ACCOUNTING — the record OUTLIVES the subscriber.
+  ///
+  /// This was a required link, so an invoice physically blocked the delete.
+  /// The only ways out were to refuse the delete or to destroy the invoice,
+  /// and both are wrong: money you actually billed does not stop being real
+  /// because the customer record was removed, and your revenue totals must not
+  /// change when someone tidies up a subscriber list.
+  ///
+  /// Nullable + SetNull keeps the invoice, detached. `subscriberName` holds a
+  /// snapshot so the row still means something on its own.
+  subscriberId   Int?
+  subscriber     Subscriber? @relation("SubscriberInvoices", fields: [subscriberId], references: [id], onDelete: SetNull)
+  /// Who this was billed to, captured at issue time. Survives the delete.
+  subscriberName String?
+
+  /// The currency this invoice is PRICED in, captured at issue time.
+  ///
+  /// Stamped rather than looked up, because `Isp.currency` is an editable
+  /// field: without this column, changing it re-reads all of history in the
+  /// new currency and a 5,000 PKR invoice silently becomes 5,000 USD in every
+  /// report. The stamp is what makes a past invoice mean today what it meant
+  /// when it was issued. Filled automatically on create — see the currency
+  /// middleware in PrismaService.
+  currency String @default("")
+
+  amount   Float
+  tax      Float @default(0)
+  discount Float @default(0)
+
+  total      Float
+  paidAmount Float @default(0)
+  dueAmount  Float @default(0)
+
+  invoiceDate DateTime  @default(now())
+  dueDate     DateTime
+  paidDate    DateTime?
+
+  status InvoiceStatus @default(UNPAID)
+
+  items               InvoiceItem[]        @relation("InvoiceItems")
+  payments            Payment[]            @relation("InvoicePayments")
+  reversal            InvoiceReversal?     @relation("ReversalOriginal")
+  reversedFrom        InvoiceReversal?     @relation("ReversalNew")
+  gatewayTransactions PaymentTransaction[]
+
+  // Phase 1: invoice reversal (🔍 reason is mandatory in the API)
+  reversedAt     DateTime?
+  reversalReason String?
+  reversedBy     Int?
+
+  notes     String?
+  createdBy Int?
+
+  /**
+   * Client idempotency key — the browser mints one per activation dialog and
+   * sends the same key for every attempt of that SAME click. Combined with the
+   * unique index, the database refuses a second invoice for the same key even
+   * when two requests race each other, so a double-clicked Activate/Renew can
+   * never produce a second charge. NULL for non-activation invoices.
+   */
+  idempotencyKey String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([invoiceDate])
+}
+
+model InvoiceItem {
+  id        Int @id @default(autoincrement())
+  invoiceId Int
+
+  invoice Invoice @relation("InvoiceItems", fields: [invoiceId], references: [id])
+
+  description String
+  quantity    Int    @default(1)
+  unitPrice   Float
+  total       Float
+
+  createdAt DateTime @default(now())
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id        Int    @id @default(autoincrement())
+  paymentNo String @unique
+
+  invoiceId    Int
+  /// ACCOUNTING — money received. This is the strongest record in the system
+  /// and must never be destroyed by a subscriber delete, nor block one.
+  subscriberId Int?
+
+  invoice        Invoice     @relation("InvoicePayments", fields: [invoiceId], references: [id])
+  subscriber     Subscriber? @relation("SubscriberPayments", fields: [subscriberId], references: [id], onDelete: SetNull)
+  /// Who paid, captured at the time. Survives the delete.
+  subscriberName String?
+
+  transactions PaymentTransaction[]
+
+  /// The currency the money ACTUALLY ARRIVED IN — not the invoice's.
+  ///
+  /// These are usually the same and `fxRate` is 1. They differ when a gateway
+  /// settles in its own currency: `assertGatewaySupportsCurrency()` already
+  /// allows that, and without these three columns the panel would record the
+  /// foreign NUMBER against a local invoice as though it were local money.
+  currency String @default("")
+
+  amount Float
+
+  /// `amount` expressed in the INVOICE's currency. This is what is applied to
+  /// `Invoice.paidAmount`, and what any report may safely sum.
+  ///
+  /// Nullable only so existing rows migrate cleanly; the middleware fills it
+  /// with `amount` whenever the two currencies match, which is nearly always.
+  baseAmount Float?
+
+  /// baseAmount / amount, recorded so the conversion is auditable and can be
+  /// reproduced years later. A rate looked up at read time is not evidence of
+  /// anything — the rate that mattered is the one used on the day.
+  fxRate Float?
+
+  method      PaymentMethod @default(CASH)
+  referenceNo String?
+  notes       String?
+
+  // Phase 1: refunds (🔍 reason is mandatory in the API)
+  refundedAt     DateTime?
+  refundReason   String?
+  refundedBy     Int?
+  /// Cumulative amount refunded so far. Supports partial refunds — a payment
+  /// is fully refunded only when this reaches `amount` (refundedAt is set then).
+  refundedAmount Float     @default(0)
+
+  paymentDate DateTime @default(now())
+
+  receivedBy     Int?
+  receivedByUser User? @relation("PaymentReceiver", fields: [receivedBy], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([subscriberId])
+  @@index([receivedBy])
+  @@index([paymentDate])
+  @@index([method])
+}
+
+model Voucher {
+  id           Int         @id @default(autoincrement())
+  code         String      @unique
+  pin          String
+  type         VoucherType @default(PREPAID)
+  amount       Float
+  dataQuota    String?
+  validityDays Int         @default(30)
+
+  /// The plan this card sells.
+  ///
+  /// A hotspot card has to grant a SPEED — "1 hour of internet" means nothing
+  /// to a router without a rate limit behind it. Nullable so every existing
+  /// card keeps working: those were top-up/credit cards where the plan comes
+  /// from the subscriber's own package, and only a card redeemed at a hotspot
+  /// (where there is no subscriber yet) actually needs one.
+  packageId Int?
+  package   Package?      @relation("PackageVouchers", fields: [packageId], references: [id], onDelete: SetNull)
+  status    VoucherStatus @default(UNUSED)
+  batchId   String?
+  createdBy Int?
+
+  /// Which account is currently HOLDING this card as sellable stock.
+  ///
+  /// An ISP prints cards and hands batches to a franchise or dealer to sell;
+  /// until the card is redeemed it is that account's inventory — and its
+  /// liability, because an unredeemed card is bearer value. Without this the
+  /// cards exist but belong to nobody, so there is no way to know what a
+  /// dealer is holding or to reconcile what they sold against what they owe.
+  ///
+  /// SetNull rather than Cascade: deleting a dealer account must not delete
+  /// cards that physically exist. They return to unassigned stock.
+  assignedToUserId Int?
+  assignedAt       DateTime?
+
+  usedBy      Int?
+  usedAt      DateTime?
+  activatedAt DateTime?
+  expireDate  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  subscriber Subscriber? @relation("SubscriberVouchers", fields: [usedBy], references: [id])
+  assignedTo User?       @relation("UserVoucherStock", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([batchId])
+  @@index([usedBy])
+  /// Stock lookups are always "what does this account hold, unredeemed".
+  @@index([assignedToUserId, status])
+}
+
+model Ticket {
+  id       Int    @id @default(autoincrement())
+  ticketNo String @unique
+
+  subscriberId Int
+  /// Cascade: a support ticket is about this customer and nobody else.
+  subscriber   Subscriber @relation("SubscriberTickets", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  category TicketCategory @default(TECHNICAL)
+  priority TicketPriority @default(MEDIUM)
+  status   TicketStatus   @default(OPEN)
+
+  subject     String
+  description String
+  resolution  String?
+
+  assignedTo   Int?
+  assignedUser User? @relation("AssignedTickets", fields: [assignedTo], references: [id], onDelete: SetNull)
+
+  // ── SLA tracking ──
+  // Targets are derived from priority when the ticket is created, so "was this
+  // handled on time?" is answerable without recomputing rules after the fact
+  // (business hours and policies change; a stored target does not).
+  responseDueAt   DateTime? // first human reply expected by
+  resolutionDueAt DateTime? // resolution expected by
+  firstResponseAt DateTime? // when staff actually first replied
+  slaBreached     Boolean   @default(false)
+  breachedAt      DateTime?
+  escalatedAt     DateTime?
+  escalatedTo     Int?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+
+  messages  TicketMessage[] @relation("TicketMessages")
+  fieldJobs FieldJob[]      @relation("TicketFieldJobs")
+
+  @@index([subscriberId])
+  @@index([status, priority])
+  @@index([assignedTo])
+  @@index([createdAt])
+}
+
+model TicketMessage {
+  id       Int @id @default(autoincrement())
+  ticketId Int
+
+  ticket Ticket @relation("TicketMessages", fields: [ticketId], references: [id])
+
+  message       String
+  attachmentUrl String?
+
+  sentBy     Int
+  sentByType SenderType @default(STAFF)
+
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+}
+
+model LoginLog {
+  id         BigInt   @id @default(autoincrement())
+  userId     Int?
+  email      String
+  ipAddress  String?
+  userAgent  String?
+  status     String
+  failReason String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation("LoginLogUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([email])
+}
+
+model ActivityLog {
+  id        BigInt   @id @default(autoincrement())
+  userId    Int?
+  action    String
+  entity    String
+  entityId  Int?
+  details   String?
+  traceId   String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User? @relation("ActivityLogUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([traceId])
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
+
+model SessionLog {
+  id           BigInt    @id @default(autoincrement())
+  userId       Int
+  sessionId    String    @unique
+  token        String?
+  ipAddress    String?
+  userAgent    String?
+  loginAt      DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+  logoutAt     DateTime?
+  isActive     Boolean   @default(true)
+  expiresAt    DateTime
+
+  user User @relation("SessionLogUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isActive, expiresAt])
+}
+
+model SystemLog {
+  id        Int      @id @default(autoincrement())
+  level     String
+  message   String
+  source    String?
+  stack     String?
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([createdAt])
+}
+
+model NetworkLog {
+  id           BigInt           @id @default(autoincrement())
+  nasId        Int
+  eventType    NetworkEventType
+  eventReason  String?
+  subscriberId Int?
+  username     String?
+  callerId     String?
+  framedIp     String?
+  sessionId    String?
+  message      String?
+  severity     String
+  loggedAt     DateTime         @default(now())
+
+  nas        Nas         @relation("NetworkLogNas", fields: [nasId], references: [id])
+  /// SetNull: logs are evidence. The username stays on the row, so the record
+  /// still reads sensibly once the subscriber is gone.
+  subscriber Subscriber? @relation("SubscriberNetworkLogs", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([nasId])
+  @@index([subscriberId])
+  @@index([loggedAt])
+  @@index([eventType])
+  @@index([username])
+}
+
+/// ═══════════════════════════════════════════════════════════════════
+/// TRANSMISSION PATH — ONU → PON port → OLT → BRAS
+///
+/// Modelled so a fault can be placed on the network rather than guessed at.
+/// When a customer reports "no internet", the question that matters is whether
+/// it is only them, everyone on their splitter, or the whole OLT — and that is
+/// answerable only if the path is recorded.
+///
+/// Most of this populates itself: if the OLT runs PPPoE Intermediate Agent it
+/// stamps a Circuit-ID into the session, which RADIUS stores in nasportid, and
+/// the topology service parses OLT / slot / port / ONU straight out of it. The
+/// manual fields exist for deployments without an intermediate agent.
+/// ═══════════════════════════════════════════════════════════════════
+
+model Olt {
+  id       Int     @id @default(autoincrement())
+  name     String  @unique
+  vendor   String? // huawei | zte | vsol | bdcom | other — drives ID parsing
+  model    String?
+  mgmtIp   String? @db.Inet
+  location String?
+
+  /// Which BRAS this OLT's traffic terminates on. The last hop before RADIUS.
+  nasId Int?
+  nas   Nas? @relation("NasOlts", fields: [nasId], references: [id])
+
+  areaId Int?
+  area   Area? @relation("AreaOlts", fields: [areaId], references: [id])
+
+  /// Set when the record was created by parsing a circuit-id rather than by a
+  /// person. Auto-learned entries are worth flagging in the UI so an operator
+  /// knows the name came off the wire and may want tidying.
+  autoDetected Boolean @default(false)
+
+  isActive  Boolean  @default(true)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ports PonPort[] @relation("OltPorts")
+  onus  Onu[]     @relation("OltOnus")
+
+  @@index([nasId])
+  @@index([areaId])
+}
+
+/// A PON port on an OLT — the shared fibre that a splitter hangs off.
+/// This is the level at which most physical faults actually occur.
+model PonPort {
+  id    Int @id @default(autoincrement())
+  oltId Int
+  olt   Olt @relation("OltPorts", fields: [oltId], references: [id], onDelete: Cascade)
+
+  /// As the OLT names it, e.g. "0/1/2" or "gpon-onu_1/1/1".
+  portName String
+  slot     String?
+  port     String?
+
+  /// Splitter ratio, for capacity planning (1:8, 1:16, 1:32…).
+  splitRatio       Int?
+  /// Where the splitter physically is — the first thing a field team asks.
+  splitterLocation String?
+
+  autoDetected Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  onus Onu[] @relation("PortOnus")
+
+  @@unique([oltId, portName])
+  @@index([oltId])
+}
+
+/// The customer-premises optical unit.
+model Onu {
+  id        Int      @id @default(autoincrement())
+  oltId     Int
+  olt       Olt      @relation("OltOnus", fields: [oltId], references: [id], onDelete: Cascade)
+  ponPortId Int?
+  ponPort   PonPort? @relation("PortOnus", fields: [ponPortId], references: [id])
+
+  /// Index on the PON, and the vendor serial if we can read it.
+  onuIndex     String?
+  serialNumber String?
+  macAddress   String?
+  model        String?
+
+  /// Optical readings. Only populated by SNMP/telnet polling — RADIUS does not
+  /// carry them. Null means "not polled", which is different from "bad signal".
+  rxPower      Float?
+  txPower      Float?
+  lastPolledAt DateTime?
+
+  /// The raw circuit-id this ONU was learned from. Kept so an operator can see
+  /// exactly what the OLT reported when a parse looks wrong.
+  circuitId String?
+
+  subscriberId Int?        @unique
+  /// SetNull: the ONU is hardware on your PON. It goes back to unassigned.
+  subscriber   Subscriber? @relation("SubscriberOnu", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  autoDetected Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  telemetry OnuTelemetry?
+
+  @@index([oltId])
+  @@index([ponPortId])
+  @@index([subscriberId])
+  @@index([serialNumber])
+}
+
+enum CreditStatus {
+  OUTSTANDING
+  SETTLED
+  DEFAULTED
+}
+
+/// A customer activated on trust — "I'll pay in five days".
+///
+/// This happens constantly and is normally handled by someone just extending
+/// the expiry date, which loses the fact that money is owed: the customer looks
+/// like every other paid subscriber and nobody chases them. Recording it makes
+/// the debt visible, attributes it to whoever authorised it, and lets the panel
+/// flag the ones who did not pay up.
+model CreditExtension {
+  id           Int        @id @default(autoincrement())
+  subscriberId Int
+  subscriber   Subscriber @relation("SubscriberCredits", fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  /// Days of service granted, and the expiry that resulted.
+  days      Int
+  expirySet DateTime
+
+  /// What the customer owes for this period.
+  amountDue Float
+
+  /// Who authorised it. Trust is personal — the panel must be able to say who
+  /// let this through when it turns into bad debt.
+  grantedBy Int?
+  reason    String?
+
+  /// When they promised to pay.
+  dueDate DateTime
+
+  status    CreditStatus @default(OUTSTANDING)
+  settledAt DateTime?
+  settledBy Int?
+  invoiceId Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([grantedBy])
+}
+
+/// Raw log lines pulled off the MikroTik itself.
+///
+/// The router knows exactly why a session failed — "logged in, 255.255.255.254"
+/// followed by "terminating..." names the fault instantly. Without this table
+/// that knowledge is only reachable by SSHing into the router, which defeats
+/// the point of having a panel. Everything the router says is mirrored here so
+/// a fault can be diagnosed from the subscriber's page.
+model RouterLog {
+  id    Int @id @default(autoincrement())
+  nasId Int
+  nas   Nas @relation("NasRouterLogs", fields: [nasId], references: [id], onDelete: Cascade)
+
+  loggedAt DateTime
+  topics   String // e.g. "pppoe,ppp,info,account"
+  message  String
+
+  /// Pulled out of the message so a subscriber's own lines can be found
+  /// without scanning every row with a LIKE.
+  username String?
+
+  /// error | warning | info — derived from the topics.
+  severity String @default("info")
+
+  /// Hash of router + time + message. The router hands back the same lines on
+  /// every poll, so this is what stops the table filling with duplicates.
+  fingerprint String @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([nasId, loggedAt])
+  @@index([username, loggedAt])
+  @@index([severity])
+  @@index([loggedAt])
+}
+
+/// Failed activation attempts (insufficient balance, permission, errors) — auditable per reseller.
+model FailedActivation {
+  id          Int      @id @default(autoincrement())
+  username    String?
+  fullName    String?
+  reason      String
+  createdById Int? // the reseller/user who attempted it
+  createdAt   DateTime @default(now())
+
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("failed_activation")
+}
+
+//////////////////////////////////////
+// PHASE 4B: MULTI-TENANCY MODELS
+//////////////////////////////////////
+
+model Isp {
+  id       Int     @id @default(autoincrement())
+  name     String  @unique
+  logoUrl  String?
+  isActive Boolean @default(true)
+
+  // Money is displayed in the operator's own currency — this deployment may be
+  // in Pakistan, India, Bangladesh, the Gulf, anywhere. Never hard-code a symbol.
+  currency       String @default("PKR") // ISO code, e.g. PKR / INR / BDT / USD
+  currencySymbol String @default("Rs") // what actually renders next to amounts
+
+  createdAt DateTime @default(now())
+
+  branches Branch[] @relation("IspBranches")
+}
+
+model Branch {
+  id        Int      @id @default(autoincrement())
+  ispId     Int
+  name      String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  isp         Isp          @relation("IspBranches", fields: [ispId], references: [id])
+  subscribers Subscriber[] @relation("BranchSubscribers")
+  users       User[]       @relation("BranchUsers")
+
+  @@unique([ispId, name])
+  @@index([ispId])
+}
+
+/// Reseller/staff wallet history (🔍 mirrors subscriber BalanceTransaction)
+model UserBalanceTransaction {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  type         String // TOPUP | DEDUCT | COMMISSION | WITHDRAWAL | ADJUSTMENT
+  amount       Float
+  balanceAfter Float
+  reference    String?
+  notes        String?
+  createdBy    Int?
+  createdAt    DateTime @default(now())
+
+  user User @relation("UserBalanceTxs", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([type])
+}
+
+//////////////////////////////////////
+// PHASE 4A: SECURITY / RBAC MODELS
+//////////////////////////////////////
+
+/// Role → permission grants. Permission keys are `<resource>.<read|write>`
+/// (resource = first URL segment, e.g. "subscribers.write", "accounting.read").
+/// A role with NO rows = unrestricted (backward compatible until configured).
+/// SUPER_ADMIN always bypasses.
+model RolePermission {
+  id         Int      @id @default(autoincrement())
+  role       String
+  permission String
+  createdAt  DateTime @default(now())
+
+  @@unique([role, permission])
+  @@index([role])
+}
+
+//////////////////////////////////////
+// PHASE 3: PAYMENT GATEWAY MODELS
+//////////////////////////////////////
+
+/// One row per online payment attempt (🔍 full gateway audit trail, idempotent)
+model GatewayTransaction {
+  id             Int      @id @default(autoincrement())
+  gateway        String // SANDBOX | STRIPE | BKASH | SSLCOMMERZ
+  invoiceId      Int
+  subscriberId   Int
+  amount         Float
+  currency       String   @default("BDT")
+  status         String   @default("INITIATED") // INITIATED | SUCCESS | FAILED | CANCELLED
+  gatewayRef     String?
+  idempotencyKey String   @unique
+  payload        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@index([subscriberId])
+  @@index([status])
+  @@index([gateway, createdAt])
+}
+
+//////////////////////////////////////
+// PHASE 2: COMMUNICATION MODELS
+//////////////////////////////////////
+
+/// Reusable SMS/Email templates. Variables: {name} {username} {phone} {amount}
+/// {expiry} {invoiceNo} {package} {balance} {dueAmount}
+model MessageTemplate {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  channel   String // SMS | EMAIL
+  subject   String? // email only
+  body      String
+  event     String? // INVOICE_CREATED | PAYMENT_RECEIVED | EXPIRY_REMINDER | SUSPENSION | RENEWAL | WELCOME | MANUAL
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([event, channel])
+}
+
+/// Every message ever sent — per-subscriber communication log (🔍 feeds the Timeline)
+model Message {
+  id           Int       @id @default(autoincrement())
+  subscriberId Int?
+  channel      String // SMS | EMAIL
+  recipient    String
+  subject      String?
+  body         String
+  event        String?
+  status       String    @default("QUEUED") // QUEUED | SENT | SIMULATED | FAILED
+  error        String?
+  attempts     Int       @default(0)
+  sentAt       DateTime?
+  createdBy    Int?
+  createdAt    DateTime  @default(now())
+
+  @@index([subscriberId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([event])
+}
+
+/// Bulk announcements (audience snapshot kept for audit)
+model Notice {
+  id        Int      @id @default(autoincrement())
+  title     String
+  body      String
+  channel   String   @default("SMS")
+  audience  String   @default("ALL") // ALL | STATUS:x | AREA:id | PACKAGE:id
+  sentCount Int      @default(0)
+  createdBy Int?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+//////////////////////////////////////
+// PHASE 1: ACCOUNTING MODELS
+//////////////////////////////////////
+
+/// Double-entry ledger. Every financial event posts balanced debit/credit rows.
+/// Accounts: CASH, ACCOUNTS_RECEIVABLE, REVENUE, EXPENSE, SUBSCRIBER_BALANCE
+model LedgerEntry {
+  id      Int    @id @default(autoincrement())
+  account String
+
+  /// The currency of this posting. A trial balance that sums across
+  /// currencies is not a smaller error than a wrong number — it is a
+  /// meaningless one, so every line has to say what it is denominated in
+  /// before any total can be trusted.
+  currency String @default("")
+
+  debit        Float    @default(0)
+  credit       Float    @default(0)
+  description  String?
+  refType      String? // INVOICE | PAYMENT | REFUND | REVERSAL | EXPENSE | BALANCE
+  refId        Int?
+  subscriberId Int?
+  createdBy    Int?
+  entryDate    DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([account])
+  @@index([entryDate])
+  @@index([refType, refId])
+  @@index([subscriberId])
+}
+
+model Expense {
+  id          Int      @id @default(autoincrement())
+  category    String
+  amount      Float
+  description String?
+  expenseDate DateTime @default(now())
+  createdBy   Int?
+  createdAt   DateTime @default(now())
+
+  /// APPROVED expenses hit the ledger and cashflow immediately. A large one
+  /// raised by staff is held PENDING until the ISP owner approves it — nothing
+  /// posts until then. REJECTED is a closed request that never posted.
+  status       String    @default("APPROVED") // APPROVED | PENDING | REJECTED
+  approvedById Int?
+  approvedAt   DateTime?
+
+  @@index([category])
+  @@index([expenseDate])
+  @@index([status])
+}
+
+/// Subscriber wallet history (🔍 balanceAfter makes every row self-auditing)
+model BalanceTransaction {
+  id           Int      @id @default(autoincrement())
+  subscriberId Int?
+  type         String // TOPUP | DEDUCT | REFUND | RENEWAL | ADJUSTMENT
+  amount       Float
+  balanceAfter Float
+  reference    String?
+  notes        String?
+  createdBy    Int?
+  createdAt    DateTime @default(now())
+
+  /// ACCOUNTING — wallet history survives the subscriber, detached.
+  subscriber Subscriber? @relation("SubscriberBalanceTxs", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([subscriberId])
+  @@index([createdAt])
+  @@index([type])
+}
+
+/// Automation audit: one row per billing job run (🔍 dry-run friendly)
+model BillingRun {
+  id         Int       @id @default(autoincrement())
+  type       String // AUTO_INVOICE | AUTO_RENEWAL | SUSPENSION
+  dryRun     Boolean   @default(false)
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  processed  Int       @default(0)
+  succeeded  Int       @default(0)
+  failed     Int       @default(0)
+  details    String?
+
+  @@index([type, startedAt])
+}
+
+model PppoeSession {
+  id               Int       @id @default(autoincrement())
+  sessionId        String    @unique
+  nasId            Int
+  subscriberId     Int?
+  username         String
+  callerId         String
+  framedIp         String?
+  framedIpv6       String?
+  sessionTime      Int?
+  inputOctets      Int?
+  outputOctets     Int?
+  startTime        DateTime  @default(now())
+  endTime          DateTime?
+  disconnectReason String?
+  isActive         Boolean   @default(true)
+  lastSeenAt       DateTime  @default(now())
+
+  nas        Nas         @relation("PppoeSessionNas", fields: [nasId], references: [id])
+  /// SetNull: session history keeps its username and timings.
+  subscriber Subscriber? @relation("SubscriberPppoeSessions", fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([nasId])
+  @@index([subscriberId])
+  @@index([username])
+  @@index([isActive, lastSeenAt])
+}
+
+/// Accounting-period lock — a single row (id = 1) holding the date through
+/// which the books are CLOSED. Any financial entry dated on or before
+/// `lockedThrough` is refused, so a closed month can't be silently backdated
+/// into. Only the ISP owner may move the lock, and only forward.
+model AccountingLock {
+  id            Int       @id @default(1)
+  lockedThrough DateTime?
+  updatedById   Int?
+  updatedAt     DateTime  @updatedAt
+}
+
+/// Async job queue. Long-running or bulk work (mass activation, RADIUS sync,
+/// bulk notifications, backups) is enqueued here and processed in the
+/// background by a poller, so the HTTP request returns immediately and the
+/// operator can watch progress instead of the browser hanging.
+model Job {
+  id          Int       @id @default(autoincrement())
+  type        String // registered handler key, e.g. "integrity.reconcile"
+  status      String    @default("QUEUED") // QUEUED | RUNNING | DONE | FAILED
+  progress    Int       @default(0) // 0–100
+  total       Int       @default(0) // optional item count for the UI
+  done        Int       @default(0) // items processed so far
+  payload     Json? // handler input
+  result      Json? // handler output on success
+  error       String? // message on failure
+  label       String? // human title for the queue view
+  createdById Int?
+  rootId      Int? // tenant scoping — owning ISP subtree
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status])
+  @@index([rootId])
+}
+
+/// ISP-wide finance policy. Singleton (id=1). Holds the refund value above
+/// which a refund must be signed off by the ISP owner before it posts.
+model FinanceSettings {
+  id                       Int      @id @default(1)
+  /// Refunds at or below this post immediately; above it queue for approval.
+  /// 0 = every refund needs no approval (feature off).
+  refundApprovalThreshold  Float    @default(0)
+  /// Same idea for expenses: staff-raised expenses above this wait for the ISP
+  /// owner to approve before they post. 0 = off.
+  expenseApprovalThreshold Float    @default(0)
+  updatedById              Int?
+  updatedAt                DateTime @updatedAt
+}
+
+/// A refund awaiting ISP sign-off because it exceeded the approval threshold.
+/// Nothing is posted until it is APPROVED — approval runs the real refund.
+model RefundRequest {
+  id              Int       @id @default(autoincrement())
+  paymentId       Int
+  amount          Float
+  toBalance       Boolean   @default(false)
+  reason          String
+  status          String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  requestedById   Int?
+  requestedByName String?
+  decidedById     Int?
+  decidedAt       DateTime?
+  decisionNote    String?
+  createdAt       DateTime  @default(now())
+
+  @@index([status])
+}
+
+/// Free-text notes attachable to ANY record — subscribers, users, packages,
+/// pools, routers, etc. Polymorphic by (entityType, entityId) so one table and
+/// one API serve every screen. Used for operational memos like transmission
+/// details ("rooftop dish → MikroTik SXT, fed from Tower-3"), install notes,
+/// or anything staff need to remember about a record. Author name is stored
+/// denormalised so a note reads correctly even if the author account changes.
+model RecordNote {
+  id            Int      @id @default(autoincrement())
+  entityType    String // SUBSCRIBER | USER | PACKAGE | IP_POOL | NAS | AREA | INVOICE …
+  entityId      Int
+  body          String
+  pinned        Boolean  @default(false)
+  createdById   Int?
+  createdByName String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([entityType, entityId])
+  @@index([createdById])
+}
+
+//////////////////////////////////////
+// PHASE 1 NEW MODELS — groups, payments, pro-rata, FTTH, throttle, discounts
+//////////////////////////////////////
+
+/// Access groups are the heart of "share a NAS/package with franchise A and
+/// dealer B, but hide it from dealer C". A resource is either GLOBAL (visible
+/// to everyone — null group), PERSONAL (visible only to its owner), or in one
+/// or more NAMED groups (visible to members of those groups, with optional
+/// inheritance to their descendants). This is what ISPs need when one ISP runs
+/// multiple brands, or when a franchise only sells a subset of packages to a
+/// specific dealer.
+model AccessGroup {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(100)
+  description String?  @db.VarChar(500)
+  color       String?  @db.VarChar(20) // hex tag for the UI
+  /// When true, membership in a parent account cascades down to its downline.
+  /// The ISP's "Premium Customers" group flows automatically to its dealers
+  /// when propagate=true, so the dealer never has to be added by hand.
+  propagate   Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members       AccessGroupMember[]
+  nasResources  AccessGroupNas[]
+  pkgResources  AccessGroupPackage[]
+  poolResources AccessGroupIpPool[]
+
+  @@index([isActive])
+  @@map("access_group")
+}
+
+model AccessGroupMember {
+  id        Int      @id @default(autoincrement())
+  groupId   Int
+  userId    Int
+  /// A membership can itself propagate to the user’s downline, so a franchise
+  /// being in a group drags its dealers in too. Mirrors AccessGroup.propagate
+  /// but per-membership so a single dealer can be granted without their siblings.
+  propagate Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  group AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("access_group_member")
+}
+
+/// Many-to-many between AccessGroup and Nas. A NAS with no row here is GLOBAL
+/// (visible to all); a row means the NAS is restricted to the listed group(s).
+model AccessGroupNas {
+  id      Int @id @default(autoincrement())
+  groupId Int
+  nasId   Int
+
+  group AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  nas   Nas         @relation("AccessGroupNasRel", fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, nasId])
+  @@index([nasId])
+  @@map("access_group_nas")
+}
+
+/// Many-to-many between AccessGroup and Package — same visibility model as
+/// AccessGroupNas. Lets the ISP offer a "Premium Fiber" plan only to one
+/// franchise without exposing it to the rest of the tree.
+model AccessGroupPackage {
+  id        Int @id @default(autoincrement())
+  groupId   Int
+  packageId Int
+
+  group   AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  package Package     @relation("AccessGroupPackageRel", fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, packageId])
+  @@index([packageId])
+  @@map("access_group_package")
+}
+
+model AccessGroupIpPool {
+  id      Int @id @default(autoincrement())
+  groupId Int
+  poolId  Int
+
+  group AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  pool  IpPool      @relation("AccessGroupIpPoolRel", fields: [poolId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, poolId])
+  @@index([poolId])
+  @@map("access_group_ip_pool")
+}
+
+/// Payment gateway configuration. Per-tenant — the same ISP can run JazzCash
+/// for one branch and Stripe for the international customers in another.
+/// `credentials` is an encrypted JSON blob (gateway-specific keys, secrets,
+/// webhook URL). The actual integration lives in PaymentGatewayService.
+model PaymentGateway {
+  id                  Int      @id @default(autoincrement())
+  name                String   @db.VarChar(100)
+  /// JAZZCASH | EASYPAISA | STRIPE | PAYPAL | BKASH | RAZORPAY | FLUTTERWAVE
+  /// SADAD | MANUAL_BANK | CRYPTO | OTHER
+  provider            String   @db.VarChar(40)
+  /// Public-safe creds (publishable key, merchant id) shown to the portal.
+  publicConfig        Json     @default("{}")
+  /// Server-side secret creds (API key, signing secret). Never sent to the client.
+  secretConfig        Json     @default("{}")
+  /// Webhook URL registered with the gateway.
+  webhookUrl          String?  @db.VarChar(500)
+  /// Per-100-unit fee charged by the gateway (e.g. 2.9 for Stripe).
+  feePercent          Float    @default(0)
+  /// Flat fee per transaction in the ISP's currency.
+  feeFixed            Float    @default(0)
+  /// Display order in the checkout list.
+  displayOrder        Int      @default(0)
+  isActive            Boolean  @default(true)
+  /// Restrict by currency: empty = accept any.
+  supportedCurrencies String?  @db.VarChar(200)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  transactions PaymentTransaction[]
+
+  @@index([provider, isActive])
+  @@map("payment_gateway")
+}
+
+/// One row per gateway payment attempt. The portal creates this on checkout,
+/// the gateway callback updates it, and the invoices/payments services use it
+/// to flip the invoice to PAID once the gateway confirms. Refunds also live
+/// here so the audit trail stays in one place.
+model PaymentTransaction {
+  id             Int       @id @default(autoincrement())
+  gatewayId      Int
+  /// Local reference (shown on the invoice / receipt). Format: JT-<timestamp>-<rand>
+  reference      String    @unique @db.VarChar(64)
+  /// Gateway-side id returned in the create-order response.
+  gatewayRef     String?   @db.VarChar(128)
+  subscriberId   Int?
+  invoiceId      Int?
+  amount         Float
+  currency       String    @default("PKR") @db.VarChar(8)
+  /// PENDING | SUCCESS | FAILED | EXPIRED | REFUNDED | PARTIAL_REFUND
+  status         String    @default("PENDING") @db.VarChar(20)
+  /// Raw gateway response, for debugging and audit.
+  rawResponse    Json?     @default("{}")
+  /// Once settled, link to the actual Payment row in the accounting ledger.
+  paymentId      Int?
+  failureReason  String?   @db.VarChar(500)
+  /// Idempotency key from the client — same key returns the same row.
+  idempotencyKey String?   @unique @db.VarChar(64)
+  expiresAt      DateTime?
+  paidAt         DateTime?
+  refundedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  gateway PaymentGateway @relation(fields: [gatewayId], references: [id])
+  invoice Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  payment Payment?       @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([gatewayId, status])
+  @@index([subscriberId])
+  @@index([invoiceId])
+  @@map("payment_transaction")
+}
+
+/// Pro-rata billing settings for a package. When a subscriber activates
+/// mid-cycle, the first invoice is calculated day-based: remaining_days/total *
+/// package_price, then optionally charged a setup fee and rounded to the ISP's
+/// preferred unit (5 PKR, 10 PKR, 1 USD, etc.). This is what makes mid-month
+/// signups feel fair and is a hard differentiator vs flat-rate billing.
+model ProRatedBilling {
+  id             Int      @id @default(autoincrement())
+  packageId      Int      @unique
+  /// Master switch — turn off pro-rata on a single package without removing it.
+  isActive       Boolean  @default(true)
+  /// Minimum first invoice in currency units. A 5-day activation still bills
+  /// at least this much so micro-amounts don't go on the books.
+  minCharge      Float    @default(0)
+  /// Optional flat setup fee added to every first invoice.
+  setupFee       Float    @default(0)
+  /// Round to nearest (0 = no rounding, 1 = round to whole unit, 0.5 = half).
+  roundTo        Float    @default(0)
+  /// Carry over unused time to the next cycle? When true, the new cycle
+  /// starts from the natural anniversary minus the unused days.
+  carryOver      Boolean  @default(false)
+  /// Day the package normally renews on (1-28, 0 = use activation day).
+  anniversaryDay Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@map("pro_rated_billing")
+}
+
+/// Per-subscriber billing mode override. Defaults follow the package, but a
+/// customer can be flagged as POSTPAID with a credit limit, a PREPAID with
+/// auto-topup, or HYBRID (charges from a balance until it hits zero, then
+/// stops — used for kiosks / public WiFi where you want a daily budget that
+/// the customer tops up themselves).
+enum BillingMode {
+  PREPAID
+  POSTPAID
+  HYBRID
+}
+
+model SubscriberBilling {
+  id                  Int         @id @default(autoincrement())
+  subscriberId        Int         @unique
+  mode                BillingMode @default(PREPAID)
+  /// POSTPAID only: the maximum overdue balance allowed before suspension.
+  creditLimit         Float       @default(0)
+  /// PREPAID only: when balance drops below this, fire a "low balance" notice.
+  lowBalanceThreshold Float       @default(0)
+  /// PREPAID only: auto top up by this amount when balance < threshold.
+  autoTopupAmount     Float       @default(0)
+  /// Optional discount in percent (0-100) applied to every renewal.
+  discountPercent     Float       @default(0)
+  /// Billing day of the month (1-28) for postpaid customers.
+  billingDay          Int         @default(1)
+  /// Carry unused time when changing plans?
+  carryOver           Boolean     @default(true)
+  /// Grace period in days after expiry before hard disconnect.
+  graceDays           Int         @default(0)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@map("subscriber_billing")
+}
+
+/// Subscriber balance ledger (PREPAID wallet, separate from User balance for
+/// staff). Top-ups, package purchases, refunds, and the daily/periodic
+/// deductions all flow through this single table so a subscriber's "what's
+/// left" is always the sum of the rows.
+model SubscriberBalance {
+  id              Int      @id @default(autoincrement())
+  subscriberId    Int      @unique
+  balance         Float    @default(0)
+  reservedBalance Float    @default(0) // held for in-flight renewals
+  currency        String   @default("PKR") @db.VarChar(8)
+  updatedAt       DateTime @updatedAt
+
+  subscriber Subscriber                @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  ledger     SubscriberBalanceLedger[]
+
+  @@map("subscriber_balance")
+}
+
+enum SubscriberBalanceEntryType {
+  TOPUP
+  RENEWAL
+  PACKAGE_PURCHASE
+  REFUND
+  ADJUSTMENT
+  TRANSFER
+  REVERSAL
+  FEE
+  REWARD
+}
+
+model SubscriberBalanceLedger {
+  id           Int                        @id @default(autoincrement())
+  subscriberId Int
+  type         SubscriberBalanceEntryType
+  amount       Float // positive = credit, negative = debit
+  balanceAfter Float
+  reference    String?                    @db.VarChar(64) // invoice, payment, manual note
+  description  String?                    @db.VarChar(500)
+  /// Actor who triggered the change. SYSTEM for scheduled jobs, PORTAL for
+  /// self-service, or a staff user id.
+  actorType    String                     @default("STAFF") @db.VarChar(20)
+  actorId      Int?
+  actorName    String?                    @db.VarChar(200)
+  createdAt    DateTime                   @default(now())
+
+  subscriber SubscriberBalance @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([subscriberId, createdAt])
+  @@index([type])
+  @@map("subscriber_balance_ledger")
+}
+
+/// Throttle / bandwidth policies. A policy is a named rule that says "during
+/// peak hours, give this package 50% of its normal speed". The policy is then
+/// attached to one or more packages, or to individual subscribers as an
+/// override. Implementation on the NAS is done by RADIUS reply attributes
+/// written at session start.
+model ThrottlePolicy {
+  id             Int      @id @default(autoincrement())
+  name           String   @db.VarChar(100)
+  description    String?  @db.VarChar(500)
+  /// PERCENT | ABSOLUTE_KBPS | BURST_TO_KBPS
+  mode           String   @default("PERCENT") @db.VarChar(20)
+  /// Value used with mode. 50 = 50%, 5120 = 5 Mbps.
+  value          Float    @default(0)
+  /// When the throttle applies. Empty = always.
+  /// 0=Sunday … 6=Saturday. Multiple days = recurring window.
+  daysOfWeek     Int[]    @default([])
+  startTime      String?  @db.VarChar(8) // "08:00"
+  endTime        String?  @db.VarChar(8) // "23:00"
+  /// Burst window in seconds when mode=BURST_TO_KBPS.
+  burstSeconds   Int      @default(0)
+  /// Burst threshold in bytes.
+  burstThreshold Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  packages    PackageThrottlePolicy[]
+  subscribers SubscriberThrottle[]
+
+  @@index([isActive])
+  @@map("throttle_policy")
+}
+
+model PackageThrottlePolicy {
+  id        Int @id @default(autoincrement())
+  packageId Int
+  policyId  Int
+
+  package Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  policy  ThrottlePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, policyId])
+  @@map("package_throttle_policy")
+}
+
+model SubscriberThrottle {
+  id           Int      @id @default(autoincrement())
+  subscriberId Int
+  policyId     Int
+  /// Subscriber override: when set, takes precedence over package defaults.
+  /// Used to throttle a specific heavy user without touching the package.
+  isOverride   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  subscriber Subscriber     @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  policy     ThrottlePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriberId, policyId])
+  @@map("subscriber_throttle")
+}
+
+/// Extra fees / surcharges that can be attached to a package or to an invoice
+/// directly. Distinct from taxes: a fee is a one-time addition (e.g. "new
+/// connection fee", "router installation fee"), taxes are recurring.
+model ExtraFee {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  /// FIXED | PERCENT
+  type        String   @default("FIXED") @db.VarChar(20)
+  value       Float    @default(0)
+  description String?  @db.VarChar(500)
+  isRecurring Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  packages ExtraFeePackage[]
+
+  @@index([isActive])
+  @@map("extra_fee")
+}
+
+model ExtraFeePackage {
+  id        Int @id @default(autoincrement())
+  packageId Int
+  feeId     Int
+
+  package Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  fee     ExtraFee @relation(fields: [feeId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, feeId])
+  @@map("extra_fee_package")
+}
+
+/// Subscriber-level discount (percent or fixed). Different from package-level
+/// pricing — this is a customer-specific promotion ("3 months free for this
+/// VIP customer"). The discount applies to the package price at renewal or
+/// activation, never to taxes or fees.
+model SubscriberDiscount {
+  id           Int       @id @default(autoincrement())
+  subscriberId Int
+  /// PERCENT | FIXED
+  type         String    @default("PERCENT") @db.VarChar(20)
+  value        Float     @default(0)
+  /// Optional human reason — "loyalty", "winback", "VIP".
+  reason       String?   @db.VarChar(200)
+  /// 0 = forever, otherwise the discount auto-expires.
+  expiresAt    DateTime?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([subscriberId, isActive])
+  @@map("subscriber_discount")
+}
+
+/// Subscriber portal self-service registration request. When a customer fills
+/// the sign-up form on the portal, this row is created. Staff review and
+/// either activate the subscriber (which creates a real Subscriber + RADIUS
+/// credentials) or reject it. Failed rows are kept for spam analysis.
+model ActivationRequest {
+  id                Int       @id @default(autoincrement())
+  /// Token used to look up the request from the confirmation email.
+  token             String    @unique @db.VarChar(64)
+  /// PENDING | APPROVED | REJECTED | EXPIRED
+  status            String    @default("PENDING") @db.VarChar(20)
+  /// Captured form fields — name, phone, address, package id, etc.
+  formData          Json
+  selectedPackageId Int?
+  selectedNasId     Int?
+  /// The staff user who decided the request.
+  decidedById       Int?
+  decidedByName     String?   @db.VarChar(200)
+  decidedAt         DateTime?
+  decisionNote      String?   @db.VarChar(500)
+  /// When created, this maps to a real Subscriber (after approval).
+  subscriberId      Int?
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status])
+  @@index([expiresAt])
+  @@map("activation_request")
+}
+
+/// FTTH OLT extension — already had Olt/PonPort/Onu; this adds the
+/// "operational" fields the team needs: last seen, signal level, distance,
+/// VLAN mapping, and a per-ONU status log. Existing Olt/Onu models are kept
+/// untouched for backward compat; this is the new high-fidelity layer.
+model OnuTelemetry {
+  id           BigInt    @id @default(autoincrement())
+  onuId        Int       @unique
+  onu          Onu       @relation(fields: [onuId], references: [id], onDelete: Cascade)
+  rxPowerDbm   Float? // received signal level (dBm)
+  txPowerDbm   Float?
+  distanceM    Float? // estimated fiber distance
+  temperatureC Float?
+  voltageV     Float?
+  status       String?   @db.VarChar(40) // ONLINE | OFFLINE | LOS | DYING_GASP
+  lastSeenAt   DateTime?
+  rawPayload   Json?     @default("{}")
+  collectedAt  DateTime  @default(now())
+
+  @@index([onuId])
+  @@index([status])
+  @@map("onu_telemetry")
+}
+
+/// Encrypted key/value store for operator-managed secrets (Discord webhook,
+/// WhatsApp tokens…). Values are AES-256-GCM encrypted at rest and are NEVER
+/// returned to the UI in plaintext — only a masked preview.
+model AppSecret {
+  key         String   @id
+  valueEnc    String // iv:tag:ciphertext (base64)
+  maskedHint  String? // e.g. "https://discord.com/api/webhooks/…4f2a"
+  updatedById Int?
+  updatedAt   DateTime @updatedAt
+
+  @@map("app_secret")
+}
+
+/// Per-account alert destination. Every user (ISP owner, franchise, dealer…)
+/// can point alerts about THEIR OWN network at their own Discord/WhatsApp, so
+/// a franchise's alerts go to the franchise's channel, not the ISP's. Values
+/// are AES-256-GCM encrypted like AppSecret and never returned in plaintext.
+model UserAlertChannel {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  kind       String   @db.VarChar(20) // DISCORD | WHATSAPP
+  valueEnc   String // webhook URL / phone, encrypted
+  extraEnc   String? // provider api key / token, encrypted
+  provider   String?  @db.VarChar(20) // callmebot | meta (WhatsApp only)
+  maskedHint String?
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, kind])
+  @@index([userId])
+  @@map("user_alert_channel")
+}
+
+/// Time-series of ONU optical signal + link status, so signal degradation and
+/// up/down flaps can be graphed over time (OnuTelemetry only keeps the latest).
+model OnuSignalSample {
+  id         BigInt   @id @default(autoincrement())
+  onuId      Int
+  ts         DateTime @default(now())
+  rxPowerDbm Float?
+  txPowerDbm Float?
+  status     String?  @db.VarChar(40)
+
+  @@index([onuId, ts])
+  @@map("onu_signal_sample")
+}
+
+/// Audit trail for invoice reversals. The original invoice gets CANCELLED,
+/// a new reversal invoice is created, and every step is logged here.
+model InvoiceReversal {
+  id                Int      @id @default(autoincrement())
+  originalInvoiceId Int      @unique
+  originalInvoice   Invoice  @relation("ReversalOriginal", fields: [originalInvoiceId], references: [id], onDelete: Cascade)
+  reversalInvoiceId Int?     @unique
+  reversalInvoice   Invoice? @relation("ReversalNew", fields: [reversalInvoiceId], references: [id], onDelete: SetNull)
+  reason            String   @db.VarChar(500)
+  proRated          Boolean  @default(false)
+  refundedAmount    Float    @default(0)
+  /// FULL | PARTIAL | PRO_RATA
+  mode              String   @default("FULL") @db.VarChar(20)
+  createdById       Int?
+  createdByName     String?  @db.VarChar(200)
+  createdAt         DateTime @default(now())
+
+  @@index([createdById])
+  @@map("invoice_reversal")
+}
+
+/// Captive portal session — separate from PPPoE sessions because hotspot
+/// users authenticate by MAC + voucher/credentials, not dial-up.
+model PortalSession {
+  id           Int       @id @default(autoincrement())
+  subscriberId Int?
+  macAddress   String    @db.VarChar(32)
+  ipAddress    String?   @db.VarChar(64)
+  /// VOUCHER | PASSWORD | SOCIAL | FREE
+  authMethod   String    @db.VarChar(20)
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  bytesIn      BigInt    @default(0)
+  bytesOut     BigInt    @default(0)
+  sessionId    String?   @unique @db.VarChar(64)
+
+  @@index([macAddress])
+  @@index([subscriberId])
+  @@index([startedAt])
+  @@map("portal_session")
+}
+
+/// CoA (Change of Authorization) requests. A staff action like "disconnect
+/// this customer now" or "drop their bandwidth to 1Mbps" is logged here so
+/// the audit trail matches the NAS-side reality.
+model CoaRequest {
+  id              Int       @id @default(autoincrement())
+  subscriberId    Int?
+  nasId           Int?
+  sessionId       String?   @db.VarChar(64)
+  /// DISCONNECT | BANDWIDTH_CHANGE | ENABLE | DISABLE | RENEWAUTH
+  action          String    @db.VarChar(30)
+  /// What was sent (e.g. "Mikrotik-Rate-Limit=1024k/512k").
+  payload         Json?     @default("{}")
+  /// QUEUED | SENT | ACK | NAK | TIMEOUT
+  status          String    @default("QUEUED") @db.VarChar(20)
+  responseLog     String?   @db.VarChar(1000)
+  /// Success or failure reason from the NAS.
+  resultMessage   String?   @db.VarChar(500)
+  requestedById   Int?
+  requestedByName String?   @db.VarChar(200)
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@index([subscriberId, createdAt])
+  @@index([status])
+  @@map("coa_request")
+}
+
+/// A host the operator wants pinged continuously (network monitoring page).
+/// Scoped to its owner's subtree so a parent's targets are private unless shared.
+model MonitorTarget {
+  id            Int       @id @default(autoincrement())
+  ownerId       Int?
+  groupName     String?   @db.VarChar(80) // free-text group ("Core", "Towers", …)
+  name          String    @db.VarChar(120) // friendly label
+  host          String    @db.VarChar(255) // hostname or IP to ping
+  enabled       Boolean   @default(true)
+  intervalSec   Int       @default(30)
+  isUp          Boolean? // null = never checked yet
+  lastLatencyMs Float?
+  lastCheckedAt DateTime?
+  downSince     DateTime? // set when it goes down, cleared when up
+  lossPct       Float? // packet loss % of the last check
+  history       String? // JSON: last ~60 {t,ms,up} samples for the mini graph
+  createdAt     DateTime  @default(now())
+
+  owner   User?           @relation("UserMonitorTargets", fields: [ownerId], references: [id], onDelete: Cascade)
+  samples MonitorSample[]
+
+  @@index([ownerId])
+  @@index([enabled])
+  @@map("monitor_target")
+}
+
+/// One recorded ping result for a MonitorTarget — the persisted history behind
+/// the per-host charts (latency/loss/availability over time).
+model MonitorSample {
+  id        Int      @default(autoincrement())
+  targetId  Int
+  at        DateTime @default(now())
+  up        Boolean
+  latencyMs Float?
+  lossPct   Float?
+
+  target MonitorTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  /// Composite with the time column because this table is a TimescaleDB
+  /// hypertable where the extension is installed, and a hypertable requires
+  /// its partitioning column in every unique index. Declared unconditionally
+  /// so the model matches the database on BOTH kinds of server — otherwise the
+  /// `prisma db push` that db-deploy.sh runs after every migration would keep
+  /// reverting the key and silently undo the hypertable.
+  /// Harmless without TimescaleDB: `id` is still a sequence.
+  @@id([id, at])
+  @@index([targetId, at])
+  @@map("monitor_sample")
+}
+
+/// PROFIT LEDGER — reporting only, never wallet money.
+///
+/// When a downline account activates a customer, each tier above it earns a
+/// margin. That margin must NOT be credited to the tier's wallet: the parent was
+/// already paid when it sold the credit the child just spent, so crediting again
+/// double-counts. The margin is recorded here instead, so profit can be reported
+/// by day/week/month/year and traced to the child, customer and package that
+/// produced it, while wallets only move on real transactions (loads, transfers,
+/// and the activator's own deduction).
+model ProfitEntry {
+  id           Int      @id @default(autoincrement())
+  at           DateTime @default(now())
+  /// The account that EARNED this margin (the parent/tier).
+  userId       Int
+  /// The downline account whose activation generated it (the seller).
+  fromUserId   Int?
+  subscriberId Int?
+  packageId    Int?
+  /// What the child paid this tier, what this tier paid upward, and the margin.
+  saleAmount   Float    @default(0)
+  costAmount   Float    @default(0)
+  profitAmount Float    @default(0)
+  /// Same reference as the settlement, so a reversal can find its entries.
+  reference    String?  @db.VarChar(120)
+  note         String?  @db.VarChar(200)
+
+  user       User        @relation("UserProfitEntries", fields: [userId], references: [id], onDelete: Cascade)
+  subscriber Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([userId, at])
+  @@index([fromUserId, at])
+  @@index([reference])
+  @@map("profit_entry")
+}
+
+/// Device health samples (CPU %, memory %, uptime seconds, temperature °C).
+/// One row per metric per poll — the series behind the health graphs.
+model DeviceMetric {
+  id     Int      @id @default(autoincrement())
+  nasId  Int
+  ts     DateTime @default(now())
+  metric String   @db.VarChar(24) // cpu | memory | uptime | temperature | snmpMs
+  value  Float
+
+  nas Nas @relation(fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@index([nasId, metric, ts])
+  @@map("device_metric")
+}
+
+/// Per-interface samples. `rxBps`/`txBps` are RATES already derived from counter
+/// deltas by the poller (never raw counters — a raw ifInOctets graphed as Mbps
+/// is meaningless and wraps). Raw counters are kept only to compute the next
+/// delta and to detect rollover / device reboot.
+model InterfaceMetric {
+  id          Int      @id @default(autoincrement())
+  nasId       Int
+  ifIndex     Int
+  name        String   @db.VarChar(96)
+  ts          DateTime @default(now())
+  rxBps       Float    @default(0)
+  txBps       Float    @default(0)
+  inErrors    Float    @default(0) // per second
+  outErrors   Float    @default(0)
+  inDiscards  Float    @default(0)
+  outDiscards Float    @default(0)
+  up          Boolean  @default(true)
+  speedMbps   Int?
+
+  nas Nas @relation(fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@index([nasId, ifIndex, ts])
+  @@index([ts])
+  @@map("interface_metric")
+}
+
+/// ────────────────────────────────────────────────────────────────────────
+/// NETWORK DEVICE MONITORING (switches / routers / BNGs via SNMP + Syslog)
+/// ────────────────────────────────────────────────────────────────────────
+/// A switch/router/tower added from the Network Monitoring page. Separately
+/// scoped like MonitorTarget: ownerId points into the reseller tree, so a
+/// child account only ever sees devices (and therefore ports, syslogs and
+/// alerts) inside its own subtree — enforced in the API, never only in the UI.
+/// SNMP credentials live in SnmpConfiguration, encrypted at rest, and are
+/// never returned to the browser.
+model NetworkDevice {
+  id              Int       @id @default(autoincrement())
+  ownerId         Int?
+  name            String    @db.VarChar(120)
+  ip              String    @db.VarChar(64)
+  /// CISCO | MIKROTIK | HUAWEI | JUNIPER | OTHER
+  vendor          String    @default("OTHER") @db.VarChar(24)
+  /// Free-text "Cisco Switch" / "MikroTik CCR" — used for the vendor health profile.
+  deviceType      String?   @db.VarChar(80)
+  groupName       String?   @db.VarChar(80)
+  location        String?   @db.VarChar(160)
+  description     String?   @db.VarChar(500)
+  enabled         Boolean   @default(true)
+  /// HOW this target is actually checked — SNMP | ICMP | HTTP.
+  ///
+  /// Every NetworkDevice used to be SNMP-polled unconditionally, because the
+  /// module was built for switches and routers. Operators then (reasonably)
+  /// added plain internet targets — 8.8.8.8, google.com, youtube.com — which
+  /// answer ping but have no SNMP agent, so the poller reported "SNMP timeout"
+  /// on hosts that were perfectly reachable. The status was wrong, the failure
+  /// reason was misleading, and the sweep wasted a timeout on each one.
+  ///
+  /// SNMP → interface table, ports, traffic, uptime (a real network device)
+  /// ICMP → reachability + latency only; no ports, no SNMP uptime
+  /// HTTP → endpoint check (reserved; polled as ICMP until implemented)
+  monitorMethod   String    @default("SNMP") @db.VarChar(8)
+  /// V2C | V3
+  snmpVersion     String    @default("V2C") @db.VarChar(8)
+  snmpPort        Int       @default(161)
+  /// Last ICMP round-trip in ms and loss %, for ICMP targets. Latest value
+  /// only — deliberately NOT a history series: this page shows current state,
+  /// and long-term latency graphing belongs to the ping-monitor module.
+  lastLatencyMs   Float?
+  lastLossPct     Float?
+  /// When the target last answered successfully (either method).
+  lastOkAt        DateTime?
+  /// When it first went down in the current outage — drives "down for 6m".
+  downSince       DateTime?
+  pollIntervalSec Int       @default(30) // 10 | 30 | 60 | 300
+  snmpTimeoutMs   Int       @default(5000)
+  snmpRetries     Int       @default(1)
+
+  /// Reachability + health as of the last poll (cached for the dashboard).
+  isReachable    Boolean?
+  cpu            Float?
+  memory         Float?
+  temperature    Float?
+  uptimeSec      BigInt?
+  lastSnmpPollAt DateTime?
+  lastSyslogAt   DateTime?
+  lastError      String?   @db.VarChar(500)
+  /// Cached counts for the dashboard (interface count, up/down ports).
+  interfaceCount Int       @default(0)
+  upPorts        Int       @default(0)
+  downPorts      Int       @default(0)
+
+  /// Syslog collection for THIS device (points its boxes at the panel).
+  syslogEnabled  Boolean @default(false)
+  syslogProtocol String  @default("UDP") @db.VarChar(8)
+  syslogPort     Int     @default(514)
+
+  /// Device-level sound override: false mutes every alert this device raises
+  /// (even CRITICAL ones) regardless of rule channels.
+  soundEnabled   Boolean @default(true)
+  /// Recovery-sound master: gates the "port/device is back UP" chime.
+  /// Independent of soundEnabled so an operator can silence DOWN beeps
+  /// without killing recovery chimes (or vice versa).
+  soundUpEnabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner          User?                     @relation("UserNetworkDevices", fields: [ownerId], references: [id], onDelete: SetNull)
+  snmpConfig     SnmpConfiguration?
+  interfaces     NetworkInterface[]
+  statusHistory  InterfaceStatusHistory[]
+  trafficHistory InterfaceTrafficHistory[]
+  syslogEvents   SyslogEvent[]
+  networkEvents  NetworkEvent[]
+  alerts         Alert[]
+  healthMetrics  DeviceHealthMetric[]
+
+  @@index([ownerId])
+  @@index([enabled])
+  @@index([ip])
+  @@map("network_device")
+}
+
+/// SNMP credentials — encrypted at rest (AES-256-GCM via SecretsService),
+/// one row per device. Never serialized to the frontend.
+model SnmpConfiguration {
+  id           Int      @id @default(autoincrement())
+  deviceId     Int      @unique
+  /// v2c community (encrypted).
+  communityEnc String?  @db.Text
+  /// v3 (encrypted values; auth/priv keys only).
+  v3Username   String?  @db.VarChar(64)
+  v3AuthProto  String?  @db.VarChar(16) // SHA | MD5
+  v3AuthKeyEnc String?  @db.Text
+  v3PrivProto  String?  @db.VarChar(16) // AES | DES
+  v3PrivKeyEnc String?  @db.Text
+  hasCommunity Boolean  @default(false)
+  hasAuthKey   Boolean  @default(false)
+  hasPrivKey   Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@map("snmp_configuration")
+}
+
+/// One discovered interface of a network device. `operStatus` is the last
+/// polled operational state; every poll also lands a row in
+/// InterfaceTrafficHistory so the graphs have a real series.
+model NetworkInterface {
+  id                Int     @id @default(autoincrement())
+  deviceId          Int
+  ifIndex           Int
+  /// ifName (Gi1/0/1, ether1, xe-0/0/0…)
+  name              String  @db.VarChar(96)
+  description       String? @db.VarChar(240) // ifAlias — operator's label
+  /// 1=up 2=down (IF-MIB unless adminStatus), 0=unknown
+  adminStatus       Int     @default(1)
+  /// 1=up 2=down
+  operStatus        Int     @default(2)
+  speedMbps         Int?
+  duplex            String? @db.VarChar(16)
+  /// Last polled IF-MIB counters (monotonic; deltas below are persisted).
+  inOctets          BigInt? @db.BigInt
+  outOctets         BigInt? @db.BigInt
+  inUcastPkts       BigInt? @db.BigInt
+  outUcastPkts      BigInt? @db.BigInt
+  inErrors          BigInt? @db.BigInt
+  outErrors         BigInt? @db.BigInt
+  inDiscards        BigInt? @db.BigInt
+  outDiscards       BigInt? @db.BigInt
+  crcErrors         BigInt? @db.BigInt
+  /// Last polled RATES (derived from counter deltas). NULL = no valid sample
+  /// yet (first poll / counter reset after reboot) — the UI shows "—", never
+  /// a fake 0 bps.
+  rxRateBps         Float?
+  txRateBps         Float?
+  rxPps             Float?
+  txPps             Float?
+  errorRatePerMin   Float?
+  mac               String? @db.VarChar(40)
+  ifLastChangeTicks BigInt? @db.BigInt
+
+  /// Standard MIB-2 ifType (IANAifType) captured at discovery time.
+  ifType             Int?
+  /// PHYSICAL | VLAN | LOOPBACK | BRIDGE | BOND | TUNNEL | PPP | PPPOE_SESSION | DYNAMIC | UNKNOWN
+  interfaceCategory  String? @db.VarChar(24)
+  /// Gates alerts + traffic history + port totals for this port. PPPoE
+  /// session links start disabled; operators can re-enable per-port.
+  /// NOTE: the poller re-applies the policy default every poll UNLESS the
+  /// operator overrode it (monitoringExplicit = true), so legacy PPPoE rows
+  /// get excluded even after an upgrade.
+  monitoringEnabled  Boolean @default(true)
+  /// True once an operator edited this port's monitoring flag by hand —
+  /// the poller then stops re-applying the classification default.
+  monitoringExplicit Boolean @default(false)
+  /// Human reason why an interface is excluded ("PPPoE session", "Tunnel"…).
+  excludedReason     String? @db.VarChar(120)
+  /// Per-port sound override (device → port → rule hierarchy).
+  soundEnabled       Boolean @default(true)
+  /// Per-port recovery-chime override (device → port → rule hierarchy).
+  soundUpEnabled     Boolean @default(true)
+
+  lastStateChangeAt DateTime?
+  firstSeen         DateTime  @default(now())
+  lastSeen          DateTime  @default(now())
+  lastPollAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  device         NetworkDevice             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  statusHistory  InterfaceStatusHistory[]
+  trafficHistory InterfaceTrafficHistory[]
+  events         NetworkEvent[]
+  alerts         Alert[]
+
+  @@unique([deviceId, ifIndex])
+  @@index([deviceId])
+  @@index([operStatus])
+  @@index([deviceId, operStatus])
+  @@map("network_interface")
+}
+
+/// Every operational-state TRANSITION of an interface (UP↔DOWN) — the raw
+/// material for availability % ("what fraction of the range was it down").
+model InterfaceStatusHistory {
+  id          BigInt   @id @default(autoincrement())
+  deviceId    Int
+  interfaceId Int
+  /// "UP" | "DOWN" — the state this row moves the interface INTO.
+  toStatus    String   @db.VarChar(8)
+  /// How long the PREVIOUS state lasted (seconds), when known.
+  durationSec Int?
+  at          DateTime @default(now())
+
+  device    NetworkDevice    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  interface NetworkInterface @relation(fields: [interfaceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, at])
+  @@index([interfaceId, at])
+  @@index([deviceId, interfaceId])
+  @@map("interface_status_history")
+}
+
+/// Per-poll interface sample — rates (derived) + counters. One row per
+/// interface per poll (bounded by retention; pruned nightly).
+model InterfaceTrafficHistory {
+  id              BigInt   @id @default(autoincrement())
+  deviceId        Int
+  interfaceId     Int
+  at              DateTime @default(now())
+  rxRateBps       Float    @default(0)
+  txRateBps       Float    @default(0)
+  rxPps           Float    @default(0)
+  txPps           Float    @default(0)
+  errorRatePerMin Float    @default(0)
+  up              Boolean  @default(true)
+  speedMbps       Int?
+  inOctets        BigInt?  @db.BigInt
+  outOctets       BigInt?  @db.BigInt
+  inErrors        BigInt?  @db.BigInt
+  outErrors       BigInt?  @db.BigInt
+  inDiscards      BigInt?  @db.BigInt
+  outDiscards     BigInt?  @db.BigInt
+  crcErrors       BigInt?  @db.BigInt
+
+  device    NetworkDevice    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  interface NetworkInterface @relation(fields: [interfaceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, at])
+  @@index([interfaceId, at])
+  @@index([deviceId, interfaceId, at])
+  @@map("interface_traffic_history")
+}
+
+/// Raw syslog messages received by the built-in syslog server. deviceId is
+/// null when the source IP is not (yet) a monitored network device — raw
+/// lines are still kept, but only permitted devices' rows are surfaced.
+model SyslogEvent {
+  id           BigInt   @id @default(autoincrement())
+  deviceId     Int?
+  sourceIp     String   @db.VarChar(64)
+  hostname     String?  @db.VarChar(120)
+  facility     Int?
+  facilityName String?  @db.VarChar(32)
+  /// 0 Emergency … 7 Debug
+  severity     Int?
+  severityName String   @default("INFO") @db.VarChar(16)
+  tag          String?  @db.VarChar(64)
+  message      String   @db.Text
+  /// Smart-parsed: PORT_DOWN, PORT_UP, BGP_DOWN, AUTH_FAILURE, CPU_HIGH…
+  eventType    String?  @db.VarChar(48)
+  /// OPEN | IGNORED — OPEN when it produced a network event/alert.
+  status       String   @default("OPEN") @db.VarChar(16)
+  raw          String?  @db.Text
+  receivedAt   DateTime @default(now())
+
+  device NetworkDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([deviceId, receivedAt])
+  @@index([sourceIp, receivedAt])
+  @@index([severity, receivedAt])
+  @@index([eventType])
+  @@index([status])
+  @@index([receivedAt])
+  @@map("syslog_event")
+}
+
+/// A smart-parsed, human-readable network event (port down/up, BGP down/up,
+/// OSPF adjacency, STP change, auth failure, reboot…). The alert engine
+/// evaluates AlertRules against these.
+model NetworkEvent {
+  id            BigInt    @id @default(autoincrement())
+  deviceId      Int?
+  sourceIp      String?   @db.VarChar(64)
+  interfaceId   Int?
+  interfaceName String?   @db.VarChar(96)
+  eventType     String    @db.VarChar(48) // PORT_DOWN, BGP_DOWN, …
+  severity      String    @db.VarChar(16) // critical | error | warning | notice | info | debug
+  message       String    @db.Text
+  /// OPEN | RECOVERED — PORT_DOWN opens, PORT_UP on the same port recovers it.
+  status        String    @default("OPEN") @db.VarChar(16)
+  count         Int       @default(1) // flap counter within a window
+  createdAt     DateTime  @default(now())
+  resolvedAt    DateTime?
+
+  device    NetworkDevice?    @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  interface NetworkInterface? @relation(fields: [interfaceId], references: [id], onDelete: SetNull)
+
+  @@index([deviceId, createdAt])
+  @@index([interfaceId, createdAt])
+  @@index([eventType, status])
+  @@index([severity])
+  @@index([status])
+  @@index([createdAt])
+  @@map("network_event")
+}
+
+/// Administrator-defined alert conditions (Settings → Alert Rules).
+/// `condition` is a compact DSL evaluated by the alert engine:
+///   - "DURATION:120"    → alert stays OPEN; notify again when sustained > 120s
+///   - "FLAP:5:600"      → 5+ occurrences of eventType within 600s → critical
+///   - "THRESHOLD:90:CPU"→ metric crosses a threshold (CPU %, memory, temperature)
+///   - "SYSLOG_SILENCE:300" → device sent no syslog for 300s → warning
+/// Empty condition matches every event of `eventType`.
+model AlertRule {
+  id          Int      @id @default(autoincrement())
+  ownerId     Int? // rules are tenant scoped; SUPER_ADMIN sees all
+  name        String   @db.VarChar(120)
+  eventType   String   @db.VarChar(48)
+  condition   String?  @db.VarChar(120)
+  severity    String   @default("WARNING") @db.VarChar(16)
+  enabled     Boolean  @default(true)
+  /// {"sound":true,"desktop":true,"email":false,"discord":true,"whatsapp":false}
+  channels    Json     @default("{}")
+  description String?  @db.VarChar(500)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  alerts Alert[]
+
+  @@index([ownerId])
+  @@index([eventType, enabled])
+  @@map("alert_rule")
+}
+
+/// One OPEN/resolved alert. `key` dedupes: only ONE open alert per
+/// eventType+device+interface, so a port that stays down never re-alerts
+/// every polling cycle; it re-alerts only on transition (or when a DURATION
+/// rule escalates it / the downtime crosses the configured threshold).
+model Alert {
+  id             Int       @id @default(autoincrement())
+  ruleId         Int?
+  deviceId       Int?
+  interfaceId    Int?
+  interfaceName  String?   @db.VarChar(96)
+  eventType      String    @db.VarChar(48)
+  title          String    @db.VarChar(240)
+  message        String    @db.Text
+  severity       String    @default("WARNING") @db.VarChar(16)
+  key            String    @db.VarChar(160)
+  /// OPEN | RESOLVED | ACKNOWLEDGED
+  status         String    @default("OPEN") @db.VarChar(16)
+  openedAt       DateTime  @default(now())
+  resolvedAt     DateTime?
+  acknowledgedAt DateTime?
+  acknowledgedBy Int?
+  /// Number of times this alert was re-fired (DURATION escalation).
+  fireCount      Int       @default(1)
+
+  rule          AlertRule?        @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  device        NetworkDevice?    @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  interface     NetworkInterface? @relation(fields: [interfaceId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+
+  @@index([status, openedAt])
+  @@index([deviceId, status])
+  @@index([interfaceId, status])
+  @@index([key, status])
+  @@index([eventType])
+  @@map("alert")
+}
+
+/// Delivery log for every notification a rule produced (sound/SSE pushes are
+/// recorded here too, so a repeated "did the alarm go off?" has an answer).
+model Notification {
+  id      Int      @id @default(autoincrement())
+  alertId Int?
+  channel String   @db.VarChar(32) // SOUND | DESKTOP | EMAIL | DISCORD | WHATSAPP
+  title   String   @db.VarChar(240)
+  message String   @db.Text
+  status  String   @default("SENT") @db.VarChar(16) // SENT | FAILED | SKIPPED
+  error   String?  @db.VarChar(500)
+  sentAt  DateTime @default(now())
+
+  alert Alert? @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@index([alertId])
+  @@index([channel, sentAt])
+  @@map("notification")
+}
+
+/// Built-in syslog server listener configuration. One row per protocol.
+model SyslogServerSetting {
+  id          Int      @id @default(autoincrement())
+  protocol    String   @unique @db.VarChar(8) // UDP | TCP | TLS
+  enabled     Boolean  @default(false)
+  port        Int      @default(514)
+  tlsCertPath String?  @db.VarChar(500)
+  tlsKeyPath  String?  @db.VarChar(500)
+  updatedAt   DateTime @updatedAt
+
+  @@map("syslog_server_setting")
+}
+
+/// ────────────────────────────────────────────────────────────────────────
+/// ROUTED PREFIX ALLOCATION (corporate / P2P clients)
+/// ────────────────────────────────────────────────────────────────────────
+/// Distinct from IpPool (PPPoE address pools) and StaticIp (single addresses).
+/// This is prefix DELEGATION: a business client gets a VLAN, a /30 transit link
+/// to the router, and a routed block (e.g. /29) of their own, plus a static
+/// route, uRPF and an ingress ACL.
+///
+/// Kept in the database rather than a spreadsheet for the reason every ISP
+/// eventually learns: the spreadsheet is always one allocation out of date, two
+/// clients end up with the same block, and when abuse is reported six months
+/// later nobody can say who held the prefix at the time.
+model PrefixPool {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(120)
+  /// The block this pool hands out from, e.g. 103.115.196.0/24
+  cidr        String   @db.VarChar(64)
+  /// PUBLIC (routed customer space) | TRANSIT (P2P /30 link addressing)
+  kind        String   @default("PUBLIC") @db.VarChar(16)
+  /// Default size handed out from this pool (29 = /29, 30 = /30).
+  defaultSize Int      @default(29)
+  description String?  @db.VarChar(300)
+  ownerId     Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  allocations PrefixAllocation[]
+
+  @@index([kind])
+  @@index([isActive])
+  @@map("prefix_pool")
+}
+
+/// One client's provisioning record — the single source of truth for what was
+/// given to whom, when, and with which configuration.
+model PrefixAllocation {
+  id           Int    @id @default(autoincrement())
+  clientName   String @db.VarChar(160)
+  /// Optional link to a subscriber record, when the client is also one.
+  subscriberId Int?
+  poolId       Int?
+
+  vlanId   Int?
+  vlanName String? @db.VarChar(80) // vlan651-Zubair
+  /// P2P | LAN | TRUNK
+  linkType String  @default("P2P") @db.VarChar(16)
+
+  /// Transit /30: our side and the client side of the point-to-point link.
+  transitCidr String? @db.VarChar(64) // 10.152.0.0/30
+  ourIp       String? @db.VarChar(64) // 10.152.0.1
+  clientIp    String? @db.VarChar(64) // 10.152.0.2
+
+  /// The ROUTED block delegated to the client.
+  allocatedCidr String @db.VarChar(64) // 103.115.196.8/29
+
+  /// Security posture actually applied on the router.
+  urpfEnabled Boolean @default(true)
+  ingressAcl  String? @db.VarChar(120) // ACL-CLIENT-ZUBAIR-IN
+  mtu         Int?    @default(1500)
+  description String? @db.VarChar(300) // Client-Zubair-P2P-23Aug2026
+
+  /// Which device it was provisioned on (free text — not every box is a NAS).
+  deviceName String? @db.VarChar(120)
+  nasId      Int?
+
+  /// ACTIVE | RESERVED | RELEASED
+  status        String    @default("ACTIVE") @db.VarChar(16)
+  provisionedAt DateTime  @default(now())
+  releasedAt    DateTime?
+  releaseReason String?   @db.VarChar(300)
+
+  notes       String?  @db.Text
+  createdById Int?
+  ownerId     Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  pool PrefixPool? @relation(fields: [poolId], references: [id], onDelete: SetNull)
+
+  /// A prefix may only be live once. Historical (RELEASED) rows are kept, so
+  /// the uniqueness is enforced in code against ACTIVE rows rather than here.
+  @@index([allocatedCidr])
+  @@index([status])
+  @@index([vlanId])
+  @@index([clientName])
+  @@map("prefix_allocation")
+}
+
+/// SYSLOG FORWARDING — relay received messages to another collector.
+///
+/// Standard practice in an ISP: the panel is where operators work, but a SIEM,
+/// a long-term archive or a head-office collector also needs the stream. Without
+/// this the panel is a dead end and operators end up pointing devices at two
+/// destinations, which doubles the load on the device and guarantees the two
+/// copies drift.
+///
+/// Forwarding is best-effort by design: a dead collector must never slow the
+/// receiver or drop a message from the local store. Delivery is fire-and-forget
+/// UDP unless TCP is chosen.
+model SyslogForwardTarget {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(120)
+  host       String    @db.VarChar(255)
+  port       Int       @default(514)
+  /// UDP | TCP
+  protocol   String    @default("UDP") @db.VarChar(8)
+  enabled    Boolean   @default(true)
+  /// Optional filter using the SAME clause DSL as syslog alert rules
+  /// (SEV<=3;CONTAINS:…). Empty = forward everything.
+  condition  String?   @db.VarChar(240)
+  /// Counters so an operator can see it is actually working.
+  sentCount  Int       @default(0)
+  failCount  Int       @default(0)
+  lastSentAt DateTime?
+  lastError  String?   @db.VarChar(300)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([enabled])
+  @@map("syslog_forward_target")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// PACKAGE MANAGEMENT
+//
+// These four tables replace backend/data/packages-management.json.
+//
+// A JSON file on disk was the wrong home for them for three reasons that all
+// bit in production: it is not shared between the pm2 workers in any
+// transactional sense (two simultaneous edits silently lose one), it is not in
+// the database backup, and a deploy that replaces the working directory takes
+// the operator's tax and policy configuration with it.
+//
+// Ids are preserved verbatim by the migration, because packageSettings
+// references taxes/policies/allocations BY ID. Renumbering during the move
+// would silently re-point every package at the wrong tax.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Per-package configuration that has no column on Package itself — quotas,
+/// expiry behaviour, and the tax/policy/allocation ids attached to it.
+model PackageSetting {
+  id        Int      @id @default(autoincrement())
+  packageId Int      @unique
+  /// The whole settings object. Kept as JSON deliberately: it is a wide,
+  /// sparse, still-evolving bag of optional switches read and written as one
+  /// unit and never queried field-by-field. Splitting it into forty nullable
+  /// columns would buy nothing and cost a migration per new option.
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@map("package_setting")
+}
+
+/// Taxes and fees that can be attached to packages.
+model PackageTax {
+  id          Int      @id @default(autoincrement())
+  groupName   String   @default("") @db.VarChar(120)
+  name        String   @db.VarChar(120)
+  /// PERCENTAGE | FIXED
+  type        String   @default("PERCENTAGE") @db.VarChar(24)
+  value       String   @default("0") @db.VarChar(32)
+  description String?  @db.VarChar(300)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@map("package_tax")
+}
+
+/// RADIUS attribute rules applied to packages.
+model PackagePolicy {
+  id             Int      @id @default(autoincrement())
+  groupName      String   @default("") @db.VarChar(120)
+  attributeName  String   @db.VarChar(120)
+  attributeType  String   @db.VarChar(24)
+  attributeOp    String   @db.VarChar(8)
+  attributeValue String   @db.VarChar(240)
+  description    String?  @db.VarChar(300)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("package_policy")
+}
+
+/// Time-of-day / day-of-week windows in which a policy applies.
+model PackageAllocation {
+  id          Int      @id @default(autoincrement())
+  groupName   String   @default("") @db.VarChar(120)
+  isActive    Boolean  @default(true)
+  /// ["MON","TUE",…]
+  days        Json     @default("[]")
+  startTime   String   @default("00:00") @db.VarChar(8)
+  endTime     String   @default("23:59") @db.VarChar(8)
+  policyId    Int?
+  description String?  @db.VarChar(300)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+  @@map("package_allocation")
+}
+
+/// CPU/memory/temperature series per network device (the Overview graphs).
+model DeviceHealthMetric {
+  id       Int      @default(autoincrement())
+  deviceId Int
+  ts       DateTime @default(now())
+  metric   String   @db.VarChar(24) // cpu | memory | temperature
+  value    Float
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  /// Composite with the time column — same reason as MonitorSample above:
+  /// a TimescaleDB hypertable needs its partitioning column in every unique
+  /// index, and the model must describe one shape for both kinds of server.
+  @@id([id, ts])
+  @@index([deviceId, metric, ts])
+  @@index([deviceId, ts])
+  @@map("device_health_metric")
+}
