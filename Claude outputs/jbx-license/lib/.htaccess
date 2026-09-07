@@ -1,0 +1,10 @@
+# These are include files, never pages. Block direct HTTP access entirely.
+# Belt and braces: the config itself lives outside public_html anyway.
+
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>

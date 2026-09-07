@@ -1,4 +1,7 @@
-import { Body, Controller, Get, Post, UseGuards, Req, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards, Req, ForbiddenException, InternalServerErrorException, ServiceUnavailableException, Logger } from '@nestjs/common';
+import { PrismaService } from './prisma/prisma.service';
+import { CacheService } from './common/cache.service';
+import { QueueService } from './common/queue.service';
 import { promises as fs } from 'fs';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -337,12 +340,75 @@ const resellerCapabilityChecklist = {
 export class AppController {
   private readonly logger = new Logger(AppController.name);
 
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+    private readonly queue: QueueService,
+  ) {}
+
   @Get('health')
   health() {
     // `build` lets a deploy/smoke-test confirm the NEW code is actually live
     // (deterministic, unlike grepping one-shot startup logs across cluster
     // workers). Bump BUILD_MARKER in main.ts alongside significant changes.
     return { ok: true, build: (globalThis as any).__JB_BUILD__ || 'unknown', ts: new Date().toISOString() };
+  }
+
+  /**
+   * LIVENESS — is this process running?
+   *
+   * Deliberately checks nothing else. A liveness probe that touches the
+   * database restarts every healthy worker during a brief Postgres blip,
+   * turning a short degradation into a full outage at the worst possible
+   * moment. It answers "the process is up", and nothing more.
+   */
+  @Get('health/live')
+  live() {
+    return { status: 'ok' };
+  }
+
+  /**
+   * READINESS — should the load balancer send this process traffic?
+   *
+   * WHY THIS IS SEPARATE FROM /health
+   * `PrismaService.onModuleInit` deliberately tolerates a failed initial
+   * connect so the app survives being started before Postgres is up. Sensible
+   * — but it means the process reports healthy at the process level while
+   * failing every real request. `/health` returns `ok: true` throughout, so a
+   * load balancer watching it keeps routing traffic to an instance that cannot
+   * answer a single query.
+   *
+   * Readiness asks what the balancer actually needs to know: can this instance
+   * reach the things it depends on? A 503 pulls it out of rotation until it
+   * can, without restarting it — the process is fine, its dependencies are
+   * not, and those are different problems with different remedies.
+   *
+   * Redis counts only where it is REQUIRED. On a single-instance install
+   * running deliberately without it, an absent Redis is the configured state
+   * rather than a fault, and must not park the only instance out of rotation.
+   */
+  @Get('health/ready')
+  async ready() {
+    const redis = this.cache.health();
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch (e: any) {
+      throw new ServiceUnavailableException({
+        status: 'not_ready',
+        db: false,
+        redis,
+        error: e?.message || 'database unreachable',
+      });
+    }
+    if (redis.required && !redis.ready) {
+      throw new ServiceUnavailableException({
+        status: 'not_ready',
+        db: true,
+        redis,
+        error: redis.error || 'Redis required but not ready',
+      });
+    }
+    return { status: 'ok', db: true, redis };
   }
 
   /**
@@ -353,6 +419,26 @@ export class AppController {
    * delta between two os.cpus() samples ~300ms apart (instantaneous busy share),
    * RAM is used/total from the os module — no shell, works on any platform.
    */
+  /**
+   * Background-queue backlog.
+   *
+   * A queue falling behind has no symptom until it has a large one: jobs are
+   * accepted, the API stays fast, nothing errors — and then somebody notices
+   * RADIUS profiles are hours stale. `waiting` growing steadily is what
+   * predicts that, early enough to act on.
+   *
+   * Behind the auth guard rather than on /health deliberately: queue names and
+   * depths describe the internals of the deployment and do not belong on an
+   * endpoint a load balancer polls unauthenticated.
+   */
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Get('system/queues')
+  async systemQueues(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') return { visible: false, queues: [] };
+    return { visible: true, ...(await this.queue.getQueueDepths()) };
+  }
+
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('system/stats')
   async systemStats(@Req() req: any) {

@@ -1,5 +1,6 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildCursorPage, parseCursor } from '../common/pagination';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationService } from '../organization/organization.service';
@@ -10,6 +11,8 @@ import { CurrencyService } from '../common/currency.service';
 
 @Injectable()
 export class InvoicesService {
+  private readonly logger = new Logger(InvoicesService.name);
+
   constructor(
     private prisma: PrismaService,
     private accounting: AccountingService,
@@ -30,21 +33,65 @@ export class InvoicesService {
    * An invoice belongs to a subscriber, and a subscriber belongs to an
    * account, so the restriction goes through the subscriber's owner.
    */
-  async findAll(actor?: Actor) {
+  /**
+   * WHY THIS NEEDED A BOUND
+   * It had no `take` and no date filter, while pulling three relations
+   * (`subscriber`, `items`, `payments`) onto every row. Invoices accumulate
+   * forever — one per subscriber per month — so at 1M subscribers that is
+   * ~12M parent rows a year, each fanned out by its items and payments, loaded
+   * into the Node heap in one allocation. `max_memory_restart: 600M` then
+   * kills the worker along with every other request it was serving. The same
+   * shape as the revenue-report defect, on a route the invoices page calls on
+   * every load.
+   *
+   * THE RETURN SHAPE IS DELIBERATELY UNCHANGED
+   * `frontend/app/invoices/page.tsx` does `Array.isArray(data) ? data : ...`,
+   * so returning a `{ items, nextCursor }` envelope here would silently empty
+   * the page. A correctness fix that blanks the invoices screen is not an
+   * improvement, so the array stays and gains a cap.
+   *
+   * This mirrors `SubscribersService.findAll` deliberately — cursor page when
+   * `?limit=` is supplied, capped legacy array otherwise. A second convention
+   * for the same problem is how the next person picks the wrong one.
+   */
+  async findAll(actor?: Actor, query?: any) {
     const where: any = {};
     if (actor && !this.scope.isAdmin(actor.role)) {
       const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
       where.subscriber = { userId: { in: ids } };
     }
-    return this.prisma.invoice.findMany({
+    const include = { subscriber: true, items: true, payments: true };
+
+    // Opt-in cursor pagination: index-driven, and never a COUNT(*).
+    if (query?.limit !== undefined) {
+      const { take, cursorArgs } = parseCursor(query);
+      const rows = await this.prisma.invoice.findMany({
+        where,
+        include,
+        orderBy: { id: 'desc' },
+        take: take + 1,
+        ...cursorArgs,
+      });
+      return buildCursorPage(rows, take);
+    }
+
+    const HARD_CAP = Number(process.env.INVOICE_LIST_CAP || 2000);
+    const rows = await this.prisma.invoice.findMany({
       where,
-      include: {
-        subscriber: true,
-        items: true,
-        payments: true,
-      },
+      include,
       orderBy: { createdAt: 'desc' },
+      take: HARD_CAP,
     });
+    // Silent truncation is the real hazard here: the page would look complete
+    // while simply missing older invoices. This is the one clue that explains
+    // it to whoever eventually asks why.
+    if (rows.length === HARD_CAP) {
+      this.logger.warn(
+        `Invoice list hit the ${HARD_CAP}-row cap. The client should paginate with ?limit= ` +
+          `(raise INVOICE_LIST_CAP only as a stop-gap).`,
+      );
+    }
+    return rows;
   }
 
   async findOne(id: number, actor?: Actor) {

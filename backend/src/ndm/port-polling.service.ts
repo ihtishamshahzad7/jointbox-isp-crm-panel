@@ -46,8 +46,27 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
   private lastSweepDue = 0;
   private sweepCount = 0;
 
+  /**
+   * Per-sweep throughput accounting.
+   *
+   * WHY THESE ARE WORTH RECORDING
+   * The old sweep silently fell behind: devices past their interval simply
+   * were not polled, and nothing anywhere said so. The dashboard showed the
+   * last known state, which looks identical to a healthy "up". `dueCount`
+   * versus `polledCount` is the one comparison that distinguishes "everything
+   * is fine" from "the poller cannot keep up", and it is the metric to alert
+   * on. The duration percentiles turn "polling is slow" into "these devices
+   * are slow", which is a problem somebody can actually go and fix.
+   */
+  private lastSweepPolled = 0;
+  private lastSweepSkipped = 0;
+  private lastSweepMs = 0;
+  private lastDurations: number[] = [];
+
   /** Snapshot for diagnostics. Never throws; safe to call from a request. */
   get health() {
+    const d = [...this.lastDurations].sort((a, b) => a - b);
+    const pct = (p: number) => (d.length ? d[Math.min(d.length - 1, Math.floor((d.length * p) / 100))] : 0);
     return {
       // On a web node the sweep returns immediately, so "scheduled" is the
       // honest word — the work belongs to the worker process.
@@ -58,7 +77,119 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
       lastSweepDue: this.lastSweepDue,
       sweeps: this.sweepCount,
       trackedDevices: this.last.size,
+      concurrency: this.pollConcurrency,
+      lastSweepPolled: this.lastSweepPolled,
+      // Non-zero here means the sweep ran out of time budget before it ran out
+      // of due devices. Sustained, it is the signal that capacity is short.
+      lastSweepSkipped: this.lastSweepSkipped,
+      lastSweepMs: this.lastSweepMs,
+      pollDurationMs: { p50: pct(50), p95: pct(95), max: d.length ? d[d.length - 1] : 0 },
+      // Without this, a backed-off device looks like a device that is simply
+      // not being polled, and the next person debugging it has no way to tell
+      // the circuit breaker from a bug.
+      backedOffDevices: [...this.failures.entries()].filter(([, f]) => f >= 2).length,
+      maxBackoffMultiplier: this.breakerMaxMultiplier,
     };
+  }
+
+  /**
+   * How many device polls may be in flight at once.
+   *
+   * THE OLD CEILING, AND WHY IT WAS A HARD WALL
+   * The sweep took `.slice(0, 40)` of the due devices and processed them in
+   * serial batches of 8, on a 5s timer. That is at most 40 devices per tick →
+   * 8 devices/second, and only if every poll returns instantly. At 1,000 NAS
+   * on a 30s interval the system needs ~33 devices/second sustained simply to
+   * visit each device once per interval. It was roughly 4× short before
+   * accounting for real SNMP latency over WAN links, so devices fell
+   * permanently behind their configured interval and nothing reported it.
+   *
+   * Worse, `Promise.all` over a batch of 8 waits for the SLOWEST member: one
+   * unreachable device burning its full `snmpTimeoutMs` × `snmpRetries` held
+   * the other seven hostages. A handful of flaky devices could throttle the
+   * entire estate.
+   *
+   * A pool fixes both. Each slot takes the next device the moment it frees up,
+   * so a slow device costs one slot rather than a whole batch, and the ceiling
+   * becomes an operator setting instead of a constant in this file.
+   */
+  private readonly pollConcurrency = Math.max(1, Number(process.env.SNMP_POLL_CONCURRENCY) || 60);
+
+  /**
+   * How long one sweep may run before it stops starting new polls.
+   *
+   * This replaces `.slice(0, 40)` as the safety bound, and it is a better one:
+   * the old cap limited the COUNT of devices regardless of how fast they
+   * answered, which throttled a healthy fast estate just as hard as a sick
+   * slow one. A time budget bounds what actually matters — that one sweep
+   * cannot still be running when the next several are due — while letting a
+   * responsive network poll as many devices as it can.
+   */
+  private readonly sweepBudgetMs = Math.max(1_000, Number(process.env.SNMP_SWEEP_BUDGET_MS) || 25_000);
+
+  /**
+   * PER-DEVICE CIRCUIT BREAKER.
+   *
+   * THE PROBLEM IT SOLVES, WHICH THE CONCURRENCY POOL DOES NOT
+   * A pool stops one dead device blocking its neighbours, but it does not stop
+   * dead devices CONSUMING the pool. An unreachable NAS occupies a slot for
+   * its full `snmpTimeoutMs × snmpRetries` — often 5-15 seconds — while a
+   * healthy device answers in tens of milliseconds. So a device that is down
+   * costs several hundred times more capacity than one that is up, and it goes
+   * on costing that on every single sweep, forever.
+   *
+   * At 1,000 NAS that arithmetic decides whether monitoring works. Fifty dead
+   * devices at 10s each is 500 seconds of slot time per sweep cycle spent
+   * confirming, over and over, something already known — while the 950 devices
+   * that are actually up get polled late.
+   *
+   * The fix is to poll what is known to be broken LESS often: double the
+   * effective interval on each consecutive failure, up to a ceiling. A device
+   * that is down is still checked — just every few minutes rather than every
+   * thirty seconds — and one successful poll clears the penalty immediately,
+   * so recovery is never delayed by more than one backed-off interval.
+   *
+   * Kept in memory rather than a column deliberately: it is a scheduling hint,
+   * not a fact about the device, and it must not survive a restart. After a
+   * deploy, every device deserves a fresh look.
+   */
+  private failures = new Map<number, number>();
+  private readonly breakerMaxMultiplier = Math.max(
+    1,
+    Number(process.env.SNMP_BACKOFF_MAX_MULTIPLIER) || 16,
+  );
+
+  /**
+   * How long this device's interval should effectively be, given its recent
+   * failures. 1× while healthy, doubling per consecutive failure, capped.
+   */
+  private backoffMultiplier(deviceId: number): number {
+    const fails = this.failures.get(deviceId) ?? 0;
+    // The first failure must NOT back off. Devices blip; a single timeout is
+    // usually noise, and delaying the retry would make the UI slow to notice a
+    // real outage — the opposite of what a monitoring system is for.
+    if (fails < 2) return 1;
+    return Math.min(this.breakerMaxMultiplier, 2 ** (fails - 1));
+  }
+
+  /**
+   * Record what a poll actually concluded.
+   *
+   * DRIVEN BY THE VERDICT, NOT BY ELAPSED TIME
+   * Timing looks like a tempting proxy — a timed-out device is slow, a healthy
+   * one is fast — and it is wrong in both directions. A satellite or
+   * VPN-reached NAS legitimately configured with a 10s timeout answers in
+   * three seconds and is perfectly healthy; a device on the LAN that fails
+   * instantly (connection refused, bad community string) answers in one
+   * millisecond and is not. Judging by duration backs off working devices and
+   * keeps hammering broken ones — precisely inverted.
+   *
+   * `markUnreachable` is the single place the poller concludes a device is
+   * down, whatever the check type, so the breaker hangs off that instead.
+   */
+  private recordPollOutcome(deviceId: number, ok: boolean) {
+    if (ok) this.failures.delete(deviceId);
+    else this.failures.set(deviceId, (this.failures.get(deviceId) ?? 0) + 1);
   }
 
   constructor(
@@ -155,14 +286,61 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
         },
       });
       const now = Date.now();
-      const due = devices
-        .filter((d) => (this.last.get(d.id) ?? 0) + d.pollIntervalSec * 1000 <= now)
-        .slice(0, 40);
+      // No artificial cap. Everything genuinely due is a candidate; the time
+      // budget below decides how far the sweep actually gets, and reports what
+      // it did not reach rather than dropping it silently.
+      // The breaker widens the interval for devices that keep failing, so a
+      // dead estate cannot crowd out the live one. A healthy device's
+      // multiplier is 1, so this is exactly the old predicate for them.
+      const due = devices.filter(
+        (d) =>
+          (this.last.get(d.id) ?? 0) + d.pollIntervalSec * 1000 * this.backoffMultiplier(d.id) <= now,
+      );
       this.lastSweepDue = due.length;
-      const BATCH = 8;
-      for (let i = 0; i < due.length; i += BATCH) {
-        await Promise.all(
-          due.slice(i, i + BATCH).map((d) => this.pollDevice(d).catch((e: any) => this.log.warn(`poll ${d.name}: ${e?.message || e}`))),
+
+      const startedAt = Date.now();
+      const deadline = startedAt + this.sweepBudgetMs;
+      const durations: number[] = [];
+      let polled = 0;
+      let index = 0;
+
+      /**
+       * One worker slot. Pulls the next due device, polls it, repeats.
+       *
+       * `index++` is safe without a lock because Node runs this on a single
+       * thread and there is no `await` between the read and the increment —
+       * each worker takes a distinct index. Deliberately not a `for` loop over
+       * chunks: chunking is what made a slow device stall its neighbours.
+       */
+      const worker = async () => {
+        while (index < due.length && Date.now() < deadline) {
+          const d = due[index++];
+          const t0 = Date.now();
+          try {
+            await this.pollDevice(d);
+          } catch (e: any) {
+            this.log.warn(`poll ${d.name}: ${e?.message || e}`);
+          }
+          durations.push(Date.now() - t0);
+          polled++;
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(this.pollConcurrency, due.length) }, () => worker()),
+      );
+
+      this.lastSweepPolled = polled;
+      this.lastSweepSkipped = due.length - polled;
+      this.lastSweepMs = Date.now() - startedAt;
+      this.lastDurations = durations;
+
+      // Falling behind is a capacity problem, and it used to be invisible.
+      // Said once per sweep, only when it is actually happening.
+      if (this.lastSweepSkipped > 0) {
+        this.log.warn(
+          `poll sweep hit its ${this.sweepBudgetMs}ms budget: polled ${polled}/${due.length}, ` +
+            `${this.lastSweepSkipped} device(s) deferred — raise SNMP_POLL_CONCURRENCY (now ${this.pollConcurrency}) or move polling to the worker process`,
         );
       }
     } catch (e: any) {
@@ -219,6 +397,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
         await this.markUnreachable(device, 'Ping timeout — no ICMP reply');
         return;
       }
+      // Poll succeeded — clear any circuit-breaker penalty so this device
+      // returns to its configured interval on the very next sweep.
+      this.recordPollOutcome(device.id, true);
       const now = new Date();
       await this.prisma.networkDevice.update({
         where: { id: device.id },
@@ -251,6 +432,10 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
 
   // ── Reachability ─────────────────────────────────────────────────
   private async markUnreachable(device: any, error: string) {
+    // The circuit breaker's failure signal. Every check type (SNMP, ICMP,
+    // HTTP) funnels its "this device is down" conclusion through here, so
+    // this one line keeps the breaker in step with all of them.
+    this.recordPollOutcome(device.id, false);
     // NULL isReachable = never polled: first failure just initializes the
     // flag, it must NOT raise a fake DEVICE_DOWN (first-poll rule).
     const wasUp = device.isReachable === true;
@@ -489,6 +674,9 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
     // ── Phase 4: device totals + health metric + escalations ────
     // (rxAll/txAll accumulated in Phase 2+3 — SUM OF THE REAL DELTA RATES of
     // monitored interfaces; the old code summed a field SNMP never fills.)
+    // Poll succeeded — clear any circuit-breaker penalty so this device
+    // returns to its configured interval on the very next sweep.
+    this.recordPollOutcome(device.id, true);
     await this.prisma.networkDevice.update({
       where: { id: device.id },
       data: {

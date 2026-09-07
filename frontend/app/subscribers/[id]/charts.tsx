@@ -32,6 +32,8 @@ const RANGES = [
   { label: "1H", minutes: 60 },
   { label: "6H", minutes: 360 },
   { label: "24H", minutes: 1440 },
+  { label: "7D", minutes: 10080 },
+  { label: "30D", minutes: 43200 },
 ];
 
 export function BandwidthHistoryChart({ username, minutes = 60, autoPoll = true }: BwChartProps) {
@@ -56,7 +58,9 @@ export function BandwidthHistoryChart({ username, minutes = 60, autoPoll = true 
     load();
     if (autoPoll) {
       if (timer.current) clearInterval(timer.current);
-      timer.current = setInterval(load, 30000);
+      // Poll less often for longer ranges: 30s for ≤6h, 2min for 24h, 5min for 7d/30d.
+      const pollMs = range <= 360 ? 30_000 : range <= 1440 ? 120_000 : 300_000;
+      timer.current = setInterval(load, pollMs);
     }
     return () => { alive = false; if (timer.current) clearInterval(timer.current); };
   }, [username, range, autoPoll]);

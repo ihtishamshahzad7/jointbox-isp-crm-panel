@@ -1,0 +1,18 @@
+# ===========================================================================
+#  NEVER COMMIT THESE. The signing key IS the licensing business.
+# ===========================================================================
+*.sk
+*.pem
+*.key
+jbx_license_ed25519.sk
+
+# The real private config lives outside public_html on the server and is
+# placed by hand. private-example/ is the template and IS committed.
+private/
+jbx-config.php
+
+# Local test artefacts
+/vendor/
+*.log
+.DS_Store
+Thumbs.db

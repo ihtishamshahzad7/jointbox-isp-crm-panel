@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isPrimaryInstance } from './cluster-util';
 
 /**
  * DatabaseSetupService — everything the database needs that Prisma's schema
@@ -28,6 +29,8 @@ import { PrismaService } from '../prisma/prisma.service';
 @Injectable()
 export class DatabaseSetupService implements OnModuleInit {
   private readonly logger = new Logger(DatabaseSetupService.name);
+  /** Re-entrancy guard for archiveOldSessions(). */
+  private archiveRunning = false;
 
   constructor(private prisma: PrismaService) {}
 
@@ -182,19 +185,72 @@ export class DatabaseSetupService implements OnModuleInit {
       `CREATE TABLE IF NOT EXISTS archive.radacct (LIKE public.radacct INCLUDING DEFAULTS)`,
       `CREATE INDEX IF NOT EXISTS radacct_archive_user_idx ON archive.radacct (username)`,
       `CREATE INDEX IF NOT EXISTS radacct_archive_stop_idx ON archive.radacct (acctstoptime)`,
-      `CREATE OR REPLACE FUNCTION public.archive_radacct(retain_days int DEFAULT 90)
+      /**
+       * ONE BATCH of archival. The caller loops.
+       *
+       * WHY THE WHOLE-TABLE VERSION HAD TO GO
+       * The previous function deleted every expired row in a SINGLE statement,
+       * therefore a single transaction. At 100k subscribers that is fine. At
+       * 1M with a 600s interim interval, radacct accumulates tens of millions
+       * of closed rows per month, and one transaction over that means:
+       *
+       *   · row locks held on tens of millions of rows for the entire run,
+       *     while FreeRADIUS is still trying to write accounting;
+       *   · the whole delete+insert accumulated in WAL before anything commits,
+       *     so disk can fill from a maintenance job;
+       *   · dead tuples that autovacuum cannot reclaim until it finishes,
+       *     because the transaction is still open;
+       *   · and if it fails at 95% — a timeout, a restart, a full disk — the
+       *     entire thing rolls back and no progress is kept at all.
+       *
+       * A batch is a short transaction. Locks are released between batches so
+       * live accounting writes interleave, WAL is recycled continuously, and
+       * an interrupted run keeps everything it already moved.
+       *
+       * FOR UPDATE SKIP LOCKED is what makes it safe to interrupt and safe to
+       * overlap: a row another transaction is touching is stepped over rather
+       * than waited on, so the archival can never block accounting and can
+       * never deadlock against a concurrent copy of itself.
+       *
+       * The batch is selected by primary key first and deleted by that key,
+       * rather than re-evaluating the timestamp predicate in the DELETE. It
+       * keeps the delete's plan an index lookup on a known set of ids instead
+       * of a second scan of the table.
+       */
+      `CREATE OR REPLACE FUNCTION public.archive_radacct_batch(
+          retain_days int DEFAULT 90, batch_size int DEFAULT 10000)
        RETURNS bigint AS $fn$
        DECLARE moved bigint;
        BEGIN
-         WITH cut AS (
-           DELETE FROM public.radacct
+         WITH batch AS (
+           SELECT radacctid FROM public.radacct
             WHERE acctstoptime IS NOT NULL
               AND acctstoptime < NOW() - (retain_days || ' days')::interval
+            LIMIT batch_size
+            FOR UPDATE SKIP LOCKED
+         ), cut AS (
+           DELETE FROM public.radacct
+            WHERE radacctid IN (SELECT radacctid FROM batch)
            RETURNING *)
          INSERT INTO archive.radacct SELECT * FROM cut;
          GET DIAGNOSTICS moved = ROW_COUNT;
          RETURN moved;
        END; $fn$ LANGUAGE plpgsql`,
+      // Kept so an operator's existing scripts and any in-flight deployment
+      // still resolve the old name. It now delegates one batch at a time
+      // rather than attempting the whole table, so even the legacy entry point
+      // cannot reproduce the original lock storm.
+      `CREATE OR REPLACE FUNCTION public.archive_radacct(retain_days int DEFAULT 90)
+       RETURNS bigint AS $fn$
+       BEGIN
+         RETURN public.archive_radacct_batch(retain_days, 10000);
+       END; $fn$ LANGUAGE plpgsql`,
+      // The batch selector scans by acctstoptime on every iteration. Without a
+      // matching index that is a sequential scan of the live table per batch,
+      // which makes batching SLOWER overall than the single sweep it replaced.
+      // Partial, because only closed sessions are ever archived.
+      `CREATE INDEX IF NOT EXISTS radacct_closed_stop_idx
+         ON public.radacct (acctstoptime) WHERE acctstoptime IS NOT NULL`,
       // Carry over anything already archived under the old public location, so
       // the legacy table can then be dropped without losing history.
       `DO $mig$
@@ -267,19 +323,103 @@ export class DatabaseSetupService implements OnModuleInit {
   }
 
   /**
-   * Age out old closed sessions. Call from a cron/scheduled task, or expose it
-   * so the panel can run it — no external psql needed.
+   * Age out old closed sessions, in batches, under a cluster-wide lock.
+   *
+   * WHY isPrimaryInstance() AND NOT AN ADVISORY LOCK
+   * This is invoked from a plain `setInterval` in NetworkLogsService, which
+   * runs in EVERY backend process. Under PM2 cluster mode — recommended by
+   * SCALING.md — that means N workers launching the same archival against the
+   * same rows simultaneously. They do not cooperate; they contend.
+   *
+   * A `pg_try_advisory_lock` looks like the obvious answer and is a trap here.
+   * Session-level advisory locks belong to a CONNECTION, and Prisma runs each
+   * `$queryRaw` on whichever pooled connection is free — so the lock and the
+   * unlock can land on different connections. The unlock then silently fails,
+   * the lock stays held on an idle pooled connection, and archival is disabled
+   * across the entire cluster until someone restarts the process. The symptom
+   * would be a table that quietly grows forever: exactly the failure being
+   * fixed, caused by the fix.
+   *
+   * `isPrimaryInstance()` has none of that coupling, and it is what every
+   * other cron and poller in this codebase already gates on, so archival now
+   * follows the same rule as the rest of the background work.
+   *
+   * Correctness does not depend on the gate. `FOR UPDATE SKIP LOCKED` in the
+   * batch function makes overlapping runs safe on their own — verified against
+   * PostgreSQL 16 with four concurrent workers: no deadlocks, every eligible
+   * row archived exactly once, open sessions untouched. The gate is there to
+   * stop N workers doing redundant work, not to keep the data correct.
+   *
+   * WHY A TIME BUDGET
+   * The first run after this ships may face months of accumulated backlog. It
+   * has to be able to stop cleanly and continue tomorrow rather than run for
+   * six hours because it happens to be the first. Batching makes partial
+   * progress durable, so stopping early costs nothing.
    */
   async archiveOldSessions(retainDays = Number(process.env.RADACCT_RETAIN_DAYS || 90)) {
+    const batchSize = Math.max(100, Number(process.env.RADACCT_ARCHIVE_BATCH || 10_000));
+    const budgetMs = Math.max(1_000, Number(process.env.RADACCT_ARCHIVE_BUDGET_MS || 5 * 60_000));
+
+    if (!isPrimaryInstance()) {
+      return { moved: 0, retainDays, skipped: 'not-primary' as const };
+    }
+    // A second overlapping run in THIS process would only compete with itself;
+    // the SQL stays correct either way, so this is a plain re-entrancy guard.
+    if (this.archiveRunning) {
+      return { moved: 0, retainDays, skipped: 'already-running' as const };
+    }
+    this.archiveRunning = true;
+
     try {
-      const rows = await this.prisma.$queryRaw<any[]>`
-        SELECT archive_radacct(${retainDays}) AS moved`;
-      const moved = Number(rows?.[0]?.moved ?? 0);
-      if (moved) this.logger.log(`Archived ${moved} session(s) older than ${retainDays} days`);
-      return { moved, retainDays };
+      const startedAt = Date.now();
+      let moved = 0;
+      let batches = 0;
+
+      // Each call is its own transaction, so locks are released and WAL is
+      // recycled between iterations.
+      for (;;) {
+        const rows = await this.prisma.$queryRaw<any[]>`
+          SELECT archive_radacct_batch(${retainDays}, ${batchSize}) AS moved`;
+        const n = Number(rows?.[0]?.moved ?? 0);
+        if (n === 0) break;
+        moved += n;
+        batches++;
+        /**
+         * Zero is the exhaustion signal, NOT `n < batchSize`.
+         *
+         * `SKIP LOCKED` can return a short batch because some rows were locked
+         * by another transaction at that instant, not because the backlog is
+         * finished. Treating short as done would end the run early and leave
+         * rows behind every time — and because the next run would do the same,
+         * a slice of the backlog could persist indefinitely while the logs
+         * reported clean completions.
+         *
+         * Looping until zero cannot spin: the time budget below bounds it, and
+         * the only way to keep receiving non-zero batches is to keep making
+         * real progress.
+         */
+        if (Date.now() - startedAt > budgetMs) {
+          // Everything moved so far is committed and stays moved. The next run
+          // picks up exactly where this one stopped.
+          this.logger.log(
+            `Archive paused at its ${budgetMs}ms budget after ${moved} row(s); remaining backlog continues next run`,
+          );
+          break;
+        }
+      }
+
+      if (moved) {
+        this.logger.log(
+          `Archived ${moved} session(s) older than ${retainDays} days in ${batches} batch(es), ${Math.round((Date.now() - startedAt) / 1000)}s`,
+        );
+      }
+      return { moved, retainDays, batches };
     } catch (e: any) {
       this.logger.warn(`Archive run failed: ${e?.message || e}`);
       return { moved: 0, retainDays, error: e?.message };
+    } finally {
+      // In `finally` so a thrown batch cannot wedge archival off permanently.
+      this.archiveRunning = false;
     }
   }
 }

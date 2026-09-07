@@ -12,7 +12,9 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
   private pollingInterval: NodeJS.Timeout | null = null;
 
   // Track last-seen radacct & radpostauth rows to detect new entries
-  private lastRadAcctId = 0;
+  // BigInt, matching lastRadPostAuthId below: radacctid is a 64-bit key, and
+  // a number here would force a lossy coercion on every comparison.
+  private lastRadAcctId = BigInt(0);
   private lastRadPostAuthId = BigInt(0);
 
   constructor(
@@ -293,7 +295,17 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
       // A router reboot can orphan thousands of sessions at once; looping would
       // mean thousands of queries in a single cycle.
       try {
-        const ids = toClose.map((o) => Number(o.radacctid));
+        /**
+         * Strings, and a bigint[] cast — not Number() and int[].
+         *
+         * Two separate failures were waiting here once radacctid became a
+         * 64-bit key. `::int[]` makes PostgreSQL reject any id past 2^31
+         * outright ("integer out of range"), and `Number()` silently rounds
+         * past 2^53 — which, in an UPDATE that closes sessions, means closing
+         * a DIFFERENT subscriber's session than the one that went away. The
+         * first fails loudly; the second does not fail at all.
+         */
+        const ids = toClose.map((o) => String(o.radacctid));
         await this.prisma.$executeRawUnsafe(
           `UPDATE radacct
               SET acctstoptime       = COALESCE(acctupdatetime, acctstarttime),
@@ -301,7 +313,7 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
                   acctsessiontime    = COALESCE(
                     acctsessiontime,
                     EXTRACT(EPOCH FROM (COALESCE(acctupdatetime, acctstarttime) - acctstarttime))::int)
-            WHERE acctstoptime IS NULL AND radacctid = ANY($1::int[])`,
+            WHERE acctstoptime IS NULL AND radacctid = ANY($1::bigint[])`,
           ids,
         );
         await this.prisma.pppoeSession.updateMany({
@@ -565,8 +577,11 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
       take: 200,
     });
 
-    const allNew = [...activeSessions, ...stoppedSessions].sort(
-      (a, b) => a.radacctid - b.radacctid,
+    // `a - b` is the usual comparator and is wrong for BigInt: subtraction
+    // yields a BigInt, which is not the number Array.sort's contract expects.
+    // Comparing directly keeps it exact at any magnitude.
+    const allNew = [...activeSessions, ...stoppedSessions].sort((a, b) =>
+      a.radacctid < b.radacctid ? -1 : a.radacctid > b.radacctid ? 1 : 0,
     );
 
     // SCALE: resolve every subscriber in ONE query up front instead of one

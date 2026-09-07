@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -69,31 +69,91 @@ export class ReportsService {
     };
   }
 
+  /**
+   * REVENUE REPORT.
+   *
+   * WHAT THIS USED TO DO, AND WHY IT WAS AN OUTAGE WAITING TO HAPPEN
+   * The date range was OPTIONAL and there was no `take`. Called without one,
+   * this ran `payment.findMany()` over every payment ever recorded, with the
+   * full `subscriber` and `invoice` relations joined onto each row, and then
+   * summed the result in JavaScript. At a hundred subscribers that is a slow
+   * page. At a million, with a year of history, it is millions of joined rows
+   * pulled into the Node heap in one go — and `max_memory_restart: 600M` in
+   * ecosystem.config.js then kills the worker, taking every other in-flight
+   * request on that process down with it. Not a slow query: an outage, and one
+   * that repeats every time somebody reloads the page.
+   *
+   * TWO SEPARATE PROBLEMS, FIXED SEPARATELY
+   * They look like one bug and are not:
+   *
+   *   1. The TOTALS were computed by loading rows. They are now `groupBy` and
+   *      `aggregate` — Postgres does the arithmetic and returns a handful of
+   *      rows however wide the range.
+   *   2. The ROW LIST was unbounded. It is now capped by `take`, and the
+   *      response says so via `truncated`.
+   *
+   * Fixing only (2) would have been the tempting one-liner and would have
+   * quietly broken the report: a capped list summed in JS gives the total of
+   * the first N payments and presents it as the total for the period. Wrong
+   * numbers reported confidently are worse than the crash, because nobody
+   * finds out. So the totals are computed over the WHOLE range, independently
+   * of the page of rows returned.
+   *
+   * WHY A DEFAULT WINDOW RATHER THAN A 400
+   * Rejecting a missing range is the clean answer for a new API, but this
+   * endpoint already ships in installs whose integrations call it bare, and a
+   * correctness fix that turns their working report into an error is its own
+   * incident. Defaulting to the last 30 days keeps existing callers working,
+   * bounds the query just as hard, and the echoed `range` tells the caller
+   * exactly which window they got rather than leaving them to guess.
+   */
   async getRevenueReport(startDate?: string, endDate?: string, actor?: Actor) {
-    const where: any = await this.viaSubscriber(actor);
-    if (startDate && endDate) {
-      where.paymentDate = {
-        gte: new Date(startDate),
-        lte: new Date(endDate),
-      };
+    const MAX_ROWS = 1000;
+    const DEFAULT_WINDOW_DAYS = 30;
+
+    // A range is ALWAYS applied, supplied or not. This is the bound that keeps
+    // the query O(window) rather than O(all history).
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate
+      ? new Date(startDate)
+      : new Date(end.getTime() - DEFAULT_WINDOW_DAYS * 86_400_000);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new BadRequestException('startDate and endDate must be valid dates');
+    }
+    if (start > end) {
+      throw new BadRequestException('startDate must not be after endDate');
     }
 
-    const payments = await this.prisma.payment.findMany({
-      where,
-      include: {
-        subscriber: true,
-        invoice:    true,
-      },
-      orderBy: { paymentDate: 'desc' },
-    });
+    const where: any = await this.viaSubscriber(actor);
+    where.paymentDate = { gte: start, lte: end };
 
-    const total    = payments.reduce((sum, p) => sum + p.amount, 0);
-    const byMethod = payments.reduce((acc: any, p) => {
-      acc[p.method] = (acc[p.method] || 0) + p.amount;
-      return acc;
-    }, {});
+    const [totalAgg, byMethodRows, payments] = await Promise.all([
+      // Headline figures, computed by Postgres across the entire range.
+      this.prisma.payment.aggregate({ where, _sum: { amount: true }, _count: true }),
+      this.prisma.payment.groupBy({ where, by: ['method'], _sum: { amount: true } }),
+      // The row list is a preview. It is NOT what the totals are derived from.
+      this.prisma.payment.findMany({
+        where,
+        include: { subscriber: true, invoice: true },
+        orderBy: { paymentDate: 'desc' },
+        take: MAX_ROWS,
+      }),
+    ]);
 
-    return { payments, total, byMethod, count: payments.length };
+    const count = typeof totalAgg._count === 'number' ? totalAgg._count : 0;
+
+    return {
+      payments,
+      total: totalAgg._sum.amount ?? 0,
+      byMethod: Object.fromEntries(byMethodRows.map((m) => [m.method, m._sum.amount ?? 0])),
+      count,
+      // Consumers that assumed `payments.length === count` need to be told
+      // when that stopped being true, and which window they were given.
+      truncated: count > payments.length,
+      returned: payments.length,
+      range: { startDate: start.toISOString(), endDate: end.toISOString() },
+    };
   }
 
   async getSubscriberReport(actor?: Actor) {

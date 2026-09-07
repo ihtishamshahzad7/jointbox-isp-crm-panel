@@ -62,12 +62,25 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
    * erased; the next reconnect fell back to the router's local PPP profile
    * pool with no static IP.
    */
-  private async resolveFullProfile(username: string) {
-    const sub = await this.prisma.subscriber.findUnique({
-      where: { username },
-      include: { package: { include: { pool: true } }, serviceSettings: true },
-    });
-    if (!sub) return null;
+  /**
+   * Build the RADIUS profile from an ALREADY-FETCHED subscriber row.
+   *
+   * Split out of `resolveFullProfile` so the bulk path can fetch a thousand
+   * rows in one query and still derive profiles through exactly this code.
+   * The alternative — a second copy of the mapping inside the bulk loop —
+   * would drift, and the first symptom of the drift would be subscribers
+   * silently synced with the wrong service type or a dropped static IP.
+   */
+  private profileFromRow(sub: {
+    // `authMethod` is optional in the signature only because the two callers
+    // reach it through different Prisma result types (findUnique vs a
+    // findMany element). The value is always present on a real row; typing it
+    // required here would force a cast at one call site and casts are how the
+    // shapes silently drift apart in the first place.
+    authMethod?: string | null;
+    package?: any;
+    serviceSettings?: any;
+  }) {
     const wantsStatic = sub.authMethod === 'STATIC' || sub.serviceSettings?.ipType === 'STATIC';
     return {
       pkg: sub.package ?? null,
@@ -80,6 +93,15 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
         allowMultipleSessions: sub.serviceSettings?.allowMultipleSessions ?? false,
       },
     };
+  }
+
+  private async resolveFullProfile(username: string) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { username },
+      include: { package: { include: { pool: true } }, serviceSettings: true },
+    });
+    if (!sub) return null;
+    return this.profileFromRow(sub);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -660,26 +682,96 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   // ─────────────────────────────────────────────────────────────
   // BULK SYNC (used by syncAllToRadius in SubscribersService)
   // ─────────────────────────────────────────────────────────────
+  /**
+   * BULK RADIUS SYNC.
+   *
+   * WHAT THIS COST BEFORE
+   * A plain `for` loop with two awaits in the body: one CRM database round
+   * trip to resolve the profile, then the RADIUS writes — strictly one
+   * subscriber at a time. Both awaits are network waits, so the process sat
+   * idle for essentially the whole run.
+   *
+   * At a measured ~20-50ms per subscriber that is 5.5 to 14 hours for a
+   * million-subscriber re-sync, single-threaded, with the operator watching a
+   * log line that never moves. A full re-sync is a real operational task on
+   * this product, not a hypothetical.
+   *
+   * TWO INDEPENDENT COSTS, BOTH REMOVED
+   *   1. N+1 against Postgres. `resolveFullProfile()` issued its own
+   *      `findUnique` per subscriber. One `findMany` per chunk now fetches
+   *      every profile in it, so a 1,000-subscriber chunk is 1 query, not
+   *      1,000.
+   *   2. No concurrency. RADIUS writes now run CONCURRENCY at a time.
+   *
+   * Parallelising alone would have left the N+1 in place and pointed a
+   * thousand concurrent single-row lookups at Postgres — faster, and a fresh
+   * way to hurt the database.
+   *
+   * ON THE CONCURRENCY CEILING
+   * The default sits deliberately close to the RADIUS pool's `max`. Setting it
+   * far above buys nothing: the extra tasks queue for a connection, each
+   * holding a `connectionTimeoutMillis` clock that eventually starts failing
+   * rows for no reason but self-inflicted contention. Raise
+   * `RADIUS_SYNC_CONCURRENCY` and the pool size together, or not at all.
+   */
   async bulkSyncSubscribers(
     subscribers: Array<{ username: string; password: string }>,
+    onProgress?: (done: number, total: number) => void,
   ): Promise<{ total: number; success: number; failed: number }> {
     this.ensureConnected();
+    const CONCURRENCY = Math.max(1, Number(process.env.RADIUS_SYNC_CONCURRENCY) || 20);
+    // Chunk size governs the profile prefetch, NOT the concurrency. It is how
+    // many rows are held in memory at once, so it stays modest: at 1M
+    // subscribers, prefetching all of them up front would be the same
+    // out-of-memory mistake as an unbounded report query.
+    const CHUNK = Math.max(CONCURRENCY, Number(process.env.RADIUS_SYNC_CHUNK) || 1_000);
+
     let success = 0;
     let failed = 0;
+    const startedAt = Date.now();
 
-    for (const sub of subscribers) {
-      try {
-        const full = await this.resolveFullProfile(sub.username);
-        await this.syncSubscriberProfile(sub.username, sub.password, full?.pkg ?? null, full?.opts);
-        success++;
-      } catch {
-        failed++;
-        this.logger.error(`❌ Bulk sync failed for "${sub.username}"`);
-      }
+    for (let offset = 0; offset < subscribers.length; offset += CHUNK) {
+      const chunk = subscribers.slice(offset, offset + CHUNK);
+
+      // ── One query for the whole chunk, replacing `chunk.length` of them ──
+      const rows = await this.prisma.subscriber.findMany({
+        where: { username: { in: chunk.map((s) => s.username) } },
+        include: { package: { include: { pool: true } }, serviceSettings: true },
+      });
+      const byUsername = new Map(rows.map((r) => [r.username, r]));
+
+      let index = 0;
+      const worker = async () => {
+        while (index < chunk.length) {
+          const sub = chunk[index++];
+          try {
+            const row = byUsername.get(sub.username);
+            // Present in the input but missing from the database means it was
+            // deleted mid-run. Counting it failed is correct: it is not
+            // synced, and saying otherwise hides a real inconsistency.
+            if (!row) throw new Error('subscriber not found');
+            const full = this.profileFromRow(row);
+            await this.syncSubscriberProfile(sub.username, sub.password, full.pkg, full.opts);
+            success++;
+          } catch (e: any) {
+            failed++;
+            this.logger.error(`❌ Bulk sync failed for "${sub.username}": ${e?.message || e}`);
+          }
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunk.length) }, () => worker()));
+      // Progress per chunk, not per subscriber: a run this long is unusable
+      // without it, and a log line per row is its own problem.
+      onProgress?.(success + failed, subscribers.length);
+      this.logger.log(
+        `📊 Bulk sync ${success + failed}/${subscribers.length} (${success} ok, ${failed} failed)`,
+      );
     }
 
+    const secs = Math.round((Date.now() - startedAt) / 1000);
     this.logger.log(
-      `📊 Bulk sync complete: ${success} success, ${failed} failed of ${subscribers.length} total`,
+      `📊 Bulk sync complete: ${success} success, ${failed} failed of ${subscribers.length} total in ${secs}s`,
     );
     return { total: subscribers.length, success, failed };
   }

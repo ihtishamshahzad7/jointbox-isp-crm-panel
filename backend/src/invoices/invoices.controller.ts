@@ -12,8 +12,11 @@ export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
   @Get()
-  findAll(@Req() req: any) {
-    return this.invoicesService.findAll(req.user);
+  findAll(@Req() req: any, @Query() query?: any) {
+    // `?limit=` (optionally with `?cursor=`) switches to the cursor-paginated
+    // envelope. Without it the legacy capped array is returned unchanged, so
+    // the existing invoices page keeps working exactly as before.
+    return this.invoicesService.findAll(req.user, query);
   }
 
   @Get('stats')

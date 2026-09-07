@@ -46,6 +46,31 @@ const splitWorker = Number(workerInstances) > 0;
 const backend = path.join(__dirname, 'backend', 'dist', 'main.js');
 const backendCwd = path.join(__dirname, 'backend');
 
+/**
+ * HOW LONG PM2 WAITS FOR A PROCESS TO FINISH ITS WORK BEFORE SIGKILL.
+ *
+ * PM2's default is 1600ms, and that default silently undoes the graceful
+ * shutdown the app already implements. `main.ts` calls
+ * `app.enableShutdownHooks()`, and `QueueService.onModuleDestroy` closes each
+ * BullMQ worker — which by design waits for the jobs currently running to
+ * finish. But the work this app does on shutdown routinely takes longer than
+ * 1.6 seconds:
+ *
+ *   · an SNMP sweep has a 25s budget (SNMP_SWEEP_BUDGET_MS);
+ *   · a RADIUS profile sync is several network round trips per subscriber;
+ *   · a radacct archival batch is a database transaction over 10,000 rows.
+ *
+ * At 1600ms PM2 hard-kills all of it mid-flight on every deploy. The queue job
+ * is left in `active` with no worker, the archival transaction rolls back, and
+ * the SNMP sweep stops halfway with `this.running` never cleared. The app was
+ * doing the right thing and the process manager was not letting it.
+ *
+ * 30s is chosen to exceed the SNMP sweep budget, which is the longest of them.
+ * PM2 only waits as long as it actually needs — a process that exits cleanly in
+ * 200ms is not delayed by this.
+ */
+const KILL_TIMEOUT_MS = Number(process.env.PM2_KILL_TIMEOUT_MS) || 30000;
+
 const workerApp = {
   name: 'jointbox-worker',
   script: backend,
@@ -57,6 +82,8 @@ const workerApp = {
   max_restarts: 10,
   restart_delay: 3000,
   max_memory_restart: '600M',
+  // Let in-flight queue jobs, SNMP sweeps and archival batches finish.
+  kill_timeout: KILL_TIMEOUT_MS,
   // JOINTBOX_ROLE=worker → runs background services, binds NO HTTP port.
   env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', JOINTBOX_ROLE: 'worker' },
 };
@@ -74,6 +101,8 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 3000,
       max_memory_restart: '600M', // recycle a worker if it leaks past 600MB
+      // Let in-flight requests and background work drain before SIGKILL.
+      kill_timeout: KILL_TIMEOUT_MS,
       // Cap V8 heap so a worker can't balloon RAM on a small VM, and so the GC
       // runs sooner. 512MB is plenty for the API; raise if you cluster heavily.
       // When a dedicated worker is running, the web nodes serve HTTP ONLY.

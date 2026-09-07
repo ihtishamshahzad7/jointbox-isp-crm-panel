@@ -94,6 +94,18 @@ export class TelemetryController {
     return this.monitor.traffic(id, range || '7d', vlan || undefined);
   }
 
+  /** Aggregate throughput across EVERY NAS — the whole-network MRTG series. */
+  @Get('network-traffic')
+  networkTraffic(@Query('range') range?: string) {
+    return this.monitor.networkTraffic(range || '1h');
+  }
+
+  /** Top-N subscribers by live throughput — dashboard "who's using now" list. */
+  @Get('top-subscribers')
+  topSubscribers(@Query('limit') limit?: string) {
+    return this.monitor.topSubscribers(limit ? Number(limit) : 8);
+  }
+
   /** Current per-VLAN online + throughput breakdown for a NAS. */
   @Get('nas/:id/vlans')
   async nasVlans(@Param('id', ParseIntPipe) id: number, @Req() req: any) {

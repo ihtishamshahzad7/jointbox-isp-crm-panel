@@ -1,0 +1,20 @@
+[
+  "src/accounting/accounting.service.ts::userBalanceTransaction",
+  "src/billing/billing.service.ts::subscriber",
+  "src/gateway/gateway.service.ts::gatewayTransaction",
+  "src/logs/logs.service.ts::pppoeSession",
+  "src/logs/network-logs.service.ts::pppoeSession",
+  "src/ndm/alert-engine.service.ts::alert",
+  "src/ndm/ndm.service.ts::interfaceStatusHistory",
+  "src/ndm/ndm.service.ts::interfaceTrafficHistory",
+  "src/notes/notes.service.ts::recordNote",
+  "src/notifications/notifications.service.ts::subscriber",
+  "src/organization/organization.service.ts::userBalanceTransaction",
+  "src/organization/reseller-pricing.service.ts::profitEntry",
+  "src/packages/packages.service.ts::subscriber",
+  "src/payments/payments.service.ts::payment",
+  "src/security/security.service.ts::sessionLog",
+  "src/subscribers/subscribers.service.ts::subscriber",
+  "src/telemetry/nas-monitor.service.ts::onuSignalSample",
+  "src/telemetry/nas-monitor.service.ts::onuTelemetry"
+]

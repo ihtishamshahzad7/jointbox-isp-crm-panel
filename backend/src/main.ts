@@ -3,6 +3,13 @@ import { installLogCapture } from './console/log-buffer';
 // backend's own output on any OS (there is no pm2/journald on Windows).
 installLogCapture();
 
+// Teach JSON.stringify about BigInt before anything can serialise a Prisma
+// row. The append-only tables (radacct, the log and telemetry tables) use
+// 64-bit keys, and without this every response carrying one throws
+// "Do not know how to serialize a BigInt" — a 500, not a wrong value. First
+// import in the file on purpose: the logger above already stringifies.
+import './common/bigint-json';
+
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
@@ -205,6 +212,45 @@ async function bootstrap() {
 
   // Graceful shutdown (queues, redis, prisma)
   app.enableShutdownHooks();
+
+  /**
+   * FAIL FAST ON A HALF-CONFIGURED PRODUCTION PROCESS.
+   *
+   * Both services used to degrade silently when Redis was configured but
+   * unreachable: cache became a per-worker map, and the "durable" job queue
+   * became inline execution that loses every job on restart. One `logger.warn`
+   * each, no alert, no crash — so a Redis outage turned into weeks of
+   * inconsistent cache reads, rate limits N times looser than configured, and
+   * jobs quietly vanishing, all while every dashboard read green.
+   *
+   * Refusing to start is the correct response. An operator who set REDIS_URL
+   * asked for that system; running a different one behind their back is worse
+   * than not running at all, because a process that will not start gets fixed
+   * within minutes and a silent downgrade does not get noticed for weeks.
+   *
+   * `redisIsRequired()` is only true in production with REDIS_URL set, so no
+   * development or single-instance install changes behaviour, and
+   * REDIS_REQUIRED=false remains the deliberate opt-out.
+   */
+  {
+    const { CacheService } = require('./common/cache.service');
+    const { QueueService } = require('./common/queue.service');
+    const { setRateLimitCache } = require('./common/rate-limit.guard');
+    const cache = app.get(CacheService, { strict: false });
+    const queue = app.get(QueueService, { strict: false });
+    try {
+      await cache.assertReady();
+      queue.assertReady();
+    } catch (e: any) {
+      console.error(`❌ FATAL: ${e.message}`);
+      console.error('   Set REDIS_URL correctly, or REDIS_REQUIRED=false to allow degraded single-instance mode.');
+      process.exit(1);
+    }
+    // Hand the shared cache to the hand-constructed rate-limit guards. Without
+    // this they keep counting in per-process memory and the limit stays N×
+    // looser than configured under cluster mode — the failure being fixed.
+    setRateLimitCache(cache);
+  }
 
   // Microservice split: a worker-role process runs background services only
   // (crons, pollers, queue workers via isPrimaryInstance) and binds NO HTTP

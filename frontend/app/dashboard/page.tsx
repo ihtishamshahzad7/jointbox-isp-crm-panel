@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { money, currencySymbol } from "../components/currency";
 import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
+import NetworkTraffic from "./network-traffic";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
 import { BRAND } from "../../lib/brand";
@@ -898,6 +899,9 @@ export default function DashboardPage() {
 
           {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
           <OverviewCharts refreshKey={refreshKey} />
+
+          {/* Whole-network bandwidth + top-N subscribers — live MRTG traffic */}
+          <NetworkTraffic API={API} />
 
           <div style={{ ...cardStyle }} className="panel-card">
             <div style={{ fontWeight: 800, marginBottom: 12 }}>Quick Actions</div>
