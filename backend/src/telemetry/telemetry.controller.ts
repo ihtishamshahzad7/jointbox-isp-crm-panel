@@ -3,6 +3,7 @@ import { TelemetryService } from './telemetry.service';
 import { NasMonitorService } from './nas-monitor.service';
 import { SnmpPollerService } from './snmp-poller.service';
 import { DeviceHealthService } from './device-health.service';
+import { LiveTrafficService } from './live-traffic.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -16,6 +17,7 @@ export class TelemetryController {
     private readonly snmp: SnmpPollerService,
     private readonly health: DeviceHealthService,
     private readonly scope: ScopeService,
+    private readonly live: LiveTrafficService,
   ) {}
 
   /** One-off SNMP walk to list a NAS's interfaces for port registration. */
@@ -104,6 +106,16 @@ export class TelemetryController {
   @Get('top-subscribers')
   topSubscribers(@Query('limit') limit?: string) {
     return this.monitor.topSubscribers(limit ? Number(limit) : 8);
+  }
+
+  /**
+   * Real-time whole-network meter (2s resolution, last 60 points). Polls the
+   * routers' live PPPoE session counters on demand — NOT the 5/10-minute DB
+   * sample tables — so both series move every ~2 seconds.
+   */
+  @Get('live-traffic')
+  liveTraffic() {
+    return this.live.snapshot();
   }
 
   /** Current per-VLAN online + throughput breakdown for a NAS. */
