@@ -1,0 +1,5 @@
+feat: MRTG-style per-subscriber bandwidth graph (real-time 10-min sampling)
+
+The subscriber Connection tab bandwidth graph read radacct, which keeps one row per session (interim updates overwrite in place) - the query could never yield an intra-session time-series, so the graph showed nothing for live PPPoE users.
+
+Add SubscriberTrafficSample (mirrors NasTrafficSample): a 10-minute cron appends cumulative octets for every online subscriber in one INSERT from radacct (64-bit, multi-session aggregated). The getBandwidthHistory query now reads this sample table and derives bit-rates from consecutive deltas. Nightly prune keeps 30 days. No frontend change needed - the chart already polls and renders the same response shape.

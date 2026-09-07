@@ -209,6 +209,44 @@ export class NasMonitorService {
     }
   }
 
+  /**
+   * MRTG-style PER-SUBSCRIBER sampling — the data behind the subscriber
+   * bandwidth-history graph.
+   *
+   * Every 10 minutes, the cumulative octet counters of every ONLINE subscriber
+   * are appended as ONE row per subscriber in a single INSERT (from radacct,
+   * which the 30-second reconcile keeps refreshed with live router counters —
+   * 64-bit safe, unlike PppoeSession's int columns). Offline subscribers stop
+   * accruing samples until they reconnect; the graph never fakes a zero line.
+   * Bit-rates are derived read-side from consecutive-sample deltas, exactly
+   * like nas_traffic_sample / MRTG.
+   *
+   * Why a dedicated table: radacct holds ONE row per session, overwritten in
+   * place by interim updates, so it can never yield an intra-session
+   * time-series. Without this sampler the PPPoE subscriber graph had nothing
+   * to draw.
+   */
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async sampleSubscribers() {
+    if (!isPrimaryInstance()) return;
+    try {
+      const started = Date.now();
+      await this.prisma.$executeRawUnsafe(`
+        INSERT INTO "subscriber_traffic_sample" ("subscriber_id", "ts", "in_bytes", "out_bytes")
+        SELECT s.id, NOW(),
+               COALESCE(SUM(r.acctinputoctets), 0)::bigint,
+               COALESCE(SUM(r.acctoutputoctets), 0)::bigint
+          FROM radacct r
+          JOIN "Subscriber" s ON s.username = r.username
+         WHERE r.acctstoptime IS NULL
+           AND COALESCE(r.acctupdatetime, r.acctstarttime) > NOW() - INTERVAL '11 minutes'
+         GROUP BY s.id`);
+      this.log.debug(`Subscriber traffic sample took ${Date.now() - started}ms`);
+    } catch (e: any) {
+      this.log.warn(`Subscriber traffic sample failed: ${e?.message || e}`);
+    }
+  }
+
   /** Copy the latest ONU telemetry snapshots into the signal-history table. */
   private async sampleSignals() {
     try {
@@ -281,6 +319,8 @@ export class NasMonitorService {
     const cutoff = new Date(Date.now() - 31 * 86400_000);
     await this.prisma.nasTrafficSample.deleteMany({ where: { ts: { lt: cutoff } } })
       .catch((e) => this.log.warn(`Traffic prune failed: ${e?.message || e}`));
+    await this.prisma.subscriberTrafficSample.deleteMany({ where: { ts: { lt: cutoff } } })
+      .catch((e) => this.log.warn(`Subscriber traffic prune failed: ${e?.message || e}`));
     await this.prisma.onuSignalSample.deleteMany({ where: { ts: { lt: cutoff } } })
       .catch((e) => this.log.warn(`Signal prune failed: ${e?.message || e}`));
   }
