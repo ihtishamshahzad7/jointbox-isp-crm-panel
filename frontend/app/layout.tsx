@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./dashboard.css";
+import "./agile-performance.css";
 import { AppShellGate } from "./components/app-shell";
 import { THEME_BOOT_SCRIPT } from "./components/theme";
 import { NotifyProvider } from "./components/notify";

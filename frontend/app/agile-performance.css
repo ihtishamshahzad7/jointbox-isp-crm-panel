@@ -1,0 +1,78 @@
+/* Jointbox Agile frontend performance layer. Additive only: no API/backend behavior. */
+:root {
+  --jb-motion-fast: 120ms;
+  --jb-motion: 180ms;
+  --jb-focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent, #3C50E0) 18%, transparent);
+}
+
+/* Keep interaction feedback cheap: transform/opacity avoid layout work. */
+.db-root button,
+.db-root a,
+.db-root input,
+.db-root select,
+.db-root textarea,
+.db-root [role="button"] {
+  transition: transform var(--jb-motion-fast) ease,
+              opacity var(--jb-motion-fast) ease,
+              background-color var(--jb-motion) ease,
+              border-color var(--jb-motion) ease,
+              box-shadow var(--jb-motion) ease;
+}
+
+.db-root button:focus-visible,
+.db-root a:focus-visible,
+.db-root input:focus-visible,
+.db-root select:focus-visible,
+.db-root textarea:focus-visible,
+.db-root [role="button"]:focus-visible {
+  outline: none;
+  box-shadow: var(--jb-focus-ring);
+}
+
+/* Large collections should scroll instead of forcing the page to grow. */
+.jb-scroll-x { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+.jb-scroll-y { overflow-y: auto; overscroll-behavior-y: contain; }
+
+/* Utility for virtualized/list containers. */
+.jb-list-viewport {
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 600px;
+}
+
+/* Prevent expensive effects on high-density operational screens. */
+.jb-data-grid,
+.jb-device-grid,
+.jb-subscriber-list {
+  contain: layout paint;
+}
+
+/* Mobile command bars remain usable without wrapping into multiple rows. */
+.jb-command-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.jb-command-bar::-webkit-scrollbar { display: none; }
+.jb-command-bar > * { flex: 0 0 auto; }
+
+/* Consistent responsive page gutters. */
+.jb-page-container { width: min(100%, 1600px); margin-inline: auto; padding-inline: clamp(12px, 2vw, 28px); }
+
+@media (max-width: 768px) {
+  .jb-page-container { padding-inline: 12px; }
+  .jb-command-bar { gap: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .db-root button,
+  .db-root a,
+  .db-root input,
+  .db-root select,
+  .db-root textarea,
+  .db-root [role="button"] { transition: none !important; }
+}
