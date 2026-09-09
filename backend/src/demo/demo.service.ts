@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { DemoDataService } from './demo-data.service';
 
 /**
  * DemoService — self-serve sandbox accounts.
@@ -18,9 +19,12 @@ export class DemoService implements OnModuleInit {
   private readonly log = new Logger('Demo');
   private static readonly DAYS = 7;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly demoData: DemoDataService,
+  ) {}
 
-  /** Keep the published demo login synchronized whenever the backend starts. */
+  /** Keep the published demo login and its realistic sandbox synchronized whenever the backend starts. */
   async onModuleInit() {
     await this.ensureShared().catch((e) =>
       this.log.warn(`Shared demo initialization failed: ${e?.message || e}`),
@@ -59,8 +63,10 @@ export class DemoService implements OnModuleInit {
           select: { id: true, email: true },
         });
 
-        // Return both names used by different frontend builds. `username` is an
-        // alias for the actual login email; authentication remains email-based.
+        // Build a complete synthetic ISP sandbox before returning credentials.
+        // The login screen therefore never lands in an empty dashboard.
+        const dataset = await this.demoData.seedForUser(user.id, 10_000);
+
         this.log.log(`Demo account #${user.id} created (${email}) — expires ${expiresAt.toISOString()}`);
         return {
           email: user.email,
@@ -68,8 +74,9 @@ export class DemoService implements OnModuleInit {
           password,
           role: 'Franchise (demo)',
           expiresAt,
+          dataset,
           credentials: { email: user.email, username: user.email, password },
-          note: 'This is a sandbox. Everything you create is automatically deleted after 7 days. Console, RADIUS admin and logs are disabled.',
+          note: 'This is a sandbox with synthetic Pakistan ISP data: 500 NAS, 20 areas, 50 IP pools, 12 packages, 10,000 subscribers, active sessions and traffic/signal graphs. Everything you create is automatically deleted after 7 days. Console, RADIUS admin and logs are disabled.',
         };
       } catch (e: any) {
         // A random collision on the unique email is safe to retry; other DB
@@ -90,7 +97,7 @@ export class DemoService implements OnModuleInit {
       username: this.sharedEmail,
       password: this.sharedPassword,
       role: 'Franchise (sandbox)',
-      note: 'Shared demo. You see only this sandbox account\'s own data — never a real customer\'s. Server console, RADIUS admin and system logs are disabled, and everything created here is wiped every week.',
+      note: 'Shared demo. You see only this sandbox account\'s own synthetic data — never a real customer\'s.',
     };
   }
 
@@ -99,30 +106,41 @@ export class DemoService implements OnModuleInit {
     const hash = await bcrypt.hash(this.sharedPassword, 10);
     const far = new Date(Date.now() + 3650 * 86400_000);
     const existing = await this.prisma.user.findFirst({ where: { email: this.sharedEmail }, select: { id: true } });
+    let userId: number;
     if (existing) {
+      userId = existing.id;
       await this.prisma.user.update({
         where: { id: existing.id },
-        data: { password: hash, isDemo: true, isActive: true, demoExpiresAt: far },
+        data: { password: hash, isDemo: true, isActive: true, demoExpiresAt: far, role: 'RESELLER', canAddNas: true, canTopupDownline: true, canSetPackagePrice: true },
       });
-      return;
+    } else {
+      const u = await this.prisma.user.create({
+        data: {
+          name: 'Jointbox Demo',
+          email: this.sharedEmail,
+          password: hash,
+          role: 'RESELLER',
+          isActive: true,
+          isDemo: true,
+          demoExpiresAt: far,
+          canAddNas: true,
+          canTopupDownline: true,
+          canSetPackagePrice: true,
+          balance: 100000,
+        },
+        select: { id: true },
+      });
+      userId = u.id;
+      this.log.log(`Shared public demo account ready (#${u.id}, ${this.sharedEmail})`);
     }
-    const u = await this.prisma.user.create({
-      data: {
-        name: 'Jointbox Demo',
-        email: this.sharedEmail,
-        password: hash,
-        role: 'RESELLER',
-        isActive: true,
-        isDemo: true,
-        demoExpiresAt: far,
-        canAddNas: true,
-        canTopupDownline: true,
-        canSetPackagePrice: true,
-        balance: 100000,
-      },
-      select: { id: true },
+
+    // Existing installations may have the account but no sandbox records.
+    // seedForUser is idempotent and repairs a partial demo dataset.
+    const dataset = await this.demoData.seedForUser(userId, 10_000).catch((e) => {
+      this.log.warn(`Demo dataset seed failed for #${userId}: ${e?.message || e}`);
+      return null;
     });
-    this.log.log(`Shared public demo account ready (#${u.id}, ${this.sharedEmail})`);
+    if (dataset?.seeded) this.log.log(`Shared demo dataset ready: ${JSON.stringify(dataset)}`);
   }
 
   @Cron('0 4 * * 1')
@@ -132,15 +150,24 @@ export class DemoService implements OnModuleInit {
     if (!u) return;
     const kids = await this.prisma.user.findMany({ where: { parentId: u.id }, select: { id: true } });
     for (const k of kids) await this.purgeAccount(k.id).catch(() => null);
-    await this.purgeSubscribersOf(u.id).catch(() => null);
+    await this.demoData.resetForUser(u.id).catch((e) => this.log.warn(`Shared demo dataset reset failed: ${e?.message || e}`));
     await this.prisma.user.update({ where: { id: u.id }, data: { balance: 100000, isActive: true } }).catch(() => null);
-    this.log.log('Shared demo account reset for the week.');
+    this.log.log('Shared demo account and synthetic ISP dataset reset for the week.');
   }
 
   private async purgeSubscribersOf(userId: number) {
-    const subs = await this.prisma.subscriber.findMany({ where: { userId }, select: { id: true } });
+    const subs = await this.prisma.subscriber.findMany({ where: { userId }, select: { id: true, username: true } });
     if (!subs.length) return;
-    await this.prisma.subscriber.deleteMany({ where: { id: { in: subs.map((s) => s.id) } } }).catch(() => null);
+    const ids = subs.map((s) => s.id);
+    const usernames = subs.map((s) => s.username).filter(Boolean);
+    if (usernames.length) {
+      await this.prisma.$executeRawUnsafe(`DELETE FROM radcheck WHERE username = ANY($1)`, usernames).catch(() => null);
+      await this.prisma.$executeRawUnsafe(`DELETE FROM radreply WHERE username = ANY($1)`, usernames).catch(() => null);
+      await this.prisma.$executeRawUnsafe(`DELETE FROM radacct WHERE username = ANY($1)`, usernames).catch(() => null);
+    }
+    await this.prisma.subscriberTrafficSample.deleteMany({ where: { subscriberId: { in: ids } } }).catch(() => null);
+    await this.prisma.linkSignal.deleteMany({ where: { subscriberId: { in: ids } } }).catch(() => null);
+    await this.prisma.subscriber.deleteMany({ where: { id: { in: ids } } }).catch(() => null);
   }
 
   @Cron('30 3 * * *')
@@ -176,6 +203,9 @@ export class DemoService implements OnModuleInit {
       await this.prisma.subscriber.deleteMany({ where: { id: { in: subIds } } }).catch((e) => this.log.warn(`sub delete: ${e?.message}`));
     }
     await this.prisma.nas.deleteMany({ where: { ownerId: { in: userIds } } }).catch(() => null);
+    await this.prisma.ipPool.deleteMany({ where: { ownerId: { in: userIds } } }).catch(() => null);
+    await this.prisma.package.deleteMany({ where: { ownerId: { in: userIds } } }).catch(() => null);
+    await this.prisma.area.deleteMany({ where: { ownerId: { in: userIds } } }).catch(() => null);
     await this.prisma.user.deleteMany({ where: { id: { in: userIds } } }).catch((e) => this.log.warn(`user delete: ${e?.message}`));
   }
 }
