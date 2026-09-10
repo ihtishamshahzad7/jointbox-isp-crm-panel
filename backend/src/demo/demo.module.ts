@@ -4,10 +4,11 @@ import { DemoController } from './demo.controller';
 import { DemoService } from './demo.service';
 import { DemoDataService } from './demo-data.service';
 import { DemoHierarchyService } from './demo-hierarchy.service';
+import { DemoRepairService } from './demo-repair.service';
 
 @Module({
   imports: [PrismaModule],
   controllers: [DemoController],
-  providers: [DemoService, DemoDataService, DemoHierarchyService],
+  providers: [DemoService, DemoDataService, DemoHierarchyService, DemoRepairService],
 })
 export class DemoModule {}
