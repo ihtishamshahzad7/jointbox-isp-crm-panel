@@ -9,18 +9,42 @@ STATUS_FILE="${STATUS_DIR}/deployment-status.json"
 FRONTEND_VERSION_FILE="${ROOT_DIR}/frontend/public/deployment-version.json"
 
 log(){ printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-fail(){ log "ERROR: $*"; exit 1; }
-trap 'fail "Update failed at line $LINENO. See the output above."' ERR
-
-exec 9>"$LOCK_FILE"
-flock -n 9 || fail "Another Jointbox update is already running."
 
 cd "$ROOT_DIR"
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Jointbox directory is not a Git repository."
-git remote get-url origin >/dev/null 2>&1 || fail "Git origin is not configured."
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { log "ERROR: Jointbox directory is not a Git repository."; exit 1; }
+git remote get-url origin >/dev/null 2>&1 || { log "ERROR: Git origin is not configured."; exit 1; }
+mkdir -p "$STATUS_DIR" "$(dirname "$FRONTEND_VERSION_FILE")"
+
+BEFORE_SHA="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+DEPLOY_SHA="$BEFORE_SHA"
+DEPLOY_SHORT="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+DEPLOY_MESSAGE="$(git log -1 --pretty=%s HEAD 2>/dev/null || printf 'unknown')"
+DEPLOY_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+write_status(){
+  local state="$1" text="$2"
+  local safe_message safe_text
+  safe_message="$(printf '%s' "$DEPLOY_MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+  safe_text="$(printf '%s' "$text" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+  cat > "$STATUS_FILE" <<JSON
+{"status":"${state}","commit":"${DEPLOY_SHA}","shortCommit":"${DEPLOY_SHORT}","message":${safe_message},"time":"${DEPLOY_TIME}","messageText":${safe_text}}
+JSON
+}
+
+fail(){
+  local line="$1"
+  local text="Update failed at line ${line}. Check update.log for details."
+  write_status "failed" "$text" || true
+  log "ERROR: ${text}"
+  exit 1
+}
+trap 'fail "$LINENO"' ERR
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || { write_status "failed" "Another Jointbox update is already running." || true; log "ERROR: Another Jointbox update is already running."; exit 1; }
 
 log "Starting Jointbox production update from origin/${BRANCH}"
-BEFORE_SHA="$(git rev-parse HEAD)"
+write_status "running" "Update process started"
 
 log "Fetching latest GitHub commit..."
 git fetch --prune origin "$BRANCH"
@@ -38,16 +62,7 @@ DEPLOY_SHA="$(git rev-parse HEAD)"
 DEPLOY_SHORT="$(git rev-parse --short HEAD)"
 DEPLOY_MESSAGE="$(git log -1 --pretty=%s HEAD)"
 DEPLOY_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-
-mkdir -p "$STATUS_DIR" "$(dirname "$FRONTEND_VERSION_FILE")"
-
-write_status(){
-  local state="$1" message="$2"
-  cat > "$STATUS_FILE" <<JSON
-{"status":"${state}","commit":"${DEPLOY_SHA}","shortCommit":"${DEPLOY_SHORT}","message":$(printf '%s' "$DEPLOY_MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),"time":"${DEPLOY_TIME}","messageText":$(printf '%s' "$message" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}
-JSON
-}
-write_status "running" "Deployment in progress"
+write_status "running" "Code synced; installing dependencies and building"
 
 if [[ -f backend/package-lock.json ]]; then
   log "Installing backend dependencies with npm ci..."
@@ -91,17 +106,20 @@ cat > "$FRONTEND_VERSION_FILE" <<JSON
 }
 JSON
 
+write_status "running" "Build completed; reloading Jointbox services"
+
 if command -v pm2 >/dev/null 2>&1; then
   if [[ -f ecosystem.config.js ]]; then
     log "Reloading Jointbox PM2 applications..."
     pm2 startOrReload ecosystem.config.js --update-env
     pm2 save
   else
-    log "ecosystem.config.js not found; restarting existing Jointbox PM2 processes..."
-    pm2 restart all --update-env
+    log "ecosystem.config.js not found; reloading only named Jointbox processes..."
+    pm2 restart jointbox-backend --update-env
+    pm2 restart jointbox-frontend --update-env
   fi
 else
-  fail "PM2 is not installed on the server."
+  fail "$LINENO"
 fi
 
 sleep 3
@@ -115,7 +133,7 @@ for _ in {1..12}; do
   fi
   sleep 2
 done
-[[ "$BACKEND_OK" == "1" ]] || fail "Backend health check failed on port 3001."
+[[ "$BACKEND_OK" == "1" ]] || fail "$LINENO"
 
 log "Checking frontend health..."
 FRONTEND_OK=0
@@ -126,7 +144,7 @@ for _ in {1..12}; do
   fi
   sleep 2
 done
-[[ "$FRONTEND_OK" == "1" ]] || fail "Frontend health check failed on port 3000."
+[[ "$FRONTEND_OK" == "1" ]] || fail "$LINENO"
 
 write_status "success" "Deployment completed successfully"
 
