@@ -132,8 +132,99 @@ describe('connection policy', () => {
       expect(r.error).toBeDefined();
       // The message has to carry the arithmetic, or the operator cannot act.
       expect(r.error).toMatch(/16 backend process/);
-      expect(r.error).toMatch(/pgbouncer=true/);
+      expect(r.error).toMatch(/PgBouncer/);
       expect(r.projectedConnections).toBe(16 * 33);
+    });
+
+    /**
+     * THE PRODUCTION OUTAGE THIS PREVENTS.
+     *
+     * The first version of this guard refused every multi-process deployment
+     * without PgBouncer and never compared the total to a limit — while its
+     * message told the operator to lower connection_limit. On a live panel that
+     * meant: 12 workers × 20 = 240 refused, operator follows the advice, sets
+     * connection_limit=5, and gets the SAME refusal quoting 60 against a stated
+     * ceiling of 100. The backend stayed down and the stated fix was a dead
+     * end. These two cases pin the arithmetic so that can never recur.
+     */
+    it('REGRESSION: accepts a clustered install whose total genuinely fits', () => {
+      const r = evaluateConnectionPolicy(
+        env({
+          NODE_ENV: 'production',
+          BACKEND_INSTANCES: '12',
+          DATABASE_URL: 'postgresql://u:p@h:5432/db?connection_limit=5',
+        }),
+        12,
+      );
+      expect(r.projectedConnections).toBe(60); // vs 100 - 25 reserved = 75 available
+      expect(r.error).toBeUndefined();
+    });
+
+    it('REGRESSION: lowering connection_limit actually changes the verdict', () => {
+      const at = (limit: number) =>
+        evaluateConnectionPolicy(
+          env({
+            NODE_ENV: 'production',
+            BACKEND_INSTANCES: '12',
+            DATABASE_URL: `postgresql://u:p@h:5432/db?connection_limit=${limit}`,
+          }),
+          12,
+        );
+      // The advice the message gives must be advice that works.
+      expect(at(20).error).toBeDefined();
+      expect(at(5).error).toBeUndefined();
+    });
+
+    it('the refusal names a connection_limit that would actually fit', () => {
+      const r = evaluateConnectionPolicy(
+        env({
+          NODE_ENV: 'production',
+          BACKEND_INSTANCES: '12',
+          DATABASE_URL: 'postgresql://u:p@h:5432/db?connection_limit=20',
+        }),
+        12,
+      );
+      const suggested = Number(/connection_limit=(\d+)\)/.exec(r.error ?? '')?.[1]);
+      expect(suggested).toBeGreaterThan(0);
+      // Take the guard's own advice and re-run it: it must now pass.
+      const after = evaluateConnectionPolicy(
+        env({
+          NODE_ENV: 'production',
+          BACKEND_INSTANCES: '12',
+          DATABASE_URL: `postgresql://u:p@h:5432/db?connection_limit=${suggested}`,
+        }),
+        12,
+      );
+      expect(after.error).toBeUndefined();
+    });
+
+    it('respects a raised max_connections', () => {
+      const r = evaluateConnectionPolicy(
+        env({
+          NODE_ENV: 'production',
+          BACKEND_INSTANCES: '12',
+          POSTGRES_MAX_CONNECTIONS: '500',
+          DATABASE_URL: 'postgresql://u:p@h:5432/db?connection_limit=20',
+        }),
+        12,
+      );
+      expect(r.error).toBeUndefined();
+    });
+
+    it('still reserves connections for FreeRADIUS', () => {
+      // 12 × 7 = 84 fits under 100 but NOT under 100-25. Subscribers going
+      // offline matters more than the panel running more workers.
+      const r = evaluateConnectionPolicy(
+        env({
+          NODE_ENV: 'production',
+          BACKEND_INSTANCES: '12',
+          DATABASE_URL: 'postgresql://u:p@h:5432/db?connection_limit=7',
+        }),
+        12,
+      );
+      expect(r.projectedConnections).toBe(84);
+      expect(r.error).toBeDefined();
+      expect(r.error).toMatch(/FreeRADIUS/);
     });
 
     it('is satisfied once PgBouncer is in front', () => {

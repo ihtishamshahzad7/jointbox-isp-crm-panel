@@ -77,6 +77,33 @@ export function defaultPoolSize(cpuCount = os.cpus().length): number {
   return cpuCount * 2 + 1;
 }
 
+/**
+ * How many connections Postgres will accept, and how many belong to others.
+ *
+ * `max_connections` cannot be read before we connect, so the static check uses
+ * the stock default unless the operator states otherwise. The reserve exists
+ * because this database is shared: FreeRADIUS authenticates subscribers
+ * against it, and a panel that consumes the last connection takes people
+ * OFFLINE rather than merely breaking a dashboard. The panel is the process
+ * that must yield.
+ */
+export const DEFAULT_MAX_CONNECTIONS = 100;
+export const DEFAULT_RESERVED_FOR_OTHERS = 25;
+
+export function connectionBudget(env: NodeJS.ProcessEnv = process.env): {
+  maxConnections: number;
+  reserved: number;
+  available: number;
+} {
+  const num = (v: string | undefined, fallback: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  };
+  const maxConnections = num(env.POSTGRES_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
+  const reserved = num(env.DB_RESERVED_CONNECTIONS, DEFAULT_RESERVED_FOR_OTHERS);
+  return { maxConnections, reserved, available: Math.max(1, maxConnections - reserved) };
+}
+
 export interface ConnectionPolicyResult {
   /** Fatal message — refuse to start. */
   error?: string;
@@ -111,18 +138,62 @@ export function evaluateConnectionPolicy(env: NodeJS.ProcessEnv = process.env, c
   const isProd = env.NODE_ENV === 'production';
 
   if (totalProcesses <= 1) return base;
+
+  // PgBouncer multiplexes: the pool sizes above stop being the number of real
+  // server connections, so the arithmetic no longer applies.
   if (usesPgBouncer(url)) return base;
 
-  const detail =
-    `${totalProcesses} backend process(es) × ${perWorker} connection(s) each = ` +
-    `~${projectedConnections} PostgreSQL connections, and DATABASE_URL is not routed ` +
-    `through PgBouncer (pgbouncer=true). Stock PostgreSQL allows 100. ` +
-    `Put Postgres behind PgBouncer (SCALING.md Step 1), or set connection_limit ` +
-    `in DATABASE_URL so the total stays under max_connections.`;
+  const { maxConnections, reserved, available } = connectionBudget(env);
 
-  // Outside production this is a warning: a developer briefly running two
-  // instances locally should not be blocked by a capacity rule.
-  return isProd ? { ...base, error: detail } : { ...base, warning: detail };
+  const arithmetic =
+    `${totalProcesses} backend process(es) × ${perWorker} connection(s) each = ` +
+    `~${projectedConnections} PostgreSQL connections`;
+
+  /**
+   * THE BUG THIS REPLACES.
+   *
+   * The original guard refused EVERY multi-process deployment that was not
+   * behind PgBouncer, without ever comparing projectedConnections to a limit —
+   * while its own message told the operator to "set connection_limit so the
+   * total stays under max_connections". Following that advice could not
+   * possibly work: an operator who dropped connection_limit from 20 to 5 got
+   * the identical refusal, now quoting a total of 60 against a stated ceiling
+   * of 100. A guard that names a remedy it does not implement is worse than no
+   * guard, because it sends the operator somewhere that cannot help while
+   * production is down.
+   *
+   * So the rule is now the arithmetic it always claimed to be: refuse only
+   * when the projected total genuinely does not fit.
+   */
+  if (projectedConnections > available) {
+    const detail =
+      `${arithmetic}, but only ~${available} are available for the panel ` +
+      `(max_connections=${maxConnections}, ${reserved} reserved for FreeRADIUS and admin ` +
+      `access — if the panel takes the last connection, subscriber authentication fails ` +
+      `and people go offline). Fix by ANY of: lower connection_limit in DATABASE_URL ` +
+      `(e.g. connection_limit=${Math.max(1, Math.floor(available / totalProcesses))}), ` +
+      `reduce BACKEND_INSTANCES, raise max_connections and set POSTGRES_MAX_CONNECTIONS ` +
+      `to match, or put Postgres behind PgBouncer (SCALING.md Step 1).`;
+
+    // Outside production this is a warning: a developer briefly running two
+    // instances locally should not be blocked by a capacity rule.
+    return isProd ? { ...base, error: detail } : { ...base, warning: detail };
+  }
+
+  // It fits, but without a pooler there is no elasticity: every worker holds
+  // its pool open whether or not it is busy. Worth saying once at boot, not
+  // worth refusing to start over.
+  if (projectedConnections > available * 0.8) {
+    return {
+      ...base,
+      warning:
+        `${arithmetic}, close to the ~${available} available for the panel. ` +
+        `There is no pooler in front of Postgres, so this has little headroom. ` +
+        `Consider PgBouncer (SCALING.md Step 1) before scaling further.`,
+    };
+  }
+
+  return base;
 }
 
 /**
