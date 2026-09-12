@@ -5,6 +5,7 @@ import { isPrimaryInstance } from '../common/cluster-util';
 import { IF, IF_HC, IF_EXTRA, IF_OPER_UP, healthProfileFor, HealthOid } from './oids';
 import { SecretsService } from '../common/secrets.service';
 import { decField } from '../nas/nas-credentials';
+import { NON_DEMO_OWNED } from '../common/scope.service';
 
 /**
  * DEVICE HEALTH + INTERFACE RATE COLLECTOR.
@@ -50,7 +51,9 @@ export class DeviceHealthService {
     this.busy = true;
     try {
       const list = await this.prisma.nas.findMany({
-        where: { snmpEnabled: true, isActive: true },
+        // See NON_DEMO_OWNED: demo routers do not exist, so polling them can
+        // only ever produce failures and false alerts.
+        where: { AND: [{ snmpEnabled: true, isActive: true }, NON_DEMO_OWNED] },
         select: {
           id: true, nasname: true, nasIp: true, deviceType: true,
           snmpCommunity: true, snmpPort: true, snmpVersion: true, monitoredPorts: true,

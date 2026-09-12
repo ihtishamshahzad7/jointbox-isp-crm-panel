@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AlertsService } from '../notifications/alerts.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { NON_DEMO_OWNED } from '../common/scope.service';
 
 /**
  * NasMonitorService — MRTG-style per-NAS monitoring built on radacct.
@@ -116,7 +117,12 @@ export class NasMonitorService {
     // nothing. Never throws — a diagnostic must not break the monitor.
     await this.diagnoseAccounting().catch(() => null);
     try {
-      const nases = await this.prisma.nas.findMany({ where: { isActive: true }, select: { id: true, nasIp: true, nasname: true, shortname: true, ownerId: true } });
+      const nases = await this.prisma.nas.findMany({
+        // Sampling a demo router writes a NasTrafficSample row every five
+        // minutes for hardware that does not exist — 500 rows a tick, for ever.
+        where: { AND: [{ isActive: true }, NON_DEMO_OWNED] },
+        select: { id: true, nasIp: true, nasname: true, shortname: true, ownerId: true },
+      });
       for (const nas of nases) {
         const ip = nas.nasIp || nas.nasname;
         if (!ip) continue;
@@ -491,7 +497,10 @@ export class NasMonitorService {
    */
   async healthOverview() {
     const nases = await this.prisma.nas.findMany({
-      where: { isActive: true },
+      // This is the NOC's "NAS / Router health" panel. Unfiltered it read
+      // "488/488 reporting" over a page of invented routers, with the ISP's
+      // one real device lost among them.
+      where: { AND: [{ isActive: true }, NON_DEMO_OWNED] },
       select: { id: true, nasname: true, nasIp: true, shortname: true },
     });
     // Last ~20 min of whole-NAS samples for every NAS, newest last.

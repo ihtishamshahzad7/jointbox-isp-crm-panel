@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { NON_DEMO_OWNED } from '../common/scope.service';
 
 @Injectable()
 export class IpPoolService {
@@ -32,7 +33,9 @@ export class IpPoolService {
   // match the router (import missing pools, correct ranges).
   // ─────────────────────────────────────────────────────────────
   async syncFromNas(apply = false) {
-    const nasList = await this.prisma.nas.findMany({ where: { isActive: true } });
+    // Demo routers are unreachable by construction, so including them makes
+    // every sync report hundreds of spurious failures.
+    const nasList = await this.prisma.nas.findMany({ where: { AND: [{ isActive: true }, NON_DEMO_OWNED] } });
     const report: Array<{
       nas: string; pool: string; routerRange: string;
       panelRange: string | null; status: 'MATCH' | 'DIFFERENT' | 'MISSING_IN_PANEL' | 'MISSING_ON_ROUTER';

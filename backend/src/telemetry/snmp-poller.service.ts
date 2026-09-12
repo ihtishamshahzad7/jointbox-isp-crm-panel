@@ -6,6 +6,7 @@ import { LinkAggregatorService } from './link-aggregator.service';
 import { IF, IF_OPER_UP, ONT_RX_POWER, signalStatus } from './oids';
 import { SecretsService } from '../common/secrets.service';
 import { decField } from '../nas/nas-credentials';
+import { NON_DEMO_OWNED } from '../common/scope.service';
 
 /**
  * SNMP poller — the "works on ANY device" collector.
@@ -49,7 +50,10 @@ export class SnmpPollerService {
     this.busy = true;
     try {
       const list = await this.prisma.nas.findMany({
-        where: { snmpEnabled: true, isActive: true },
+        // NON_DEMO_OWNED: never dial the sandbox's 500 invented routers. This
+        // loop runs every ten seconds; without it that is ~488 UDP probes to
+        // 10.255.0.0/23 six times a minute, and a CRITICAL alert for each.
+        where: { AND: [{ snmpEnabled: true, isActive: true }, NON_DEMO_OWNED] },
         select: {
           id: true, nasname: true, nasIp: true, snmpPort: true, snmpCommunity: true,
           snmpVersion: true, snmpPollSec: true, deviceType: true, monitoredPorts: true,

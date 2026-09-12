@@ -5,6 +5,7 @@ import { terminateInfo } from '../common/radius-terminate';
 import { mapLimit, withTimeout } from '../common/concurrency';
 import { DatabaseSetupService } from '../common/database-setup.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { NON_DEMO_OWNED } from '../common/scope.service';
 
 @Injectable()
 export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
@@ -184,7 +185,7 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
   async reconcileWithRouters() {
     let nasList: any[] = [];
     try {
-      nasList = await this.prisma.nas.findMany({ where: { isActive: true } });
+      nasList = await this.prisma.nas.findMany({ where: { AND: [{ isActive: true }, NON_DEMO_OWNED] } });
     } catch {
       return 0;
     }

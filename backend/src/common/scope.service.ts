@@ -19,6 +19,33 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 const ADMIN_ROLES = ['SUPER_ADMIN'];
 
+/**
+ * INFRASTRUCTURE A BACKGROUND JOB MUST NEVER TOUCH.
+ *
+ * The sandbox seeds 500 routers at 10.255.0.0/23 with `snmpEnabled: true` and
+ * `isActive: true`. Nothing in the pollers knew they were imaginary, so the
+ * SNMP poller — which runs every TEN SECONDS — was opening ~488 UDP sessions to
+ * addresses that do not exist, six times a minute, forever. device-health did
+ * the same every thirty seconds, and each failure wrote a CRITICAL alert, so
+ * the operator's live NOC feed filled with "10.255.0.116 not responding to
+ * SNMP" and buried the one real router's events.
+ *
+ * That is not a display bug: it is real CPU, real sockets and a real alert
+ * channel spent on fiction, and it makes a genuine outage harder to see.
+ *
+ * DELIBERATELY NOT tied to DEMO_VISIBLE_TO_ADMIN. That switch governs what an
+ * operator may LOOK at; it must never cause the system to start dialling
+ * addresses that were invented. Polling demo hardware is wrong in every
+ * configuration.
+ *
+ * Exported as a plain fragment rather than a ScopeService method so a poller
+ * can use it without taking a dependency it otherwise has no reason to have.
+ */
+export const NON_DEMO_OWNED = {
+  // ownerId null is kept: an unowned router is a real one nobody has claimed.
+  OR: [{ ownerId: null }, { owner: { is: { isDemo: false } } }],
+} as const;
+
 export type Actor = { sub?: number; id?: number; role?: string } | undefined;
 
 @Injectable()
