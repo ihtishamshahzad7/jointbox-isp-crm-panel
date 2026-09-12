@@ -7,6 +7,7 @@ import { IF, IF_OPER_UP, ONT_RX_POWER, signalStatus } from './oids';
 import { SecretsService } from '../common/secrets.service';
 import { decField } from '../nas/nas-credentials';
 import { NON_DEMO_OWNED } from '../common/scope.service';
+import { snmpEnabled } from '../common/snmp-enabled';
 
 /**
  * SNMP poller — the "works on ANY device" collector.
@@ -46,6 +47,7 @@ export class SnmpPollerService {
 
   @Cron(CronExpression.EVERY_10_SECONDS)
   async tick() {
+    if (!snmpEnabled()) return;
     if (!this.snmp || this.busy || !isPrimaryInstance()) return;
     this.busy = true;
     try {

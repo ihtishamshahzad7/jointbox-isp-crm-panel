@@ -6,6 +6,7 @@ import { IF, IF_HC, IF_EXTRA, IF_OPER_UP, healthProfileFor, HealthOid } from './
 import { SecretsService } from '../common/secrets.service';
 import { decField } from '../nas/nas-credentials';
 import { NON_DEMO_OWNED } from '../common/scope.service';
+import { snmpEnabled } from '../common/snmp-enabled';
 
 /**
  * DEVICE HEALTH + INTERFACE RATE COLLECTOR.
@@ -47,6 +48,7 @@ export class DeviceHealthService {
 
   @Cron(CronExpression.EVERY_30_SECONDS)
   async tick() {
+    if (!snmpEnabled()) return;
     if (!this.snmp || this.busy || !isPrimaryInstance()) return;
     this.busy = true;
     try {
@@ -304,6 +306,11 @@ export class DeviceHealthService {
    */
   @Cron('40 3 * * *')
   async prune() {
+    // DELIBERATELY NOT gated on snmpEnabled(). Turning SNMP off stops new
+    // metrics being written; it must not strand the ones already stored. If
+    // this returned early, the existing DeviceMetric/InterfaceMetric rows would
+    // sit in the database for ever, which is the opposite of what switching a
+    // feature off should cost you.
     if (!isPrimaryInstance()) return;
     const days = Number(process.env.METRIC_RETENTION_DAYS || 30);
     const cutoff = new Date(Date.now() - days * 86400_000);

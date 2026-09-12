@@ -3156,7 +3156,23 @@ model MonitorTarget {
   ownerId       Int?
   groupName     String?   @db.VarChar(80) // free-text group ("Core", "Towers", …)
   name          String    @db.VarChar(120) // friendly label
-  host          String    @db.VarChar(255) // hostname or IP to ping
+  host          String    @db.VarChar(255) // hostname or IP to check
+  /// WHAT this monitor checks, not merely where.
+  ///
+  /// A device answering ICMP tells you the box is powered and routable. It does
+  /// NOT tell you the service on it is alive — a web server can be pinging
+  /// happily while its application returns 500, and that is the outage a
+  /// customer actually feels. So a monitor names its own check:
+  ///   ICMP  — the historical behaviour, and still the default
+  ///   TCP   — the port accepts a connection (SSH 22, Telnet 23, anything)
+  ///   HTTP/HTTPS — a real request, where a bad status code means DOWN
+  checkType     String    @default("ICMP") @db.VarChar(10)
+  /// TCP/HTTP/HTTPS only. Null on an ICMP monitor; defaulted per scheme.
+  port          Int?
+  /// HTTP/HTTPS only — the path to request. Defaults to "/".
+  path          String?   @db.VarChar(255)
+  /// HTTP/HTTPS only — the last status code, so the UI can show WHY it is down.
+  lastStatus    Int?
   enabled       Boolean   @default(true)
   intervalSec   Int       @default(30)
   isUp          Boolean? // null = never checked yet

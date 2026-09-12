@@ -3,6 +3,7 @@ import * as dgram from 'dgram';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { LinkAggregatorService, FeedLevel } from './link-aggregator.service';
+import { snmpEnabled } from '../common/snmp-enabled';
 
 /**
  * Syslog receiver — the real-time, zero-polling collector.
@@ -32,6 +33,7 @@ export class SyslogReceiverService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (!snmpEnabled()) return;
     if (!isPrimaryInstance()) return;
     await this.refreshNasMap();
     this.refreshTimer = setInterval(() => this.refreshNasMap().catch(() => {}), 30_000);

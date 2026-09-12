@@ -8,6 +8,7 @@ import { NdmEventEngine } from './event-engine.service';
 import { NdmAlertEngine } from './alert-engine.service';
 import { NdmNotificationEngine } from './notification-engine.service';
 import { counterDelta, defaultMonitored, CATEGORY_LABELS, isRecoveryEventType, eventOpenSound, parseCondition, type InterfaceCategory, type NdmEventType } from './ndm.constants';
+import { snmpEnabled } from '../common/snmp-enabled';
 
 /**
  * Port polling service — the SNMP heart: walks the interface table of every
@@ -202,6 +203,7 @@ export class NdmPortPollingService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (!snmpEnabled()) return;
     // One-time (idempotent) data fix: classify interface rows that predate
     // the classifier (created before this deployment). Runs before the first
     // poll so PPPoE/dynamic links start excluded. `db push` on the server

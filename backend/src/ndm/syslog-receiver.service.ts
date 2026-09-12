@@ -11,6 +11,7 @@ import { NdmEventEngine } from './event-engine.service';
 import { NdmAlertEngine } from './alert-engine.service';
 import { parseCondition, matchSyslogRule, type NdmEventType } from './ndm.constants';
 import { NdmSyslogArchiveService } from './syslog-archive.service';
+import { snmpEnabled } from '../common/snmp-enabled';
 
 /**
  * Syslog receiver — real-time collection for switch/router logs.
@@ -44,6 +45,7 @@ export class NdmSyslogReceiverService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (!snmpEnabled()) return;
     if (!isPrimaryInstance()) return;
     await this.refreshDeviceMap();
     this.refreshTimer = setInterval(() => this.refreshDeviceMap().catch(() => {}), 30_000);
@@ -411,6 +413,7 @@ export class NdmSyslogReceiverService implements OnModuleInit, OnModuleDestroy {
   /** Quiet check every minute: syslog-enabled devices that stopped talking. */
   @Cron(CronExpression.EVERY_MINUTE)
   async checkSilence() {
+    if (!snmpEnabled()) return;
     if (!isPrimaryInstance()) return;
     try {
       const rules = await this.prisma.alertRule.findMany({ where: { enabled: true, condition: { startsWith: 'SYSLOG_SILENCE' } } });

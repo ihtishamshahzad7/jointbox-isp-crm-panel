@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { DiagnosticsService } from './diagnostics.service';
 
 /**
  * Network monitoring — continuously pings the hosts each account adds, keeps a
@@ -21,6 +22,9 @@ export class MonitoringService {
     private prisma: PrismaService,
     private scope: ScopeService,
     private events: EventsService,
+    // Reused rather than reimplemented: diagnostics already owns a hardened
+    // TCP connect and an HTTP(S) fetch, including host validation.
+    private diag: DiagnosticsService,
   ) {}
 
   // ── Scope helpers ────────────────────────────────────────────
@@ -206,7 +210,32 @@ export class MonitoringService {
     return t ? { ...t, history: this.parseHistory(t.history) } : null;
   }
 
-  async create(data: { name?: string; host?: string; groupName?: string; intervalSec?: number }, actor?: Actor) {
+  /**
+   * Normalise the check a caller asked for.
+   *
+   * Rejects an unknown type rather than silently falling back to ICMP: an
+   * operator who typo'd "HTTPs" and got a ping monitor would believe a service
+   * was being watched when it was not, and would find out during an outage.
+   */
+  private static parseCheck(data: { checkType?: any; port?: any; path?: any }) {
+    const type = String(data.checkType ?? 'ICMP').toUpperCase();
+    if (!['ICMP', 'TCP', 'HTTP', 'HTTPS'].includes(type)) {
+      throw new BadRequestException(`Unknown check type "${data.checkType}". Use ICMP, TCP, HTTP or HTTPS.`);
+    }
+    if (type === 'ICMP') return { checkType: type, port: null, path: null };
+
+    const raw = data.port ?? MonitoringService.DEFAULT_PORT[type];
+    const port = Number(raw);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new BadRequestException('Port must be a whole number between 1 and 65535.');
+    }
+    const path = type === 'HTTP' || type === 'HTTPS'
+      ? (data.path ? String(data.path).trim().slice(0, 255) : '/')
+      : null;
+    return { checkType: type, port, path };
+  }
+
+  async create(data: { name?: string; host?: string; groupName?: string; intervalSec?: number; checkType?: string; port?: number; path?: string }, actor?: Actor) {
     const host = String(data.host || '').trim();
     if (!host) throw new BadRequestException('A host (IP or hostname) is required.');
     if (!/^[a-zA-Z0-9._:-]{1,255}$/.test(host)) throw new BadRequestException('That host looks invalid — use an IP or hostname.');
@@ -216,6 +245,7 @@ export class MonitoringService {
         host,
         groupName: data.groupName ? String(data.groupName).trim().slice(0, 80) : null,
         intervalSec: Math.min(Math.max(Number(data.intervalSec) || 30, 10), 3600),
+        ...MonitoringService.parseCheck(data),
         ownerId: actor ? this.scope.actorId(actor) : null,
       },
     });
@@ -320,6 +350,20 @@ export class MonitoringService {
     if (data.groupName !== undefined) patch.groupName = data.groupName ? String(data.groupName).trim().slice(0, 80) : null;
     if (data.enabled !== undefined) patch.enabled = !!data.enabled;
     if (data.intervalSec !== undefined) patch.intervalSec = Math.min(Math.max(Number(data.intervalSec) || 30, 10), 3600);
+    if (data.checkType !== undefined || data.port !== undefined || data.path !== undefined) {
+      const current = await this.prisma.monitorTarget.findUnique({
+        where: { id }, select: { checkType: true, port: true, path: true },
+      });
+      // Merged with what is stored, so changing only the port on an HTTPS
+      // monitor does not silently reset it to a ping.
+      Object.assign(patch, MonitoringService.parseCheck({
+        checkType: data.checkType ?? current?.checkType,
+        port: data.port ?? current?.port,
+        path: data.path ?? current?.path,
+      }));
+      // A type change invalidates the last status code.
+      if (patch.checkType !== current?.checkType) patch.lastStatus = null;
+    }
     return this.prisma.monitorTarget.update({ where: { id }, data: patch });
   }
 
@@ -364,8 +408,72 @@ export class MonitoringService {
     return this.runCheck(t);
   }
 
-  private async runCheck(t: { id: number; host: string; name: string; ownerId: number | null; isUp: boolean | null; history: string | null }) {
-    const res = await this.ping(t.host);
+  /** Default port when the operator did not name one. */
+  private static readonly DEFAULT_PORT: Record<string, number> = { HTTP: 80, HTTPS: 443, TCP: 22 };
+
+  /**
+   * Run the check this target actually asks for.
+   *
+   * THE POINT OF THIS METHOD: "the device is up" and "the service is up" are
+   * different questions, and only the second one matches what a customer
+   * experiences. A box that answers ICMP while its web application returns 500
+   * is down as far as anyone using it is concerned, and a monitor that only
+   * pings reports it green.
+   *
+   * ICMP loses its meaning for the other types, so `loss` is reported as the
+   * binary it really is (0 or 100) rather than invented — every consumer of
+   * this value already treats 100 as "no answer".
+   */
+  private async probe(t: { host: string; checkType?: string | null; port?: number | null; path?: string | null }):
+    Promise<{ up: boolean; ms: number | null; loss: number; status?: number | null; detail?: string | null }> {
+    const type = (t.checkType || 'ICMP').toUpperCase();
+    if (type === 'ICMP') return this.ping(t.host);
+
+    const port = t.port ?? MonitoringService.DEFAULT_PORT[type] ?? 0;
+
+    if (type === 'HTTP' || type === 'HTTPS') {
+      const scheme = type.toLowerCase();
+      const isDefaultPort = (type === 'HTTP' && port === 80) || (type === 'HTTPS' && port === 443);
+      const authority = isDefaultPort ? t.host : `${t.host}:${port}`;
+      const path = t.path && t.path.startsWith('/') ? t.path : `/${t.path || ''}`;
+      const r: any = await this.diag.httpCheck(`${scheme}://${authority}${path}`).catch((e: any) => ({
+        success: false, error: e?.message || 'request failed',
+      }));
+      const status: number | null = r?.status ?? null;
+      // 2xx and 3xx are a working service. Anything else — including a refused
+      // connection or a TLS failure — is an outage the operator should see.
+      const up = !!status && status >= 200 && status < 400;
+      return {
+        up,
+        ms: r?.responseMs ?? r?.latencyMs ?? null,
+        loss: up ? 0 : 100,
+        status,
+        detail: up ? null : (r?.error || (status ? `HTTP ${status}` : 'no response')),
+      };
+    }
+
+    const r: any = await this.diag.tcpPort(t.host, port, 4000).catch((e: any) => ({
+      open: false, error: e?.message || 'connect failed',
+    }));
+    return {
+      up: !!r?.open,
+      ms: r?.latencyMs ?? null,
+      loss: r?.open ? 0 : 100,
+      status: null,
+      detail: r?.open ? null : (r?.error || 'connection failed'),
+    };
+  }
+
+  /** Human label for a target, used in alerts so "DOWN" says what is down. */
+  private static describe(t: { host: string; checkType?: string | null; port?: number | null }): string {
+    const type = (t.checkType || 'ICMP').toUpperCase();
+    if (type === 'ICMP') return t.host;
+    const port = t.port ?? MonitoringService.DEFAULT_PORT[type];
+    return `${t.host}:${port} (${type})`;
+  }
+
+  private async runCheck(t: { id: number; host: string; name: string; ownerId: number | null; isUp: boolean | null; history: string | null; checkType?: string | null; port?: number | null; path?: string | null }) {
+    const res = await this.probe(t);
     const wasUp = t.isUp;
     const now = new Date();
     const hist = this.parseHistory(t.history);
@@ -378,6 +486,7 @@ export class MonitoringService {
         isUp: res.up,
         lastLatencyMs: res.ms,
         lossPct: res.loss,
+        lastStatus: res.status ?? null,
         lastCheckedAt: now,
         downSince: res.up ? null : (wasUp === false ? undefined : now),
         history: JSON.stringify(hist),
@@ -400,7 +509,11 @@ export class MonitoringService {
         data: {
           level: res.up ? 'INFO' : 'ERROR',
           source: 'monitoring',
-          message: res.up ? `Monitor UP: "${t.name}" (${t.host}) recovered.` : `Monitor DOWN: "${t.name}" (${t.host}) is not responding.`,
+          message: res.up
+            ? `Monitor UP: "${t.name}" (${MonitoringService.describe(t)}) recovered.`
+            // The reason matters: "HTTP 502" and "connection refused" send an
+            // engineer to completely different places.
+            : `Monitor DOWN: "${t.name}" (${MonitoringService.describe(t)}) — ${res.detail || 'not responding'}.`,
           metadata: JSON.stringify({ targetId: t.id, ownerId: t.ownerId }),
         },
       }).catch(() => null);
@@ -422,7 +535,8 @@ export class MonitoringService {
     try {
       const targets = await this.prisma.monitorTarget.findMany({
         where: { enabled: true },
-        select: { id: true, host: true, name: true, ownerId: true, isUp: true, history: true },
+        select: { id: true, host: true, name: true, ownerId: true, isUp: true, history: true,
+                  checkType: true, port: true, path: true },
       });
       // Bounded concurrency so a big list doesn't spawn hundreds of pings at once.
       const BATCH = 12;
