@@ -151,7 +151,14 @@ describe('multi-currency reporting', () => {
           groupBy: jest.fn().mockResolvedValue(groups),
         },
       };
-      const scope: any = { isAdmin: jest.fn().mockReturnValue(true) };
+      // An ISP-level actor still gets a filter now: no subtree restriction, but
+      // demo-owned rows are excluded, which is what subscriberWhere() returns.
+      const scope: any = {
+        isAdmin: jest.fn().mockReturnValue(true),
+        subscriberWhere: jest.fn().mockResolvedValue({
+          OR: [{ userId: null }, { user: { is: { isDemo: false } } }],
+        }),
+      };
       const svc = new InvoicesService(
         prisma,
         {} as any,

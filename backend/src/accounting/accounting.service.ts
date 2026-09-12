@@ -439,8 +439,11 @@ export class AccountingService {
     // system, which is both a customer list and a debt ledger for the whole
     // network.
     const where: any = query?.nonZero === 'true' ? { balance: { not: 0 } } : {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
     return this.prisma.subscriber.findMany({
       where,

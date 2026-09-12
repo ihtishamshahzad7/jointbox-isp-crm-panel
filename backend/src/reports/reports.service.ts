@@ -206,9 +206,11 @@ export class ReportsService {
    */
   async getAgedDebt(actor?: Actor) {
     const where: any = { status: { in: ['UNPAID', 'PARTIAL', 'OVERDUE'] }, dueAmount: { gt: 0 } };
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.subscriber = { userId: { in: ids } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.subscriber = _sub;
     }
     const invoices = await this.prisma.invoice.findMany({
       where,

@@ -132,8 +132,11 @@ export class KycService {
   /** Compliance dashboard: what still needs attention. */
   async stats(actor?: Actor) {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
     const soon = new Date(Date.now() + 60 * 86400_000);
 
@@ -169,8 +172,11 @@ export class KycService {
   /** The work queue — who needs checking, worst first. */
   async queue(actor?: Actor, filter = 'ALL') {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
     if (filter === 'PENDING') where.kycStatus = 'PENDING';
     if (filter === 'EXPIRED') where.kycStatus = 'EXPIRED';
@@ -265,8 +271,11 @@ export class KycService {
   /** Compliance stats for user accounts (scoped to the actor's descendants). */
   async userStats(actor?: Actor) {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.id = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see userWhere) — AND-composed so a later
+    // `where.OR` from a UI filter cannot overwrite the demo exclusion.
+    {
+      const _usr = await this.scope.userWhere(actor);
+      if (Object.keys(_usr).length) where.AND = [...(where.AND ?? []), _usr];
     }
     const [byStatus, missingNumber, missingDocs, total] = await Promise.all([
       this.prisma.user.groupBy({ by: ['kycStatus'], where, _count: { _all: true } }),
@@ -287,8 +296,11 @@ export class KycService {
   /** The user-KYC work queue, scoped to the actor's own accounts. */
   async userQueue(actor?: Actor, filter = 'ALL') {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.id = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see userWhere) — AND-composed so a later
+    // `where.OR` from a UI filter cannot overwrite the demo exclusion.
+    {
+      const _usr = await this.scope.userWhere(actor);
+      if (Object.keys(_usr).length) where.AND = [...(where.AND ?? []), _usr];
     }
     if (['PENDING', 'EXPIRED', 'REJECTED', 'VERIFIED'].includes(filter)) where.kycStatus = filter;
     if (filter === 'MISSING') where.OR = [{ cnicNumber: null }, { cnicFrontUrl: null }, { cnicBackUrl: null }];
@@ -385,8 +397,11 @@ export class KycService {
    */
   async register(actor?: Actor, skip = 0) {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
     // BOUNDED: at 300k subscribers an unbounded findMany loads the whole base
     // into memory and takes the API down. The regulator export is paginated —

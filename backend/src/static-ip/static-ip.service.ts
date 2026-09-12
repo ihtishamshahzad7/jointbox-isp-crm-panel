@@ -86,9 +86,11 @@ export class StaticIpService {
     // addresses sold by other dealers. Everything below is now restricted to
     // addresses held by the caller's own subscribers.
     const scoped: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      scoped.subscriber = { userId: { in: ids } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) scoped.subscriber = _sub;
     }
     // Named `assignedWhere` because `assigned` further down is the COUNT of
     // assigned addresses. Two different things; one name was a redeclaration.

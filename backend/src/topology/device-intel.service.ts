@@ -115,8 +115,11 @@ export class DeviceIntelService {
    */
   async deviceReport(actor?: Actor) {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
 
     const subs = await this.prisma.subscriber.findMany({
@@ -192,8 +195,11 @@ export class DeviceIntelService {
     const minScore = opts.minScore ?? 0.4;
 
     const where: any = { status: 'ACTIVE' };
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
     const subs = await this.prisma.subscriber.findMany({
       where,

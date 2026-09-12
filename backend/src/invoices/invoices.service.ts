@@ -56,9 +56,11 @@ export class InvoicesService {
    */
   async findAll(actor?: Actor, query?: any) {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.subscriber = { userId: { in: ids } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.subscriber = _sub;
     }
     const include = { subscriber: true, items: true, payments: true };
 
@@ -131,9 +133,11 @@ export class InvoicesService {
      * to the caller's own subtree, exactly like findAll() does.
      */
     const scope: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      scope.subscriber = { userId: { in: ids.length ? ids : [-1] } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) scope.subscriber = _sub;
     }
     const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
 

@@ -19,9 +19,11 @@ export class TicketsService {
    */
   async findAll(actor?: Actor) {
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.subscriber = { userId: { in: ids } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.subscriber = _sub;
     }
     return this.prisma.ticket.findMany({
       where,
@@ -62,9 +64,11 @@ export class TicketsService {
     // Scope to the caller's subtree (same as findAll) — unscoped, every dealer
     // saw the whole ISP's ticket counts.
     const scope: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      scope.subscriber = { userId: { in: ids.length ? ids : [-1] } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) scope.subscriber = _sub;
     }
     const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
 

@@ -41,9 +41,11 @@ export class PaymentsService {
     const to = query?.to ? new Date(query.to) : new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1);
 
     const where: any = { paymentDate: { gte: from, lt: to } };
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.subscriber = { userId: { in: ids } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.subscriber = _sub;
     }
 
     const payments = await this.prisma.payment.findMany({
@@ -85,9 +87,11 @@ export class PaymentsService {
     const { page, limit } = options || {};
 
     const where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.subscriber = { userId: { in: ids } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.subscriber = _sub;
     }
 
     const includeOptions = {
@@ -125,9 +129,11 @@ export class PaymentsService {
     // Scope to the caller's subtree (same as findAll) — an unscoped total leaked
     // the whole ISP's collections to every reseller.
     const scope: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      scope.subscriber = { userId: { in: ids.length ? ids : [-1] } };
+    // Delegated to ScopeService: the ISP branch must exclude the demo
+    // sandbox too, and a rule restated here stops matching the rest of the app.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) scope.subscriber = _sub;
     }
     const w = (extra: any = {}) => (Object.keys(scope).length ? { AND: [scope, extra] } : extra);
     const [total, totalAmount, cashCount, bankCount, onlineCount, chequeCount] = await Promise.all([

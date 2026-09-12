@@ -382,8 +382,11 @@ export class RouterLogsService {
 
     const names = grouped.map((g) => g.username!).filter(Boolean);
     const where: any = { username: { in: names } };
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      where.userId = { in: await this.scope.descendantIds(await this.scope.rootId(actor)) };
+    // Delegated to ScopeService (see subscriberWhere) — composed under
+    // AND so a later `where.OR` from a UI filter cannot overwrite it.
+    {
+      const _sub = await this.scope.subscriberWhere(actor);
+      if (Object.keys(_sub).length) where.AND = [...(where.AND ?? []), _sub];
     }
 
     const subs = await this.prisma.subscriber.findMany({
