@@ -172,7 +172,19 @@ describe('demo leak ratchet', () => {
     const body = fs.readFileSync(path.join(SRC, 'common/scope.service.ts'), 'utf8');
     const adminBranches = body
       .split('\n')
-      .filter((l) => /isAdmin\(/.test(l) && /return\s*\{\}/.test(l));
+      .filter((l) => /isAdmin\(/.test(l) && /return\s*\{\}/.test(l))
+      /**
+       * A NEGATED check is the opposite statement and is safe: `if (!isAdmin)
+       * return {}` means the unrestricted result goes to everyone EXCEPT an
+       * ISP account — which is how radiusWhere() is built, because every
+       * non-admin caller has already narrowed to an explicit list of usernames
+       * from its own subtree and cannot reach a demo session.
+       *
+       * Worth being precise rather than widening the rule: a test that fires on
+       * correct code is one people start editing to make quiet, and then it
+       * stops catching the thing it was written for.
+       */
+      .filter((l) => !/!\s*this\.isAdmin\(|!\s*isAdmin\(/.test(l));
     expect(adminBranches).toEqual([]);
   });
 });

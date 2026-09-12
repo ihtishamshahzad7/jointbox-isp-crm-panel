@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { Pool } from 'pg';
 import { allocateIpv6, ipv6AutoConfig } from './ipv6-alloc';
 import { PrismaService } from '../prisma/prisma.service';
+import { demoSessionExclusionSql } from '../common/scope.service';
 
 /**
  * Resolved policy attributes from a package's linked RADIUS policies.
@@ -910,9 +911,10 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
         // wrong clock) stays "active" forever and this tile disagrees with the
         // rest of the panel.
         this.pgClient.query(
-          `SELECT COUNT(*) FROM radacct
+          `SELECT COUNT(*) FROM radacct a
              WHERE acctstoptime IS NULL
-               AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`,
+               AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'
+               ${demoSessionExclusionSql('a')}`,
         ),
       ]);
       return {
@@ -943,11 +945,14 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
           ) AS duration_seconds,
           acctinputoctets  AS upload_bytes,
           acctoutputoctets AS download_bytes
-        FROM radacct
+        FROM radacct a
         WHERE acctstoptime IS NULL
           -- Same freshness rule as the subscriber list / overview: a session
           -- whose Accounting-Stop never arrived is not a live session.
           AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'
+          -- ...and never the sandbox's 2,500, whose invented counters dominate
+          -- every throughput total and top-talkers list they appear in.
+          ${demoSessionExclusionSql('a')}
       `;
       const params: any[] = [];
       if (nasIp) {

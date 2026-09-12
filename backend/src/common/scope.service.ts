@@ -48,6 +48,38 @@ export const NON_DEMO_OWNED = {
 
 export type Actor = { sub?: number; id?: number; role?: string } | undefined;
 
+/**
+ * SESSIONS THAT BELONG TO THE SANDBOX.
+ *
+ * `radacct` and `radpostauth` are FreeRADIUS's tables. They are keyed by
+ * username and carry no owner column, so none of the Prisma where-fragments
+ * above can reach them — a session is only demo-owned by virtue of the
+ * Subscriber that shares its username.
+ *
+ * The sandbox keeps 2,500 sessions open, with fabricated counters that dwarf
+ * real traffic (roughly 25 TB of downstream). Unfiltered, they took over the
+ * RADIUS session history, the live-sessions table, "active sessions" on the NAS
+ * overview, and every top-talkers list — an operator looking for the customer
+ * saturating their uplink found ten pages of invented ones first.
+ *
+ * NOT EXISTS rather than a join, so a session whose username matches no
+ * Subscriber at all is KEPT. Those are real: a mistyped login, a device
+ * authenticating against a stale credential, a customer deleted while online.
+ * They are exactly what an operator is hunting for in the session log, and a
+ * join would silently drop every one of them.
+ *
+ * A module-level function, not only a method, so services that talk to Postgres
+ * through a raw `pg` client (radius-sync) can use the identical rule without
+ * taking a Nest dependency they otherwise have no use for.
+ */
+export function demoSessionExclusionSql(alias = 'a'): string {
+  if (process.env.DEMO_VISIBLE_TO_ADMIN === '1') return '';
+  return ` AND NOT EXISTS (
+      SELECT 1 FROM "Subscriber" _s
+      JOIN "User" _u ON _u.id = _s."userId"
+      WHERE _s.username = ${alias}.username AND _u."isDemo" = true)`;
+}
+
 @Injectable()
 export class ScopeService {
   constructor(private prisma: PrismaService) {}
@@ -334,6 +366,33 @@ export class ScopeService {
   /** As above, for a query whose rows are Users rather than Subscribers. */
   demoUserExclusionSql(userAlias = 'u'): string {
     return this.hidesDemo ? ` AND ${userAlias}."isDemo" = false` : '';
+  }
+
+  /** The raw-SQL session rule. See demoSessionExclusionSql() above. */
+  demoSessionSql(alias = 'a'): string {
+    return demoSessionExclusionSql(alias);
+  }
+
+  /**
+   * Prisma filter for `radacct` rows — sessions not owned by a demo subscriber.
+   *
+   * Only meaningful for an ISP-level actor: every other caller already narrows
+   * to an explicit list of usernames from its own subtree, which cannot contain
+   * a demo one.
+   *
+   * The three branches spell out the keep-cases rather than leaning on a NOT
+   * over a nullable relation: a session with no matching Subscriber, and one
+   * whose Subscriber has no owner, are both real and must survive.
+   */
+  async radiusWhere(actor: Actor): Promise<any> {
+    if (!this.isAdmin(actor?.role) || !this.hidesDemo) return {};
+    return {
+      OR: [
+        { subscriber: { is: null } },
+        { subscriber: { is: { userId: null } } },
+        { subscriber: { is: { user: { is: { isDemo: false } } } } },
+      ],
+    };
   }
 
   /**

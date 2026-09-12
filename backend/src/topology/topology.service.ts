@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { demoSessionExclusionSql } from '../common/scope.service';
 
 /**
  * TopologyService — learns and traces the transmission path.
@@ -234,9 +235,12 @@ export class TopologyService {
 
   /** Usernames with a live session right now. */
   private async onlineSet(): Promise<Set<string>> {
-    const rows = await this.prisma.$queryRaw<any[]>`
-      SELECT DISTINCT username FROM radacct WHERE acctstoptime IS NULL AND username IS NOT NULL
-        AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
+    // Demo sessions would otherwise count as "up" in every tree, fault list and
+    // availability percentage on the ISP's topology screens.
+    const rows = await this.prisma.$queryRawUnsafe<any[]>(`
+      SELECT DISTINCT username FROM radacct a WHERE a.acctstoptime IS NULL AND a.username IS NOT NULL
+        AND COALESCE(a.acctupdatetime, a.acctstarttime) > NOW() - INTERVAL '15 minutes'
+        ${demoSessionExclusionSql('a')}`)
     .catch(() => [] as any[]);
     return new Set(rows.map((r) => r.username));
   }

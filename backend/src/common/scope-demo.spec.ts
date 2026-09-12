@@ -112,6 +112,29 @@ describe('scope: demo isolation', () => {
       expect(sql.trim().startsWith('AND')).toBe(true); // appends to an existing WHERE
     });
 
+    /**
+     * radacct has no owner column, so a session is only demo-owned through the
+     * Subscriber sharing its username. The rule must therefore be a NOT EXISTS,
+     * and it must KEEP a session that matches no subscriber at all — a mistyped
+     * login, a stale credential, a customer deleted while still online. Those
+     * are the rows an operator opens the session log to find; a join would drop
+     * every one of them.
+     */
+    it('excludes demo sessions but keeps ones with no subscriber', () => {
+      const sql = scope.demoSessionSql('a');
+      expect(sql).toMatch(/NOT EXISTS/);
+      expect(sql).toMatch(/a\.username/);
+      expect(sql).toMatch(/_u\."isDemo" = true/);
+      expect(sql).not.toMatch(/JOIN radacct/); // never an inner join on the session
+      expect(sql.trim().startsWith('AND ')).toBe(true);
+    });
+
+    it('the session rule honours the override', () => {
+      process.env.DEMO_VISIBLE_TO_ADMIN = '1';
+      expect(scope.demoSessionSql('a')).toBe('');
+      delete process.env.DEMO_VISIBLE_TO_ADMIN;
+    });
+
     it('excludes demo users from a user-keyed query', () => {
       expect(scope.demoUserExclusionSql('u')).toMatch(/u\."isDemo" = false/);
     });
@@ -145,6 +168,26 @@ describe('scope: demo isolation', () => {
         const close = (sql.match(/\)/g) || []).length;
         expect(open).toBe(close);
       }
+    });
+  });
+
+  /**
+   * The Prisma-side session filter. Only an ISP account needs it: every other
+   * caller has already narrowed to an explicit list of usernames from its own
+   * subtree, which cannot contain a demo one.
+   */
+  describe('radacct filter', () => {
+    it('narrows for an ISP account, spelling out the keep-cases', async () => {
+      const where = await scope.radiusWhere(admin);
+      expect(where.OR).toEqual([
+        { subscriber: { is: null } },                              // no subscriber: real
+        { subscriber: { is: { userId: null } } },                  // ownerless: real
+        { subscriber: { is: { user: { is: { isDemo: false } } } } },
+      ]);
+    });
+
+    it('stays out of the way for a reseller, who is already username-scoped', async () => {
+      expect(await scope.radiusWhere(demoReseller)).toEqual({});
     });
   });
 

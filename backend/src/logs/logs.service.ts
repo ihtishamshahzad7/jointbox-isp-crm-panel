@@ -152,6 +152,13 @@ export class LogsService {
       params.push(ids);
       whereParts.push(`p.username IN (SELECT username FROM "Subscriber" WHERE "userId" = ANY($${params.length}::int[]))`);
     }
+    // Demo subscribers authenticate in the sandbox too; their Access-Accepts
+    // do not belong in the ISP's auth log. `ids === null` is the ISP branch,
+    // which is the only one that can reach them.
+    if (ids === null) {
+      const frag = this.scope.demoSessionSql('p').trim();
+      if (frag) whereParts.push(frag.replace(/^AND\s+/, ''));
+    }
     const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     // Prefer the values the post-auth query now stores natively on radpostauth
@@ -394,6 +401,13 @@ export class LogsService {
       const names = subs.map((s) => s.username).filter(Boolean) as string[];
       if (!names.length) return { items: [], summary: [], total: 0 };
       where.username = { in: names };
+    }
+    // An ISP-level actor skipped the block above, so it needs the demo rule
+    // applied here instead: 2,500 synthetic sessions otherwise fill a page that
+    // holds 2,000, and the real ones never appear at all.
+    {
+      const _rad = await this.scope.radiusWhere(actor);
+      if (Object.keys(_rad).length) where.AND = [...(where.AND ?? []), _rad];
     }
     if (opts.username) where.username = opts.username;
     // Time window: sessions that STARTED within the last N hours.
