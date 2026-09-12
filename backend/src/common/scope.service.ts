@@ -70,7 +70,13 @@ export class ScopeService {
    * assigns it — a deliberate act, which is also what makes it auditable.
    */
   async nasWhere(actor: Actor): Promise<any> {
-    if (!actor || this.isAdmin(actor.role)) return {};
+    // Same reasoning as subscriberWhere(): the sandbox's 500 invented routers
+    // are not part of anyone's real estate, so they do not belong in the ISP's
+    // NAS count or its device lists. An actorless internal call keeps seeing
+    // everything, because background jobs must still reach demo rows to expire
+    // and purge them.
+    if (!actor) return {};
+    if (this.isAdmin(actor.role)) return this.demoExclusion('owner');
     const selfId = await this.rootId(actor);
 
     /**
@@ -226,9 +232,50 @@ export class ScopeService {
     return rows.map((r) => Number(r.id));
   }
 
+  /**
+   * SANDBOX DATA IS NOT BUSINESS DATA.
+   *
+   * The demo sandbox seeds 10,000 synthetic subscribers and 500 fake routers
+   * under a demo-flagged user. Reseller scoping already hides those from other
+   * tenants — they sit in someone else's subtree. But SUPER_ADMIN is scoped by
+   * nothing, so the platform owner's own dashboard counted them as customers:
+   * "Total subscribers 10,016", "Signups today 10,000", and every renewal
+   * forecast computed over a base that was 99.8% invented.
+   *
+   * An operator cannot run a business off numbers like that, and cannot tell by
+   * looking which part is real. So demo-owned rows are excluded from ISP-level
+   * views. The demo account itself is unaffected: it is an ordinary RESELLER and
+   * reaches its data through the subtree branch below, seeing exactly the rich
+   * environment the sandbox exists to show.
+   *
+   * THE NULL CASE, STATED EXPLICITLY.
+   * `userId` and `ownerId` are both NULLABLE. An ownerless subscriber has no
+   * user row to carry `isDemo: false`, so the obvious filter would silently
+   * hide exactly the records findOwnerless() exists to surface — customers
+   * receiving service that nobody is billed for. The naive fix, a NOT over the
+   * relation, leans on how a particular ORM treats a NOT against an absent
+   * relation; that is a subtlety, and a subtlety in a filter that decides what
+   * an operator can see is a bug waiting to be discovered by its absence. So
+   * the two cases are written out as plain boolean logic instead: keep rows
+   * with no owner, and rows whose owner is not a demo. Nothing to get wrong.
+   *
+   * DEMO_VISIBLE_TO_ADMIN=1 restores the old behaviour, so an operator who
+   * needs to inspect the sandbox is not left needing a code change.
+   */
+  private demoExclusion(relation: 'user' | 'owner'): any {
+    if (process.env.DEMO_VISIBLE_TO_ADMIN === '1') return {};
+    const fk = relation === 'user' ? 'userId' : 'ownerId';
+    return {
+      OR: [
+        { [fk]: null },
+        { [relation]: { is: { isDemo: false } } },
+      ],
+    };
+  }
+
   /** Prisma where-fragment limiting SUBSCRIBERS to the actor's subtree. */
   async subscriberWhere(actor: Actor): Promise<any> {
-    if (this.isAdmin(actor?.role)) return {};
+    if (this.isAdmin(actor?.role)) return this.demoExclusion('user');
     const ids = await this.descendantIds(await this.rootId(actor));
     // subscribers owned by anyone in my subtree, or sold by anyone in my subtree
     /**
