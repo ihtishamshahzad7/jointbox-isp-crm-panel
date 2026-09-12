@@ -13,7 +13,7 @@ import React, { useMemo, useState } from "react";
 import { useSubscriberDetail } from "./context";
 import { Panel, Btn, DefList, EmptyState, Spinner } from "./ui";
 import { apiSend, fmtBytes, fmtDateTime, fmtDateTimeFull, fmtDuration, num, show, detectFlapping } from "./lib";
-import { BandwidthHistoryChart } from "./charts";
+import { BandwidthHistoryChart, LiveTrafficChart } from "./charts";
 import LinkPath from "./link-path";
 import { useRouter } from "next/navigation";
 
@@ -221,8 +221,16 @@ export function ConnectionTab() {
         </div>
       </div>
 
-      {/* Live bandwidth chart */}
-      <Panel title="Live bandwidth" sub="Rate from RADIUS accounting interim updates — a quiet line is a real zero, not missing data">
+      {/* Live traffic — last 5 minutes, refreshed every 5s */}
+      <Panel
+        title="Live traffic"
+        sub="Upload and download over the last 5 minutes. Each reading is taken when you are looking at this page — there is no background sampler."
+      >
+        {username ? <LiveTrafficChart username={username} /> : <EmptyState title="No username" />}
+      </Panel>
+
+      {/* Longer-run bandwidth chart */}
+      <Panel title="Bandwidth history" sub="Rate from RADIUS accounting interim updates — a quiet line is a real zero, not missing data">
         {username ? <BandwidthHistoryChart username={username} /> : <EmptyState title="No username" />}
       </Panel>
 

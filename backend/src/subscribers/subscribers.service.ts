@@ -14,6 +14,7 @@ import { ResellerPricingService } from '../organization/reseller-pricing.service
 import { InvoicesService } from '../invoices/invoices.service';
 import { SecurityService } from '../security/security.service';
 import { RenewalService } from './renewal.service';
+import { LiveTrafficService, Reading } from './live-traffic.service';
 import {
   CONNECTION_TYPE, PROFILE_STATUS, DISCOUNT_TYPE, parsePanelDate, parseFlag,
 } from './panel-format';
@@ -42,6 +43,8 @@ export class SubscribersService implements OnModuleInit {
     // credentials alone stops only the next login, not the current session.
     private mikrotik: MikrotikSyncService,
     private currency: CurrencyService,
+    // Keeps the short per-subscriber ring buffer behind the live graph.
+    private liveTraffic: LiveTrafficService,
   ) {}
 
   onModuleInit() {
@@ -4301,6 +4304,127 @@ if (!unpaid && data.username && data.password) {
   // NasMonitorService.sampleSubscribers. radacct cannot produce a series:
   // it keeps ONE row per session and interim updates overwrite in place.
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // LIVE TRAFFIC (the 5-minute upload/download graph)
+  //
+  // Reads ONE counter and hands it to LiveTrafficService, which keeps the
+  // short ring buffer and works out the rates.
+  //
+  // Sources, best first:
+  //   1. The router's own interface counters via the MikroTik API — true
+  //      real-time, the counter moves on every poll.
+  //   2. radacct — universal (any NAS, no credentials) but refreshed only on
+  //      the RADIUS interim-update interval, 300s by default here.
+  //
+  // Note what is NOT here: no polling loop, no new table. The frontend's own
+  // polling is the sampler. At 10k online subscribers a background sampler
+  // would write tens of millions of rows a day for data nobody looks at.
+  // ------------------------------------------------------------------
+  async getLiveTraffic(username: string, seconds = 300) {
+    const windowSeconds = Math.max(30, Math.min(900, seconds));
+    return this.liveTraffic.sample(username, windowSeconds, () =>
+      this.readTrafficCounter(username),
+    );
+  }
+
+  /** One counter reading, from the best source available for this subscriber. */
+  private async readTrafficCounter(username: string): Promise<Reading | null> {
+    const pg = this.radiusSync.getPgClient();
+    if (!pg) return null;
+
+    const res = await pg.query(
+      `SELECT nasipaddress,
+              acctsessionid,
+              acctstarttime,
+              COALESCE(acctupdatetime, acctstarttime) AS counter_at,
+              acctinputoctets  AS upload_bytes,
+              acctoutputoctets AS download_bytes
+         FROM radacct
+        WHERE username = $1
+          AND acctstoptime IS NULL
+          AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'
+        ORDER BY acctstarttime DESC
+        LIMIT 1`,
+      [username],
+    );
+
+    const row = res.rows[0];
+    if (!row) return null; // not online
+
+    // A session key that changes on reconnect, so a rate is never computed
+    // across a counter reset.
+    const sessionKey = String(
+      row.acctsessionid || row.acctstarttime?.toISOString?.() || row.acctstarttime || 'session',
+    );
+
+    const live = await this.readMikrotikCounter(String(row.nasipaddress || ''), username);
+    if (live) {
+      return {
+        at: Date.now(),
+        uploadBytes: live.uploadBytes,
+        downloadBytes: live.downloadBytes,
+        sessionKey,
+        source: 'mikrotik',
+      };
+    }
+
+    // Dated by the NAS's own update time, NOT by now(). That is the whole
+    // reason the graph does not invent a flat line between interim updates.
+    const counterAt = new Date(row.counter_at).getTime();
+    return {
+      at: Number.isFinite(counterAt) ? counterAt : Date.now(),
+      uploadBytes: Number(row.upload_bytes) || 0,
+      downloadBytes: Number(row.download_bytes) || 0,
+      sessionKey,
+      source: 'radius',
+    };
+  }
+
+  /**
+   * Live byte counters for one username from its NAS, when that NAS is a
+   * MikroTik with API credentials. Any failure returns null and we fall back
+   * to RADIUS — an unreachable router must never surface as a graph error.
+   *
+   * Cached 3s and keyed by NAS, not by user: one API round trip serves every
+   * operator watching any subscriber on that router.
+   */
+  private async readMikrotikCounter(
+    nasIp: string,
+    username: string,
+  ): Promise<{ uploadBytes: number; downloadBytes: number } | null> {
+    if (!nasIp) return null;
+
+    try {
+      const nas = await this.prisma.nas.findFirst({
+        where: { nasIp, apiUsername: { not: null } },
+        select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+      });
+      if (!nas?.apiUsername) return null;
+
+      const byUser = await this.cache.wrap<Record<string, [number, number]>>(
+        `livetraffic:nas:${nasIp}`,
+        3,
+        async () => {
+          const users = await this.mikrotik.getActivePppoeUsers(
+            nas.nasIp!, nas.apiPort || 8728, nas.apiUsername!, nas.apiPassword || '',
+          );
+          const map: Record<string, [number, number]> = {};
+          for (const u of users) {
+            if (!u?.username) continue;
+            if (u.uploadBytes == null || u.downloadBytes == null) continue;
+            map[String(u.username).toLowerCase()] = [u.uploadBytes, u.downloadBytes];
+          }
+          return map;
+        },
+      );
+
+      const hit = byUser?.[username.toLowerCase()];
+      return hit ? { uploadBytes: hit[0], downloadBytes: hit[1] } : null;
+    } catch {
+      return null;
+    }
+  }
+
   async getBandwidthHistory(username: string, minutes = 60) {
     try {
       const pg = this.radiusSync.getPgClient();

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SubscribersController } from './subscribers.controller';
 import { SubscribersService } from './subscribers.service';
 import { RenewalService } from './renewal.service';
+import { LiveTrafficService } from './live-traffic.service';
 import { ExportService } from './export.service';
 import { LifecycleService } from './lifecycle.service';
 import { IntegrityService } from './integrity.service';
@@ -15,8 +16,8 @@ import { InvoicesModule } from '../invoices/invoices.module';
 @Module({
   imports: [PrismaModule, NasModule, AccountingModule, NotificationsModule, OrganizationModule, InvoicesModule],
   controllers: [SubscribersController],
-  providers: [SubscribersService, RenewalService, ExportService, LifecycleService, IntegrityService],
+  providers: [SubscribersService, RenewalService, LiveTrafficService, ExportService, LifecycleService, IntegrityService],
   // Exported so the public API can serve subscriber data under an API key.
-  exports: [SubscribersService, RenewalService, ExportService, LifecycleService, IntegrityService],
+  exports: [SubscribersService, RenewalService, LiveTrafficService, ExportService, LifecycleService, IntegrityService],
 })
 export class SubscribersModule {}

@@ -6750,3 +6750,55 @@ body {
    surfaces, and the QR code backing, all of which must stay white
    whatever the theme.
    ─────────────────────────────────────────────────────────────── */
+
+/* ───────────────────────────────────────────────────────────────
+   Subscriber bandwidth / live-traffic charts.
+
+   These class names were already used by
+   app/subscribers/[id]/charts.tsx but had never been defined
+   anywhere, so both charts rendered as unstyled blocks — the
+   legend, the range buttons and the "no data" message all ran
+   together as plain inline text. Defining them here fixes the
+   existing BandwidthHistoryChart as well as the live one.
+   ─────────────────────────────────────────────────────────────── */
+.sd-bw { display: flex; flex-direction: column; gap: 10px; }
+
+.sd-bw-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+
+.sd-bw-legends {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  font-size: 12.5px; font-weight: 600;
+}
+.sd-bw-legends i {
+  display: inline-block; width: 10px; height: 3px; border-radius: 2px;
+  margin-right: 6px; vertical-align: middle;
+}
+.sd-bw-now { font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.sd-bw-ranges { display: flex; gap: 4px; }
+.sd-bw-ranges button,
+.sd-bw-ranges .on {
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--muted); border-radius: 7px; padding: 4px 10px;
+  font-size: 12px; font-weight: 600; cursor: pointer; line-height: 1.4;
+}
+.sd-bw-ranges button:hover { color: var(--text); }
+.sd-bw-ranges button.on,
+.sd-bw-ranges span.on { color: var(--text); border-color: var(--accent, #378ADD); }
+
+/* Reserve the chart's height so the panel does not jump between the
+   "collecting" message and the first drawn line. */
+.sd-bw-empty {
+  display: grid; place-items: center; text-align: center;
+  min-height: 150px; padding: 16px;
+  border: 1px dashed var(--border); border-radius: 12px;
+  color: var(--muted); font-size: 13px; line-height: 1.6;
+}
+
+.sd-bw-note {
+  color: var(--muted); font-size: 12px; line-height: 1.55;
+  padding-top: 2px;
+}

@@ -12,7 +12,7 @@
  * Both are dependency-free SVG (mirrors the app's existing bandwidth-chart).
  */
 import { useEffect, useRef, useState } from "react";
-import { apiGet, fmtBits, BwPoint, DailyUsage, num, u } from "./lib";
+import { apiGet, fmtBits, BwPoint, DailyUsage, LiveTraffic, LiveRatePoint, num, u } from "./lib";
 
 const UP = "#4ade80";
 const DOWN = "#60a5fa";
@@ -260,6 +260,183 @@ export function UsageMeter({ quotaGb, usedGb, percentUsed, state, throttledTo }:
               ? <span style={{ color: "#F59E0B", fontWeight: 700 }}>Near the cap</span>
               : <span>Within allowance</span>}
       </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * LIVE TRAFFIC — the last 5 minutes, upload and download
+ *
+ * Why this exists alongside BandwidthHistoryChart: that one reads
+ * /subscribers/bandwidth-history, which queries radacct. radacct holds ONE
+ * ROW PER SESSION, rewritten in place on each interim update, so for a
+ * subscriber who is online right now it returns a single row — one point, at
+ * zero. There was never a series to draw.
+ *
+ * This chart uses /subscribers/live-traffic, where each request takes a
+ * counter reading and the backend keeps a short ring buffer. The frontend's
+ * own polling is what builds the series.
+ *
+ * ── One deliberate difference from the chart above ──────────────────────
+ * Points are placed on the x-axis by their REAL TIMESTAMP, not by their index
+ * in the array. The chart above spaces samples evenly, which is fine when
+ * they arrive evenly — but these do not. On a plain RADIUS NAS a reading
+ * arrives every 300s; on a MikroTik, every 5s. Even spacing would put a
+ * five-minute-old reading and a five-second-old one side by side and imply
+ * the traffic happened at the wrong moment.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const LIVE_WINDOW_SECONDS = 300;
+const LIVE_POLL_MS = 5000;
+
+export function LiveTrafficChart({ username }: { username: string }) {
+  const [data, setData] = useState<LiveTraffic | null>(null);
+  const [err, setErr] = useState(false);
+  const [firstLoad, setFirstLoad] = useState(true);
+  const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const d = await apiGet<LiveTraffic>(
+        `/subscribers/live-traffic/${encodeURIComponent(username)}?seconds=${LIVE_WINDOW_SECONDS}`,
+      );
+      if (!alive) return;
+      if (d) { setData(d); setErr(false); } else { setErr(true); }
+      setFirstLoad(false);
+    };
+    load();
+    if (timer.current) clearInterval(timer.current);
+    timer.current = setInterval(load, LIVE_POLL_MS);
+    return () => { alive = false; if (timer.current) clearInterval(timer.current); };
+  }, [username]);
+
+  const W = 600, H = 190, PAD = { top: 16, right: 14, bottom: 26, left: 52 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  const points = data?.points ?? [];
+
+  // The window is fixed, so the line walks leftwards as time passes instead of
+  // rescaling on every poll — which would make a steady rate look like it was
+  // jittering.
+  const tEnd = Date.now();
+  const tStart = tEnd - LIVE_WINDOW_SECONDS * 1000;
+
+  const peak = points.reduce((m, p) => Math.max(m, p.uploadBps, p.downloadBps), 0);
+  const yMax = Math.max(peak * 1.15, 1000); // 1 Kbps floor keeps a quiet line honest
+
+  const x = (at: number) =>
+    PAD.left + innerW * Math.min(1, Math.max(0, (at - tStart) / (tEnd - tStart)));
+  const y = (v: number) => PAD.top + innerH - (v / yMax) * innerH;
+
+  const linePath = (acc: (p: LiveRatePoint) => number) =>
+    points.length < 2
+      ? ""
+      : points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.at).toFixed(1)},${y(acc(p)).toFixed(1)}`).join(" ");
+
+  const areaPath = (acc: (p: LiveRatePoint) => number) => {
+    if (points.length < 2) return "";
+    const bottom = PAD.top + innerH;
+    const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.at).toFixed(1)},${y(acc(p)).toFixed(1)}`).join(" ");
+    return `${d} L${x(points[points.length - 1].at).toFixed(1)},${bottom} L${x(points[0].at).toFixed(1)},${bottom} Z`;
+  };
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(yMax * f));
+  // Fixed minute marks across the window, so the axis does not jump about.
+  const xTicks = [0, 1, 2, 3, 4, 5].map((m) => tEnd - (5 - m) * 60_000);
+  const fmtClock = (ms: number) =>
+    new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  const now = data?.latest;
+  const sourceLabel =
+    data?.source === "mikrotik" ? "Router (live)"
+    : data?.source === "radius" ? "RADIUS accounting"
+    : null;
+
+  return (
+    <div className="sd-bw">
+      <div className="sd-bw-head">
+        <div className="sd-bw-legends">
+          <span style={{ color: DOWN }}><i style={{ background: DOWN }} /> Download</span>
+          <span style={{ color: UP }}><i style={{ background: UP }} /> Upload</span>
+          {now && (
+            <span className="sd-bw-now" style={{ color: MUTED }}>
+              now: <b style={{ color: "var(--text)" }}>↓{fmtBits(now.downloadBps)}</b>
+              {" / "}
+              <b style={{ color: "var(--text)" }}>↑{fmtBits(now.uploadBps)}</b>
+            </span>
+          )}
+        </div>
+        {sourceLabel && (
+          <div className="sd-bw-ranges" aria-label="Data source">
+            <span
+              className="on"
+              style={{ cursor: "default", fontSize: 11 }}
+              title={
+                data?.source === "mikrotik"
+                  ? "Read straight from the router's interface counters on every poll."
+                  : `Read from RADIUS accounting, which refreshes every ${data?.resolutionSeconds ?? "?"}s on this NAS.`
+              }
+            >
+              {sourceLabel}
+              {data?.resolutionSeconds ? ` · ${data.resolutionSeconds}s` : ""}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {err ? (
+        <div className="sd-bw-empty">Live traffic unavailable — the panel could not reach RADIUS.</div>
+      ) : firstLoad ? (
+        <div className="sd-bw-empty">Reading counters…</div>
+      ) : points.length < 2 ? (
+        <div className="sd-bw-empty">{data?.notice ?? "Waiting for a second reading…"}</div>
+      ) : (
+        <>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", overflow: "visible" }}>
+            {yTicks.map((tick, i) => (
+              <g key={`y${i}`}>
+                <line
+                  x1={PAD.left} y1={y(tick)} x2={W - PAD.right} y2={y(tick)}
+                  stroke={BORDER} strokeWidth={1} strokeDasharray={i === 0 ? "" : "2 3"}
+                />
+                <text x={PAD.left - 6} y={y(tick) + 4} textAnchor="end" fontSize={9} fill={MUTED}>
+                  {fmtBits(tick)}
+                </text>
+              </g>
+            ))}
+
+            {xTicks.map((t, i) => (
+              <text key={`x${i}`} x={x(t)} y={H - 5} textAnchor="middle" fontSize={9} fill={MUTED}>
+                {i === 5 ? "now" : `-${5 - i}m`}
+              </text>
+            ))}
+
+            <path d={areaPath((p) => p.downloadBps)} fill="rgba(96,165,250,0.12)" />
+            <path d={linePath((p) => p.downloadBps)} fill="none" stroke={DOWN} strokeWidth={2} strokeLinejoin="round" />
+            <path d={areaPath((p) => p.uploadBps)} fill="rgba(74,222,128,0.12)" />
+            <path d={linePath((p) => p.uploadBps)} fill="none" stroke={UP} strokeWidth={2} strokeLinejoin="round" />
+
+            {/* Mark the newest reading so "now" is unambiguous even when flat. */}
+            {points.length > 0 && (
+              <>
+                <circle cx={x(points[points.length - 1].at)} cy={y(points[points.length - 1].downloadBps)} r={3} fill={DOWN} />
+                <circle cx={x(points[points.length - 1].at)} cy={y(points[points.length - 1].uploadBps)} r={3} fill={UP} />
+              </>
+            )}
+          </svg>
+
+          {data?.notice && <div className="sd-bw-note">{data.notice}</div>}
+
+          {data?.source === "radius" && (data.resolutionSeconds ?? 0) > 60 && (
+            <div className="sd-bw-note">
+              Each point covers {data.resolutionSeconds}s, so short bursts are averaged away.
+              For a second-by-second line, add API credentials to this subscriber&rsquo;s NAS.
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

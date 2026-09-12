@@ -376,6 +376,27 @@ export class SubscribersController {
     return this.subscribersService.getRadiusSession(username);
   }
 
+  /**
+   * Live upload/download for the last few minutes.
+   *
+   * Each call takes one counter reading and returns the window, so the
+   * frontend's own polling builds the series — there is no background sampler
+   * and no new table. Poll every 5s for a live line.
+   *
+   * The response carries `source` and `resolutionSeconds` because the honest
+   * answer depends on the NAS: a MikroTik with API credentials gives true
+   * per-poll resolution, while plain RADIUS accounting refreshes only on the
+   * interim-update interval (300s by default here). The UI reports that rather
+   * than implying a precision it does not have.
+   */
+  @Get('live-traffic/:username')
+  async getLiveTraffic(
+    @Param('username') username: string,
+    @Query('seconds') seconds?: string,
+  ) {
+    return this.subscribersService.getLiveTraffic(username, Number(seconds) || 300);
+  }
+
   @Get('bandwidth-history/:username')
   async getBandwidthHistory(
     @Param('username') username: string,

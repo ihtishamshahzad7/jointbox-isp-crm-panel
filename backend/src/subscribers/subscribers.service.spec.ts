@@ -90,6 +90,12 @@ describe('SubscribersService.activateRenewal', () => {
             fxRate: 1,
           })),
       } as any,      // currency
+      // Live traffic ring buffer. These tests never touch the graph, so a stub
+      // that returns an empty window is enough.
+      {
+        sample: jest.fn().mockResolvedValue({ points: [], online: false }),
+        reset: jest.fn().mockResolvedValue(undefined),
+      } as any,      // liveTraffic
     );
     return { prisma, radiusSync, accounting, notifications, pricing, renewal };
   }
