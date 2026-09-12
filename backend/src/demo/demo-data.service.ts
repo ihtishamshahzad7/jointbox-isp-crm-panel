@@ -60,8 +60,29 @@ export class DemoDataService {
     await this.createBatches('subscriber', subscriberData);
     const subscribers = await this.prisma.subscriber.findMany({ where: { userId: ownerId }, select: { id: true, username: true, nasId: true, status: true }, orderBy: { id: 'asc' } });
 
-    await this.createBatches('radCheck', subscribers.map((s) => ({ username: s.username, attribute: 'Cleartext-Password', op: ':=', value: `DemoPass-${s.username.slice(5)}` })));
-    await this.createBatches('radReply', subscribers.map((s, i) => ({ username: s.username, attribute: 'Framed-IP-Address', op: ':=', value: `10.250.${i % 50}.${(i % 250) + 2}` })));
+    /**
+     * DELIBERATELY NOT SEEDED: radcheck / radreply.
+     *
+     * Those two tables are not the panel's own — FreeRADIUS reads them straight
+     * out of Postgres on every authentication, with no reference to the panel,
+     * its roles, or its tenant scoping. They are keyed by username alone; the
+     * stock schema has no owner column, so there is nowhere to record that a row
+     * is "only pretend" and nothing that could act on it if there were.
+     *
+     * Seeding them therefore did not create demo credentials. It created TEN
+     * THOUSAND WORKING SUBSCRIBER LOGINS on the production RADIUS server —
+     * `demo-00001` / `DemoPass-00001`, derivable from a single example, valid
+     * from any real NAS, handing out an address from radreply. The sandbox was
+     * writing directly into the live authentication path.
+     *
+     * Nothing on the demo dashboard needs them. Counts, lists, graphs and the
+     * "online now" tile all read `Subscriber` and `radacct`, which the panel
+     * owns and scopes. So the sandbox looks exactly as convincing without ever
+     * touching the tables that grant network access.
+     *
+     * radacct below IS still seeded: it is accounting history, it authenticates
+     * nobody, and it is what makes the demo look like a live network.
+     */
 
     const online = subscribers.filter((_, i) => i % 5 !== 0).slice(0, 2500), now = Date.now();
     await this.createBatches('radAcct', online.map((s, i) => {
