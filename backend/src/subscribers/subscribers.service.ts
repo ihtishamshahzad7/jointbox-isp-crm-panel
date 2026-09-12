@@ -4475,21 +4475,62 @@ if (!unpaid && data.username && data.password) {
   }
 
   /**
-   * Daily data usage for the last N days — powers the historical usage bar
-   * chart on the subscriber profile. Bytes are attributed to the day the
-   * session started (a good-enough MRTG-style view for support/upsell).
+   * Daily data usage for the last N days — powers the usage chart on the
+   * subscriber profile.
+   *
+   * ── Why this is not a GROUP BY on the start day ──────────────────────────
+   * It used to be, and the result was wrong in a way that looked like a broken
+   * chart. `radacct` holds ONE ROW PER SESSION with cumulative counters, and a
+   * PPPoE session routinely stays open for days or weeks. Grouping by
+   * `date_trunc('day', acctstarttime)` therefore dumps a fortnight of traffic
+   * onto the single day the session began, and reports every day since as
+   * having none — so a customer who has been online continuously showed four
+   * bars and then nothing, while the caption underneath told the operator "a
+   * day with no bar truly had no traffic", which was the opposite of the truth.
+   *
+   * Days with no row were also absent from the result entirely, so the x-axis
+   * skipped them and was not evenly spaced.
+   *
+   * This version generates every day in the window — zero is drawn as zero, and
+   * the axis is continuous — and apportions each session across the days it was
+   * actually open. RADIUS reports one total per session and never a per-day
+   * breakdown, so an even spread is the most honest reconstruction available;
+   * the chart says as much rather than implying precision that is not there.
    */
   async getDailyUsage(username: string, days = 14) {
     try {
       const pg = this.radiusSync.getPgClient();
       if (!pg) return { days: [] };
       const res = await pg.query(`
-        SELECT to_char(date_trunc('day', acctstarttime), 'YYYY-MM-DD') AS day,
-               COALESCE(SUM(acctinputoctets), 0)::float8  AS up,
-               COALESCE(SUM(acctoutputoctets), 0)::float8 AS down
-        FROM radacct
-        WHERE username = $1 AND acctstarttime >= NOW() - ($2 || ' days')::interval
-        GROUP BY 1 ORDER BY 1
+        WITH win AS (
+          SELECT generate_series(
+                   date_trunc('day', NOW()) - ($2::int - 1) * INTERVAL '1 day',
+                   date_trunc('day', NOW()),
+                   INTERVAL '1 day')::date AS day
+        ),
+        sess AS (
+          SELECT acctstarttime AS s,
+                 COALESCE(acctstoptime, NOW()) AS e,
+                 COALESCE(acctinputoctets, 0)::float8  AS up,
+                 COALESCE(acctoutputoctets, 0)::float8 AS down
+          FROM radacct
+          WHERE username = $1
+            AND acctstarttime IS NOT NULL
+            -- Any session OVERLAPPING the window, not merely starting inside it:
+            -- the long-running session is precisely the one that matters here.
+            AND COALESCE(acctstoptime, NOW())
+                >= date_trunc('day', NOW()) - ($2::int - 1) * INTERVAL '1 day'
+        )
+        SELECT to_char(w.day, 'YYYY-MM-DD') AS day,
+               COALESCE(SUM(s.up   / GREATEST(1, (date_trunc('day', s.e)::date
+                                                - date_trunc('day', s.s)::date) + 1)), 0)::float8 AS up,
+               COALESCE(SUM(s.down / GREATEST(1, (date_trunc('day', s.e)::date
+                                                - date_trunc('day', s.s)::date) + 1)), 0)::float8 AS down
+        FROM win w
+        LEFT JOIN sess s
+          ON w.day BETWEEN date_trunc('day', s.s)::date AND date_trunc('day', s.e)::date
+        GROUP BY w.day
+        ORDER BY w.day
       `, [username, days]);
       const gb = (b: number) => Math.round((b / 1024 ** 3) * 100) / 100;
       return {

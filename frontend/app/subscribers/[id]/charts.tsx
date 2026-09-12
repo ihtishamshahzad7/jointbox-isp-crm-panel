@@ -14,8 +14,12 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, fmtBits, BwPoint, DailyUsage, LiveTraffic, LiveRatePoint, num, u } from "./lib";
 
-const UP = "#4ade80";
-const DOWN = "#60a5fa";
+// Validated as a categorical pair against both the light and dark chart
+// surfaces (lightness band, chroma, CVD separation, normal-vision separation,
+// contrast). The previous #4ade80 sat at L 0.80 — pale green on a white card,
+// which is the hardest combination on this page to read.
+const UP = "#16a34a";
+const DOWN = "#2563eb";
 const MUTED = "var(--muted)";
 const BORDER = "var(--border)";
 const SURFACE = "var(--surface)";
@@ -159,10 +163,23 @@ export function BandwidthHistoryChart({ username, minutes = 60, autoPoll = true 
   );
 }
 
-/** Daily usage bars for the last N days. */
+/**
+ * DAILY USAGE — download and upload over the last N days.
+ *
+ * Was a stacked bar per day, which made the two series impossible to compare:
+ * stacking shows a TOTAL, and the upload segment floated on top of a varying
+ * download segment, so its bar length was the only readable thing about it and
+ * even that started from a different baseline every day. Two lines on one scale
+ * answer the questions an operator actually has — is usage trending up, is this
+ * customer upload-heavy, which day was the spike — at a glance.
+ *
+ * Both series are GB, so they share one axis. (Never two y-scales: the crossing
+ * point would be an artefact of the scaling, not something in the data.)
+ */
 export function UsageBars({ username, days = 14 }: { username: string; days?: number }) {
   const [daily, setDaily] = useState<DailyUsage["days"]>([]);
   const [loading, setLoading] = useState(true);
+  const [hover, setHover] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -175,45 +192,140 @@ export function UsageBars({ username, days = 14 }: { username: string; days?: nu
     return () => { alive = false; };
   }, [username, days]);
 
-  const dayMax = Math.max(...daily.map((d) => d.downloadGb + d.uploadGb), 0.001);
+  // ── geometry ────────────────────────────────────────────────────────────
+  const W = 720, H = 210;
+  const PAD = { l: 44, r: 14, t: 14, b: 26 };
+  const plotW = W - PAD.l - PAD.r;
+  const plotH = H - PAD.t - PAD.b;
+
+  const peak = Math.max(...daily.map((d) => Math.max(d.downloadGb, d.uploadGb)), 0);
+  /** A rounded ceiling, so every gridline lands on a number worth reading. */
+  const niceMax = (() => {
+    if (peak <= 0) return 1;
+    const mag = Math.pow(10, Math.floor(Math.log10(peak)));
+    for (const step of [1, 2, 2.5, 5, 10]) {
+      if (peak <= step * mag) return step * mag;
+    }
+    return 10 * mag;
+  })();
+
+  const x = (i: number) => PAD.l + (daily.length <= 1 ? plotW / 2 : (i / (daily.length - 1)) * plotW);
+  const y = (v: number) => PAD.t + plotH - (v / niceMax) * plotH;
+  const path = (key: "downloadGb" | "uploadGb") =>
+    daily.map((d, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(d[key]).toFixed(1)}`).join(" ");
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({ v: niceMax * f, y: y(niceMax * f) }));
+  const fmtGb = (v: number) => (v >= 100 ? Math.round(v).toString() : v >= 10 ? v.toFixed(0) : v.toFixed(v >= 1 ? 1 : 2));
+
+  /**
+   * Thin the date labels so they never collide. At 14 points on a narrow card
+   * every other label is the most that fits; the crosshair gives the exact day
+   * for any point, so nothing is lost by not printing all of them.
+   */
+  const labelEvery = daily.length > 10 ? 2 : 1;
+
+  const totalDown = daily.reduce((a, d) => a + d.downloadGb, 0);
+  const totalUp = daily.reduce((a, d) => a + d.uploadGb, 0);
+  const allZero = peak === 0 && daily.length > 0;
+
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!daily.length) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const px = ((e.clientX - box.left) / box.width) * W;
+    const i = Math.round(((px - PAD.l) / plotW) * (daily.length - 1));
+    setHover(Math.max(0, Math.min(daily.length - 1, i)));
+  };
 
   return (
     <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>Daily usage · last {days} days</div>
-        <div style={{ display: "flex", gap: 12, fontSize: 10.5, color: MUTED }}>
-          <span><i style={{ display: "inline-block", width: 9, height: 9, background: DOWN, borderRadius: 2, marginRight: 4 }} />Download (GB)</span>
-          <span><i style={{ display: "inline-block", width: 9, height: 9, background: UP, borderRadius: 2, marginRight: 4 }} />Upload (GB)</span>
+        {/* Legend: identity is never colour alone — each swatch is labelled. */}
+        <div style={{ display: "flex", gap: 14, fontSize: 10.5, color: MUTED }}>
+          <span><i style={{ display: "inline-block", width: 10, height: 2.5, background: DOWN, borderRadius: 2, marginRight: 5, verticalAlign: "middle" }} />Download (GB)</span>
+          <span><i style={{ display: "inline-block", width: 10, height: 2.5, background: UP, borderRadius: 2, marginRight: 5, verticalAlign: "middle" }} />Upload (GB)</span>
         </div>
       </div>
+
+      {daily.length > 0 && !loading && (
+        <div style={{ fontSize: 11, color: MUTED, marginBottom: 6 }}>
+          {fmtGb(totalDown)} GB down · {fmtGb(totalUp)} GB up over {daily.length} days
+        </div>
+      )}
+
       {loading ? (
-        <div style={{ fontSize: 11.5, color: MUTED, padding: "18px 0", textAlign: "center" }}>Loading usage…</div>
+        <div style={{ fontSize: 11.5, color: MUTED, padding: "40px 0", textAlign: "center" }}>Loading usage…</div>
       ) : daily.length === 0 ? (
-        <div style={{ fontSize: 11.5, color: MUTED, padding: "18px 0", textAlign: "center" }}>
+        <div style={{ fontSize: 11.5, color: MUTED, padding: "40px 0", textAlign: "center" }}>
           No usage recorded yet — nothing is fabricated until the first session.
         </div>
       ) : (
         <>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 92 }}>
-            {daily.map((d) => {
-              const tot = d.downloadGb + d.uploadGb;
-              return (
-                <div key={d.day} title={`${d.day}: ↓${d.downloadGb} GB / ↑${d.uploadGb} GB`}
-                  style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                  <span style={{ fontSize: 8.5, color: "var(--text)" }}>
-                    {tot >= 0.01 ? (tot >= 10 ? Math.round(tot) : tot.toFixed(1)) : ""}
-                  </span>
-                  <div style={{ width: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", height: 58 }}>
-                    <div style={{ height: `${(d.uploadGb / dayMax) * 56}px`, background: UP, borderRadius: "2px 2px 0 0" }} />
-                    <div style={{ height: `${(d.downloadGb / dayMax) * 56}px`, background: DOWN }} />
-                  </div>
-                  <span style={{ fontSize: 8.5, color: MUTED }}>{d.day.slice(5)}</span>
-                </div>
-              );
-            })}
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }}
+            onMouseMove={onMove}
+            onMouseLeave={() => setHover(null)}
+            role="img"
+            aria-label={`Daily download and upload in gigabytes for the last ${days} days`}
+          >
+            {/* Recessive gridlines + a value on every one, so the scale reads without counting. */}
+            {ticks.map((t, i) => (
+              <g key={i}>
+                <line x1={PAD.l} x2={W - PAD.r} y1={t.y} y2={t.y} stroke={BORDER} strokeWidth={1} />
+                <text x={PAD.l - 8} y={t.y + 3.5} textAnchor="end" fontSize={9.5} fill={MUTED}>{fmtGb(t.v)}</text>
+              </g>
+            ))}
+
+            {/* Date axis, thinned to avoid collisions. */}
+            {daily.map((d, i) =>
+              i % labelEvery === 0 || i === daily.length - 1 ? (
+                <text key={d.day} x={x(i)} y={H - 8} textAnchor="middle" fontSize={9} fill={MUTED}>
+                  {d.day.slice(5)}
+                </text>
+              ) : null,
+            )}
+
+            {/* A faint fill under download gives the eye the magnitude; upload stays a clean line on top. */}
+            <path d={`${path("downloadGb")} L${x(daily.length - 1)},${y(0)} L${x(0)},${y(0)} Z`} fill={DOWN} opacity={0.1} />
+            <path d={path("downloadGb")} fill="none" stroke={DOWN} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path d={path("uploadGb")} fill="none" stroke={UP} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+            {/* Markers only when the series is short enough that they aid reading. */}
+            {daily.length <= 21 && daily.map((d, i) => (
+              <g key={`m${d.day}`}>
+                <circle cx={x(i)} cy={y(d.downloadGb)} r={hover === i ? 4.5 : 2.6} fill={DOWN} stroke={SURFACE} strokeWidth={2} />
+                <circle cx={x(i)} cy={y(d.uploadGb)} r={hover === i ? 4.5 : 2.6} fill={UP} stroke={SURFACE} strokeWidth={2} />
+              </g>
+            ))}
+
+            {/* Crosshair. Hit target is the whole plot, not the 2.6px dot. */}
+            {hover !== null && (
+              <line x1={x(hover)} x2={x(hover)} y1={PAD.t} y2={PAD.t + plotH} stroke={MUTED} strokeWidth={1} strokeDasharray="3 3" opacity={0.7} />
+            )}
+          </svg>
+
+          {/* Tooltip in HTML rather than SVG text: it wraps, and it inherits the app's type. */}
+          <div style={{ minHeight: 20, marginTop: 4, fontSize: 11, color: "var(--text)" }}>
+            {hover !== null && daily[hover] ? (
+              <span>
+                <strong>{daily[hover].day}</strong>
+                <span style={{ color: MUTED }}> · </span>
+                <i style={{ display: "inline-block", width: 8, height: 8, background: DOWN, borderRadius: 2, marginRight: 4 }} />
+                {fmtGb(daily[hover].downloadGb)} GB down
+                <span style={{ color: MUTED }}> · </span>
+                <i style={{ display: "inline-block", width: 8, height: 8, background: UP, borderRadius: 2, marginRight: 4 }} />
+                {fmtGb(daily[hover].uploadGb)} GB up
+              </span>
+            ) : (
+              <span style={{ color: MUTED }}>Hover any day for its exact totals.</span>
+            )}
           </div>
-          <div style={{ marginTop: 8, fontSize: 10.5, color: MUTED, lineHeight: 1.6 }}>
-            Bytes are attributed to the day each session started — a good-enough MRTG-style view for support and upsell. A day with no bar truly had no traffic.
+
+          <div style={{ marginTop: 6, fontSize: 10.5, color: MUTED, lineHeight: 1.6 }}>
+            {allZero
+              ? "No traffic recorded in this window — the line sits on zero rather than the chart being blank, so you can tell \u201cno usage\u201d from \u201cno data\u201d."
+              : "A session\u2019s bytes are spread evenly across the days it was open. RADIUS reports one total per session, not per day, so a multi\u2011day session can only be apportioned \u2014 treat a single day as an estimate and the shape of the line as reliable."}
           </div>
         </>
       )}

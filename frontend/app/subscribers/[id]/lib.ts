@@ -273,6 +273,32 @@ export interface RouterLogResponse {
 }
 
 // ─── Bandwidth history ───────────────────────────────────────────
+/**
+ * Live per-subscriber traffic — the 5-minute graph.
+ *
+ * `source` and `resolutionSeconds` matter to the UI: a MikroTik with API
+ * credentials refreshes its counters on every poll, while plain RADIUS
+ * accounting only refreshes on the interim-update interval (300s by default).
+ * The chart says which it is rather than implying a precision it lacks.
+ */
+export interface LiveRatePoint {
+  at: number;
+  uploadBps: number;
+  downloadBps: number;
+  spanSeconds: number;
+}
+
+export interface LiveTraffic {
+  username: string;
+  online: boolean;
+  source: "mikrotik" | "radius" | "none";
+  resolutionSeconds: number | null;
+  points: LiveRatePoint[];
+  latest: { uploadBps: number; downloadBps: number } | null;
+  totals: { uploadBytes: number; downloadBytes: number } | null;
+  notice: string | null;
+}
+
 export interface BwPoint {
   timestamp: string;
   uploadBps: number;
