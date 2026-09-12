@@ -17,7 +17,7 @@ can't measure Zal Pro directly, the row is marked "typical (Laravel/MySQL)" as a
 | Frontend | Next.js 16 (React, Turbopack) | Vue.js + Blade |
 | AAA | FreeRADIUS (shared Postgres) | FreeRADIUS |
 | Cache/Queue | Redis + BullMQ (optional, auto-fallback) | Laravel queue/cron |
-| Licensing | None (you own the code) | Paid per-install license |
+| Licensing | Per-install licence, self-hosted; source included | Paid per-install license |
 
 ---
 

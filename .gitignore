@@ -19,6 +19,10 @@ backend-fixed/
 # Licence server — MUST NOT be committed to this PUBLIC repo.
 # It belongs in its own PRIVATE repository (see docs/LICENSING-PLANE.md).
 _LICENCE-SERVER-MOVE-ME-OUT/
-jbxlic.tgz
+# every delivery archive, not just the two named ones
+*.tgz
+*.tar.gz
 *.sk
 jbx-config.php
+_LICENCE-AGENT-MOVE-ME-OUT/
+jbx-agent.tgz

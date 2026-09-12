@@ -42,7 +42,7 @@ SERVER_IP="$(hostname -I | awk '{print $1}')"
 cd /tmp 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
-step "1/9  System packages"
+step "1/10  System packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl git build-essential ca-certificates gnupg ufw redis-server >/dev/null
@@ -50,7 +50,7 @@ systemctl enable --now redis-server >/dev/null 2>&1 || true
 ok "Base packages (incl. Redis for cache + job queue)"
 
 # -----------------------------------------------------------------------------
-step "2/9  Node.js 20 LTS"
+step "2/10  Node.js 20 LTS"
 if ! command -v node >/dev/null || [ "$(node -v | cut -c2-3)" -lt 20 ] 2>/dev/null; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
   apt-get install -y -qq nodejs >/dev/null
@@ -59,7 +59,7 @@ ok "Node $(node -v), npm $(npm -v)"
 npm i -g pm2 >/dev/null 2>&1 && ok "PM2 installed"
 
 # -----------------------------------------------------------------------------
-step "3/9  PostgreSQL"
+step "3/10  PostgreSQL"
 apt-get install -y -qq postgresql postgresql-contrib >/dev/null
 systemctl enable --now postgresql >/dev/null 2>&1
 
@@ -152,7 +152,7 @@ systemctl restart postgresql
 ok "PostgreSQL ready, LAN-reachable, tuned (max_connections=300, shared_buffers=${SHARED_MB}MB)"
 
 # -----------------------------------------------------------------------------
-step "4/9  FreeRADIUS"
+step "4/10  FreeRADIUS"
 apt-get install -y -qq freeradius freeradius-postgresql freeradius-utils >/dev/null
 RAD=/etc/freeradius/3.0
 
@@ -258,7 +258,7 @@ systemctl enable freeradius >/dev/null 2>&1
 ok "FreeRADIUS configured (SQL clients, auth logging, 60s interim updates)"
 
 # -----------------------------------------------------------------------------
-step "5/9  Application source"
+step "5/10  Application source"
 if [ "$APP_DIR" = "$SCRIPT_DIR" ]; then
   ok "Using the checkout you ran this from: $APP_DIR"
 elif [ -d "$APP_DIR/.git" ]; then
@@ -269,7 +269,7 @@ fi
 [ -d "$APP_DIR/backend" ] || { err "backend/ not found — check REPO_URL"; exit 1; }
 
 # -----------------------------------------------------------------------------
-step "6/9  Backend"
+step "6/10  Backend"
 cd "$APP_DIR/backend"
 cat > .env <<EOF
 # connection_limit is PER PROCESS. With pm2 cluster + a worker you may have many
@@ -396,7 +396,7 @@ chmod -R 775 "$APP_DIR/uploads" "$APP_DIR/backend/uploads" 2>/dev/null || true
 ok "Uploads directory ready"
 
 # -----------------------------------------------------------------------------
-step "7/9  Frontend"
+step "7/10  Frontend"
 if [ -d "$APP_DIR/frontend" ]; then
   cd "$APP_DIR/frontend"
   echo "NEXT_PUBLIC_BACKEND_URL=http://$SERVER_IP:$API_PORT" > .env.local
@@ -470,7 +470,7 @@ if [ "$WEB_PORT" != "80" ] && [ "${FRONTEND_PORT:-}" != "80" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-step "8/9  Firewall"
+step "8/10  Firewall"
 # `ufw status` on a box without ufw printed a raw
 # "install.sh: line NNN: ufw: command not found" into the middle of the
 # install. Not fatal, but it reads like a crash; check for the binary first.
@@ -504,12 +504,29 @@ if [ -f "$SCRIPT_DIR/backend/scripts/patch-postauth.sh" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-step "9/9  Start services and verify"
+step "9/10  Start services and verify"
 systemctl restart freeradius && sleep 2
 systemctl is-active --quiet freeradius && ok "FreeRADIUS running" || err "FreeRADIUS failed — run: freeradius -XC"
 ss -ulnp 2>/dev/null | grep -q ':1812' && ok "Listening on 1812 (auth)" || warn "Not listening on 1812"
 ss -ulnp 2>/dev/null | grep -q ':1813' && ok "Listening on 1813 (accounting)" || warn "Not listening on 1813"
 curl -fsS "http://localhost:$API_PORT/health" >/dev/null 2>&1 && ok "API responding" || warn "API not responding yet — pm2 logs jointbox-backend"
+
+# -----------------------------------------------------------------------------
+step "10/10  Licence activation"
+# Sourced, not executed, so it can reuse ok()/warn()/step() and $APP_DIR.
+#
+# This step can never fail the install. Every path inside it returns 0: a
+# server that cannot reach the licence server, or whose operator has no key
+# yet, still finishes with a working panel and a 24-hour trial. Leaving an ISP
+# with a half-built stack because of a licensing hiccup would be indefensible.
+if [[ -f "$APP_DIR/scripts/install-licence-agent.sh" ]]; then
+  # shellcheck source=scripts/install-licence-agent.sh
+  source "$APP_DIR/scripts/install-licence-agent.sh"
+  jbx_install_agent
+  jbx_activate
+else
+  warn "scripts/install-licence-agent.sh not found — skipping licence setup"
+fi
 
 cat <<EOF
 

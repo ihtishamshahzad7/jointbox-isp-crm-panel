@@ -4,6 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TraceMiddleware } from './common/trace.middleware';
 import { CommonModule } from './common/common.module';
+import { LicenceModule } from './licence/licence.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { BillingModule } from './billing/billing.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -54,6 +55,9 @@ import { GroupsModule } from './groups/groups.module';
   imports: [
     ScheduleModule.forRoot(),
     CommonModule,
+    // Registers the global LicenceGuard. Placed straight after CommonModule so
+    // its APP_GUARD is in place before any feature module's routes.
+    LicenceModule,
     SecurityModule,
     OrganizationModule,
     NetworkModule,
