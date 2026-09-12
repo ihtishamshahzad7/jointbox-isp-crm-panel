@@ -77,6 +77,77 @@ describe('scope: demo isolation', () => {
     expect(visible).toEqual(['real', 'ownerless']);
   });
 
+  /**
+   * The 143 synthetic franchises, dealers and sub-dealers filled the ISP's
+   * Users & Staff list (144 accounts, four of them real), its wallet list, and
+   * its reseller counts. `isDemo` is non-nullable with a default, so unlike the
+   * owner relations there is no null case to preserve here.
+   */
+  it('hides the demo reseller tree from ISP account lists and wallets', async () => {
+    expect(await scope.userWhere(admin)).toEqual({ isDemo: false });
+  });
+
+  it.each([
+    ['ownedWhere', 'areas'],
+    ['packageWhere', 'packages'],
+    ['poolWhere', 'IP pools'],
+  ])('%s excludes demo-owned %s from ISP views', async (method) => {
+    const where = await (scope as any)[method](admin);
+    expect(where.OR).toEqual([
+      { ownerId: null },
+      { owner: { is: { isDemo: false } } },
+    ]);
+  });
+
+  /**
+   * analytics builds its scope as interpolated SQL, so it cannot use the
+   * Prisma objects above. The fragments live here anyway — four services each
+   * writing their own version of this rule is what caused the leak.
+   */
+  describe('raw-SQL fragments, for services that hand-write queries', () => {
+    it('excludes demo subscribers while keeping ownerless ones', () => {
+      const sql = scope.demoExclusionSql('s');
+      expect(sql).toMatch(/s\."userId" IS NULL/);   // unbilled service stays visible
+      expect(sql).toMatch(/_du\."isDemo" = true/);
+      expect(sql.trim().startsWith('AND')).toBe(true); // appends to an existing WHERE
+    });
+
+    it('excludes demo users from a user-keyed query', () => {
+      expect(scope.demoUserExclusionSql('u')).toMatch(/u\."isDemo" = false/);
+    });
+
+    it('both fragments empty out when the override is set', () => {
+      process.env.DEMO_VISIBLE_TO_ADMIN = '1';
+      expect(scope.demoExclusionSql('s')).toBe('');
+      expect(scope.demoUserExclusionSql('u')).toBe('');
+    });
+
+    /**
+     * The alias is supplied by calling code, never by a request — but an empty
+     * fragment spliced into `WHERE 1=1 ${own}` must still leave valid SQL, and
+     * a non-empty one must not begin a new clause of its own.
+     */
+    it('never emits a fragment that could break the surrounding query', () => {
+      delete process.env.DEMO_VISIBLE_TO_ADMIN;
+      for (const alias of ['s', 'sub', 'x1']) {
+        const sql = scope.demoExclusionSql(alias);
+        expect(sql).not.toMatch(/;/);
+        // It must ATTACH to the caller's WHERE, never open a clause of its own.
+        // The subquery has its own WHERE, which is fine — what matters is that
+        // the fragment starts with AND and that every WHERE sits inside the
+        // parenthesised EXISTS.
+        expect(sql.trim().startsWith('AND ')).toBe(true);
+        expect(sql.trim()).not.toMatch(/^WHERE/);
+        const beforeSubquery = sql.slice(0, sql.indexOf('SELECT 1'));
+        expect(beforeSubquery).not.toMatch(/\bWHERE\b/);
+        // Balanced parentheses, or the query fails to parse at runtime.
+        const open = (sql.match(/\(/g) || []).length;
+        const close = (sql.match(/\)/g) || []).length;
+        expect(open).toBe(close);
+      }
+    });
+  });
+
   // ── 2. the demo account itself ───────────────────────────────────────────
   /**
    * The whole point of the sandbox is that a visitor sees a busy, realistic

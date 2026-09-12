@@ -22,11 +22,21 @@ export class SegmentationService {
 
   constructor(private prisma: PrismaService, private scope: ScopeService) {}
 
-  /** Restrict everything to the caller's subtree. Only the ISP sees all. */
+  /**
+   * Restrict everything to the caller's subtree.
+   *
+   * This used to re-implement the rule: `isAdmin -> {}`, otherwise a subtree
+   * filter. That duplication is precisely why demo data kept surfacing on ISP
+   * screens after it had supposedly been fixed — the same rule existed in four
+   * services, and correcting ScopeService left the other three untouched, so
+   * Insights went on reporting 10,016 subscribers while the dashboard beside it
+   * correctly showed 16.
+   *
+   * Delegating means there is one definition to get right, and any future
+   * refinement reaches every screen at once.
+   */
   private async scopeWhere(actor?: Actor) {
-    if (!actor || this.scope.isAdmin(actor.role)) return {};
-    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-    return { userId: { in: ids } };
+    return this.scope.subscriberWhere(actor);
   }
 
   /**

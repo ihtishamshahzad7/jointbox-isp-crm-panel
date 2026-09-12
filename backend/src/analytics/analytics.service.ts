@@ -46,7 +46,19 @@ export class AnalyticsService {
    * $queryRaw tagged template — values are parameterized, never concatenated.
    */
   private ownerFilter(ids: number[] | null, column: string = '"userId"'): Prisma.Sql {
-    if (!ids || ids.length === 0) return Prisma.sql``;
+    /**
+     * `ids === null` means ISP-level: no subtree restriction. It used to mean
+     * no restriction AT ALL, which is how the sandbox's 10,000 invented
+     * subscribers ended up inside the owner's revenue, churn and growth charts
+     * — Rs 41m of monthly revenue that nobody had ever billed.
+     *
+     * The demo clause comes from ScopeService so this file cannot drift away
+     * from the Prisma-side rule the rest of the app uses.
+     */
+    if (!ids || ids.length === 0) {
+      const demo = this.scope.demoExclusionSql('s');
+      return demo ? Prisma.raw(demo) : Prisma.sql``;
+    }
     const safe = ids.map(Number).filter((n) => Number.isInteger(n) && n > 0);
     if (safe.length === 0) return Prisma.sql`AND s.${Prisma.raw(column)} IN (0)`;
     return Prisma.sql`AND s.${Prisma.raw(column)} IN (${Prisma.join(safe)})`;
@@ -206,9 +218,14 @@ export class AnalyticsService {
 
     return this.cache.wrap(key, 300, async () => {
       const since = new Date(Date.now() - days * 86400_000);
+      // The leaderboard ranks USERS, so it needs the user-side exclusion: an
+      // ISP's reseller leaderboard topped by "Demo Franchise 07" is worse than
+      // useless, because it displaces the real account that should be there.
       const filter: Prisma.Sql = ids && ids.length > 0
         ? Prisma.sql`AND u.id IN (${Prisma.join(ids)})`
-        : Prisma.sql``;
+        : (this.scope.demoUserExclusionSql('u')
+            ? Prisma.raw(this.scope.demoUserExclusionSql('u'))
+            : Prisma.sql``);
 
       const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
         SELECT u.id, u.name, u.role, u.balance,
@@ -271,7 +288,7 @@ export class AnalyticsService {
       const since = new Date(Date.now() - days * 86400_000);
 
       const users = await this.prisma.user.findMany({
-        where: ids ? { id: { in: ids } } : {},
+        where: ids ? { id: { in: ids } } : await this.scope.userWhere(actor),
         select: {
           id: true, name: true, email: true, role: true, parentId: true,
           balance: true, isActive: true, commissionPercent: true, createdAt: true,

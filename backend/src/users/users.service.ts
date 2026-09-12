@@ -28,8 +28,9 @@ export class UsersService {
    */
   async myBusiness(actor?: Actor) {
     const myId = this.scope.actorId(actor);
-    const ids = this.scope.isAdmin(actor?.role) ? null : await this.scope.descendantIds(myId);
-    const subWhere: any = ids ? { userId: { in: ids } } : {};
+    // Was `{}` for an ISP account, which put the sandbox's 10,000 invented
+    // customers into the owner's own business snapshot.
+    const subWhere: any = await this.scope.subscriberWhere(actor);
 
     const me = await this.prisma.user.findUnique({
       where: { id: myId },

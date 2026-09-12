@@ -43,7 +43,14 @@ describe('ReportsService.getRevenueReport', () => {
         ),
       },
     };
-    const scope: any = { isAdmin: jest.fn().mockReturnValue(true) };
+    // An ISP-level actor: no subtree restriction, but demo-owned rows are still
+    // excluded — which is what subscriberWhere() now returns for an admin.
+    const scope: any = {
+      isAdmin: jest.fn().mockReturnValue(true),
+      subscriberWhere: jest.fn().mockResolvedValue({
+        OR: [{ userId: null }, { user: { is: { isDemo: false } } }],
+      }),
+    };
     return { svc: new ReportsService(prisma, scope), prisma };
   }
 
@@ -149,6 +156,7 @@ describe('ReportsService.getRevenueReport', () => {
       isAdmin: jest.fn().mockReturnValue(false),
       rootId: jest.fn().mockResolvedValue(5),
       descendantIds: jest.fn().mockResolvedValue([5, 6]),
+      subscriberWhere: jest.fn().mockResolvedValue({ userId: { in: [5, 6] } }),
     };
     const svc = new ReportsService(prisma, scope);
     await svc.getRevenueReport(undefined, undefined, { id: 5, role: 'RESELLER' } as any);

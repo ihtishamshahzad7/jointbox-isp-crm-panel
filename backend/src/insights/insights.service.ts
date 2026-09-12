@@ -33,13 +33,15 @@ export class InsightsService {
     const isNum = Number.isFinite(asNum);
 
     // Restrict every branch of the search to the caller's own subtree.
-    const isAdmin = !actor || this.scope.isAdmin(actor.role);
-    const ids = isAdmin ? null : await this.scope.descendantIds(await this.scope.rootId(actor!));
-    const subScope: any = ids ? { userId: { in: ids } } : {};
-    const viaSub: any = ids ? { subscriber: { userId: { in: ids } } } : {};
+    // Delegated rather than re-derived: the admin branch also has to exclude
+    // the demo sandbox, and a rule written out separately here is a rule that
+    // stops matching the rest of the app the first time either one changes.
+    const subScope: any = await this.scope.subscriberWhere(actor);
+    const viaSub: any = Object.keys(subScope).length ? { subscriber: subScope } : {};
     // Staff results are limited to accounts inside the tree — a dealer has no
-    // business discovering the ISP's other users by searching their name.
-    const userScope: any = ids ? { id: { in: ids } } : {};
+    // business discovering the ISP's other users by searching their name, and
+    // nobody has any business finding 143 invented demo franchises.
+    const userScope: any = await this.scope.userWhere(actor);
 
     const [subscribers, invoices, payments, users, tickets] = await Promise.all([
       this.prisma.subscriber.findMany({

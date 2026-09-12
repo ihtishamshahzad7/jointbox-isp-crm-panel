@@ -12,22 +12,19 @@ export class ReportsService {
    * number for someone else's business.
    */
   private async scoped(actor?: Actor): Promise<any> {
-    if (!actor || this.scope.isAdmin(actor.role)) return {};
-    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-    return { userId: { in: ids } };
+    // Delegated: the admin branch must also drop the demo sandbox, and a rule
+    // restated here is one that silently stops matching the rest of the app.
+    return this.scope.subscriberWhere(actor);
   }
 
   private async viaSubscriber(actor?: Actor): Promise<any> {
-    if (!actor || this.scope.isAdmin(actor.role)) return {};
-    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-    return { subscriber: { userId: { in: ids } } };
+    const sub = await this.scope.subscriberWhere(actor);
+    return Object.keys(sub).length ? { subscriber: sub } : {};
   }
 
   async getDashboardStats(actor?: Actor) {
-    const isAdmin = !actor || this.scope.isAdmin(actor.role);
-    const ids = isAdmin ? null : await this.scope.descendantIds(await this.scope.rootId(actor!));
-    const sub: any = ids ? { userId: { in: ids } } : {};
-    const bySub: any = ids ? { subscriber: { userId: { in: ids } } } : {};
+    const sub: any = await this.scoped(actor);
+    const bySub: any = await this.viaSubscriber(actor);
     const owned: any = ids ? { ownerId: { in: ids } } : {};
     const userWhere: any = ids ? { id: { in: ids } } : {};
     const voucherWhere: any = ids ? { createdBy: { in: ids } } : {};

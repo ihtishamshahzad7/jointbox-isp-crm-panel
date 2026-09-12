@@ -39,7 +39,12 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
    * hiding a sibling franchise's routers. The ISP (admin) sees everything.
    */
   private async networkScopeWhere(actor?: Actor): Promise<any> {
-    if (!actor || this.scope.isAdmin(actor.role)) return {};
+    if (!actor) return {};
+    if (this.scope.isAdmin(actor.role)) {
+      // Demo sessions are synthetic; they do not belong in an ISP's network log.
+      const sub = await this.scope.subscriberWhere(actor);
+      return Object.keys(sub).length ? { subscriber: sub } : {};
+    }
     const [subWhere, nasList] = await Promise.all([
       this.scope.subscriberWhere(actor),
       this.prisma.nas.findMany({ where: await this.scope.nasWhere(actor), select: { id: true } }),

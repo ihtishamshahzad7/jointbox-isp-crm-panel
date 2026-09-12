@@ -149,7 +149,8 @@ export class ScopeService {
    * sees nothing.
    */
   async poolWhere(actor: Actor): Promise<any> {
-    if (!actor || this.isAdmin(actor.role)) return {};
+    if (!actor) return {};
+    if (this.isAdmin(actor.role)) return this.demoExclusion('owner');
     const selfId = await this.rootId(actor);
     const [mine, chain] = await Promise.all([
       this.descendantIds(selfId),
@@ -173,7 +174,8 @@ export class ScopeService {
    * account may see. Pools now use poolWhere() instead — they are shareable.
    */
   async ownedWhere(actor: Actor): Promise<any> {
-    if (!actor || this.isAdmin(actor.role)) return {};
+    if (!actor) return {};
+    if (this.isAdmin(actor.role)) return this.demoExclusion('owner');
     const selfId = await this.rootId(actor);
     // Descendants included so a franchise still sees what its own dealers
     // created — it is responsible for their network, and hiding it would
@@ -190,7 +192,8 @@ export class ScopeService {
    *     which carries the price they buy at. That is what creates the margin.
    */
   async packageWhere(actor: Actor): Promise<any> {
-    if (!actor || this.isAdmin(actor.role)) return {};
+    if (!actor) return {};
+    if (this.isAdmin(actor.role)) return this.demoExclusion('owner');
     const selfId = await this.rootId(actor);
     return {
       OR: [
@@ -262,8 +265,12 @@ export class ScopeService {
    * DEMO_VISIBLE_TO_ADMIN=1 restores the old behaviour, so an operator who
    * needs to inspect the sandbox is not left needing a code change.
    */
+  get hidesDemo(): boolean {
+    return process.env.DEMO_VISIBLE_TO_ADMIN !== '1';
+  }
+
   private demoExclusion(relation: 'user' | 'owner'): any {
-    if (process.env.DEMO_VISIBLE_TO_ADMIN === '1') return {};
+    if (!this.hidesDemo) return {};
     const fk = relation === 'user' ? 'userId' : 'ownerId';
     return {
       OR: [
@@ -271,6 +278,35 @@ export class ScopeService {
         { [relation]: { is: { isDemo: false } } },
       ],
     };
+  }
+
+  /** The demo users themselves — hidden from ISP-level account lists. */
+  private demoUserExclusion(): any {
+    // `isDemo` is non-nullable with a default, so unlike the owner relations
+    // above there is no null case to preserve here.
+    return this.hidesDemo ? { isDemo: false } : {};
+  }
+
+  /**
+   * The same rule as a raw-SQL fragment, for services that hand-write queries.
+   *
+   * analytics builds its scope as interpolated SQL rather than a Prisma filter,
+   * so it cannot use the objects above. Defining the fragment HERE anyway is the
+   * point: the reason demo rows kept reappearing on ISP screens is that four
+   * different services each wrote their own "an admin sees everything" rule, and
+   * fixing one never fixed the rest. One definition, four callers.
+   *
+   * No user input is interpolated — the alias is supplied by the calling code.
+   */
+  demoExclusionSql(subscriberAlias = 's'): string {
+    if (!this.hidesDemo) return '';
+    return ` AND (${subscriberAlias}."userId" IS NULL OR NOT EXISTS (
+      SELECT 1 FROM "User" _du WHERE _du.id = ${subscriberAlias}."userId" AND _du."isDemo" = true))`;
+  }
+
+  /** As above, for a query whose rows are Users rather than Subscribers. */
+  demoUserExclusionSql(userAlias = 'u'): string {
+    return this.hidesDemo ? ` AND ${userAlias}."isDemo" = false` : '';
   }
 
   /** Prisma where-fragment limiting SUBSCRIBERS to the actor's subtree. */
@@ -296,7 +332,10 @@ export class ScopeService {
 
   /** Prisma where-fragment limiting USERS (resellers) to the actor's descendants. */
   async userWhere(actor: Actor): Promise<any> {
-    if (this.isAdmin(actor?.role)) return {};
+    // The demo tree is 143 synthetic franchises, dealers and sub-dealers. They
+    // filled the ISP's Users & Staff list, its wallet list and its user counts,
+    // burying four real accounts among them.
+    if (this.isAdmin(actor?.role)) return this.demoUserExclusion();
     const ids = await this.descendantIds(await this.rootId(actor));
     return { id: { in: ids } };
   }
