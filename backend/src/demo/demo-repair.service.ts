@@ -64,6 +64,22 @@ export class DemoRepairService implements OnModuleInit {
     this.log.log(`Shared demo visibility repaired for #${root.id}: ${subscriberCount} subscribers, ${nasCount} NAS, ${poolCount} pools, ${packageCount} packages, ${areaCount} areas.`);
 
     await this.revokeDemoRadiusCredentials();
+
+    /**
+     * Refresh immediately, not only on the next cron tick.
+     *
+     * The cron keeps the sandbox alive from then on, but it fires on the
+     * wall clock: a panel restarted or re-seeded at 16:57 would show a busy
+     * network for fifteen minutes and an empty one until the tick after that.
+     * Whoever restarted it is looking at the screen right now, so this is
+     * exactly the window that must not be dark.
+     */
+    const refreshed = await this.refreshDemoSessions();
+    this.log.log(
+      refreshed
+        ? `Demo live sessions refreshed at boot: ${refreshed} session(s) now reporting as online.`
+        : `Demo live sessions: nothing to refresh (no open radacct rows owned by a demo account).`,
+    );
   }
 
   /**
@@ -137,7 +153,10 @@ export class DemoRepairService implements OnModuleInit {
         AND u."isDemo" = true
         AND a.acctstoptime IS NULL
         AND a.acctstarttime IS NOT NULL
-    `).catch((e) => { this.log.debug(`Demo session refresh skipped: ${e?.message || e}`); return 0; });
+    `).catch((e) => { this.log.warn(`Demo session refresh failed: ${e?.message || e}`); return 0; });
+    // Debug on the cron path so twelve ticks an hour do not fill the log; the
+    // boot path above logs at info, which is where an operator looks first.
+    this.log.debug(`Demo session refresh touched ${Number(updated)} row(s).`);
     return Number(updated);
   }
 }

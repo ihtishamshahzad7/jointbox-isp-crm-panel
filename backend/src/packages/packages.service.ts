@@ -432,7 +432,10 @@ export class PackagesService {
     });
     const packages = actor && !this.scope.isAdmin(actor.role)
       ? await this.scopeToActor(all, actor)
-      : all;
+      // An ISP sees every real plan — but not the sandbox's twelve invented
+      // ones, which arrived here with 7,016 customers and Rs 59m of revenue
+      // attached and no way to tell them apart on screen.
+      : await this.scope.withoutDemoOwned(all);
 
     const legacy = (dl: number, ul: number, p: any) => {
       if (p.burstDownload && p.burstUpload) {
@@ -739,6 +742,8 @@ export class PackagesService {
     let visible = packages;
     if (actor && !this.scope.isAdmin(actor.role)) {
       visible = await this.scopeToActor(packages, actor);
+    } else {
+      visible = await this.scope.withoutDemoOwned(packages);
     }
 
     return visible
@@ -860,11 +865,22 @@ export class PackagesService {
         : 0;
       return { total: visible.length, active, inactive: visible.length - active, totalSubscribers };
     }
-    const total    = await this.prisma.package.count();
-    const active   = await this.prisma.package.count({ where: { isActive: true } });
-    const inactive = await this.prisma.package.count({ where: { isActive: false } });
+    // The ISP branch. These used to be bare counts over the whole table, which
+    // is what put the sandbox's plans and its 7,016 synthetic customers into
+    // the owner's package cards. Both filters come from ScopeService so this
+    // file cannot drift away from the rule the rest of the app uses.
+    const pkgWhere = await this.scope.packageWhere(actor);
+    const subWhere = await this.scope.subscriberWhere(actor);
+    const and = (extra: any) =>
+      Object.keys(pkgWhere).length ? { AND: [pkgWhere, extra] } : extra;
+
+    const total    = await this.prisma.package.count({ where: pkgWhere });
+    const active   = await this.prisma.package.count({ where: and({ isActive: true }) });
+    const inactive = await this.prisma.package.count({ where: and({ isActive: false }) });
     const totalSubscribers = await this.prisma.subscriber.count({
-      where: { packageId: { not: null } },
+      where: Object.keys(subWhere).length
+        ? { AND: [{ packageId: { not: null } }, subWhere] }
+        : { packageId: { not: null } },
     });
     return { total, active, inactive, totalSubscribers };
   }

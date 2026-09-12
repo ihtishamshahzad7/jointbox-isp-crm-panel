@@ -58,6 +58,30 @@ describe('demo leak ratchet', () => {
    */
   const SHORT_CIRCUIT = /isAdmin\([^)]*\)\s*\)?\s*(?:return\s*\{\}|\?\s*(?:null|\{\}))/;
 
+  /**
+   * The INVERTED form, which the rule above does not see.
+   *
+   *   const packages = actor && !this.scope.isAdmin(actor.role)
+   *     ? await this.scopeToActor(all, actor)
+   *     : all;                                    // <- the ISP gets everything
+   *
+   *   if (actor && !this.scope.isAdmin(actor.role)) { ...scoped... }
+   *   ...unscoped counts below...
+   *
+   * This is exactly how the Packages page kept showing an ISP the sandbox's
+   * twelve invented plans — with 7,016 customers and Rs 59m of revenue on them
+   * — after the first ratchet was already passing. A negated admin check means
+   * the admin path is the ELSE branch, and an else branch is easy to leave
+   * unfiltered because nothing in the line mentions it.
+   *
+   * There are 132 of these across 39 services and the overwhelming majority are
+   * permission checks (`if (!isAdmin) throw Forbidden`), not visibility filters.
+   * Flagging them all would produce a test nobody trusts, and an untrusted test
+   * is worse than none. So the coverage check below takes the other route: it
+   * pins the SIX models that actually carry demo rows, and fails if the filter
+   * for any of them is ever weakened back to "everything".
+   */
+
   it('no service outside ScopeService grants an admin an unrestricted filter', () => {
     const offenders: string[] = [];
 
@@ -105,6 +129,45 @@ describe('demo leak ratchet', () => {
    * branch ever returns a bare `{}` again, every screen in the app silently
    * goes back to showing sandbox data and no other test would notice.
    */
+  /**
+   * COVERAGE: every model the demo seeder writes to must have a filter that
+   * still narrows for an ISP-level account.
+   *
+   * This is the list to extend when the seeder learns to create something new.
+   * Each entry names the seeder line that creates the rows, so the connection
+   * survives someone reading only one of the two files.
+   */
+  it('every demo-bearing model has an admin filter that actually narrows', async () => {
+    const { ScopeService } = require('./scope.service');
+    const prisma: any = {
+      $queryRaw: jest.fn(async () => []),
+      user: { findMany: jest.fn(async () => [{ id: 99 }]), findUnique: jest.fn(async () => null) },
+    };
+    const scope = new ScopeService(prisma);
+    const admin = { sub: 1, role: 'SUPER_ADMIN' };
+    delete process.env.DEMO_VISIBLE_TO_ADMIN;
+
+    const COVERED: Array<[string, string]> = [
+      ['subscriberWhere', 'demo-data.service.ts: createBatches("subscriber", ...) — 10,000 rows'],
+      ['nasWhere', 'demo-data.service.ts: createBatches("nas", ...) — 500 routers'],
+      ['userWhere', 'demo-hierarchy.service.ts — 20 franchises, 40 dealers, 80 sub-dealers'],
+      ['packageWhere', 'demo-data.service.ts: createBatches("package", ...) — 12 plans'],
+      ['poolWhere', 'demo-data.service.ts: createBatches("ipPool", ...) — 50 pools'],
+      ['ownedWhere', 'demo-data.service.ts: area.createManyAndReturn — 20 areas'],
+    ];
+
+    const broken: string[] = [];
+    for (const [method, provenance] of COVERED) {
+      const where = await (scope as any)[method](admin);
+      if (Object.keys(where).length === 0) {
+        broken.push(`${method}() returns {} for an ISP account — ${provenance} is now visible on real screens.`);
+      }
+    }
+    // Collected rather than asserted one at a time, so a failure names EVERY
+    // model that regressed instead of stopping at the first.
+    expect(broken).toEqual([]);
+  });
+
   it('ScopeService itself does not return a bare {} for an admin', () => {
     const body = fs.readFileSync(path.join(SRC, 'common/scope.service.ts'), 'utf8');
     const adminBranches = body

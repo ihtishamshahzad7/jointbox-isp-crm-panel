@@ -309,6 +309,38 @@ export class ScopeService {
     return this.hidesDemo ? ` AND ${userAlias}."isDemo" = false` : '';
   }
 
+  /**
+   * The demo account ids, for code that filters an already-fetched array.
+   *
+   * packages.service loads every package and then narrows the list in memory,
+   * because a reseller's visibility depends on ResellerPackagePrice rows rather
+   * than a column. That cannot use a Prisma where-fragment, so it needs the ids
+   * instead — and without them an ISP saw the sandbox's twelve invented plans
+   * sitting among its own, complete with 7,016 customers and Rs 59m of revenue
+   * attributed to them.
+   *
+   * Empty when the override is on, so callers can filter unconditionally.
+   */
+  async demoUserIds(): Promise<Set<number>> {
+    if (!this.hidesDemo) return new Set();
+    const rows = await this.prisma.user.findMany({ where: { isDemo: true }, select: { id: true } });
+    return new Set(rows.map((r) => Number(r.id)));
+  }
+
+  /**
+   * Drop demo-owned entries from a list already loaded into memory.
+   *
+   * A row with no owner is KEPT, for the same reason as demoExclusion(): an
+   * unowned record is a real one that nobody has claimed, and hiding it from
+   * the ISP is how unowned things stay unnoticed.
+   */
+  async withoutDemoOwned<T extends { ownerId?: number | null }>(rows: T[]): Promise<T[]> {
+    if (!this.hidesDemo || rows.length === 0) return rows;
+    const demo = await this.demoUserIds();
+    if (demo.size === 0) return rows;
+    return rows.filter((r) => r.ownerId == null || !demo.has(Number(r.ownerId)));
+  }
+
   /** Prisma where-fragment limiting SUBSCRIBERS to the actor's subtree. */
   async subscriberWhere(actor: Actor): Promise<any> {
     if (this.isAdmin(actor?.role)) return this.demoExclusion('user');
