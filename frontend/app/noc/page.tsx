@@ -110,7 +110,7 @@ export default function NocPage() {
         </div>
       )}
 
-      {/* Live link-tracing feed (SNMP + Syslog) */}
+      {/* Live link-tracing feed */}
       <div style={{ marginBottom: 18 }}>
         <LiveFeed limit={40} />
       </div>

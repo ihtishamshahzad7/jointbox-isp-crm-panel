@@ -206,7 +206,6 @@ export default function NasPage() {
     deviceType:'MIKROTIK',
     apiEnabled:true,
     snmpEnabled:false, snmpPort:161, snmpCommunity:'public', snmpVersion:'V2C', snmpPollSec:30,
-    syslogEnabled:false, syslogPort:514,
   });
 
   /** The signed-in account — decides whether router registration is offered. */
@@ -524,8 +523,6 @@ export default function NasPage() {
       snmpCommunity: form.snmpCommunity.trim() || 'public',
       snmpVersion:   form.snmpVersion,
       snmpPollSec:   Number(form.snmpPollSec),
-      syslogEnabled: form.syslogEnabled,
-      syslogPort:    Number(form.syslogPort),
     };
     try {
       const res = await fetch(url, { method, headers, body: JSON.stringify(body) });
@@ -599,7 +596,6 @@ export default function NasPage() {
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
     deviceType:'MIKROTIK', apiEnabled:true,
     snmpEnabled:false, snmpPort:161, snmpCommunity:'public', snmpVersion:'V2C', snmpPollSec:30,
-    syslogEnabled:false, syslogPort:514,
   });
 
   // FIX: populate form with actual stored ports from the NAS record
@@ -624,8 +620,6 @@ export default function NasPage() {
       snmpCommunity: (nas as any).snmpCommunity ?? 'public',
       snmpVersion:   (nas as any).snmpVersion   ?? 'V2C',
       snmpPollSec:   (nas as any).snmpPollSec   ?? 30,
-      syslogEnabled: (nas as any).syslogEnabled ?? false,
-      syslogPort:    (nas as any).syslogPort     ?? 514,
     });
     setEditItem(nas); setShowForm(true);
   };
@@ -1016,16 +1010,6 @@ export default function NasPage() {
                 id={`mp-${viewDetail.nas.id}`}
                 placeholder="e.g. ether1-wan, vlan100  (blank = all interfaces)"
                 style={{ ...inputSt, flex:1, minWidth:220 }} />
-              <Btn variant="ghost" size="xs" onClick={async ()=>{
-                const r = await fetch(`${API}/telemetry/nas/${viewDetail.nas.id}/discover-interfaces`, { headers });
-                const d = await r.json();
-                if (!d?.ok) { alert(d?.error || "Discovery failed"); return; }
-                const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
-                const current = new Set((el?.value||"").split(",").map(s=>s.trim()).filter(Boolean));
-                const pick = d.interfaces.map((i:any)=>`${i.name}${i.up?"":" (down)"}`).join("\n");
-                const chosen = prompt(`Discovered ${d.interfaces.length} interface(s). Type the ones to monitor (comma-separated), or copy from this list:\n\n${pick}`, (el?.value)|| d.interfaces.filter((i:any)=>i.up).map((i:any)=>i.name).join(", "));
-                if (chosen != null && el) el.value = chosen;
-              }}>Discover</Btn>
               <Btn variant="primary" size="xs" onClick={async ()=>{
                 const el = document.getElementById(`mp-${viewDetail.nas.id}`) as HTMLInputElement;
                 const ports = (el?.value || "").split(",").map(s=>s.trim()).filter(Boolean);
@@ -1657,7 +1641,7 @@ export default function NasPage() {
                         </Field>
 
                         {/* ── Link tracing — each method optional & independent ── */}
-                        <Field label="Device type" hint="Selects the right SNMP OIDs / syslog parser. VSOL for your OLTs.">
+                        <Field label="Device type" hint="Selects the right SNMP OIDs. VSOL for your OLTs.">
                           <select value={form.deviceType}
                             onChange={e => setForm(p => ({ ...p, deviceType: e.target.value }))}>
                             <option value="MIKROTIK">MikroTik</option>
@@ -1702,13 +1686,6 @@ export default function NasPage() {
                               onChange={e => setForm(p => ({ ...p, snmpPollSec: +e.target.value }))} /></Field>
                           </>
                         )}
-                        <Field label="Syslog" hint={`Point the device's syslog at this panel (UDP ${form.syslogPort}) for real-time events.`}>
-                          <label style={{ display:'flex', gap:8, alignItems:'center' }}>
-                            <input type="checkbox" checked={form.syslogEnabled}
-                              onChange={e => setForm(p => ({ ...p, syslogEnabled: e.target.checked }))} />
-                            <span>Receive syslog from this device</span>
-                          </label>
-                        </Field>
                       </>
                     ),
                   },
@@ -1776,7 +1753,7 @@ export default function NasPage() {
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
                 <div>
                   <label style={labelSt}>Device type</label>
-                  <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>Selects the right SNMP OIDs / syslog parser. VSOL for your OLTs.</div>
+                  <div style={{ fontSize:10, color:t.textMuted, marginBottom:5 }}>Selects the right SNMP OIDs. VSOL for your OLTs.</div>
                   <select value={form.deviceType} onChange={e => setForm(p => ({ ...p, deviceType: e.target.value }))} style={{ ...inputSt, cursor:'pointer' }}>
                     <option value="MIKROTIK">MikroTik</option>
                     <option value="OLT_VSOL">OLT — VSOL</option>
@@ -1824,18 +1801,6 @@ export default function NasPage() {
                 )}
               </div>
 
-              {/* Syslog */}
-              <div style={{ marginTop:10, background:d?'var(--surface-2)':'#f8fafc', border:`1px solid ${t.inputBorder}`, borderRadius:8, padding:'10px 12px' }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <div>
-                    <div style={{ fontWeight:700, color:t.text, fontSize:12 }}>Syslog</div>
-                    <div style={{ fontSize:10.5, color:t.textMuted }}>Real-time events. Point the device's syslog target at this panel on UDP {form.syslogPort}.</div>
-                  </div>
-                  <Btn onClick={() => setForm(p => ({ ...p, syslogEnabled: !p.syslogEnabled }))} variant={form.syslogEnabled ? 'success' : 'ghost'} size="xs">
-                    {form.syslogEnabled ? '✓ Enabled' : 'Enable'}
-                  </Btn>
-                </div>
-              </div>
             </div>
 
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, background:d?'var(--bg)':'#f8fafc', borderRadius:8, padding:'10px 12px', marginTop:14, fontSize:11, color:t.textMuted, border:`1px solid ${t.inputBorder}` }}>

@@ -46,8 +46,6 @@ export function ConfigTab() {
       snmpPollSec: nas?.snmpPollSec ?? 30,
       snmpTimeoutMs: nas?.snmpTimeoutMs ?? 1000,
       snmpRetries: nas?.snmpRetries ?? 3,
-      syslogEnabled: nas?.syslogEnabled ?? false,
-      syslogPort: nas?.syslogPort ?? 514,
     });
     setEditing(true);
   };
@@ -71,8 +69,6 @@ export function ConfigTab() {
         snmpPollSec: Number(form.snmpPollSec) || 30,
         snmpTimeoutMs: Number(form.snmpTimeoutMs) || 1000,
         snmpRetries: Number(form.snmpRetries) || 3,
-        syslogEnabled: form.syslogEnabled,
-        syslogPort: Number(form.syslogPort) || 514,
       };
       // Masked values are sent but the backend treats them as "unchanged".
       if (form.apiPassword) body.apiPassword = form.apiPassword;
@@ -135,11 +131,6 @@ export function ConfigTab() {
               ["Community", nas?.hasSnmpCommunity ?? !!nas?.snmpCommunity ? MASK : "not set"],
               ["Poll / timeout / retries", `${nas?.snmpPollSec ?? 30}s · ${nas?.snmpTimeoutMs ?? 1000}ms · ${nas?.snmpRetries ?? 3}`],
             ]} />
-            <div className="nd-group-label">Syslog</div>
-            <DefList rows={[
-              ["Enabled", nas?.syslogEnabled ? "Yes" : "No"],
-              ["Port", `UDP :${nas?.syslogPort ?? 514}`],
-            ]} />
           </div>
         </div>
       </Panel>
@@ -175,9 +166,6 @@ export function ConfigTab() {
               <input type="number" value={form.snmpTimeoutMs} onChange={(e) => set("snmpTimeoutMs", e.target.value)} />
               <input type="number" value={form.snmpRetries} onChange={(e) => set("snmpRetries", e.target.value)} />
             </div></Field>
-
-            <Field label="Syslog enabled"><select value={form.syslogEnabled ? "1" : "0"} onChange={(e) => set("syslogEnabled", e.target.value === "1")}><option value="1">Yes</option><option value="0">No</option></select></Field>
-            <Field label="Syslog port"><input type="number" className="nd-mono" value={form.syslogPort} onChange={(e) => set("syslogPort", e.target.value)} /></Field>
           </div>
 
           {saveErr && <div className="nd-config-err">{saveErr}</div>}

@@ -1,7 +1,6 @@
 import { Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { TelemetryService } from './telemetry.service';
 import { NasMonitorService } from './nas-monitor.service';
-import { SnmpPollerService } from './snmp-poller.service';
 import { DeviceHealthService } from './device-health.service';
 import { LiveTrafficService } from './live-traffic.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -14,18 +13,15 @@ export class TelemetryController {
   constructor(
     private readonly telemetry: TelemetryService,
     private readonly monitor: NasMonitorService,
-    private readonly snmp: SnmpPollerService,
     private readonly health: DeviceHealthService,
     private readonly scope: ScopeService,
     private readonly live: LiveTrafficService,
   ) {}
 
-  /** One-off SNMP walk to list a NAS's interfaces for port registration. */
-  @Get('nas/:id/discover-interfaces')
-  async discover(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    await this.scope.assertNas(req.user, id);
-    return this.snmp.discoverInterfaces(id);
-  }
+  // REMOVED: GET nas/:id/discover-interfaces — port registration was part of
+  // the SNMP device monitor, which has been removed. Device health (CPU,
+  // memory, uptime, interface list) is kept and served by DeviceHealthService
+  // below, which does its own SNMP walk and does not depend on the poller.
 
   /**
    * Really contact the device over SNMP and report what came back — uptime,
@@ -132,18 +128,10 @@ export class TelemetryController {
     return this.monitor.nasUptime(id, days ? +days : 7);
   }
 
-  /** Link up/down + optical signal for every ONU on a NAS. */
-  @Get('nas/:id/signals')
-  async nasSignals(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    await this.scope.assertNas(req.user, id);
-    return this.monitor.nasSignals(id);
-  }
-
-  /** Optical-signal history for one ONU (trend graph). */
-  @Get('onu/:id/signal')
-  onuSignal(@Param('id', ParseIntPipe) id: number, @Query('range') range?: string) {
-    return this.monitor.onuSignal(id, range || '7d');
-  }
+  // REMOVED: GET nas/:id/signals and GET onu/:id/signal — ONU optical signal
+  // readings were SNMP-polled. Removed with the rest of SNMP by operator
+  // decision. Subscriber traffic graphs are unaffected: they come from
+  // radacct, not from SNMP.
 
   /** Live network feed for the sidebar widget (in-memory, newest first). */
   @Get('feed')

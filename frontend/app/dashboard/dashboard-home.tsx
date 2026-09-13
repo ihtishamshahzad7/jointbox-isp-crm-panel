@@ -144,11 +144,11 @@ export default function DashboardHome({ homeStats, currency = "Rs", refreshKey =
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div style={card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div><div style={{ fontSize: 14, fontWeight: 750 }}>Live network feed</div><div style={{ fontSize: 11, color: "var(--muted)", opacity: 0.8 }}>Real-time from SNMP + Syslog</div></div>
+            <div><div style={{ fontSize: 14, fontWeight: 750 }}>Live network feed</div><div style={{ fontSize: 11, color: "var(--muted)", opacity: 0.8 }}>Real-time network events</div></div>
             <span style={{ fontSize: 12, color: "#22c55e", fontWeight: 700 }}>● Live</span>
           </div>
           {feed.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "10px 0" }}>No events yet — enable SNMP/Syslog on a NAS to start tracing.</div>
+            <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "10px 0" }}>No events yet.</div>
           ) : feed.map((f) => {
             const col = f.level === "critical" || f.level === "down" ? "#ef4444" : f.level === "warning" ? "#f59e0b" : f.level === "up" ? "#22c55e" : "#38bdf8";
             return (

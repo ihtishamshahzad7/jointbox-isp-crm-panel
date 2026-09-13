@@ -1,31 +1,45 @@
-release: security hardening, correctness fixes, and a real test foundation
+Remove SNMP device manager and syslog; monitoring is ping + traceroute only
 
-SECURITY
-- SSE stream was unauthenticated; add SseAuthGuard (header, query fallback)
-- Centralized SSRF guard with EXTERNAL / OPERATOR_NETWORK profiles
-- Webhook URLs validated on create AND update; delivery via safeFetch
-- Diagnostics (ping/traceroute/tcp/http/dns resolver) routed through the guard
-- CSV formula injection escaped at the shared serialiser
-- Authorization matrix over all 723 routes, as a build-failing ratchet
-- CONSOLE_SHELL_ENABLED now ships as false in .env.example
+Monitoring keeps exactly what it had that worked: ICMP ping with the latency
+graph, traceroute and the port check. Everything that depended on an SNMP walk
+of a third-party device, or on a syslog listener, is gone.
 
-CORRECTNESS
-- Wallet deductions are transactional; FOR UPDATE now held by a real
-  transaction, backed by unique (subscriberId, reference)
-- Reseller wallet made transactional and given its missing ledger row
-- Invoice numbers from a per-year sequence, format unchanged
-- radacct poller: keyset cursor on (acctupdatetime, radacctid), separate
-  stop cursor, persisted in poller_cursor; events idempotent on replay
-- Live events published over Redis so they reach every PM2 worker
-- BullMQ job options no longer dropped by a second Queue construction site
+Backend
+ - deleted src/ndm/ (14 files): the whole network-device manager -- devices,
+   interfaces, ports, alerts, alert rules, syslog events, forward targets and
+   the on-disk syslog archive.
+ - deleted telemetry/snmp-poller.service.ts and telemetry/syslog-receiver.service.ts.
+ - telemetry.controller.ts: removed GET nas/:id/discover-interfaces,
+   GET nas/:id/signals and GET onu/:id/signal.
+ - nas-monitor.service.ts: removed ONU optical signal sampling. Traffic
+   sampling is untouched -- it reads radacct, never SNMP, so the NAS traffic
+   graphs keep working exactly as before.
+ - monitoring.service.ts: unifiedList() no longer queries networkDevice, alert
+   or syslogEvent. The response SHAPE is preserved (snmp/ports/syslog null,
+   counters zero) so nothing downstream has to change at once.
+ - route-permissions.ts: dropped the now-dead discover-interfaces entry.
 
-DEPLOY
-- install.sh: a failed migration stops the deploy; no --accept-data-loss
-- All shell scripts normalised to LF (they did not parse on Ubuntu)
-- GitHub Actions CI: shell, backend, security ratchets, integration, frontend
+Kept deliberately
+ - telemetry/device-health.service.ts. It does its own SNMP walk for NAS CPU,
+   memory, temperature and response time and never depended on the poller, so
+   the NAS Health tab and the "Test SNMP" button still work.
+ - the database tables (NetworkDevice, SyslogEvent, OnuSignalSample and the
+   rest). Dropping them would destroy real historical readings to tidy up a
+   removed feature; they simply stop being written. The nightly prune is left
+   in place so they drain on their own retention schedule.
 
-TESTS
-- 767 unit tests, 39 integration tests against real PostgreSQL
+Frontend
+ - removed /monitoring/{devices,ports,syslog,events,alerts,settings} and the
+   ndm.ts / ndm-ui.tsx / ndm-tabs.tsx / ndm-sound.tsx modules behind them.
+ - monitoring/page.tsx: dropped the network-device panel, the SSE ndm:alert
+   port-alert cards and the SNMP/ports/syslog capability chips. Details now
+   always opens the ping history page.
+ - NAS pages: removed the Syslog tab, the syslog config fields, the ONU
+   optical-signal list and the SNMP interface-discovery button.
+
+Verified
+ - backend: tsc clean in the touched files, 50 suites / 748 tests pass.
+ - frontend: tsc --noEmit exits 0, 10/10 unit tests pass.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01X7xG929ZbVWHe8ogTG3ZLU

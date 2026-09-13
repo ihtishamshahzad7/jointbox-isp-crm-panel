@@ -6,7 +6,7 @@
  * Route: /nas/[id] (id = the NAS database id; middleware already guards /nas/*).
  *
  * Design rules honored here:
- *  - Device reachability is separate from API / RADIUS / CoA / SNMP / Syslog
+ *  - Device reachability is separate from API / RADIUS / CoA / SNMP
  *    health — "permission limited" never shows as "offline".
  *  - Every number comes from a real backend endpoint; nothing is fabricated.
  *  - Heavy tabs load lazily; logs/sessions paginate; secrets stay masked.
@@ -36,7 +36,6 @@ const PppoeTab = lazy(() => import("./tabs-interfaces").then((m) => ({ default: 
 const SubscribersTab = lazy(() => import("./tabs-interfaces").then((m) => ({ default: m.SubscribersTab })));
 const RadiusTab = lazy(() => import("./tabs-services").then((m) => ({ default: m.RadiusTab })));
 const SnmpTab = lazy(() => import("./tabs-services").then((m) => ({ default: m.SnmpTab })));
-const SyslogTab = lazy(() => import("./tabs-services").then((m) => ({ default: m.SyslogTab })));
 const IpAddrTab = lazy(() => import("./tabs-network").then((m) => ({ default: m.IpAddrTab })));
 const VlansTab = lazy(() => import("./tabs-network").then((m) => ({ default: m.VlansTab })));
 const LogsTab = lazy(() => import("./tabs-network").then((m) => ({ default: m.LogsTab })));
@@ -58,7 +57,6 @@ const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "subscribers", label: "Subscribers", group: "Network" },
   { id: "radius", label: "RADIUS", group: "Services" },
   { id: "snmp", label: "SNMP", group: "Services" },
-  { id: "syslog", label: "Syslog", group: "Services" },
   { id: "ip", label: "IP Addresses", group: "Network" },
   { id: "vlans", label: "VLANs", group: "Network" },
   { id: "logs", label: "Logs", group: "History" },
@@ -219,7 +217,6 @@ function DevicePage() {
         {tab === "subscribers" && <SubscribersTab onOpenSession={setOpenSession} />}
         {tab === "radius" && <RadiusTab />}
         {tab === "snmp" && <SnmpTab />}
-        {tab === "syslog" && <SyslogTab />}
         {tab === "ip" && <IpAddrTab />}
         {tab === "vlans" && <VlansTab />}
         {tab === "logs" && <LogsTab />}

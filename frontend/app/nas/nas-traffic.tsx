@@ -26,7 +26,6 @@ export function NasTraffic({ nasId }: { nasId: number }) {
   const [range, setRange] = React.useState("7d");
   const [data, setData] = React.useState<any>(null);
   const [vlans, setVlans] = React.useState<any[]>([]);
-  const [links, setLinks] = React.useState<any[]>([]);
   const [uptime, setUptime] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
   const [hover, setHover] = React.useState<{ i: number; x: number } | null>(null);
@@ -40,9 +39,8 @@ export function NasTraffic({ nasId }: { nasId: number }) {
     Promise.all([
       fetch(`${API}/telemetry/nas/${nasId}/traffic?range=${range}`, { headers: h }).then((r) => r.ok ? r.json() : null),
       fetch(`${API}/telemetry/nas/${nasId}/vlans`, { headers: h }).then((r) => r.ok ? r.json() : null),
-      fetch(`${API}/telemetry/nas/${nasId}/signals`, { headers: h }).then((r) => r.ok ? r.json() : null),
       fetch(`${API}/telemetry/nas/${nasId}/uptime?days=${days}`, { headers: h }).then((r) => r.ok ? r.json() : null),
-    ]).then(([t, v, s, u]) => { if (!alive) return; setData(t); setVlans(v?.vlans || []); setLinks(s?.links || []); setUptime(u); setLoading(false); })
+    ]).then(([t, v, u]) => { if (!alive) return; setData(t); setVlans(v?.vlans || []); setUptime(u); setLoading(false); })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [nasId, range]);
@@ -140,24 +138,6 @@ export function NasTraffic({ nasId }: { nasId: number }) {
         </div>
       )}
 
-      <div className="nt-vlan-h">Links up/down &amp; optical signal</div>
-      {links.length === 0 ? (
-        <div className="nt-empty sm">No ONU/link telemetry for this NAS (needs SNMP-enabled OLT/ONU).</div>
-      ) : (
-        <div className="nt-links">
-          <div className="nt-links-sum">
-            {links.filter((l) => l.up).length} up · <span className="dn">{links.filter((l) => !l.up).length} down</span>
-          </div>
-          {links.slice(0, 200).map((l) => (
-            <div key={l.onuId} className={`nt-link q-${l.quality}`}>
-              <span className={`ld ${l.up ? "up" : "dn"}`} />
-              <span className="l-name">{l.name}</span>
-              <span className="l-st">{l.status}</span>
-              <span className="l-sig">{l.rxPowerDbm != null ? `${l.rxPowerDbm.toFixed(1)} dBm` : "—"}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

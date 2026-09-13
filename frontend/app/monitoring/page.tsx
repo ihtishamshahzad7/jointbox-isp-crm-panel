@@ -3,7 +3,6 @@
 import React from "react";
 import API from "../components/api";
 import { useSSE } from "../components/use-sse";
-import { ndm as ndmApi } from "./ndm";
 
 /**
  * Network Monitoring — each account adds hosts (IP/hostname), grouped, pinged
@@ -17,21 +16,16 @@ type Sample = { t: number; ms: number | null; up: boolean };
  * ONE PHYSICAL DEVICE = ONE ROW.
  *
  * The backend (`GET /monitoring/unified`) correlates the ICMP record
- * (MonitorTarget) with the SNMP record (NetworkDevice) by address, so a switch
- * that is both pinged and SNMP-polled is a single card here instead of
- * appearing twice on two different screens.
- *
- * The ping fields are kept FLAT and unchanged so every existing behaviour —
- * latency graph, down alarm, search, status filter, pause, check-now — keeps
- * working untouched. The SNMP half is additive and always optional: a
- * ping-only monitor simply has `snmp: null` and renders exactly as before.
+ * (MonitorTarget). SNMP and syslog were removed from the product; this page
+ * is ping + traceroute + port check only. The unified response still carries
+ * `snmp`/`ports`/`syslog` keys fixed at null so old clients keep working.
  */
 type Target = {
   id: number; name: string; host: string; groupName: string | null;
   enabled: boolean; isUp: boolean | null; lastLatencyMs: number | null;
   lossPct: number | null; lastCheckedAt: string | null; downSince: string | null;
   intervalSec: number; history: Sample[];
-  // Unified additions (null when this device has no SNMP side).
+  // Always null since SNMP/syslog removal — kept for response compatibility.
   monitorId?: number | null;
   deviceId?: number | null;
   location?: string | null;
@@ -85,7 +79,6 @@ export default function MonitoringPage() {
 
   const [targets, setTargets] = React.useState<Target[]>([]);
   const [summary, setSummary] = React.useState<UnifiedSummary | null>(null);
-  const [ndmStats, setNdmStats] = React.useState<any>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [muted, setMuted] = React.useState(false);
@@ -109,7 +102,7 @@ export default function MonitoringPage() {
   }, []);
 
   /**
-   * Load the UNIFIED list (ping + SNMP correlated into one row per device).
+   * Load the unified list (ping only).
    *
    * Falls back to the old ping-only endpoint if `/unified` isn't there — the
    * frontend and backend are deployed by the same script, but a half-finished
@@ -123,9 +116,9 @@ export default function MonitoringPage() {
       if (r.ok) {
         const d = await r.json();
         // Flatten to the shape the existing cards/graphs/filters already use,
-        // carrying the SNMP half alongside rather than replacing anything.
+        // shape-compatible with the pre-removal response.
         setTargets((d.devices || []).map((x: any) => ({
-          // Negative ids for SNMP-only rows keep React keys unique without
+          // Negative ids for device-only rows keep React keys unique without
           // colliding with real MonitorTarget ids.
           id: x.monitorId ?? -(x.deviceId ?? 0),
           monitorId: x.monitorId ?? null,
@@ -133,7 +126,6 @@ export default function MonitoringPage() {
           name: x.name, host: x.host, groupName: x.groupName ?? null,
           location: x.location ?? null,
           enabled: x.enabled,
-          // A device with no ICMP monitor still shows up/down — from SNMP.
           isUp: x.ping ? x.ping.isUp : (x.snmp ? x.snmp.reachable : null),
           lastLatencyMs: x.ping?.latencyMs ?? null,
           lossPct: x.ping?.lossPct ?? null,
@@ -162,62 +154,11 @@ export default function MonitoringPage() {
 
   React.useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
 
-  // Network-device stats (SNMP switches) — same rhythm, one extra call.
-  const loadNdm = React.useCallback(async () => {
-    ndmApi.stats().then(setNdmStats).catch(() => {});
-  }, []);
-  React.useEffect(() => { loadNdm(); const t = setInterval(loadNdm, 30000); return () => clearInterval(t); }, [loadNdm]);
-
-  // Instant refresh on a down/up transition pushed from the server. NDM
-  // port alerts come through the SAME SSE channel — this is the fixed end of
-  // the pipeline that used to drop every `ndm:*` frame before the backend
-  // switch to unnamed frames.
-  type PortAlert = {
-    id: number; deviceId: number | null; deviceName: string | null;
-    interfaceId: number | null; interfaceName: string | null;
-    eventType: string; severity: string; title: string; message: string;
-    openedAt: string; resolvedAt: string | null; sound: boolean; muted: boolean;
-  };
-  const [portAlerts, setPortAlerts] = React.useState<PortAlert[]>([]);
-  const announcedRef = React.useRef<Set<number>>(new Set());
-
+  // SNMP and syslog were removed. Monitoring is ping-only, so the only frame
+  // this page cares about is the ping transition the poller pushes.
   useSSE({
-    onEvent: (type, data) => {
-      if (type === "monitor") { load(); return; }
-      if (type !== "ndm:alert" || !data) return;
-      const a = data;
-      const now = Date.now();
-      setPortAlerts((prev) => {
-        let next = prev.filter(
-          (p) => p.interfaceId !== a.interfaceId || p.deviceId !== a.deviceId || !p.resolvedAt,
-        );
-        const card: PortAlert = {
-          id: a.id ?? 0, deviceId: a.deviceId ?? null, deviceName: a.deviceName ?? null,
-          interfaceId: a.interfaceId ?? null, interfaceName: a.interfaceName ?? null,
-          eventType: a.eventType ?? "PORT_DOWN", severity: a.severity ?? "WARNING",
-          title: a.title ?? "", message: a.message ?? "",
-          openedAt: a.openedAt ?? new Date().toISOString(),
-          resolvedAt: a.status === "RESOLVED" || a.action === "resolve" || a.action === "ack"
-            ? (a.resolvedAt ?? new Date().toISOString())
-            : null,
-          sound: !!a.sound, muted: false,
-        };
-        next = [card, ...next];
-        // Garbage-collect: resolved cards linger 20s so 🟢 is visible, stale
-        // open cards for missing devices drop after 10 min.
-        return next.filter((p) =>
-          p.resolvedAt
-            ? now - new Date(p.resolvedAt).getTime() < 20_000
-            : now - new Date(p.openedAt).getTime() < 10 * 60_000,
-        );
-      });
-      // Browser-audio gate: the server already decided `sound`; the operator
-      // can still mute globally (muted / alerts.enabled) or per card.
-      if (a.action === "open" && a.sound && soundOn && a.id != null && !announcedRef.current.has(a.id)) {
-        announcedRef.current.add(a.id);
-        beep("down");
-        if (alerts.speak) speak(`${a.deviceName || "Device"}${a.interfaceName ? ` ${a.interfaceName}` : ""} port down`);
-      }
+    onEvent: (type) => {
+      if (type === "monitor") load();
     },
   });
 
@@ -360,7 +301,7 @@ export default function MonitoringPage() {
       if (status === "up" && !(t.enabled && t.isUp === true)) return false;
       if (status === "paused" && t.enabled) return false;
       if (!terms.length) return true;
-      // Location and capability names are searchable too, so "snmp", "syslog"
+      // Location names are searchable too,
       // or a site name narrows the board without a separate filter control.
       const hay = `${t.name || ""} ${t.host} ${t.groupName || ""} ${t.location || ""} ${(t.capabilities || []).join(" ")}`.toLowerCase();
       return terms.every((w) => hay.includes(w));
@@ -385,7 +326,7 @@ export default function MonitoringPage() {
         <div>
           <h1>Network Monitoring</h1>
           <p>
-            One device, everything about it — ping, SNMP, ports, syslog and alerts.
+            Ping and traceroute for every device, with live latency graphs.
             {summary && summary.merged > 0 && (
               <> <b>{summary.merged}</b> device{summary.merged === 1 ? "" : "s"} shown once instead of twice.</>
             )}
@@ -394,15 +335,6 @@ export default function MonitoringPage() {
         <div className="mon-head-stats">
           <span className="ok">{summary ? summary.up : targets.filter((t) => t.isUp).length} up</span>
           <span className={down.length ? "bad" : "muted"}>{down.length} down</span>
-          {summary && summary.snmpDevices > 0 && (
-            <>
-              <span className="muted" title="Interfaces up across all SNMP devices">
-                {summary.portsUp}/{summary.portsUp + summary.portsDown} ports
-              </span>
-              {summary.openAlerts > 0 && <span className="bad" title="Open alerts">⚠ {summary.openAlerts} alerts</span>}
-              {summary.syslog24h > 0 && <span className="muted" title="Syslog messages in the last 24h">{summary.syslog24h} syslog</span>}
-            </>
-          )}
           <button className="mon-hbtn" onClick={() => setShowImport(true)} title="Import monitors from Excel or CSV">⬆ Import</button>
           <button className="mon-hbtn" onClick={() => setShowSettings((s) => !s)} title="Alert sound settings">
             {alerts.enabled && !muted ? "🔔" : "🔕"} Alerts
@@ -418,79 +350,6 @@ export default function MonitoringPage() {
       )}
 
       {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={importRows} knownGroups={knownGroups} />}
-
-      {/* NETWORK DEVICES (SNMP + syslog) — sits on top; Ping stays untouched below. */}
-      <div className="mon-ndm">
-        <div className="mon-ndm-h">
-          <div>
-            <b>Network Devices</b>
-            <span>SNMP switches &amp; routers — live ports, traffic, syslog events and alerts.</span>
-          </div>
-          <div className="mon-ndm-actions">
-            <a href="/monitoring/alerts" className="mon-ndm-link">Alerts &amp; Rules</a>
-            <a href="/monitoring/ports" className="mon-ndm-link">Ports</a>
-            <a href="/monitoring/devices" className="mon-ndm-link pri">Manage devices</a>
-          </div>
-        </div>
-        {ndmStats ? (
-          <div className="mon-ndm-stats">
-            <div className="t"><b>{ndmStats.devices.total}</b><span>devices</span></div>
-            <div className="t"><b style={{ color: "#219653" }}>{ndmStats.devices.reachable}</b><span>reachable</span></div>
-            <div className={`t ${ndmStats.devices.down ? "bad" : ""}`}><b style={ndmStats.devices.down ? { color: "#D34053" } : undefined}>{ndmStats.devices.down}</b><span>down</span></div>
-            <div className="t"><b>{`${ndmStats.devices.upPorts} / ${ndmStats.devices.ports}`}</b><span>ports up</span></div>
-            <div className={`t ${ndmStats.alerts.open ? "bad" : ""}`}><b style={ndmStats.alerts.open ? { color: "#D34053" } : undefined}>{ndmStats.alerts.open}</b><span>open alerts</span></div>
-            <div className="t"><b>{ndmStats.events.last24h}</b><span>events / 24h</span></div>
-            <div className="t"><b>{ndmStats.syslog.last24h}</b><span>syslog / 24h</span></div>
-          </div>
-        ) : (
-          <div className="mon-ndm-empty">Check out the SNMP device monitor — add your switches to get live port status.</div>
-        )}
-
-        {/* LIVE PORT ALERTS — pushed over SSE, exercised by the real pipeline. */}
-        {portAlerts.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-            {portAlerts.map((al) => {
-              const open = !al.resolvedAt;
-              const dt = (open ? Date.now() : new Date(al.resolvedAt!).getTime()) - new Date(al.openedAt).getTime();
-              const mins = Math.max(0, Math.floor(dt / 60000));
-              const secs = Math.max(0, Math.floor((dt % 60000) / 1000));
-              return (
-                <div key={`${al.deviceId}:${al.interfaceId}:${al.id}`}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8,
-                    border: open ? "1px solid var(--danger, #D34053)" : "1px solid var(--online, #219653)",
-                    background: open ? "rgba(211,64,83,0.08)" : "rgba(33,150,83,0.08)",
-                  }}>
-                  <span style={{ fontSize: 16 }}>{open ? "🔴" : "🟢"}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>
-                      {open ? "PORT DOWN" : "PORT RECOVERED"}
-                      {al.interfaceName ? ` · ${al.interfaceName}` : ""}
-                      {al.deviceName ? ` on ${al.deviceName}` : ""}
-                    </div>
-                    <div style={{ opacity: 0.75, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {al.message || al.title} · {open ? "down for" : "was down"} {mins}m {secs}s
-                      {al.sound && !al.muted ? " · 🔊" : " · 🔇"}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {al.deviceId != null && <a className="mon-hbtn" href={`/monitoring/devices/${al.deviceId}`}>Open Device</a>}
-                    <button className="mon-hbtn" onClick={() =>
-                      setPortAlerts((prev) => prev.map((p) => p.id === al.id ? { ...p, muted: !p.muted } : p))}
-                      title="Stop this card's sound">{al.muted ? "🔇" : "🔊"}</button>
-                    {open && al.id > 0 && (
-                      <button className="mon-hbtn" onClick={async () => {
-                        try { await ndmApi.ackAlert(al.id); } catch { /* keep card */ }
-                        setPortAlerts((prev) => prev.map((p) => p.id === al.id ? { ...p, resolvedAt: new Date().toISOString() } : p));
-                      }}>Acknowledge</button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
 
       {/* SEARCH + STATUS FILTER */}
       <div className="mon-filter">
@@ -812,56 +671,15 @@ function Card({ t, onDelete, onCheck, onToggle }: { t: Target; onDelete: () => v
         <span className="muted">{t.lastCheckedAt ? timeAgo(t.lastCheckedAt) : "never"}</span>
       </div>
 
-      {/*
-        CAPABILITY CHIPS — the visible result of the ping/SNMP merge.
-        Rendered ONLY for what this device actually has, so a ping-only monitor
-        (google.com, a DNS resolver) looks exactly as it always did and gains no
-        empty placeholders.
-      */}
-      {(t.snmp || t.ports || t.syslog || (t.alerts ?? 0) > 0) && (
-        <div className="mon-caps">
-          {t.snmp && (
-            <span className={`cap ${t.snmp.reachable === false ? "bad" : t.snmp.reachable ? "ok" : ""}`}
-              title={t.snmp.lastError || (t.snmp.reachable ? "SNMP reachable" : "SNMP not yet polled")}>
-              SNMP {t.snmp.reachable === false ? "✕" : t.snmp.reachable ? "✓" : "…"}
-              {t.snmp.cpu != null && <em>{Math.round(t.snmp.cpu)}% cpu</em>}
-            </span>
-          )}
-          {t.ports && t.ports.total > 0 && (
-            <span className={`cap ${t.ports.down > 0 ? "bad" : "ok"}`} title={`${t.ports.up} of ${t.ports.total} interfaces up`}>
-              Ports {t.ports.up}/{t.ports.total}
-              {t.ports.down > 0 && <em>{t.ports.down} down</em>}
-            </span>
-          )}
-          {t.syslog && (
-            <span className="cap" title={t.syslog.lastAt ? `last message ${timeAgo(t.syslog.lastAt)}` : "no messages yet"}>
-              Syslog <em>{t.syslog.last24h}</em>
-            </span>
-          )}
-          {(t.alerts ?? 0) > 0 && (
-            <span className="cap bad" title="Open alerts on this device">⚠ {t.alerts} alert{t.alerts === 1 ? "" : "s"}</span>
-          )}
-        </div>
-      )}
       {state === "down" && t.downSince && <div className="mon-down-since">down since {timeAgo(t.downSince)}</div>}
       <div className="mon-card-actions">
-        {/*
-          ONE "Details" ENTRY POINT. An SNMP-capable device opens the device
-          view (ports, traffic, syslog, events, alerts); a ping-only monitor
-          opens the ping history + diagnostics page. The operator clicks the
-          same button either way and never has to know which subsystem holds
-          the data — which is the whole point of the merge.
-        */}
-        <a className="details" href={t.deviceId ? `/monitoring/devices/${t.deviceId}` : `/monitoring/${t.id}`}>
+        {/* Ping history + diagnostics (ping, traceroute, port check). */}
+        <a className="details" href={`/monitoring/${t.id}`}>
           📈 Details
         </a>
-        {/* Ping-only actions are meaningless for an SNMP-only row. */}
         {t.monitorId != null && <button onClick={onCheck}>Check now</button>}
         {t.monitorId != null && <button onClick={onToggle}>{t.enabled ? "Pause" : "Resume"}</button>}
         {t.monitorId != null && <button className="del" onClick={onDelete}>Delete</button>}
-        {t.monitorId == null && t.deviceId != null && (
-          <a className="details" href={`/monitoring/devices/${t.deviceId}`}>Manage device</a>
-        )}
       </div>
     </div>
   );
@@ -928,20 +746,6 @@ function timeAgo(iso: string) {
 
 const CSS = `
 .mon{max-width:1100px;color:var(--text)}
-.mon-ndm{background:var(--surface,#fff);border:1px solid var(--border,#E2E8F0);border-radius:12px;padding:12px 14px;margin-bottom:16px}
-.mon-ndm-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
-.mon-ndm-h b{font-size:14px;display:block}
-.mon-ndm-h span{font-size:11.5px;color:#94A3B8}
-.mon-ndm-actions{display:flex;gap:6px;flex-wrap:wrap}
-.mon-ndm-link{font-size:12px;font-weight:600;color:#3C50E0;border:1px solid rgba(60,80,224,.35);border-radius:999px;padding:4px 12px;text-decoration:none}
-.mon-ndm-link:hover{background:rgba(60,80,224,.06)}
-.mon-ndm-link.pri{background:#3C50E0;color:#fff;border-color:transparent}
-.mon-ndm-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
-.mon-ndm-stats .t{background:var(--bg,#F1F5F9);border:1px solid var(--border,#E2E8F0);border-radius:9px;padding:8px 10px}
-.mon-ndm-stats .t b{font-size:16px;display:block}
-.mon-ndm-stats .t span{font-size:10.5px;color:#94A3B8}
-.mon-ndm-stats .t.bad{background:rgba(176,42,55,.06);border-color:rgba(176,42,55,.35)}
-.mon-ndm-empty{font-size:12.5px;color:#94A3B8;text-align:center;padding:6px}
 .mon-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .mon-head h1{font-size:20px;font-weight:800;margin:0}
 .mon-head p{font-size:12.5px;color:var(--muted);margin:4px 0 0}

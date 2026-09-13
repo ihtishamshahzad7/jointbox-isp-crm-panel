@@ -208,8 +208,6 @@ export class NasMonitorService {
 
         this.lastOnline.set(nas.id, now);
       }
-      // Append ONU optical-signal history so signal + up/down can be graphed.
-      await this.sampleSignals();
     } catch (e: any) {
       this.log.warn(`NAS sample failed: ${e?.message || e}`);
     }
@@ -253,70 +251,21 @@ export class NasMonitorService {
     }
   }
 
-  /** Copy the latest ONU telemetry snapshots into the signal-history table. */
-  private async sampleSignals() {
-    try {
-      const rows = await this.prisma.onuTelemetry.findMany({
-        where: { OR: [{ rxPowerDbm: { not: null } }, { status: { not: null } }] },
-        select: { onuId: true, rxPowerDbm: true, txPowerDbm: true, status: true },
-      });
-      if (!rows.length) return;
-      await this.prisma.onuSignalSample.createMany({
-        data: rows.map((r) => ({ onuId: r.onuId, rxPowerDbm: r.rxPowerDbm, txPowerDbm: r.txPowerDbm, status: r.status })),
-      });
-    } catch (e: any) {
-      this.log.warn(`Signal sample failed: ${e?.message || e}`);
-    }
-  }
-
-  /** Current link status + optical signal for every ONU on a NAS. */
-  async nasSignals(nasId: number) {
-    const onus = await this.prisma.onu.findMany({
-      where: { subscriber: { is: { nasId } } },
-      select: {
-        id: true, serialNumber: true,
-        subscriber: { select: { id: true, fullName: true, username: true } },
-        telemetry: { select: { rxPowerDbm: true, txPowerDbm: true, status: true, lastSeenAt: true } },
-      },
-      take: 2000,
-    });
-    const quality = (dbm?: number | null) => {
-      if (dbm == null) return 'unknown';
-      if (dbm >= -25) return 'good';
-      if (dbm >= -28) return 'warn';
-      return 'critical';
-    };
-    return {
-      nasId,
-      links: onus.map((o) => {
-        const st = (o.telemetry?.status || '').toUpperCase();
-        const up = st === 'ONLINE' || st === 'UP' || (st === '' && o.telemetry?.rxPowerDbm != null);
-        return {
-          onuId: o.id,
-          subscriberId: o.subscriber?.id ?? null,
-          name: o.subscriber?.fullName ?? o.serialNumber ?? `ONU #${o.id}`,
-          username: o.subscriber?.username ?? null,
-          status: o.telemetry?.status ?? (up ? 'ONLINE' : 'OFFLINE'),
-          up,
-          rxPowerDbm: o.telemetry?.rxPowerDbm ?? null,
-          txPowerDbm: o.telemetry?.txPowerDbm ?? null,
-          quality: quality(o.telemetry?.rxPowerDbm),
-          lastSeenAt: o.telemetry?.lastSeenAt ?? null,
-        };
-      }).sort((a, b) => (a.up === b.up ? 0 : a.up ? 1 : -1)), // down/critical first
-    };
-  }
-
-  /** Optical-signal history for one ONU (for a trend graph). */
-  async onuSignal(onuId: number, range = '7d') {
-    const { since } = this.rangeToInterval(range);
-    const rows = await this.prisma.onuSignalSample.findMany({
-      where: { onuId, ts: { gte: since } },
-      orderBy: { ts: 'asc' },
-      select: { ts: true, rxPowerDbm: true, txPowerDbm: true, status: true },
-    });
-    return { onuId, range, points: rows };
-  }
+  /*
+   * REMOVED: ONU optical signal sampling and its two read methods
+   * (`sampleOnuSignals`, `nasSignals`, `onuSignal`).
+   *
+   * Optical Rx/Tx power came from an SNMP walk of the OLT, and SNMP has been
+   * removed from the product by operator decision. The `onu_signal_sample`
+   * table is left in place rather than dropped: it holds real historical
+   * readings, and a migration that destroys data to tidy up a removed
+   * feature is not a trade worth making. Its nightly prune is also kept, so
+   * the table drains to empty on its own retention schedule.
+   *
+   * TRAFFIC GRAPHS ARE UNAFFECTED. Everything else in this service samples
+   * `radacct`, which FreeRADIUS writes directly and which never involved
+   * SNMP.
+   */
 
   /** Nightly: keep the sample table bounded (30 days of history). */
   @Cron('40 3 * * *')

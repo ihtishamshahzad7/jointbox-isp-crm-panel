@@ -21,7 +21,7 @@ const LEVEL: Record<string, { dot: string; label: string }> = {
 
 /**
  * Live network feed — polls the aggregator's in-memory event ring. Shows the
- * newest link ups/downs, flaps, weak signals and syslog across all NAS devices.
+ * newest link ups/downs and flaps across all NAS devices.
  */
 export default function LiveFeed({ limit = 40 }: { limit?: number }) {
   const [items, setItems] = useState<FeedItem[]>([]);
@@ -66,7 +66,7 @@ export default function LiveFeed({ limit = 40 }: { limit?: number }) {
       <div style={{ maxHeight: 360, overflowY: "auto" }}>
         {items.length === 0 && (
           <div style={{ padding: 18, fontSize: 12, color: "var(--muted)" }}>
-            No events yet. Enable SNMP or Syslog on a NAS to start tracing links.
+            No events yet.
           </div>
         )}
         {items.map((it) => {

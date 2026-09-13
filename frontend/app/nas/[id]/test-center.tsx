@@ -4,8 +4,8 @@
  * Test Center — one place to probe every integration a NAS depends on.
  *
  * Every test is a real backend call (Ping ICMP, API login, SNMP walk, CoA
- * UDP probe). RADIUS and Syslog rows are driven by real live state (server
- * health + received events), never invented. Latency is measured client-side
+ * UDP probe). The RADIUS row is driven by real live state (server
+ * health), never invented. Latency is measured client-side
  * for the round trip and reported next to each status.
  */
 import React from "react";
@@ -50,10 +50,10 @@ function TestRow({ result, onRun, running, latencyHint }: {
 
 export function TestCenter() {
   const {
-    nas, reach, radiusStats, events,
+    nas, reach, radiusStats,
     pingResult, runPing, apiRoundTrip, runApiTest,
     snmpTest, runSnmpTest, coaTest, runCoaTest,
-    runAllTests, clearTests, refreshReach, refreshEvents,
+    runAllTests, clearTests, refreshReach,
   } = useNasDetail();
   const snmpEnabled = !!nas?.snmpEnabled;
 
@@ -83,20 +83,6 @@ export function TestCenter() {
     ts: reach?.lastChecked ? String(reach.lastChecked) : new Date().toISOString(),
   };
 
-  // Real syslog signal: is this NAS actually producing events?
-  const syslogEnabled = !!nas?.syslogEnabled;
-  const syslogCount = events.length;
-  const syslogResult: TestResult | null = {
-    key: "syslog",
-    label: "Syslog",
-    status: !syslogEnabled ? "warn" : syslogCount > 0 ? "ok" : "running",
-    message: !syslogEnabled
-      ? "Syslog not enabled on this device"
-      : syslogCount > 0
-        ? `Receiving events (${syslogCount} recent) — port ${nas?.syslogPort ?? 514}`
-        : "Enabled, no events received yet",
-    ts: new Date().toISOString(),
-  };
 
   return (
     <Panel
@@ -115,7 +101,6 @@ export function TestCenter() {
         <TestRow result={snmpTest} onRun={runSnmpTest} running={snmpTest?.status === "running"} latencyHint={snmpEnabled ? `SNMP v${nas?.snmpVersion ?? "2c"} walk` : "SNMP polling disabled"} />
         <TestRow result={coaTest} onRun={runCoaTest} running={coaTest?.status === "running"} latencyHint={`CoA probe on UDP :${nas?.incomingPort ?? 3799}`} />
         <TestRow result={radiusResult} onRun={() => refreshReach({ silent: true })} running={radiusUp === null} latencyHint="FreeRADIUS server health" />
-        <TestRow result={syslogResult} onRun={refreshEvents} running={false} latencyHint={`Syslog UDP :${nas?.syslogPort ?? 514}`} />
       </div>
 
       <div className="nd-test-tail">

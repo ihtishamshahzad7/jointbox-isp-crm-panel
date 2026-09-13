@@ -83,7 +83,6 @@ export function OverviewTab({ onOpenSession, onGoto }: {
             <div className="nd-mini-cell"><div className="m-label">API round-trip</div><div className="m-value">{reach?.responseTimeMs != null ? `${reach.responseTimeMs} ms` : "—"}</div></div>
             <div className="nd-mini-cell"><div className="m-label">CoA port</div><div className="m-value nd-mono">UDP:{nas?.incomingPort ?? 3799}</div><div className="m-sub">{reach?.nasRegistered ? "registered" : "not registered"}</div></div>
             <div className="nd-mini-cell"><div className="m-label">SNMP</div><div className="m-value">{nas?.snmpEnabled ? `v${show(nas.snmpVersion, "2c")}` : "disabled"}</div><div className="m-sub">every {nas?.snmpPollSec ?? 30}s</div></div>
-            <div className="nd-mini-cell"><div className="m-label">Syslog</div><div className="m-value">{nas?.syslogEnabled ? "enabled" : "disabled"}</div><div className="m-sub">UDP:{nas?.syslogPort ?? 514}</div></div>
             <div className="nd-mini-cell"><div className="m-label">RADIUS server</div><div className="m-value">{radiusStats?.alive ? "healthy" : "down"}</div><div className="m-sub">{radiusStats?.alive ? `${radiusStats.activeSessionCount} sessions` : "check config"}</div></div>
           </div>
         </Panel>
@@ -129,7 +128,7 @@ export function OverviewTab({ onOpenSession, onGoto }: {
       </Panel>
 
       <div className="nd-two-col">
-        <Panel title="Recent events" sub="Telemetry & syslog (durable event log)">
+        <Panel title="Recent events" sub="Telemetry event log">
           {events.length === 0 ? (
             <div className="nd-empty" style={{ padding: 14 }}><div className="nd-empty-title">No events yet</div></div>
           ) : (

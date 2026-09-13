@@ -35,8 +35,6 @@ describe('demo leak ratchet', () => {
   const ALLOWED: Record<string, string> = {
     'common/scope.service.ts':
       'The one home of the rule. Its admin branch returns the demo exclusion, not {}.',
-    'ndm/ndm.service.ts':
-      'Scopes NetworkDevice. The demo seeder creates Nas rows, never NetworkDevice, so there is no demo dimension to exclude.',
     'groups/groups.service.ts':
       'Returns an access-group overlay that the calling service layers on top of scope.nasWhere(), which already excludes demo routers.',
   };

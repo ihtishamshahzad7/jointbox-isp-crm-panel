@@ -38,8 +38,6 @@ export interface NasRecord {
   snmpPollSec?: number;
   snmpTimeoutMs?: number;
   snmpRetries?: number;
-  syslogEnabled?: boolean;
-  syslogPort?: number;
   nasIdentifier?: string | null;
   monitoredPorts?: string | null;
   _count?: { subscribers: number };
@@ -355,7 +353,7 @@ export interface ServiceHealth {
 }
 
 /**
- * Separate DEVICE reachability from API / RADIUS / CoA / SNMP / Syslog health.
+ * Separate DEVICE reachability from API / RADIUS / CoA / SNMP health.
  * A router with permission-limited API is ONLINE, not offline.
  */
 export function buildServiceHealth(opts: {
@@ -418,14 +416,8 @@ export function buildServiceHealth(opts: {
       ? { key: "snmp", label: "SNMP", level: "ok", text: "Monitoring", detail: `v${nas.snmpVersion?.replace("V", "v") ?? "2c"} · every ${nas.snmpPollSec ?? 30}s` }
       : { key: "snmp", label: "SNMP", level: "warn", text: "Polling", detail: "Enabled — waiting for first sample." };
 
-  // Syslog: enabled? receiving events?
-  const syslog: ServiceHealth = !nas?.syslogEnabled
-    ? { key: "syslog", label: "Syslog", level: "off", text: "Not configured", detail: "Enable syslog in Configuration." }
-    : events.length === 0
-      ? { key: "syslog", label: "Syslog", level: "warn", text: "Listening", detail: `UDP :${nas.syslogPort ?? 514} — no events yet.` }
-      : { key: "syslog", label: "Syslog", level: "ok", text: "Receiving", detail: `${events.length} recent event(s)` };
 
-  return [device, api, radius, coa, snmp, syslog];
+  return [device, api, radius, coa, snmp];
 }
 
 // ─── API permission diagnosis (from REAL apiErrors) ──────────────

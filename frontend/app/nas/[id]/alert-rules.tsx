@@ -5,7 +5,7 @@
  *
  * There is no alert-rules backend yet, so rules live in localStorage scoped to
  * this NAS. Every threshold trigger is tied to REAL data already on this page
- * (reachability, apiErrors, session events, syslog events) so wiring a delivery
+ * (reachability, apiErrors, session events) so wiring a delivery
  * backend later only means replacing the persistence layer — the rule shape and
  * trigger conditions stay.
  */
@@ -17,8 +17,7 @@ export type AlertKind =
   | "device-offline"   // reach.apiPortOpen false
   | "api-limited"      // details.apiErrors.length > 0
   | "cpu-high"         // cpuLoad > threshold
-  | "session-storm"    // disconnect/terminate events spike within window
-  | "syslog-critical"; // critical/error syslog event
+  | "session-storm";   // disconnect/terminate events spike within window
 
 export interface AlertRule {
   id: string;
@@ -33,7 +32,6 @@ const KIND_META: Record<AlertKind, { label: string; desc: string; unit: string; 
   "api-limited":     { label: "API permission limit", desc: "RouterOS blocks one or more panel reads.", unit: "", default: 1, window: false },
   "cpu-high":        { label: "CPU high",         desc: "CPU load above the threshold.", unit: "%", default: 85, window: false },
   "session-storm":   { label: "Disconnect storm", desc: "Too many terminations within the window.", unit: "events", default: 20, window: true },
-  "syslog-critical": { label: "Syslog critical",  desc: "Critical/error severity syslog event.", unit: "", default: 1, window: false },
 };
 
 const STORE_KEY = (nasId: number) => `nb-alert-rules-${nasId}`;
@@ -104,9 +102,6 @@ export function AlertRules() {
           // Events tab). Honest "not evaluated" instead of a fake alarm.
           break;
         }
-        case "syslog-critical":
-          // Evaluated from the Events tab's severity filter (real events).
-          break;
       }
     }
     return list;
@@ -138,7 +133,7 @@ export function AlertRules() {
                   <div className="nd-rule-name">
                     {meta.label}
                     {meta.window && <em>≥ {r.threshold} events / {r.windowMin} min</em>}
-                    {!meta.window && r.kind !== "api-limited" && r.kind !== "syslog-critical" && <em>threshold {meta.unit ? `${r.threshold} ${meta.unit}` : ""}</em>}
+                    {!meta.window && r.kind !== "api-limited" && <em>threshold {meta.unit ? `${r.threshold} ${meta.unit}` : ""}</em>}
                   </div>
                   <div className="nd-rule-desc">{meta.desc}</div>
                 </div>

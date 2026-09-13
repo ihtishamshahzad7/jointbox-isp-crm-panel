@@ -1,12 +1,11 @@
 "use client";
 
 /**
- * RADIUS / SNMP / Syslog tabs.
+ * RADIUS / SNMP tabs.
  *
  * RADIUS: FreeRADIUS server health (real) + the RADIUS client list the router
  * itself reports (from /radius/print). The shared secret is ALWAYS masked.
  * SNMP: polling configuration + live test + poller status.
- * Syslog: configuration + the durable event log filtered by severity.
  */
 import React, { useMemo, useState } from "react";
 import { useNasDetail } from "./context";
@@ -169,103 +168,6 @@ function PollChart({ points, stat }: { points: Array<{ t: string; v: number }>; 
           <span className="nd-poll-hover">{new Date(points[hover].t).toLocaleTimeString()} = <b>{points[hover].v}ms</b></span>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Syslog ─────────────────────────────────────────────────────────
-export function SyslogTab() {
-  const { nas, events, refreshEvents } = useNasDetail();
-  const [sev, setSev] = useState<string>("all");
-  const [page, setPage] = useState(0);
-  const PER = 40;
-
-  // Normalize "warn" → "warning" so the fold matches DB severities.
-  const activeSev = sev === "warn" ? "warning" : sev;
-
-  const filtered = useMemo(() => {
-    if (activeSev === "all") return events;
-    return events.filter((e) => ((e.severity ?? "info").toLowerCase() === "warn" ? "warning" : (e.severity ?? "info").toLowerCase()) === activeSev);
-  }, [events, activeSev]);
-
-  const fold = ["critical", "error", "warning", "info", "success"];
-  const counts = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const e of events) {
-      const k = (e.severity ?? "info").toLowerCase() === "warn" ? "warning" : (e.severity ?? "info").toLowerCase();
-      m[k] = (m[k] ?? 0) + 1;
-    }
-    return m;
-  }, [events]);
-
-  if (!nas?.syslogEnabled) {
-    return (
-      <div className="nd-root">
-        <Panel title="Syslog">
-          <EmptyState
-            title="Syslog not enabled for this device"
-            hint="Enable the syslog toggle in Configuration (UDP :514 by default) and point the router's /system logging at this server — events will stream here."
-          />
-        </Panel>
-      </div>
-    );
-  }
-
-  const pages = Math.max(1, Math.ceil(filtered.length / PER));
-  const rows = filtered.slice(page * PER, (page + 1) * PER);
-
-  return (
-    <div className="nd-root">
-      <Panel
-        title={`Syslog events${events.length ? ` (${events.length} loaded)` : ""}`}
-        sub="Durable event log (telemetry + syslog receiver)"
-        actions={
-          <>
-            <div className="nd-ranges" role="tablist">
-              <button className={activeSev === "all" ? "on" : ""} onClick={() => { setSev("all"); setPage(0); }}>all{events.length ? ` ${events.length}` : ""}</button>
-              {fold.map((s) => (
-                <button key={s} className={activeSev === s ? "on" : ""} onClick={() => { setSev(s); setPage(0); }}>
-                  {s}{counts[s] ? ` ${counts[s]}` : ""}
-                </button>
-              ))}
-            </div>
-            <Btn size="xs" variant="ghost" onClick={refreshEvents}>Refresh</Btn>
-          </>
-        }
-      >
-        {rows.length === 0 ? (
-          <EmptyState title="No events" hint={events.length === 0 ? "Enabled but nothing received yet — confirm the router sends syslog to this server." : "No events match this severity filter."} />
-        ) : (
-          <>
-            <div className="nd-table-wrap">
-              <table className="nd-table">
-                <thead><tr><th>Time</th><th>Severity</th><th>Event</th><th>Message</th><th>User / Port</th></tr></thead>
-                <tbody>
-                  {rows.map((e) => {
-                    const sv = severityOf(e.severity);
-                    return (
-                      <tr key={e.id}>
-                        <td className="num nd-mono">{fmtDateTime(e.loggedAt)}</td>
-                        <td><span className="nd-sev" style={{ color: sv.color, background: sv.bg }}>{sv.label}</span></td>
-                        <td className="nd-mono">{e.eventType ?? "—"}</td>
-                        <td style={{ maxWidth: 380 }} title={e.message}>{e.message ?? "—"}</td>
-                        <td className="nd-mono">{e.username ?? e.port ?? "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {pages > 1 && (
-              <div className="nd-page">
-                <Btn size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>← Prev</Btn>
-                <span>{page + 1} / {pages}</span>
-                <Btn size="xs" variant="ghost" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)}>Next →</Btn>
-              </div>
-            )}
-          </>
-        )}
-      </Panel>
     </div>
   );
 }
