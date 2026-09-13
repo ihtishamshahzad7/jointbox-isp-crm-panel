@@ -76,10 +76,12 @@ log "Generating Prisma client..."
 (cd backend && npx prisma generate)
 
 log "Applying database migrations..."
-if ! (cd backend && npx prisma migrate deploy); then
-  log "No usable Prisma migration chain detected; attempting prisma db push..."
-  (cd backend && npx prisma db push)
-fi
+# A failed migration MUST fail the deployment. There is deliberately no
+# schema-sync fallback here: bypassing the migration chain on a production
+# database can silently destroy data. If migrate deploy fails, the ERR trap
+# stops the update and leaves the previous build running (verification-phase
+# Priority 1).
+(cd backend && npx prisma migrate deploy)
 
 log "Building backend..."
 (cd backend && npm run build)
