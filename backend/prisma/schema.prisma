@@ -2001,6 +2001,47 @@ model NetworkLog {
   @@index([loggedAt])
   @@index([eventType])
   @@index([username])
+
+  /// A2 · SAFEGUARD 1 — WHAT MAKES REPLAY SAFE.
+  ///
+  /// The radacct poller advances its cursor only after writing here. If it
+  /// dies in between, the same accounting row is selected again on the next
+  /// poll — which must produce the same single event, not a second one.
+  ///
+  /// A PPPoE session connects once and disconnects once, so (sessionId,
+  /// eventType) is a natural key for exactly those two transitions. The
+  /// constraint is what lets the cursor mean "processed" rather than "seen";
+  /// without it, fixing the lost-events bug would simply have traded it for a
+  /// duplicate-events bug.
+  ///
+  /// Partial, because most NetworkLog rows have no sessionId at all — router
+  /// syslog, admin actions, alerts — and those are not session transitions.
+  /// Prisma cannot express a WHERE clause on an index, so this is created by
+  /// DatabaseSetupService.ensureEventIdempotency() instead of here; the note
+  /// lives with the model so it is found by whoever reads it next.
+}
+
+/**
+ * WHERE A POLLER LEFT OFF.
+ *
+ * Before this table, `NetworkLogsService` kept its radacct position in a
+ * process variable seeded to MAX(radacctid) on every boot — so every deploy,
+ * crash and restart silently discarded the session events for however long the
+ * process was down.
+ *
+ * A cursor is (timestamp, id) rather than an id alone because radacct rows are
+ * UPDATED in place: the id of a row whose session later stops has usually
+ * already been passed. The timestamp carries the ordering and the id breaks
+ * ties between rows written in the same instant.
+ */
+model PollerCursor {
+  /// e.g. "radacct_activity", "radacct_stop"
+  name      String   @id
+  ts        DateTime @db.Timestamptz(6)
+  id        BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("poller_cursor")
 }
 
 /// ═══════════════════════════════════════════════════════════════════

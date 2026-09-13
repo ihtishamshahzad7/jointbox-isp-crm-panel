@@ -1,0 +1,17 @@
+# Shell scripts MUST be LF, always.
+#
+# install.sh was found on disk with CRLF line endings while the committed copy
+# was LF — a Windows editor had rewritten it silently. `bash -n` refuses that
+# file outright ("syntax error near unexpected token `|'"), so had it ever been
+# committed and pulled onto an Ubuntu server, the installer would not have run
+# at all. The failure would have looked like a corrupt download, not an
+# editor setting.
+#
+# `text eol=lf` makes git normalise on checkout regardless of the editor.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Same reasoning: these are read by Linux tooling.
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

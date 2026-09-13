@@ -49,8 +49,25 @@ export class PermissionsGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest();
-    const role: string | undefined = req.user?.role;
-    if (!role) return true; // unauthenticated routes are handled by their own guards
+    /**
+     * FAIL CLOSED ON AN AUTHENTICATED PRINCIPAL WITH NO ROLE.
+     *
+     * This used to be `if (!role) return true`, reasoning that a request with
+     * no role must be an unauthenticated route whose own guard decides. That
+     * holds for `req.user === undefined`. It does NOT hold once something has
+     * authenticated and simply has no role — which is exactly the shape of a
+     * subscriber portal token (see jwt.strategy.ts). The permission matrix,
+     * the AUDITOR floor and ISP_ONLY_WRITE were all skipped for precisely the
+     * principal that should never have reached an operator route.
+     *
+     * So: no principal at all → still defer to the route's own guard. A
+     * principal that authenticated but carries no operator role → refuse.
+     */
+    if (!req.user) return true; // genuinely unauthenticated — the route's own guard decides
+    const role: string | undefined = req.user.role;
+    if (!role) {
+      throw new ForbiddenException('This account is not an operator account.');
+    }
     if (role === 'SUPER_ADMIN') return true;
 
     const requestPath = (req.url || '').split('?')[0] || String(req.route?.path || '');

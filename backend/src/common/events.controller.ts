@@ -1,7 +1,14 @@
-import { Controller, Get, Request, Sse, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Request,
+  ServiceUnavailableException,
+  Sse,
+  UseGuards,
+} from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { EventsService } from './events.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { SseAuthGuard } from './sse-auth.guard';
 
 /**
  * Server-Sent Events endpoint.
@@ -34,8 +41,30 @@ export class EventsController {
    *   new EventSource(`${API}/events?token=${jwt}`)
    */
   @Get('events')
+  @UseGuards(SseAuthGuard)
   @Sse()
   stream(@Request() req: any): Observable<MessageEvent> {
+    /**
+     * A1: A CEILING ON CONCURRENT STREAMS.
+     *
+     * Every SSE connection holds an open HTTP response, an emitter listener
+     * and a 30-second heartbeat timer for as long as it lives. Nothing limited
+     * how many a worker would accept, so a frontend stuck in a reconnect loop
+     * — or anyone with the URL and a script — could accumulate them until the
+     * process ran out of memory or sockets.
+     *
+     * The limit is per worker and generous: an ISP NOC with every operator on
+     * three tabs is nowhere near it. Refusing with 503 rather than accepting
+     * and dying keeps the panel serving requests, and tells a client that
+     * retries something true.
+     */
+    const limit = Number(process.env.MAX_SSE_CLIENTS || 500);
+    if (this.events.listenerCount() >= limit) {
+      throw new ServiceUnavailableException(
+        `This backend worker is already streaming to ${limit} clients.`,
+      );
+    }
+
     return new Observable<MessageEvent>((subscriber) => {
       // Send initial connected event so the client knows the stream is live.
       // This one IS a named frame on purpose — the frontend registers a
@@ -66,8 +95,14 @@ export class EventsController {
     });
   }
 
-  /** Quick diagnostic — no auth needed. */
+  /**
+   * Quick diagnostic. Guarded too: a broadcast counter is a low-grade
+   * signal, but it is still a read of operational activity, and an
+   * unauthenticated endpoint on this controller is precisely how the stream
+   * above came to be unauthenticated for so long.
+   */
   @Get('events/status')
+  @UseGuards(SseAuthGuard)
   status() {
     return this.events.getStats();
   }

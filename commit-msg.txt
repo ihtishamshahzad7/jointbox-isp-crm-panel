@@ -1,0 +1,31 @@
+release: security hardening, correctness fixes, and a real test foundation
+
+SECURITY
+- SSE stream was unauthenticated; add SseAuthGuard (header, query fallback)
+- Centralized SSRF guard with EXTERNAL / OPERATOR_NETWORK profiles
+- Webhook URLs validated on create AND update; delivery via safeFetch
+- Diagnostics (ping/traceroute/tcp/http/dns resolver) routed through the guard
+- CSV formula injection escaped at the shared serialiser
+- Authorization matrix over all 723 routes, as a build-failing ratchet
+- CONSOLE_SHELL_ENABLED now ships as false in .env.example
+
+CORRECTNESS
+- Wallet deductions are transactional; FOR UPDATE now held by a real
+  transaction, backed by unique (subscriberId, reference)
+- Reseller wallet made transactional and given its missing ledger row
+- Invoice numbers from a per-year sequence, format unchanged
+- radacct poller: keyset cursor on (acctupdatetime, radacctid), separate
+  stop cursor, persisted in poller_cursor; events idempotent on replay
+- Live events published over Redis so they reach every PM2 worker
+- BullMQ job options no longer dropped by a second Queue construction site
+
+DEPLOY
+- install.sh: a failed migration stops the deploy; no --accept-data-loss
+- All shell scripts normalised to LF (they did not parse on Ubuntu)
+- GitHub Actions CI: shell, backend, security ratchets, integration, frontend
+
+TESTS
+- 767 unit tests, 39 integration tests against real PostgreSQL
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01X7xG929ZbVWHe8ogTG3ZLU

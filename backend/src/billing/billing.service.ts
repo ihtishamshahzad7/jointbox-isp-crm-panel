@@ -203,7 +203,24 @@ export class BillingService {
         // requiring the full price up front. This matches Zal Ultra behaviour
         // where subscribers can return from expiry with a partial payment.
         let chargeAmount = price;
-        let renewalNote = `Auto-renewal ${sub.package!.name}`;
+        /**
+         * THE PERIOD IS PART OF THE IDEMPOTENCY KEY.
+         *
+         * `deductBalance` treats `reference` as the key for "this exact charge
+         * has already been taken" and returns `alreadyDeducted` instead of
+         * charging again. This note used to be just the package name — the
+         * SAME string every month — so from the second cycle onward every
+         * full-price auto-renewal matched the previous month's row, took no
+         * money, and then carried on to write a PAID invoice, a Payment, and a
+         * 30-day expiry extension. Free service, with the books recording
+         * revenue that never arrived.
+         *
+         * (The pro-rated branch below varies its note with the day count, so
+         * it charged correctly — the bug hit the ordinary path only, which is
+         * why it would not show up in a spot check of an unusual account.)
+         */
+        const period = new Date().toISOString().slice(0, 10);
+        let renewalNote = `Auto-renewal ${sub.package!.name} [${period}]`;
         const expiryDate = sub.serviceSettings?.expiryDate;
         if (expiryDate && new Date(expiryDate) < new Date()) {
           // Days already lapsed since expiry
@@ -226,7 +243,15 @@ export class BillingService {
         }
 
         // 1. deduct wallet (posts ledger + balance tx)
-        await this.accounting.deductBalance(sub.id, chargeAmount, renewalNote);
+        //
+        // The result is CHECKED. If the charge was already taken for this
+        // period the renewal must stop here — continuing would issue a paid
+        // invoice for money that did not move, which is how the books drifted.
+        const deduction = await this.accounting.deductBalance(sub.id, chargeAmount, renewalNote);
+        if ((deduction as any)?.alreadyDeducted) {
+          lines.push(`SKIP #${sub.id} ${sub.username}: already charged for ${period}`);
+          continue;
+        }
 
         // 2. paid invoice + payment
         const invoiceNo = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}-${sub.id}`;

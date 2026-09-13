@@ -1192,21 +1192,82 @@ export class UsersService {
     });
   }
 
-  async deductBalance(id: number, amount: number) {
+  /**
+   * A4: THE RESELLER WALLET, WITH THE PROTECTION THE SUBSCRIBER WALLET ALREADY
+   * HAD.
+   *
+   * What was here read the balance, compared it to the amount, and then issued
+   * an atomic `decrement`. The decrement was never the problem — Postgres does
+   * that correctly under any concurrency. THE CHECK was the problem.
+   *
+   * Two dealers spending from the same wallet at the same moment both read
+   * 100, both concluded that 80 was affordable, and both decremented. The
+   * column ends at -60, and there is no error anywhere: each individual
+   * statement did exactly what it was told.
+   *
+   * `accounting.service.ts` documents having fixed precisely this failure for
+   * SUBSCRIBER wallets. The reseller wallet — which holds the money dealers
+   * use to activate customers — was left with the original bug. This closes it
+   * the same way: read and write inside ONE transaction, with the row locked
+   * for the duration, so the second spender waits, re-reads 20, and is
+   * correctly refused.
+   *
+   * @param reference  Optional idempotency key. When supplied, a replay of the
+   *                   same logical charge is a no-op rather than a second
+   *                   deduction — enforced by a unique index on
+   *                   ("userId", reference), not merely by this lookup.
+   */
+  async deductBalance(id: number, amount: number, reference?: string, type = 'DEDUCT', createdBy?: number) {
     if (amount <= 0) throw new BadRequestException('Amount must be greater than 0');
 
-    const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException(`User with ID ${id} not found`);
+    return this.prisma.$transaction(
+      async (tx) => {
+        // The lock must be taken BEFORE the balance is read, or the read is
+        // just as stale as it was before. Everything after this line is
+        // serialised per user.
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${id} FOR UPDATE`;
 
-    if (user.balance < amount) {
-      throw new BadRequestException(`Insufficient balance. Current balance: ${user.balance}`);
-    }
+        if (reference) {
+          const already = await tx.userBalanceTransaction.findFirst({ where: { userId: id, reference } });
+          if (already) {
+            const u = await tx.user.findUnique({
+              where: { id },
+              select: { id: true, name: true, role: true, balance: true },
+            });
+            return { ...u, alreadyDeducted: true } as any;
+          }
+        }
 
-    return this.prisma.user.update({
-      where: { id },
-      data:  { balance: { decrement: amount } },
-      select: { id: true, name: true, role: true, balance: true },
-    });
+        const user = await tx.user.findUnique({ where: { id } });
+        if (!user) throw new NotFoundException(`User with ID ${id} not found`);
+        if (user.balance < amount) {
+          throw new BadRequestException(`Insufficient balance. Current balance: ${user.balance}`);
+        }
+
+        const updated = await tx.user.update({
+          where: { id },
+          data: { balance: { decrement: amount } },
+          select: { id: true, name: true, role: true, balance: true },
+        });
+
+        // The ledger entry is written in the SAME transaction as the balance
+        // change. Previously this path wrote no ledger row at all, so a
+        // reseller deduction left no trace to reconcile against.
+        await tx.userBalanceTransaction.create({
+          data: {
+            userId: id,
+            type,
+            amount: -amount,
+            balanceAfter: updated.balance,
+            reference: reference ?? null,
+            createdBy,
+          },
+        });
+
+        return updated;
+      },
+      { timeout: 10_000 },
+    );
   }
 
   async getBalance(id: number) {

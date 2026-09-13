@@ -1,0 +1,247 @@
+# =============================================================================
+#  Jointbox CI
+# -----------------------------------------------------------------------------
+#  Until this file existed, nothing ran the test suite except a person choosing
+#  to. Every ratchet in this codebase — the demo-leak scanner, the token-scope
+#  suite, the authorization matrix, the queue-options guard — was a tripwire
+#  with nobody watching it. A ratchet that is not run on every push is a
+#  comment.
+#
+#  THE RULES THIS FILE ENFORCES, and why each is here rather than in a
+#  reviewer's head:
+#
+#    * `npm ci`, never `npm install`. The deploy scripts use `npm install`,
+#      which silently resolves NEW versions when a lock file disagrees with
+#      package.json. `npm ci` fails instead. That difference is the whole
+#      value of committing a lock file.
+#
+#    * The security suites run as their own named job. When CI goes red, the
+#      job name has to say whether it is a broken test or a broken boundary.
+#
+#    * Shell scripts are parsed. Every .sh in the tree was once committed with
+#      CRLF line endings and would not have run on Ubuntu at all — `bash -n`
+#      catches that in under a second, and the failure is otherwise invisible
+#      until a deploy dies on line 1.
+#
+#  WHAT THIS DOES NOT DO, stated so nobody mistakes a green tick for proof:
+#  there is no database here, so the behavioural cross-tenant tests do not run.
+#  They are REQUIRES EXECUTION against a real Postgres, not covered by CI.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first. Cancelling stale runs keeps the signal
+# attached to the head commit rather than to whatever was pushed ten minutes
+# ago.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # The cheapest job, first, so an obvious mistake fails in seconds rather
+  # than after a five-minute install.
+  # ───────────────────────────────────────────────────────────────────────────
+  shell:
+    name: shell scripts parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every .sh must parse on Linux
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            if ! bash -n "$f" 2>/dev/null; then
+              echo "::error file=$f::does not parse (CRLF line endings, or a syntax error)"
+              fail=1
+            fi
+          done < <(git ls-files '*.sh')
+          exit $fail
+      - name: No deploy path may authorize data loss
+        run: |
+          # `prisma db push --accept-data-loss` after a failed migration is how
+          # a migration that REFUSED to run because it would destroy data gets
+          # followed by a command explicitly permitted to destroy it.
+          if git ls-files '*.sh' '*.js' '*.json' | xargs grep -n -- '--accept-data-loss' 2>/dev/null | grep -v '^\s*#'; then
+            echo "::error::--accept-data-loss found in a tracked file"
+            exit 1
+          fi
+          echo "clean"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # `ci`, not `install`. If the lock file disagrees with package.json this
+      # fails, which is the point — a deploy that quietly resolves different
+      # versions than the ones tested is not the same software.
+      - run: npm ci
+
+      # Prisma's client is generated code that typecheck and tests both import.
+      - run: npx prisma generate
+
+      # The repo's own `lint` script passes --fix, which MUTATES files. In CI
+      # that would hide the very lint errors it is meant to report, so eslint
+      # is invoked directly.
+      - name: lint
+        run: npx eslint "src/**/*.ts"
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: unit + security tests
+        run: npm test -- --ci
+
+      - name: build
+        run: npm run build
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The security ratchets, run again on their own so a red CI names the
+  # boundary that moved. Same tests, different reporting — and this job is the
+  # one to make required on the branch.
+  # ───────────────────────────────────────────────────────────────────────────
+  security-ratchets:
+    name: security ratchets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+
+      # Fails if: a route loses its guard, an unguarded route appears that is
+      # not on the reviewed public list, the count of routes with no actor
+      # rises, a tenth unscoped bulk route appears, or unscoped DELETEs grow.
+      - name: authorization matrix
+        run: npx jest src/security/authorization-matrix.spec.ts --ci
+
+      # Fails if: a portal token becomes acceptable to the operator API, or the
+      # SSE stream loses its guard.
+      - name: token scope and SSE authentication
+        run: npx jest src/auth/token-scope.spec.ts src/common/sse-auth.spec.ts --ci
+
+      # Fails if: a service starts returning an unfiltered `{}` for an admin
+      # actor, which is how demo data reached real operators six times over.
+      - name: demo isolation
+        run: npx jest src/common/demo-leak-ratchet.spec.ts --ci
+
+      # Fails if: a second BullMQ Queue construction site appears and silently
+      # strips retries off every background job.
+      - name: queue job options
+        run: npx jest src/common/queue-options.spec.ts --ci
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The only job with a real database.
+  #
+  # A lock, a unique constraint and a sequence are behaviours of PostgreSQL,
+  # not of TypeScript. A mocked Prisma client reports all three as working
+  # whether they are or not — which is exactly how the wallet, the invoice
+  # numbering and the queue-options defect all survived a green unit suite.
+  #
+  # So R1's fixes are judged here or nowhere. TEST_DATABASE_URL is always set
+  # in CI, and the suite FAILS rather than skips if it ever goes missing.
+  # ───────────────────────────────────────────────────────────────────────────
+  integration:
+    name: integration (postgres)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        # Pinned to the major version production runs. A concurrency test is
+        # only evidence about the version it ran against.
+        image: postgres:16
+        env:
+          POSTGRES_USER: jointbox
+          POSTGRES_PASSWORD: jointbox_ci
+          POSTGRES_DB: jointbox_test
+        ports:
+          - 5432:5432
+        # Without the health check the job races the database and fails on the
+        # first connection, intermittently — the worst kind of red build.
+        options: >-
+          --health-cmd "pg_isready -U jointbox"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgres://jointbox:jointbox_ci@localhost:5432/jointbox_test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+
+      # Fails loudly if the service container is not actually reachable,
+      # rather than letting every test skip and the job go green.
+      - name: database is reachable
+        run: node -e "const{Client}=require('pg');const c=new Client({connectionString:process.env.TEST_DATABASE_URL});c.connect().then(()=>c.query('select version()')).then(r=>{console.log(r.rows[0].version);return c.end()}).catch(e=>{console.error(e.message);process.exit(1)})"
+
+      - name: integration tests
+        run: npm run test:integration
+
+  # ───────────────────────────────────────────────────────────────────────────
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: lint
+        run: npm run lint
+      - name: typecheck
+        run: npm run typecheck
+
+      # Node's built-in test runner — no test framework dependency was added
+      # for this. Covers CSV formula injection, which is a frontend-layer
+      # vulnerability and has to be tested where the serialiser lives.
+      - name: unit tests
+        run: npm run test:unit
+
+      - name: build
+        run: npm run build
+        env:
+          # The build must not reach a real API. Anything that only works
+          # against production is a build-time dependency we do not want.
+          NEXT_PUBLIC_API_URL: http://localhost:3001

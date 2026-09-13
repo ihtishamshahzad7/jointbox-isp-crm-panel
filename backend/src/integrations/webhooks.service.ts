@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import * as crypto from 'crypto';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { safeFetch, assertDestination } from '../security/outbound-guard';
 
 /**
  * WebhooksService — outbound event notifications.
@@ -67,6 +68,23 @@ export class WebhooksService {
     if (!/^https?:\/\//i.test(data.url || '')) {
       throw new BadRequestException('A valid http(s) URL is required.');
     }
+    /**
+     * REFUSE AN INTERNAL DESTINATION AT CREATION, not only at delivery.
+     *
+     * The regex above was the only check this route had, and it passes
+     * `http://127.0.0.1:6379/`, `http://169.254.169.254/latest/meta-data/`
+     * and `http://2130706433/` alike. Any authenticated user could point the
+     * server at Redis, at the database, or — on a cloud VM — at the metadata
+     * service that hands out IAM credentials, and read the response back out
+     * of the delivery log.
+     *
+     * Validating here as well as at delivery is deliberate: the operator
+     * learns their URL is unacceptable when they save it, rather than
+     * discovering it days later in a failed-delivery list. Delivery still
+     * re-checks, because DNS can change under a hostname that was fine when
+     * it was saved.
+     */
+    await assertDestination(data.url.trim(), 'EXTERNAL');
     const secret = `whsec_${crypto.randomBytes(24).toString('hex')}`;
     const hook = await this.prisma.webhook.create({
       data: {
@@ -83,6 +101,18 @@ export class WebhooksService {
 
   async update(id: number, data: any, actor?: Actor) {
     await this.assertOwned(id, actor);
+    /**
+     * `update` had NO url validation at all — not even the scheme regex that
+     * `create` used. So the bypass was simply: create a webhook pointing at
+     * https://example.com, then PATCH it to http://169.254.169.254/. The
+     * stricter of the two routes was the one an attacker never had to use.
+     *
+     * Only checked when a url is actually supplied, so a PATCH that toggles
+     * `isActive` does not fail because the saved host is briefly unresolvable.
+     */
+    if (typeof data?.url === 'string' && data.url.trim()) {
+      await assertDestination(data.url.trim(), 'EXTERNAL');
+    }
     return this.prisma.webhook.update({
       where: { id },
       data: {
@@ -190,7 +220,10 @@ export class WebhooksService {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10_000);
 
-      const res = await fetch(hook.url, {
+      // safeFetch, not fetch. The URL was checked when it was saved, but DNS
+      // can change under a hostname, and a plain fetch() follows a 302 into
+      // 169.254.169.254 without asking anyone. Every hop is re-validated.
+      const res = await safeFetch(hook.url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -201,7 +234,7 @@ export class WebhooksService {
         },
         body,
         signal: controller.signal,
-      });
+      }, 'EXTERNAL');
       clearTimeout(timer);
 
       const text = await res.text().catch(() => '');

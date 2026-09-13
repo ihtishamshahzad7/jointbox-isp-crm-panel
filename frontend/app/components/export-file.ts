@@ -13,6 +13,8 @@
  *          while this is plain XML every version of Excel opens natively.
  */
 
+import { csvSafe } from "./csv-safe";
+
 type Cell = string | number | null | undefined;
 
 function download(blob: Blob, filename: string) {
@@ -43,7 +45,10 @@ function normalise(v: Cell): string | number {
 
 export function exportCsv(headers: string[], rows: Cell[][], name = "subscribers") {
   const esc = (v: Cell) => {
-    const s = String(normalise(v));
+    // csvSafe FIRST, RFC-4180 quoting second. Excel strips the surrounding
+    // quotes while parsing and THEN evaluates the content, so quoting alone
+    // never prevented formula injection. See csv-safe.ts.
+    const s = String(csvSafe(normalise(v)));
     // Quote anything containing a delimiter, quote or newline; double inner quotes.
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };

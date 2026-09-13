@@ -3,13 +3,18 @@
  * the Import dialog expects, so an exported file re-imports cleanly (handy for
  * moving NAS / packages / pools between panels).
  */
+import { csvSafe } from "./csv-safe";
+
 export function downloadCsv(
   filename: string,
   rows: any[],
   columns: { key: string; label: string }[],
 ) {
   const esc = (v: any) => {
-    const s = v === null || v === undefined ? "" : String(v);
+    // csvSafe FIRST, RFC-4180 quoting second. The order matters: Excel strips
+    // the surrounding quotes while parsing and then evaluates what is inside,
+    // so quoting alone never prevented formula injection. See csv-safe.ts.
+    const s = v === null || v === undefined ? "" : String(csvSafe(v));
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const head = columns.map((c) => esc(c.label)).join(",");

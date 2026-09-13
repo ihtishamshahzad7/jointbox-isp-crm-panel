@@ -49,8 +49,11 @@ export class SubscribersService implements OnModuleInit {
 
   onModuleInit() {
     // ⚡ Phase 0: heavy RADIUS sync runs as background jobs, never in the request path
-    this.queue.registerProcessor('radius-sync-all', () => this.syncAllToRadius());
-    this.queue.registerProcessor('radius-sync-missing', () => this.syncMissingToRadius());
+    // The job payload carries the ACTOR-scoped where-fragment (see
+    // enqueueRadiusSync), so a sync triggered by one tenant never walks or
+    // rewrites another tenant's RADIUS profiles.
+    this.queue.registerProcessor('radius-sync-all', (data) => this.syncAllToRadius(data?.scope));
+    this.queue.registerProcessor('radius-sync-missing', (data) => this.syncMissingToRadius(data?.scope));
 
     // Self-heal any subscriber whose package / NAS / install-date links were
     // lost. Fills NULLs only, so it is safe on every boot. Delayed so it never
@@ -62,10 +65,28 @@ export class SubscribersService implements OnModuleInit {
     }, 8000).unref?.();
   }
 
-  /** Enqueue a bulk RADIUS sync job. Returns { jobId } for status polling. */
-  async enqueueRadiusSync(scope: 'all' | 'missing') {
-    const jobId = await this.queue.add(scope === 'all' ? 'radius-sync-all' : 'radius-sync-missing');
+  /**
+   * Enqueue a bulk RADIUS sync job. Returns { jobId } for status polling.
+   *
+   * The job is scoped to the ACTOR's subtree: an operator who triggers a sync
+   * expects their own customers' profiles refreshed, and the background job
+   * must never walk another tenant's subscribers. Job payload = the
+   * subscriberWhere(actor) fragment; processors merge it into their query.
+   * No actor (background/internal callers) means no restriction, exactly as
+   * before.
+   */
+  async enqueueRadiusSync(scope: 'all' | 'missing', actor?: Actor) {
+    const syncScope = actor ? await this.scope.subscriberWhere(actor) : undefined;
+    const jobId = await this.queue.add(
+      scope === 'all' ? 'radius-sync-all' : 'radius-sync-missing',
+      { scope: syncScope },
+    );
     return { jobId };
+  }
+
+  /** The where-fragment confining a RADIUS sync to the actor's subtree. */
+  async radiusSyncScope(actor?: Actor): Promise<any> {
+    return actor ? this.scope.subscriberWhere(actor) : undefined;
   }
 
   async getSyncJobStatus(jobId: string) {
@@ -3045,13 +3066,23 @@ if (!unpaid && data.username && data.password) {
     return { total: ids.length, success, failed, errors };
   }
 
-  async bulkUpdateServiceSettings(ids: number[], payload: any) {
+  async bulkUpdateServiceSettings(ids: number[], payload: any, actor?: Actor) {
+    // Actor added (verification-phase Priority 2): ids outside the caller's
+    // subtree are skipped and counted, matching bulkAction()'s documented
+    // per-item independent semantics — one bad id never aborts or contaminates
+    // the rest of the batch.
     let success = 0;
     let failed = 0;
+    let skipped = 0;
     const errors: Array<{ id: number; error: string }> = [];
+    const unique = [...new Set((ids || []).map(Number).filter(Boolean))];
 
-    for (const id of ids) {
+    for (const id of unique) {
       try {
+        if (actor && !(await this.scope.canAccessSubscriber(actor, id))) {
+          skipped++;
+          continue;
+        }
         const subscriber = await this.findOne(id);
         if (!subscriber) throw new Error('Subscriber not found');
 
@@ -3117,7 +3148,7 @@ if (!unpaid && data.username && data.password) {
       }
     }
 
-    return { total: ids.length, success, failed, errors };
+    return { total: unique.length, success, failed, skipped, errors };
   }
 
   /**
@@ -4042,13 +4073,66 @@ if (!unpaid && data.username && data.password) {
   // SYNC ALL TO RADIUS — full profile sync including speed + pool
   // This replaces the old bulk sync that only sent passwords
   // ─────────────────────────────────────────────────────────────
-  async syncAllToRadius() {
+  /**
+   * Bulk sync arbitrary subscriber ids to RADIUS.
+   *
+   * Actor added (verification-phase Priority 2): any id outside the caller's
+   * subtree is skipped with a reason, never read and never rewritten — the
+   * route previously took the ids and no caller, so it was a cross-tenant
+   * write by construction.
+   */
+  async bulkSyncToRadius(ids: number[], actor?: Actor) {
+    const unique = [...new Set((ids || []).map(Number).filter(Boolean))];
+    const results: Array<{
+      id: number;
+      username?: string;
+      status: string;
+      error?: string;
+      reason?: string;
+    }> = [];
+
+    for (const id of unique) {
+      if (actor && !(await this.scope.canAccessSubscriber(actor, id))) {
+        results.push({ id, status: 'skipped', reason: 'Outside your account.' });
+        continue;
+      }
+      const subscriber = await this.findOne(id);
+      if (subscriber && subscriber.username && subscriber.password) {
+        try {
+          await this.syncToRadius(id);
+          results.push({
+            id,
+            username: subscriber.username,
+            status: 'success',
+          });
+        } catch (error: any) {
+          results.push({
+            id,
+            username: subscriber.username,
+            status: 'failed',
+            error: error.message,
+          });
+        }
+      } else {
+        results.push({
+          id,
+          status: 'skipped',
+          reason: 'Missing username or password',
+        });
+      }
+    }
+    return { results };
+  }
+
+  async syncAllToRadius(scopeFilter?: any) {
     console.log('========================================');
     console.log('📡 FULL SYNC — ALL ACTIVE SUBSCRIBERS → RADIUS');
 
-    // Fetch all active subscribers with their package AND pool
+    // Fetch all active subscribers with their package AND pool. The optional
+    // scopeFilter (a subscriberWhere fragment, e.g. from enqueueRadiusSync)
+    // confines a tenant-triggered sync to that tenant's subtree.
     const subscribers = await this.prisma.subscriber.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...(scopeFilter || {}) },
       include: {
         package: { include: { pool: true } },
         serviceSettings: true,
@@ -4101,11 +4185,12 @@ if (!unpaid && data.username && data.password) {
   // SYNC MISSING — only adds subscribers not yet in RADIUS
   // Also syncs their full profile (speed + pool), not just password
   // ─────────────────────────────────────────────────────────────
-  async syncMissingToRadius() {
+  async syncMissingToRadius(scopeFilter?: any) {
     console.log('========================================');
     console.log('📡 SYNC MISSING SUBSCRIBERS → RADIUS');
 
     const subscribers = await this.prisma.subscriber.findMany({
+      where: scopeFilter || {},
       include: {
         package: { include: { pool: true } },
         serviceSettings: true,

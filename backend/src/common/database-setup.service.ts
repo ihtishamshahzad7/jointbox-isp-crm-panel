@@ -54,6 +54,7 @@ export class DatabaseSetupService implements OnModuleInit {
       radiusColumns: await this.ensureRadiusAccountingColumns(),
       nasreload: await this.ensureNasReload(),
       indexes: await this.ensureIndexes(),
+      moneyConstraints: await this.ensureMoneyConstraints(),
       autovacuum: await this.tuneAutovacuum(),
       archive: await this.ensureArchive(),
       ownership: await this.normaliseOwnership(),
@@ -107,6 +108,122 @@ export class DatabaseSetupService implements OnModuleInit {
          nasipaddress INET PRIMARY KEY,
          reloadtime   TIMESTAMP WITH TIME ZONE NOT NULL)`,
     ]);
+  }
+
+  /**
+   * THE CONSTRAINT THAT MAKES WALLET IDEMPOTENCY A RULE RATHER THAN A HOPE.
+   *
+   * `AccountingService.deductBalance` has always treated `reference` as an
+   * idempotency key: it looks for an existing BalanceTransaction with the same
+   * (subscriberId, reference) and, finding one, declines to charge again. That
+   * check is correct and it is not sufficient. A check is a READ, and two
+   * concurrent callers can both read "nothing there" before either writes.
+   *
+   * A unique index is the same rule expressed where it cannot be raced. With
+   * it in place the second caller does not get a second charge — it gets
+   * error 23505, which `deductBalance` now catches and reports as
+   * `alreadyDeducted`. The outcome is identical to the polite path; only the
+   * mechanism differs.
+   *
+   * WHY THIS LIVES HERE AND NOT IN A PRISMA MIGRATION
+   *  · Prisma cannot express a PARTIAL unique index (the WHERE clause), and
+   *    without it every row with a NULL reference would collide.
+   *  · Prisma wraps migration files in a transaction, and CONCURRENTLY is
+   *    rejected inside one.
+   *  · `prisma db push` removes objects it does not know about; a statement
+   *    here is reapplied on every boot, so it survives that.
+   *
+   * IF THIS FAILS, IT MEANS DUPLICATES ALREADY EXIST — and that is a finding,
+   * not a nuisance. Each one is a customer who was charged twice. The failure
+   * is logged at error level with the exact query to run, and boot continues:
+   * refusing to start the panel would not un-charge anybody.
+   *
+   * `npm run db:duplicate-charges` answers the question before you deploy.
+   */
+  private async ensureMoneyConstraints(): Promise<boolean> {
+    const constraints = [
+      {
+        name: 'balance_tx_sub_ref_uq',
+        sql: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS balance_tx_sub_ref_uq
+                ON "BalanceTransaction" ("subscriberId", reference)
+                WHERE reference IS NOT NULL`,
+        check: `SELECT "subscriberId", reference, count(*) AS copies
+                  FROM "BalanceTransaction"
+                 WHERE reference IS NOT NULL
+                 GROUP BY 1, 2 HAVING count(*) > 1 LIMIT 5`,
+        what: 'subscriber wallet',
+      },
+      {
+        name: 'network_log_session_event_uq',
+        sql: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS network_log_session_event_uq
+                ON "NetworkLog" ("sessionId", "eventType")
+                WHERE "sessionId" IS NOT NULL
+                  AND "eventType" IN ('CONNECTION','DISCONNECTION')`,
+        check: `SELECT "sessionId", "eventType", count(*) AS copies
+                  FROM "NetworkLog"
+                 WHERE "sessionId" IS NOT NULL
+                   AND "eventType" IN ('CONNECTION','DISCONNECTION')
+                 GROUP BY 1, 2 HAVING count(*) > 1 LIMIT 5`,
+        what: 'session event idempotency',
+      },
+      {
+        name: 'user_balance_tx_ref_uq',
+        sql: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS user_balance_tx_ref_uq
+                ON "UserBalanceTransaction" ("userId", reference)
+                WHERE reference IS NOT NULL`,
+        check: `SELECT "userId", reference, count(*) AS copies
+                  FROM "UserBalanceTransaction"
+                 WHERE reference IS NOT NULL
+                 GROUP BY 1, 2 HAVING count(*) > 1 LIMIT 5`,
+        what: 'reseller wallet',
+      },
+    ];
+
+    let ok = true;
+    for (const c of constraints) {
+      try {
+        const started = Date.now();
+        // An interrupted CONCURRENTLY build leaves an index that exists, is
+        // maintained on every write, and is never used — and IF NOT EXISTS
+        // would see the name and skip. Clear it first so the retry is real.
+        const invalid: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT 1 FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+            WHERE i.relname = '${c.name}' AND NOT x.indisvalid`,
+        );
+        if (invalid.length) {
+          this.logger.warn(`${c.name} was left INVALID by an interrupted build — rebuilding`);
+          await this.prisma.$executeRawUnsafe(`DROP INDEX CONCURRENTLY IF EXISTS "${c.name}"`);
+        }
+
+        await this.prisma.$executeRawUnsafe(c.sql);
+        this.logger.log(`✅ ${c.name} (${c.what}) in ${Date.now() - started}ms`);
+      } catch (e: any) {
+        const msg = String(e?.message || e);
+        if (/already exists|duplicate key|23505|unique/i.test(msg)) {
+          // Distinguish "the index is already there" from "the data would
+          // violate it". The second is the one that matters.
+          try {
+            const dupes: any[] = await this.prisma.$queryRawUnsafe(c.check);
+            if (dupes.length) {
+              this.logger.error(
+                `❌ ${c.what}: DUPLICATE CHARGES EXIST — ${c.name} could not be created.\n` +
+                  `   ${dupes.length} affected group(s), e.g. ${JSON.stringify(dupes[0])}\n` +
+                  `   Until this is reconciled, the same charge can be applied twice.\n` +
+                  `   Run: npm run db:duplicate-charges`,
+              );
+              ok = false;
+              continue;
+            }
+          } catch {
+            /* the check itself failing tells us nothing useful; fall through */
+          }
+          continue; // index already present and the data is clean
+        }
+        this.logger.warn(`${c.name}: ${msg.split('\n')[0]}`);
+        ok = false;
+      }
+    }
+    return ok;
   }
 
   /**

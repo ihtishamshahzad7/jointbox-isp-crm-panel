@@ -26,3 +26,9 @@ _LICENCE-SERVER-MOVE-ME-OUT/
 jbx-config.php
 _LICENCE-AGENT-MOVE-ME-OUT/
 jbx-agent.tgz
+
+# Scratch. `device_bash` on the Claude bridge cannot delete files, so
+# throwaway tarballs and one-off scripts are MOVED here instead of removed.
+# Nothing in it is source; delete the folder whenever you like.
+_to_delete/
+.jbtest/

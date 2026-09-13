@@ -15,6 +15,40 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
   // Track last-seen radacct & radpostauth rows to detect new entries
   // BigInt, matching lastRadPostAuthId below: radacctid is a 64-bit key, and
   // a number here would force a lossy coercion on every comparison.
+  /**
+   * A2: THE POLLING CURSOR, WHICH USED TO LOSE HALF THE EVENTS IT EXISTED TO
+   * CATCH.
+   *
+   * ── Bug one: radacct rows are UPDATED, not appended ──────────────────────
+   * FreeRADIUS writes one row per session and then rewrites THAT ROW on every
+   * interim update and on Accounting-Stop. `radacctid` never changes. The old
+   * cursor was `radacctid > lastSeen`, and it advanced for rows it saw while
+   * they were still OPEN — so once a live session's id had been passed, its
+   * eventual stop could never be selected again. No DISCONNECTION was ever
+   * logged for it, and `PppoeSession.isActive` was never set back to false.
+   *
+   * ── Bug two: the cursor was seeded to MAX() on every boot ────────────────
+   * `seedHighWaterMarks()` set it to the highest id in the table at startup,
+   * in memory only. Every deploy, crash and PM2 restart therefore skipped the
+   * entire window the process was down. Session history had a hole in it the
+   * size of every deployment ever made.
+   *
+   * ── The shape that fixes both ────────────────────────────────────────────
+   * Two persisted cursors instead of one in-memory id:
+   *
+   *   ACTIVITY  (acctupdatetime, radacctid) — new and updated sessions
+   *   STOP      (acctstoptime,   radacctid) — the separate state transition
+   *
+   * A timestamp alone is not a safe cursor: many rows share one, so `>` would
+   * skip rows and `>=` would loop forever. The id breaks the tie, and the pair
+   * gives a total order. Stops get their OWN cursor because a stop is a
+   * different transition on the same row — the row's activity position has
+   * usually already been passed by the time it closes.
+   */
+  private cursors = {
+    activity: { ts: new Date(0), id: BigInt(0) },
+    stop: { ts: new Date(0), id: BigInt(0) },
+  };
   private lastRadAcctId = BigInt(0);
   private lastRadPostAuthId = BigInt(0);
 
@@ -107,7 +141,41 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
       ]);
       if (latestAcct) this.lastRadAcctId = latestAcct.radacctid;
       if (latestAuth) this.lastRadPostAuthId = latestAuth.id;
-      this.logger.log(`High-water marks: radacct=${this.lastRadAcctId}, radpostauth=${this.lastRadPostAuthId}`);
+
+      /**
+       * A2: LOAD THE PERSISTED CURSORS, AND ONLY FALL BACK TO "NOW" ON A
+       * GENUINELY FIRST RUN.
+       *
+       * The old behaviour was to jump to MAX() unconditionally, which threw
+       * away every event that happened while the process was down. Resuming
+       * from the stored position means a deploy costs nothing but a little
+       * catch-up.
+       *
+       * On a database that has never run this poller there is no stored
+       * position, and starting from the beginning of a 90-day radacct table
+       * would replay millions of historical sessions as if they had just
+       * happened. So the FIRST run — and only the first — starts from now.
+       */
+      const stored = await this.prisma.pollerCursor.findMany({
+        where: { name: { in: ['radacct_activity', 'radacct_stop'] } },
+      });
+      const now = new Date();
+      for (const key of ['activity', 'stop'] as const) {
+        const row = stored.find((r) => r.name === `radacct_${key}`);
+        this.cursors[key] = row
+          ? { ts: row.ts, id: BigInt(row.id) }
+          : { ts: now, id: BigInt(0) };
+        if (!row) {
+          await this.prisma.pollerCursor.create({
+            data: { name: `radacct_${key}`, ts: now, id: BigInt(0) },
+          });
+        }
+      }
+      this.logger.log(
+        `Cursors: activity=${this.cursors.activity.ts.toISOString()}/${this.cursors.activity.id}, ` +
+          `stop=${this.cursors.stop.ts.toISOString()}/${this.cursors.stop.id}` +
+          `${stored.length ? ' (resumed)' : ' (first run — starting from now)'}`,
+      );
     } catch (err: any) {
       this.logger.warn(`Could not seed high-water marks: ${err.message}`);
     }
@@ -562,26 +630,39 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
   // ── RADIUS radacct → NetworkLog (connections / disconnections) ──
 
   async syncRadAcctEvents() {
-    // New stopped sessions (have acctstoptime, id > last seen)
-    const stoppedSessions = await this.prisma.radAcct.findMany({
-      where: {
-        radacctid:    { gt: this.lastRadAcctId },
-        acctstoptime: { not: null },
-      },
-      orderBy: { radacctid: 'asc' },
-      take: 200,
-    });
+    /**
+     * A2: KEYSET PAGINATION ON (timestamp, radacctid), NOT ON radacctid ALONE.
+     *
+     * Written as raw SQL because the row-value comparison `(a, b) > (x, y)` is
+     * exactly the right tool and Prisma cannot express it. It gives a total
+     * order over rows that share a timestamp — which many do, since FreeRADIUS
+     * writes them in bursts — so nothing is skipped and nothing repeats
+     * forever.
+     *
+     * STOPS ARE SELECTED SEPARATELY, by `acctstoptime`. That is the whole
+     * point of the fix: a session's activity position has almost always been
+     * passed by the time it closes, so a stop is invisible to the activity
+     * cursor. It is a different transition on the same row and needs its own
+     * high-water mark.
+     *
+     * COALESCE on the activity side because a brand-new session has an
+     * `acctstarttime` but no `acctupdatetime` until its first interim update.
+     */
+    const stoppedSessions = await this.prisma.$queryRaw<any[]>`
+      SELECT * FROM radacct
+       WHERE acctstoptime IS NOT NULL
+         AND (acctstoptime, radacctid) > (${this.cursors.stop.ts}::timestamptz, ${this.cursors.stop.id}::bigint)
+       ORDER BY acctstoptime ASC, radacctid ASC
+       LIMIT 200`;
 
-    // New active sessions (no acctstoptime, id > last seen)
-    const activeSessions = await this.prisma.radAcct.findMany({
-      where: {
-        radacctid:    { gt: this.lastRadAcctId },
-        acctstoptime: null,
-        acctstarttime: { not: null },
-      },
-      orderBy: { radacctid: 'asc' },
-      take: 200,
-    });
+    const activeSessions = await this.prisma.$queryRaw<any[]>`
+      SELECT * FROM radacct
+       WHERE acctstoptime IS NULL
+         AND acctstarttime IS NOT NULL
+         AND (COALESCE(acctupdatetime, acctstarttime), radacctid)
+             > (${this.cursors.activity.ts}::timestamptz, ${this.cursors.activity.id}::bigint)
+       ORDER BY COALESCE(acctupdatetime, acctstarttime) ASC, radacctid ASC
+       LIMIT 200`;
 
     // `a - b` is the usual comparator and is wrong for BigInt: subtraction
     // yields a BigInt, which is not the number Array.sort's contract expects.
@@ -668,6 +749,22 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
           });
         }
 
+        /**
+         * A2 · SAFEGUARD 1: THE CURSOR MEANS "PROCESSED", NOT "SEEN".
+         *
+         * It is advanced only here, after this row's NetworkLog and session
+         * state have been written. If the process dies between those two
+         * steps the row is selected again on the next poll — and that is safe
+         * because `logNetworkEvent` is idempotent on (sessionId, eventType).
+         * Replacing lost events with duplicate events would not have been a
+         * fix.
+         */
+        if (acct.acctstoptime) {
+          this.cursors.stop = { ts: new Date(acct.acctstoptime), id: BigInt(acct.radacctid) };
+        } else {
+          const at = acct.acctupdatetime ?? acct.acctstarttime;
+          this.cursors.activity = { ts: new Date(at), id: BigInt(acct.radacctid) };
+        }
         if (acct.radacctid > this.lastRadAcctId) {
           this.lastRadAcctId = acct.radacctid;
         }
@@ -677,7 +774,33 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (allNew.length > 0) {
+      // Persisted once per batch rather than once per row: a crash mid-batch
+      // costs at most a re-poll of that batch, and re-polling is free because
+      // the writes are idempotent. Writing 400 cursor rows per cycle to save
+      // that would be the wrong trade.
+      await this.persistCursors();
       this.logger.log(`Synced ${allNew.length} radacct events`);
+    }
+  }
+
+  /**
+   * Store both cursors so a restart resumes instead of skipping.
+   *
+   * Never fatal. A poller that refuses to run because it could not save its
+   * bookmark is worse than one that re-reads a batch after a restart.
+   */
+  private async persistCursors(): Promise<void> {
+    try {
+      for (const key of ['activity', 'stop'] as const) {
+        const c = this.cursors[key];
+        await this.prisma.pollerCursor.upsert({
+          where: { name: `radacct_${key}` },
+          update: { ts: c.ts, id: c.id },
+          create: { name: `radacct_${key}`, ts: c.ts, id: c.id },
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`Could not persist radacct cursors: ${e?.message || e}`);
     }
   }
 
@@ -908,20 +1031,42 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
     message?: string;
     severity: string;
   }) {
-    return this.prisma.networkLog.create({
-      data: {
-        nasId:        data.nasId,
-        eventType:    data.eventType as any,
-        eventReason:  data.eventReason,
-        subscriberId: data.subscriberId,
-        username:     data.username,
-        callerId:     data.callerId,
-        framedIp:     data.framedIp,
-        sessionId:    data.sessionId,
-        message:      data.message,
-        severity:     data.severity,
-      },
-    });
+    /**
+     * A2 · SAFEGUARD 1 IN CODE: WRITING THE SAME EVENT TWICE IS A NO-OP.
+     *
+     * The poller now advances its cursor only after this write lands, so a
+     * crash in between means the accounting row is processed again. That is
+     * only acceptable if a repeat produces nothing new.
+     *
+     * A session connects once and disconnects once, so a unique index on
+     * (sessionId, eventType) — created by DatabaseSetupService — makes the
+     * second attempt fail with 23505, and 23505 here means "already recorded",
+     * which is success. Rows without a sessionId are exempt: syslog lines and
+     * admin actions are not session transitions and legitimately repeat.
+     */
+    try {
+      return await this.prisma.networkLog.create({
+        data: {
+          nasId:        data.nasId,
+          eventType:    data.eventType as any,
+          eventReason:  data.eventReason,
+          subscriberId: data.subscriberId,
+          username:     data.username,
+          callerId:     data.callerId,
+          framedIp:     data.framedIp,
+          sessionId:    data.sessionId,
+          message:      data.message,
+          severity:     data.severity,
+        },
+      });
+    } catch (e: any) {
+      // P2002 (Prisma) / 23505 (Postgres): this exact session transition is
+      // already on record. Returning null rather than throwing keeps a replay
+      // indistinguishable from a first pass, which is what lets the cursor
+      // advance only after successful processing.
+      if (e?.code === 'P2002' || e?.code === '23505') return null;
+      throw e;
+    }
   }
 
   async logPppoeConnection(data: {

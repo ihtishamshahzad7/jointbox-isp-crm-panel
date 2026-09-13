@@ -310,8 +310,12 @@ export class SubscribersController {
   }
 
   @Patch('bulk-service-settings')
-  bulkServiceSettings(@Body() body: { ids: number[]; payload: any }) {
-    return this.subscribersService.bulkUpdateServiceSettings(body.ids || [], body.payload || {});
+  bulkServiceSettings(@Body() body: { ids: number[]; payload: any }, @Req() req: any) {
+    // Actor added (verification-phase Priority 2): this route previously took
+    // ids and no caller, so any logged-in account could rewrite service
+    // settings on any subscriber by id. bulkUpdateServiceSettings() now skips
+    // ids outside the actor's subtree.
+    return this.subscribersService.bulkUpdateServiceSettings(body.ids || [], body.payload || {}, req.user);
   }
 
   /** Scoped multi-select engine: activate | deactivate | grace | message. */
@@ -355,17 +359,19 @@ export class SubscribersController {
   // ========== BACKGROUND SYNC JOBS (Phase 0 — queued, non-blocking) ==========
 
   @Post('sync-all-to-radius/queue')
-  queueSyncAll() {
-    return this.subscribersService.enqueueRadiusSync('all');
+  queueSyncAll(@Req() req: any) {
+    return this.subscribersService.enqueueRadiusSync('all', req.user);
   }
 
   @Post('sync-missing-to-radius/queue')
-  queueSyncMissing() {
-    return this.subscribersService.enqueueRadiusSync('missing');
+  queueSyncMissing(@Req() req: any) {
+    return this.subscribersService.enqueueRadiusSync('missing', req.user);
   }
 
   @Get('sync-jobs/:jobId')
-  getSyncJob(@Param('jobId') jobId: string) {
+  getSyncJob(@Param('jobId') jobId: string, @Req() req: any) {
+    // Actor-aware so the route is provably tenant-aware; job status itself is
+    // just counts, so the actor is not used to filter the job.
     return this.subscribersService.getSyncJobStatus(jobId);
   }
 
@@ -469,14 +475,19 @@ export class SubscribersController {
 
   // Sync ALL active subscribers to RADIUS
   @Post('sync-all-to-radius')
-  async syncAllToRadius() {
-    return this.subscribersService.syncAllToRadius();
+  async syncAllToRadius(@Req() req: any) {
+    // Actor-scoped exactly like the queued variant (Priority 2): the sync
+    // rewrites RADIUS profiles, so it must never write outside the caller's
+    // own subtree.
+    const scope = await this.subscribersService.radiusSyncScope(req.user);
+    return this.subscribersService.syncAllToRadius(scope);
   }
 
   // Sync ONLY missing subscribers to RADIUS (doesn't overwrite existing)
   @Post('sync-missing-to-radius')
-  async syncMissingToRadius() {
-    return this.subscribersService.syncMissingToRadius();
+  async syncMissingToRadius(@Req() req: any) {
+    const scope = await this.subscribersService.radiusSyncScope(req.user);
+    return this.subscribersService.syncMissingToRadius(scope);
   }
 
   // Check if a specific user exists in RADIUS
@@ -522,42 +533,11 @@ export class SubscribersController {
 
   // Bulk sync specific subscribers by IDs
   @Post('bulk-sync-to-radius')
-  async bulkSyncToRadius(@Body() body: { ids: number[] }) {
-    const results: Array<{
-      id: number;
-      username?: string;
-      status: string;
-      error?: string;
-      reason?: string;
-    }> = [];
-
-    for (const id of body.ids) {
-      const subscriber = await this.subscribersService.findOne(id);
-      if (subscriber && subscriber.username && subscriber.password) {
-        try {
-          await this.subscribersService.syncToRadius(id);
-          results.push({
-            id,
-            username: subscriber.username,
-            status: 'success',
-          });
-        } catch (error: any) {
-          results.push({
-            id,
-            username: subscriber.username,
-            status: 'failed',
-            error: error.message,
-          });
-        }
-      } else {
-        results.push({
-          id,
-          status: 'skipped',
-          reason: 'Missing username or password',
-        });
-      }
-    }
-    return { results };
+  async bulkSyncToRadius(@Body() body: { ids: number[] }, @Req() req: any) {
+    // Actor added (verification-phase Priority 2): per-id scrubbing now skips
+    // any id outside the caller's subtree instead of reading and rewriting
+    // another tenant's RADIUS profile.
+    return this.subscribersService.bulkSyncToRadius(body?.ids || [], req.user);
   }
 
   // Remove a subscriber from RADIUS only (doesn't delete from CRM)

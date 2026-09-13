@@ -141,7 +141,11 @@ export class QueueService implements OnModuleDestroy {
       names.map(async (name) => {
         try {
           if (!this.queues.has(name)) {
-            this.queues.set(name, new this.bull.Queue(name, { connection: this.connection }));
+            // Third construction site, found by the ratchet in
+            // queue-options.spec.ts rather than by reading: the stats
+            // endpoint cached a bare queue too, so merely opening the queue
+            // health page was enough to strip retries off every job.
+            this.queues.set(name, this.makeQueue(name));
           }
           const c = await this.queues.get(name).getJobCounts('waiting', 'active', 'failed', 'delayed');
           return {
@@ -167,11 +171,43 @@ export class QueueService implements OnModuleDestroy {
     if (!this.bull) return [];
     for (const name of this.processors.keys()) {
       if (!this.queues.has(name)) {
-        this.queues.set(name, new this.bull.Queue(name, { connection: this.connection }));
+        this.queues.set(name, this.makeQueue(name));
       }
     }
     return [...this.queues.values()];
   }
+
+  /**
+   * THE ONE PLACE A QUEUE IS CONSTRUCTED.
+   *
+   * It has to be one place. Before this, `add()` built queues with
+   * `defaultJobOptions` and TWO other call sites built them without —
+   * and one of those, `getBullQueues()`, runs FIRST, at boot, from `main.ts`
+   * when the Bull-Board dashboard is mounted. It pre-created a Queue for every
+   * registered processor with bare options and cached it, so by the time any
+   * job was enqueued, `add()` found an existing queue and used it as-is.
+   *
+   * The effect, silently, in production: every background job ran with
+   * BullMQ's default `attempts: 1`. No retry, no exponential backoff, and no
+   * `removeOnComplete` — so a RADIUS sync or an invoice run that hit one
+   * transient Redis blip or one deadlock was simply lost, with a completed set
+   * growing without bound underneath it.
+   *
+   * Nothing about that is visible in a log. It is the kind of defect that only
+   * ever shows up as "the disconnection didn't go through last Tuesday".
+   */
+  private makeQueue(name: string): any {
+    return new this.bull.Queue(name, {
+      connection: this.connection,
+      defaultJobOptions: QueueService.JOB_OPTIONS,
+    });
+  }
+
+  static readonly JOB_OPTIONS = {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 2000 },
+    removeOnComplete: 500,
+  } as const;
 
   /** Enqueue a job. Returns a job id usable with getStatus(). */
   async add(name: string, data: any = {}): Promise<string> {
@@ -181,10 +217,7 @@ export class QueueService implements OnModuleDestroy {
     if (this.bull) {
       let queue = this.queues.get(name);
       if (!queue) {
-        queue = new this.bull.Queue(name, {
-          connection: this.connection,
-          defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 500 },
-        });
+        queue = this.makeQueue(name);
         this.queues.set(name, queue);
       }
       const job = await queue.add(name, data);

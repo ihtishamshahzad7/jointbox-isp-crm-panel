@@ -4,12 +4,34 @@ import * as net from 'net';
 import * as dns from 'dns';
 import * as https from 'https';
 import * as http from 'http';
+import { assertDestination } from '../security/outbound-guard';
 
 /**
  * On-demand network diagnostics — ping, traceroute, TCP connect/trace, DNS and
- * HTTP checks. SECURITY: user input is NEVER concatenated into a shell. Every
- * external command uses execFile with an argument array (no shell) and the host
- * is strictly validated first, so command injection is impossible.
+ * HTTP checks.
+ *
+ * SECURITY, in two separate parts that were previously conflated:
+ *
+ *  1. COMMAND INJECTION — closed, and was already closed. Every external
+ *     command uses execFile with an argument array, so there is no shell to
+ *     inject into, and `assertHost` further restricts the character set.
+ *
+ *  2. SSRF — was NOT closed, and `assertHost` never addressed it. A charset
+ *     regex happily passes `127.0.0.1`, `169.254.169.254`, `0x7f000001` and
+ *     `localhost`. This service is a first-class "connect to whatever the
+ *     caller names" tool: it will TCP-connect to any port, fetch any URL and
+ *     query any DNS resolver. Pointed at 127.0.0.1:6379 it is a Redis port
+ *     scanner; on a cloud VM, 169.254.169.254 returns IAM credentials.
+ *
+ *     The previous doc comment on this class asserted the host was "strictly
+ *     validated", which was true of its character set and of nothing else.
+ *     That sentence is why this went unnoticed for so long.
+ *
+ *  Every destination now passes `assertDestination` under the
+ *  OPERATOR_NETWORK profile: the operator's own RFC1918 network is allowed,
+ *  because diagnosing 192.168.88.20 is the entire purpose of the tool, while
+ *  loopback, link-local, cloud metadata, multicast and broadcast are refused
+ *  in every profile. No router lives at any of those.
  */
 @Injectable()
 export class DiagnosticsService {
@@ -26,6 +48,21 @@ export class DiagnosticsService {
     const p = Number(port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) throw new BadRequestException('Port must be 1–65535.');
     return p;
+  }
+
+  /**
+   * Character set first, then the actual destination.
+   *
+   * Both are needed and they defend against different things: the regex stops
+   * a shell metacharacter ever reaching an argument list, and
+   * `assertDestination` stops the request going somewhere the caller has no
+   * business reaching. Neither substitutes for the other, which is the
+   * mistake the previous version of this file made.
+   */
+  private async approve(host: string): Promise<string> {
+    const h = this.assertHost(host);
+    await assertDestination(h, 'OPERATOR_NETWORK');
+    return h;
   }
 
   private run(cmd: string, args: string[], timeoutMs: number): Promise<string> {
@@ -80,7 +117,7 @@ export class DiagnosticsService {
 
   // ── Ping ─────────────────────────────────────────────────────
   async ping(host: string, count = 4) {
-    const h = this.assertHost(host);
+    const h = await this.approve(host);
     const c = Math.min(Math.max(count, 1), 10);
     const out = await this.run('ping', ['-n', '-c', String(c), '-w', String(c + 3), h], (c + 4) * 1000);
     const loss = out.match(/([\d.]+)% packet loss/);
@@ -95,7 +132,7 @@ export class DiagnosticsService {
 
   // ── Traceroute (ICMP/UDP) ────────────────────────────────────
   async traceroute(host: string, maxHops = 20) {
-    const h = this.assertHost(host);
+    const h = await this.approve(host);
     const m = Math.min(Math.max(maxHops, 1), 30);
     const budget = (m + 6) * 2000;
 
@@ -139,7 +176,7 @@ export class DiagnosticsService {
 
   // ── TCP port connect ─────────────────────────────────────────
   async tcpPort(host: string, port: any, timeoutMs = 4000) {
-    const h = this.assertHost(host);
+    const h = await this.approve(host);
     const p = this.assertPort(port);
     const t0 = Date.now();
     return new Promise((resolve) => {
@@ -159,7 +196,7 @@ export class DiagnosticsService {
 
   // ── TCP traceroute (best effort) + definitive port reachability ──
   async tcpTrace(host: string, port: any) {
-    const h = this.assertHost(host);
+    const h = await this.approve(host);
     const p = this.assertPort(port);
     // Definitive answer: can we actually open the TCP port to the destination?
     const connect: any = await this.tcpPort(h, p, 5000);
@@ -185,11 +222,19 @@ export class DiagnosticsService {
 
   // ── DNS ──────────────────────────────────────────────────────
   async dnsLookup(name: string, type = 'A', resolver?: string) {
+    // The NAME being looked up is not a destination — resolving a name is the
+    // point of the tool, and refusing to look up one that happens to resolve
+    // internally would make it useless for exactly the diagnosis an ISP
+    // needs. Only its character set is checked.
     const n = this.assertHost(name);
     const rec = String(type || 'A').toUpperCase();
     if (!['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT'].includes(rec)) throw new BadRequestException('Unsupported record type.');
     const r = new dns.promises.Resolver();
-    if (resolver) r.setServers([this.assertHost(resolver)]);
+    // The RESOLVER, however, IS a destination: it is a server this box will
+    // send a UDP query to. Unchecked, `resolver` turns this endpoint into a
+    // probe of any internal DNS server — and, pointed at an attacker's
+    // resolver, into a data-exfiltration channel over DNS.
+    if (resolver) r.setServers([await this.approve(resolver)]);
     const t0 = Date.now();
     try {
       const answers: any = await (r as any).resolve(n, rec);
@@ -204,7 +249,7 @@ export class DiagnosticsService {
     let u: URL;
     try { u = new URL(/^https?:\/\//.test(url) ? url : `https://${url}`); } catch { throw new BadRequestException('Invalid URL.'); }
     if (!['http:', 'https:'].includes(u.protocol)) throw new BadRequestException('Only http/https URLs are supported.');
-    this.assertHost(u.hostname);
+    await this.approve(u.hostname);
     const lib = u.protocol === 'https:' ? https : http;
     const t0 = Date.now();
     return new Promise((resolve) => {

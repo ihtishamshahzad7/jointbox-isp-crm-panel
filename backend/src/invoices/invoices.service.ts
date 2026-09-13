@@ -196,10 +196,117 @@ export class InvoicesService {
     };
   }
 
-  async generateInvoiceNo() {
-    const year  = new Date().getFullYear();
-    const count = await this.prisma.invoice.count();
-    return `INV-${year}-${String(count + 1).padStart(5, '0')}`;
+  /**
+   * A5: INVOICE NUMBERS FROM A SEQUENCE, IN THE SAME FORMAT AS BEFORE.
+   *
+   * ── What was wrong ───────────────────────────────────────────────────────
+   *     const count = await this.prisma.invoice.count();
+   *     return `INV-${year}-${String(count + 1).padStart(5, '0')}`;
+   *
+   * Two problems in two lines. Concurrently, two callers both COUNT the same
+   * table, both get 4,999, and both build `INV-2026-05000`; `invoiceNo` is
+   * `@unique`, so the loser gets a constraint error in the middle of creating
+   * an invoice — the customer sees a failed action rather than a duplicate,
+   * which is the better of the two bad outcomes but still an outage under load.
+   * And `COUNT(*)` on the Invoice table is a full scan that runs on EVERY
+   * invoice creation, getting slower for the rest of the system's life.
+   *
+   * ── The format is deliberately unchanged ─────────────────────────────────
+   * `INV-<year>-<5 digits>` is what customers already have on paper, in their
+   * accounting systems and in their payment references. A sequence changes how
+   * the number is ALLOCATED, not what it looks like.
+   *
+   * ── Why a sequence PER YEAR ──────────────────────────────────────────────
+   * Because the year is part of the number. A single global sequence would
+   * carry January's counter across the year boundary and produce
+   * `INV-2027-05001` immediately after `INV-2026-05000`, which is legal but
+   * breaks the "invoices in a year are numbered from 1" expectation the
+   * current format sets. One sequence per year keeps the meaning intact.
+   *
+   * ── Why this does not touch the other three generators ───────────────────
+   * There are four invoice-number formats in this codebase — `billing.service`
+   * and `subscribers.service` use epoch-based schemes, `portal.service` uses an
+   * `ACT-` prefix. They are already collision-resistant and their formats are
+   * equally visible to customers. Consolidating them is a business decision
+   * about what an invoice number should look like, not a correctness fix, and
+   * it belongs in its own change. `npm run db:duplicate-charges` reports which
+   * of the four actually appear in a given database.
+   *
+   * ── Restart safety ───────────────────────────────────────────────────────
+   * A Postgres sequence is durable and survives restarts, deploys and crashes.
+   * On first use in a year it is created starting from one past the highest
+   * number already issued for that year, so an existing database continues its
+   * own series rather than restarting at 1 and colliding.
+   */
+  async generateInvoiceNo(): Promise<string> {
+    const year = new Date().getFullYear();
+    const seq = `invoice_no_${year}`;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const rows = await this.prisma.$queryRawUnsafe<Array<{ n: bigint }>>(
+          `SELECT nextval('${seq}') AS n`,
+        );
+        return `INV-${year}-${String(Number(rows[0].n)).padStart(5, '0')}`;
+      } catch (e: any) {
+        // 42P01 = undefined_table, which is what Postgres returns for a
+        // sequence that does not exist yet. Any other error is real.
+        const missing = e?.code === '42P01' || /does not exist/i.test(String(e?.message || ''));
+        if (!missing || attempt === 1) throw e;
+        await this.ensureInvoiceSequence(year, seq);
+      }
+    }
+    /* istanbul ignore next — the loop above either returns or throws. */
+    throw new Error('Could not allocate an invoice number');
+  }
+
+  /**
+   * Create this year's sequence, continuing from whatever has already been
+   * issued.
+   *
+   * The MAX() scan runs ONCE per year rather than once per invoice.
+   *
+   * ── `IF NOT EXISTS` IS NOT ATOMIC, AND THIS IS THE PROOF ─────────────────
+   * The obvious reading of `CREATE SEQUENCE IF NOT EXISTS` is that concurrent
+   * callers are harmless: one creates, the other finds it there. PostgreSQL
+   * does not promise that. The existence check and the creation are separate
+   * steps, so two sessions can both pass the check and the loser fails with
+   *
+   *     23505  duplicate key value violates unique constraint
+   *            "pg_class_relname_nsp_index"
+   *
+   * This was not theoretical. The first version of this method let that error
+   * escape, and `invoice-number.integration.spec.ts` caught it on the very
+   * first run — one of two concurrent callers got a number and the other got
+   * a raw Postgres catalog error in the middle of creating an invoice.
+   *
+   * The loser's error means the sequence now EXISTS, which is the outcome this
+   * method exists to produce. So it is swallowed, and the caller's retry of
+   * `nextval` then succeeds — which is where the real serialisation belongs
+   * anyway. A sequence is atomic; creating one is not.
+   *
+   * Only numbers matching this exact format are considered. The other three
+   * generators produce longer, epoch-based numbers that would otherwise
+   * suggest a starting point in the millions.
+   */
+  private async ensureInvoiceSequence(year: number, seq: string): Promise<void> {
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<Array<{ max: number | null }>>(
+        `SELECT MAX(SUBSTRING("invoiceNo" FROM 10)::int) AS max
+           FROM "Invoice"
+          WHERE "invoiceNo" ~ '^INV-${year}-[0-9]{5}$'`,
+      );
+      const start = Number(rows[0]?.max ?? 0) + 1;
+      await this.prisma.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS ${seq} START WITH ${start}`);
+    } catch (e: any) {
+      // 23505 on a catalog index, or 42P07 (duplicate_table), both mean a
+      // concurrent caller won the create. That is success for us.
+      const raced =
+        e?.code === '23505' ||
+        e?.code === '42P07' ||
+        /pg_class_relname_nsp_index|already exists/i.test(String(e?.message || ''));
+      if (!raced) throw e;
+    }
   }
 
   async create(data: any) {

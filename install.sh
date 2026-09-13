@@ -351,26 +351,50 @@ fi
 # Ownership first — anything created earlier as the postgres superuser would
 # otherwise make Prisma fail with "permission denied for table ...".
 sudo -u postgres psql -d "$DB_NAME" -qc "REASSIGN OWNED BY postgres TO $DB_USER;" >/dev/null 2>&1
-# Versioned migrations + idempotent reconcile. Same command every server runs,
-# so a fresh clone ends up byte-identical to an updated one. See MIGRATIONS.md.
+# Versioned migrations. `scripts/db-deploy.sh` runs `prisma migrate deploy` and
+# nothing else — see MIGRATIONS.md.
+#
+# A FAILED MIGRATION STOPS THE DEPLOYMENT. It did not used to.
+#
+# What this block did before, in order: caught a migration failure and printed
+# it as a WARNING; continued to the next step; found the schema missing
+# (because the migration had failed); and ran `prisma db push
+# --accept-data-loss` to "fix" it. That flag means exactly what it says. A
+# migration that refused to run BECAUSE it would destroy data was followed,
+# automatically and unattended, by a command explicitly authorised to destroy
+# it — on a database holding subscriber billing, invoices and payments.
+#
+# Nothing about that was visible in the output. The operator saw a warning
+# scroll past and an installer that finished with ticks.
+#
+# There is no safe automatic recovery from a failed migration. A human has to
+# read the error. So the installer stops here and says so.
 DB_LOG=/tmp/jointbox-db-deploy.log
 if npm run db:deploy >"$DB_LOG" 2>&1; then
   ok "Schema migrated & in sync"
 else
-  warn "db:deploy had warnings — last lines follow (full log: $DB_LOG)"
-  tail -15 "$DB_LOG"
+  err "DATABASE MIGRATION FAILED — deployment stopped. Full log: $DB_LOG"
+  tail -30 "$DB_LOG"
+  err "The database has NOT been modified past the failed step. Fix the"
+  err "migration and re-run. Do not force a schema push: this database"
+  err "holds subscriber billing."
+  exit 1
 fi
 
-# Belt and braces. db:deploy ends in `prisma db push`, so after it the schema
-# must exist. Checking a real table is the only honest confirmation: a fresh
-# database whose tables were never created takes FreeRADIUS down with
-# `relation "nas" does not exist`, and that error appears three steps later
-# where it looks like a RADIUS fault rather than a database one.
+# CONFIRMATION, NOT REPAIR.
+#
+# Checking a real table is the only honest confirmation that the schema is
+# there: a fresh database whose tables were never created takes FreeRADIUS
+# down with `relation "nas" does not exist`, and that error surfaces three
+# steps later where it looks like a RADIUS fault rather than a database one.
+#
+# If this check fails after migrations reported success, something is wrong
+# that the installer does not understand. Stopping is the correct response to
+# not understanding something about a production database.
 if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='nas'" 2>/dev/null | grep -q 1; then
-  warn "Tables still missing — forcing a schema push…"
-  npx prisma db push --accept-data-loss >>"$DB_LOG" 2>&1 \
-    && ok "Schema created by db push" \
-    || { err "Could not create the schema — see $DB_LOG"; tail -20 "$DB_LOG"; }
+  err "Migrations reported success but the schema is absent. Stopping."
+  err "Inspect $DB_LOG and the database before re-running."
+  exit 1
 fi
 # `... >/dev/null 2>&1 && ok "Backend built"` was the bug that made a broken
 # install look clean: on failure the && simply did not fire, so NEITHER a tick

@@ -79,3 +79,33 @@ export function sanitizeNasList<T extends Record<string, any>>(rows: T[]): T[] {
 export function isMask(v: any): boolean {
   return typeof v === 'string' && (v === MASK || /^[•*]{4,}$/.test(v.trim()));
 }
+
+/**
+ * Mask the NAS credentials on ANY object (or array of objects) that carries a
+ * `nas` relation.
+ *
+ * The subscriber endpoints include `nas: true`, and a Prisma relation include
+ * selects every scalar column — so `secret`, `apiPassword`, `snmpCommunity`
+ * and the SNMPv3 passphrases were shipping inside an ordinary subscriber list
+ * to anyone who could see one subscriber: a retailer, a SALES user, a
+ * read-scoped API key.
+ *
+ * That is the RADIUS shared secret. With it an attacker forges Access-Accept,
+ * CoA and Disconnect-Request packets against the BNG — free service for
+ * anyone, and the ability to knock any subscriber offline. This file's own
+ * header explains that the secret is stored in clear deliberately (FreeRADIUS
+ * reads the table directly) and is "still MASKED in API responses so it never
+ * reaches the browser". On this path it was not.
+ *
+ * Deliberately a post-hoc mask rather than a `select` allow-list: masking
+ * preserves the shape the UI already receives from nas.service, and cannot
+ * silently drop a field some page depends on.
+ */
+export function sanitizeNestedNas<T>(rows: T): T {
+  const one = (r: any) => {
+    if (!r || typeof r !== 'object') return r;
+    if (!r.nas || typeof r.nas !== 'object') return r;
+    return { ...r, nas: sanitizeNas(r.nas) };
+  };
+  return (Array.isArray(rows) ? rows.map(one) : one(rows)) as T;
+}

@@ -511,7 +511,44 @@ export class AccountingService {
     userId?: number,
     tx?: any,
   ) {
-    const client: any = tx ?? this.prisma;
+    /**
+     * A3: THE LOCK NOW LIVES INSIDE A TRANSACTION, BECAUSE OTHERWISE IT IS NOT
+     * A LOCK.
+     *
+     * This function has always taken `SELECT ... FOR UPDATE` before touching
+     * the balance. On the path where a caller supplies `tx`, that worked: the
+     * lock is held by the caller's transaction until it commits.
+     *
+     * On the path where no `tx` was supplied, it did nothing at all. The raw
+     * query ran on `this.prisma` as a standalone statement, which Postgres
+     * auto-commits immediately — releasing the row lock on the spot — and the
+     * actual balance write then happened in a SEPARATE `$transaction([...])`.
+     * Under the `pool_mode = transaction` PgBouncer config this deployment
+     * uses, the two were not even guaranteed the same server connection.
+     *
+     * The consequence was narrow but real: `billing.service.ts:250` (the
+     * nightly renewal cron) is the one caller that passes no `tx`. It cannot
+     * race itself — it is sequential — but it could race a manual renewal
+     * running through `subscribers.service.ts:3523`, which DOES hold a proper
+     * lock. One side locked; the other walked past.
+     *
+     * The fix is to stop having two paths. If no transaction was handed in,
+     * open one and re-enter with it, so every caller ends up on the branch
+     * that was always correct.
+     */
+    if (!tx) {
+      return this.prisma.$transaction(
+        (t: any) => this.deductBalance(subscriberId, amount, reference, type, userId, t),
+        {
+          // A wallet deduction is a handful of indexed statements. If it has
+          // not finished in ten seconds something is wrong, and holding a row
+          // lock open while we find out is worse than failing.
+          timeout: 10_000,
+        },
+      );
+    }
+
+    const client: any = tx;
 
     // Serialize per-subscriber wallet spending; replay of the same charge is a no-op.
     if (client.$queryRaw) {
@@ -538,28 +575,33 @@ export class AccountingService {
         },
       });
 
+    /**
+     * Both writes are inside the caller's transaction, and the row lock taken
+     * above is still held. There is no second branch any more — see the A3
+     * note at the top of this method for why there used to be one.
+     *
+     * The unique index on ("subscriberId", reference) is the backstop beneath
+     * all of this. The `already` check above is a fast path that avoids an
+     * error in the common replay case; the index is what makes a duplicate
+     * IMPOSSIBLE rather than merely unlikely. A caller racing in through some
+     * future path with no lock at all still cannot double-charge, it just
+     * finds out by exception instead of politely.
+     */
     let updated;
-    if (tx) {
-      // Inside the caller's transaction — both writes are atomic with it.
+    try {
       updated = await tx.subscriber.update({
         where: { id: subscriberId },
         data: { balance: { decrement: amount } },
       });
       await createEntry();
-    } else {
-      [updated] = await this.prisma.$transaction([
-        this.prisma.subscriber.update({ where: { id: subscriberId }, data: { balance: { decrement: amount } } }),
-        this.prisma.balanceTransaction.create({
-          data: {
-            subscriberId,
-            type,
-            amount: -amount,
-            balanceAfter: Number(subscriber.balance) - amount,
-            reference,
-            createdBy: userId,
-          },
-        }),
-      ]);
+    } catch (e: any) {
+      // P2002 is Prisma's unique-constraint violation. Reaching it means a
+      // concurrent caller committed this exact charge first — which is the
+      // same outcome as the `already` fast path, so it gets the same answer.
+      if (e?.code === 'P2002') {
+        return { subscriberId, balance: null as number | null, alreadyDeducted: true };
+      }
+      throw e;
     }
 
     await this.post([
