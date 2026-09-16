@@ -1,11 +1,36 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { RadiusSyncService } from '../nas/radius-sync.service';
+import { RadiusSyncService, type ActiveSessionsOpts } from '../nas/radius-sync.service';
 import { CoaService } from './coa.service';
 import { ScopeService } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** One live session row as the Network page renders it. */
+export interface LiveSession {
+  username: string;
+  subscriberId: number | null;
+  fullName: string | null;
+  phone: string | null;
+  package: string | null;
+  nasIp: string;
+  framedIp: string;
+  mac: string;
+  startTime: string;
+  durationSeconds: number;
+  uploadBytes: number;
+  downloadBytes: number;
+  rateBps: number;
+}
+
+/** Server-mode page (page+limit) — the DataTable "X–Y of Z" contract. */
+export interface LiveSessionPage {
+  items: LiveSession[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
 /**
  * Phase 5 network operations. RADIUS tables live in the same Postgres DB,
@@ -30,8 +55,34 @@ export class NetworkService {
   ) {}
 
   // ── Live sessions ─────────────────────────────────────────────
-  async liveSessions(nasIp?: string, actor?: any) {
-    const rows = await this.radiusSync.getActiveSessions(nasIp).catch(() => []);
+  /**
+   * Live sessions, two shapes:
+   *   • legacy: no page/limit → the FULL enriched array (backward compatible);
+   *   • server mode: BOTH page+limit → { items, total, page, pageSize } from a
+   *     true SQL page (LIMIT/OFFSET in the radacct query, COUNT for the total).
+   *     Search (q) and sorting (sortBy/sortOrder) are applied on the backend
+   *     where supported; tenancy scoping runs on every shape.
+   */
+  async liveSessions(nasIp?: string, actor?: any, opts: ActiveSessionsOpts & { page?: number; limit?: number } = {}): Promise<LiveSession[] | LiveSessionPage> {
+    const paged = opts?.page !== undefined || opts?.limit !== undefined;
+    if (!paged) {
+      const rows = await this.radiusSync.getActiveSessions(nasIp).catch(() => []);
+      return this.enrichSessions(rows, actor);
+    }
+    const page = Math.max(1, Number(opts.page) || 1);
+    const take = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
+    const offset = (page - 1) * take;
+    const q = `${opts.q ?? ''}`.trim() || undefined;
+    const [total, rawRows] = await Promise.all([
+      this.radiusSync.countActiveSessions(nasIp, q),
+      this.radiusSync.getActiveSessions(nasIp, { limit: take, offset, q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []),
+    ]);
+    return { items: await this.enrichSessions(rawRows, actor), total, page, pageSize: take };
+  }
+
+  /** Join live radacct rows to subscriber identity — scoped, enriched, and
+   *  shaped for both the legacy array and the server-mode page. */
+  private async enrichSessions(rows: any[], actor?: any) {
     if (!rows.length) return [];
     const usernames = [...new Set(rows.map((r: any) => r.username).filter(Boolean))];
     // SECURITY: a non-admin may only see sessions for subscribers in its own
@@ -71,7 +122,8 @@ export class NetworkService {
   }
 
   async liveStats(actor?: any) {
-    const sessions = await this.liveSessions(undefined, actor);
+    // No pagination opts → the legacy full-array shape by contract.
+    const sessions = (await this.liveSessions(undefined, actor)) as LiveSession[];
     const totalUp = sessions.reduce((a, s) => a + s.uploadBytes, 0);
     const totalDown = sessions.reduce((a, s) => a + s.downloadBytes, 0);
     return {

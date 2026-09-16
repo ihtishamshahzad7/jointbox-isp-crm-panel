@@ -292,3 +292,148 @@ describe('SubscribersService.activateRenewal', () => {
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * findAll() pagination — the DataTable server-mode contract.
+ *
+ * Three shapes, chosen by the query, deliberately disjoint so legacy callers
+ * are untouched:
+ *   1. no params        → legacy capped array (findMany, take = HARD_CAP)
+ *   2. ?limit=          → cursor page {items,nextCursor,hasMore} (no COUNT)
+ *   3. ?page=&limit=    → offset page {items,total,page,pageSize} (WITH COUNT,
+ *                          so the client can render "X–Y of Z")
+ */
+describe('SubscribersService.findAll pagination', () => {
+  let service: SubscribersService;
+
+  function makeMocks() {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const count = jest.fn().mockResolvedValue(0);
+    const prisma: any = {
+      subscriber: { findMany, count, findUnique: jest.fn(), update: jest.fn() },
+      $queryRaw: undefined, // live-status lookup fails → degrades to the rows as-is
+    };
+    const scope: any = {
+      isAdmin: jest.fn().mockReturnValue(false),
+      descendantIds: jest.fn().mockResolvedValue([]),
+      subscriberWhere: jest.fn().mockResolvedValue({}),
+    };
+    service = new SubscribersService(
+      prisma,
+      {} as any, // radiusSync
+      {} as any, // cache
+      {} as any, // queue
+      {} as any, // accounting
+      {} as any, // notifications
+      scope,
+      {} as any, // pricing
+      {} as any, // invoices
+      {} as any, // security
+      {} as any, // renewal
+      {} as any, // mikrotik
+      {} as any, // currency
+      {} as any, // liveTraffic
+    );
+    return { prisma, findMany, count };
+  }
+
+  it('?page= + ?limit= runs offset pagination and returns totals for the pager', async () => {
+    const { findMany, count } = makeMocks();
+    findMany.mockResolvedValue([{ id: 999, username: 'paged-row', status: 'ACTIVE' }]);
+    count.mockResolvedValue(525);
+
+    const result: any = await service.findAll({ page: '21', limit: '25' }, { id: 1 } as any);
+
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 500, take: 25, orderBy: { id: 'desc' } }),
+    );
+    // Scope had nothing to restrict — the base filter object is passed through.
+    expect(count).toHaveBeenCalledWith({ where: {} });
+    expect(result).toEqual({
+      items: [{ id: 999, username: 'paged-row', status: 'ACTIVE' }],
+      total: 525,
+      page: 21,
+      pageSize: 25,
+    });
+  });
+
+  it('offset paging is bounded to MAX_PAGE_SIZE and clamps page/preview params', async () => {
+    const { findMany, count } = makeMocks();
+    findMany.mockResolvedValue([]);
+    count.mockResolvedValue(0);
+
+    await service.findAll({ page: '0', limit: '99999' }, undefined);
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 0, take: 200 }));
+    expect(count).toHaveBeenCalledTimes(1);
+  });
+
+  it('?limit= alone keeps the cursor shape and never runs COUNT', async () => {
+    const { findMany, count } = makeMocks();
+    findMany.mockResolvedValue([]);
+
+    const result: any = await service.findAll({ limit: '25' }, undefined);
+
+    expect(count).not.toHaveBeenCalled();
+    // Cursor mode reads take + 1 rows to detect "more".
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 26 }));
+    expect(result).toEqual({ items: [], nextCursor: null, hasMore: false });
+  });
+
+  it('no pagination params keeps the legacy capped-array shape', async () => {
+    const { findMany, count } = makeMocks();
+    findMany.mockResolvedValue([{ id: 1, username: 'legacy', status: 'ACTIVE' }]);
+
+    const result: any = await service.findAll({}, undefined);
+
+    expect(count).not.toHaveBeenCalled();
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: Number(process.env.SUBSCRIBER_LIST_CAP || 2000) }),
+    );
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0]?.id).toBe(1);
+  });
+
+  it('status=STALE resolves to radacct-stale usernames with the same freshness window as the tile', async () => {
+    const { prisma, findMany } = makeMocks();
+    prisma.$queryRaw = jest.fn().mockResolvedValue([{ username: 'stale-user' }]);
+    findMany.mockResolvedValue([]);
+
+    await service.findAll({ status: 'STALE', page: '1', limit: '10' }, undefined);
+
+    const sql = (prisma.$queryRaw.mock.calls[0][0] as string[]).join('');
+    expect(sql).toContain('acctstoptime IS NULL');
+    expect(sql).toContain("INTERVAL '15 minutes'");
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ username: { in: ['stale-user'] } }),
+      }),
+    );
+  });
+
+  it('expiringDays=N filters expiryDate <= now + N days, already-expired included', async () => {
+    const { findMany } = makeMocks();
+    findMany.mockResolvedValue([]);
+
+    await service.findAll({ page: '1', limit: '10', expiringDays: '7' }, undefined);
+
+    const where: any = findMany.mock.calls[0][0].where;
+    const lte: Date = where.serviceSettings.is.expiryDate.lte;
+    const now = Date.now();
+    expect(lte.getTime()).toBeGreaterThan(now + 6 * 86400000);
+    expect(lte.getTime()).toBeLessThanOrEqual(now + 8 * 86400000);
+  });
+
+  it('server-mode sort maps whitelisted relation paths and falls back to id desc for unknown keys', async () => {
+    const { findMany } = makeMocks();
+    findMany.mockResolvedValue([]);
+
+    await service.findAll({ page: '1', limit: '10', sortBy: 'package.name', sortOrder: 'asc' }, undefined);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ orderBy: { package: { name: 'asc' } } }));
+
+    findMany.mockClear();
+    await service.findAll({ page: '1', limit: '10', sortBy: 'traffic', sortOrder: 'asc' }, undefined);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ orderBy: { id: 'desc' } }));
+  });
+});

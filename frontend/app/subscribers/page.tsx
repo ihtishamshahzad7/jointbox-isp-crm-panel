@@ -1,15 +1,35 @@
 "use client";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { money } from "../components/currency";
 import { SubscriberTable } from "./subscriber-table";
+import {
+  type DataTableFetchParams,
+  type DataTableFetchResult,
+} from "../components/data-table";
 import { SubscriberMobileList } from "./subscriber-mobile";
 import { SubscriberGroups } from "./subscriber-groups";
-import { SkeletonTable } from "../components/skeleton";
 import { Menu } from "../components/menu";
 import ImageUpload, { fileUrl } from "../components/image-upload";
 import ExportDialog from "../components/export-dialog";
 import { silent } from "../components/silent";
+import type { Subscriber, Package, Area, NasEntry, Salesperson } from "./types";
+import type { SubscriberRow } from "./subscriber-table";
+
+/** DataTable column key → backend sortBy path (backend whitelists these). */
+const SORT_FIELDS: Record<string, string> = {
+  id: "id",
+  customerId: "id",
+  customer: "fullName",
+  status: "status",
+  connection: "connectionType",
+  package: "package.name",
+  balance: "balance",
+  expiry: "serviceSettings.expiryDate",
+  nas: "nas.nasname",
+  owner: "user.name",
+  createdAt: "createdAt",
+};
 
 /**
  * UUID that works on insecure origins too. `crypto.randomUUID` is only defined
@@ -32,64 +52,8 @@ function makeUUID(): string {
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-interface Package {
-  id: number;
-  name: string;
-  price: number;
-  downloadSpeed: number;
-  uploadSpeed: number;
-  pool?: { name: string } | null;
-}
-interface Area    { id: number; name: string; }
-interface NasEntry { id: number; nasname: string; nasIp: string | null; isActive: boolean; }
-interface Salesperson { id: number; name: string; }
-
-interface Subscriber {
-  id: number;
-  fullName: string;
-  phone: string | null;
-  email: string | null;
-  address: string | null;
-  username: string | null;
-  password: string | null;
-  identity: string | null;
-  connectionType: string;
-  status: "ACTIVE" | "EXPIRED" | "SUSPENDED" | "INACTIVE";
-  packageId: number | null;
-  areaId: number | null;
-  nasId: number | null;
-  salespersonId: number | null;
-  documentUrl: string | null;
-  photoUrl?: string | null;
-  cnicFrontUrl?: string | null;
-  cnicBackUrl?: string | null;
-  installationDate: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  createdAt: string;
-  package?: Package;
-  area?: Area;
-  nas?: NasEntry;
-  /** WHO SOLD IT — attribution only. Carries no wallet and no visibility. */
-  salesperson?: Salesperson;
-  /**
-   * WHO OWNS IT — whose wallet is charged on activation and in whose subtree
-   * this customer appears.
-   *
-   * The list used to show only `salesperson`, so a customer owned by the ISP
-   * but sold by a dealer displayed the DEALER's name — and everyone read that
-   * as "the dealer owns this". The activation then charged the ISP, and the
-   * discrepancy was invisible because the two fields were never shown apart.
-   */
-  userId?: number | null;
-  user?: { id: number; name: string; role: string } | null;
-  serviceSettings?: {
-    expiryDate?: string | null;
-  } | null;
-  // Runtime-only flags added by the API / live-status merge (not columns).
-  isStaleSession?: boolean;
-  isOnline?: boolean;
-}
+// Subscriber / Package / Area / NasEntry / Salesperson live in ./types so the
+// page and the table share one row contract (see subscriber-table.tsx).
 
 interface RadiusSession {
   username: string;
@@ -251,17 +215,28 @@ export default function SubscribersPage() {
   const [time, setTime] = useState("");
   const [greeting, setGreeting] = useState("Welcome");
 
-  // Data
-  const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
+  // Data — the list lives on the SERVER now: the DataTable fetches one page
+  // at a time through fetchPage and mirrors it back here for the mobile list
+  // and the bulk-dialog name lookups. No full-array load, no client paging.
+  const [serverItems, setServerItems] = useState<SubscriberRow[]>([]);
+  const [serverTotal, setServerTotal] = useState(0);
+  /** Bump after mutations / Live refresh to re-fetch the current page. */
+  const [listToken, setListToken] = useState(0);
+  /** id → row cache so bulk dialogs can still render names of selected rows
+   *  that are no longer on the visible page. State (not a ref) so the dialogs
+   *  re-render as freshly fetched pages fill it in. */
+  const [rowsCache, setRowsCache] = useState<Map<number, SubscriberRow>>(() => new Map());
+  /** Serial number for fetchPage: when a slower OLD page response lands after
+   *  a newer one, its mirrors must not overwrite the newer page's state. The
+   *  DataTable guards its own copy the same way; this guards the page's. */
+  const fetchPageSeq = useRef(0);
   const [stats, setStats] = useState<OverviewStats>({ total: 0, active: 0, expired: 0, suspended: 0, onlineNow: 0, offline: 0, todaySignups: 0 });
   const [packages, setPackages] = useState<Package[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [nasList, setNasList] = useState<NasEntry[]>([]);
   const [salespersons, setSalespersons] = useState<Salesperson[]>([]);
-  const [loading, setLoading] = useState(true);
 
   // UI state
-  const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [connectionFilter, setConnectionFilter] = useState<string>("ALL");
   const [packageFilter, setPackageFilter] = useState<string>("ALL");
@@ -290,8 +265,6 @@ export default function SubscribersPage() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   /** Allow deleting a subscriber who has recorded payments. Off by default. */
   const [deleteForce, setDeleteForce] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
 
   const [showActivationModal, setShowActivationModal] = useState(false);
   /** Expiring-within-N-days quick filter (null = off). Replaces the old panel. */
@@ -404,17 +377,14 @@ export default function SubscribersPage() {
 
   // ── Data fetching ─────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
-    setLoading(true);
     try {
-      const [subRes, statsRes, pkgRes, areaRes, nasRes, usersRes] = await Promise.all([
-        fetch(`${API}/subscribers`, { headers }),
+      const [statsRes, pkgRes, areaRes, nasRes, usersRes] = await Promise.all([
         fetch(`${API}/subscribers/overview`, { headers }),
         fetch(`${API}/packages`, { headers }),
         fetch(`${API}/areas`, { headers }),
         fetch(`${API}/nas`, { headers }),
         fetch(`${API}/users`, { headers }),
       ]);
-      if (subRes.ok) setSubscribers(await subRes.json());
       if (statsRes.ok) setStats(await statsRes.json());
       if (pkgRes.ok) setPackages(await pkgRes.json());
       if (areaRes.ok) setAreas(await areaRes.json());
@@ -436,26 +406,61 @@ export default function SubscribersPage() {
     } catch {
       showToast("Failed to load data", "err");
     }
-    setLoading(false);
+    // The list itself is paged server-side; refresh the current page too.
+    setListToken((t) => t + 1);
   }, []);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      loadAll();
-      return;
+/**
+   * Server-mode list fetcher — the DataTable contract. Every filter the page
+   * offers has a backend equivalent (STALE and expiringDays are resolved in
+   * subscribers.service.findAll); sort keys are mapped to whitelisted DB paths
+   * and anything unmapped falls back to the backend's id desc.
+   */
+  const fetchPage = useCallback(async (p: DataTableFetchParams): Promise<DataTableFetchResult<SubscriberRow>> => {
+    const mySeq = ++fetchPageSeq.current;
+    const qs = new URLSearchParams({ page: String(p.page), limit: String(p.pageSize) });
+    const f = p.filters ?? {};
+    if (p.search.trim()) qs.set("q", p.search.trim());
+    if (f.status && f.status !== "ALL") qs.set("status", String(f.status));
+    if (f.expiringDays != null) qs.set("expiringDays", String(f.expiringDays));
+    if (f.connectionType && f.connectionType !== "ALL") qs.set("connectionType", String(f.connectionType));
+    if (f.packageId && f.packageId !== "ALL") qs.set("packageId", String(f.packageId));
+    if (f.salespersonId && f.salespersonId !== "ALL") qs.set("salespersonId", String(f.salespersonId));
+    if (f.nasId && f.nasId !== "ALL") qs.set("nasId", String(f.nasId));
+    if (f.dateFrom) qs.set("dateFrom", String(f.dateFrom));
+    if (f.dateTo) qs.set("dateTo", String(f.dateTo));
+    if (p.sort) {
+      const field = SORT_FIELDS[p.sort.key];
+      if (field) {
+        qs.set("sortBy", field);
+        qs.set("sortOrder", p.sort.dir);
+      }
     }
-    try {
-      const res = await fetch(`${API}/subscribers/search?q=${encodeURIComponent(q)}`, { headers });
-      if (res.ok) setSubscribers(await res.json());
-    } catch { /* ignore */ }
-  }, [loadAll]);
-
-  const searchRef = useRef<NodeJS.Timeout | null>(null);
-  const onSearch = (q: string) => {
-    setSearchQ(q);
-    if (searchRef.current) clearTimeout(searchRef.current);
-    searchRef.current = setTimeout(() => doSearch(q), 400);
-  };
+    const tk = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+    const res = await fetch(`${API}/subscribers?${qs}`, {
+      headers: { Authorization: `Bearer ${tk}` },
+      signal: p.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    // Superseded while in flight: the DataTable already dropped this payload
+    // (its own seq guard); drop it here too so the mirrors — mobile list,
+    // header count, select-all source — never show a stale page.
+    if (mySeq !== fetchPageSeq.current) {
+      return { items: [], total: 0, page: p.page, pageSize: p.pageSize };
+    }
+    const items: SubscriberRow[] = Array.isArray(data.items) ? data.items : [];
+    if (items.length) {
+      setRowsCache((prev) => {
+        const next = new Map(prev);
+        for (const i of items) if (i?.id != null) next.set(i.id, i);
+        return next;
+      });
+    }
+    setServerItems(items);
+    setServerTotal(Number(data.total) || 0);
+    return { items, total: Number(data.total) || 0, page: p.page, pageSize: p.pageSize };
+  }, []);
 
   // ── RADIUS helpers ────────────────────────────────────────────────────────
   const checkRadiusStatus = async (sub: Subscriber) => {
@@ -892,7 +897,7 @@ export default function SubscribersPage() {
       // ONLY when the target is already ACTIVE — that is a renewal. A plain
       // activation of an already-active customer stays blocked by the backend,
       // which is what stops the double-charge you hit.
-      const target = subscribers.find((s) => String(s.id) === String(f.subscriberId));
+      const target = rowsCache.get(Number(f.subscriberId));
       const isRenewal = String(target?.status || "").toUpperCase() === "ACTIVE";
 
       const res = await fetch(`${API}/subscribers/activate-renewal`, {
@@ -1429,33 +1434,21 @@ export default function SubscribersPage() {
   };
 
   // ── Filtering ─────────────────────────────────────────────────────────────
-  const filtered = subscribers
-    .filter((s) => {
-      if (statusFilter === "ALL") return true;
-      if (statusFilter === "STALE") return s.isStaleSession === true;
-      return s.status === statusFilter;
-    })
-    // Expiring-within-N-days chip (includes already-expired so nothing is missed).
-    .filter((s) => {
-      if (expiringDays == null) return true;
-      const raw = s.serviceSettings?.expiryDate;
-      if (!raw) return false;
-      const days = Math.ceil((new Date(raw).getTime() - Date.now()) / 86400000);
-      return days <= expiringDays;
-    })
-    .filter((s) => connectionFilter === "ALL" || s.connectionType === connectionFilter)
-    .filter((s) => packageFilter === "ALL" || String(s.packageId || "") === packageFilter)
-    .filter((s) => salespersonFilter === "ALL" || String(s.salespersonId || "") === salespersonFilter)
-    .filter((s) => nasFilter === "ALL" || String(s.nasId || "") === nasFilter)
-    .filter((s) => {
-      if (!dateFrom && !dateTo) return true;
-      const source = s.serviceSettings?.expiryDate || s.installationDate || s.createdAt;
-      if (!source) return false;
-      const dt = new Date(source).getTime();
-      const from = dateFrom ? new Date(dateFrom).getTime() : -Infinity;
-      const to = dateTo ? new Date(dateTo + "T23:59:59").getTime() : Infinity;
-      return dt >= from && dt <= to;
-    });
+  // The list is filtered SERVER-side now: every filter below is forwarded to
+  // findAll() via serverFilters + fetchPage (STALE and expiringDays included).
+  // The DataTable resets to page 1 itself when the filter object changes.
+  // Memoized on the filter VALUES so unrelated re-renders (toasts, dialogs,
+  // live-status checks) don't churn the DataTable's fetch effect.
+  const serverFilters: Record<string, unknown> = useMemo(() => ({
+    status: statusFilter,
+    expiringDays,
+    connectionType: connectionFilter,
+    packageId: packageFilter,
+    salespersonId: salespersonFilter,
+    nasId: nasFilter,
+    dateFrom,
+    dateTo,
+  }), [statusFilter, expiringDays, connectionFilter, packageFilter, salespersonFilter, nasFilter, dateFrom, dateTo]);
 
   // Shared style for drill-down cells (package / NAS / area / salesperson).
   const drillSt: React.CSSProperties = {
@@ -1465,21 +1458,18 @@ export default function SubscribersPage() {
     transition: "opacity .12s",
   };
 
-  const totalPages = Math.max(Math.ceil(filtered.length / pageSize), 1);
-  const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
-
   const toggleSelected = (id: number) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
+  // Server-mode select-all: toggles every row on the CURRENT fetched page.
   const toggleSelectAllCurrentPage = () => {
-    const ids = paged.map((s) => s.id);
-    const allSelected = ids.every((id) => selectedIds.includes(id));
+    const pageIds = serverItems.map((s) => s.id);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
     if (allSelected) {
-      setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
+      setSelectedIds((prev) => prev.filter((id) => !pageIds.includes(id)));
     } else {
-      setSelectedIds((prev) => Array.from(new Set([...prev, ...ids])));
+      setSelectedIds((prev) => [...prev, ...pageIds.filter((id) => !prev.includes(id))]);
     }
   };
 
@@ -1670,17 +1660,8 @@ export default function SubscribersPage() {
 
           {/* Toolbar */}
           <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: t.textMuted, pointerEvents: "none" }}>
-                <Ic.Search />
-              </span>
-              <input
-                placeholder="Search by name, phone, username, email, identity…"
-                value={searchQ}
-                onChange={(e) => onSearch(e.target.value)}
-                style={{ ...inputSt, paddingLeft: 30, width: "100%" }}
-              />
-            </div>
+            {/* Search lives inside the table now (server-side, debounced by the
+                DataTable) — same backend q= search, one fewer duplicate input. */}
             <div className="jb-status-filters" style={{ display: "flex", gap: 4 }}>
               {["ALL", "ACTIVE", "STALE", "EXPIRED", "SUSPENDED", "INACTIVE"].map((s) => (
                 <button
@@ -1720,7 +1701,7 @@ export default function SubscribersPage() {
               ].map((c) => (
                 c.d === 0
                   ? <span key="lbl" className="jb-exp-lbl">{c.label}</span>
-                  : <button key={c.d} onClick={() => { setExpiringDays(expiringDays === c.d ? null : c.d); setPage(1); }}
+                  : <button key={c.d} onClick={() => { setExpiringDays(expiringDays === c.d ? null : c.d); }}
                       className={expiringDays === c.d ? "on" : ""}
                       title={`Show subscribers expiring within ${c.d} day(s)`}>{c.label}</button>
               ))}
@@ -1766,24 +1747,24 @@ export default function SubscribersPage() {
 
           {showFilters && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, marginBottom: 14 }}>
-              <select style={{ ...inputSt, cursor: "pointer" }} value={connectionFilter} onChange={(e) => { setConnectionFilter(e.target.value); setPage(1); }}>
+              <select style={{ ...inputSt, cursor: "pointer" }} value={connectionFilter} onChange={(e) => { setConnectionFilter(e.target.value); }}>
                 <option value="ALL">Connection Type: All</option>
                 {["FTTH", "ADSL", "G4_LTE", "WIRELESS", "FIBER"].map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-              <select style={{ ...inputSt, cursor: "pointer" }} value={packageFilter} onChange={(e) => { setPackageFilter(e.target.value); setPage(1); }}>
+              <select style={{ ...inputSt, cursor: "pointer" }} value={packageFilter} onChange={(e) => { setPackageFilter(e.target.value); }}>
                 <option value="ALL">Package: All</option>
                 {packages.map((pk) => <option key={pk.id} value={pk.id}>{pk.name}</option>)}
               </select>
-              <select style={{ ...inputSt, cursor: "pointer" }} value={salespersonFilter} onChange={(e) => { setSalespersonFilter(e.target.value); setPage(1); }}>
+              <select style={{ ...inputSt, cursor: "pointer" }} value={salespersonFilter} onChange={(e) => { setSalespersonFilter(e.target.value); }}>
                 <option value="ALL">Salesperson: All</option>
                 {salespersons.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
               </select>
-              <select style={{ ...inputSt, cursor: "pointer" }} value={nasFilter} onChange={(e) => { setNasFilter(e.target.value); setPage(1); }}>
+              <select style={{ ...inputSt, cursor: "pointer" }} value={nasFilter} onChange={(e) => { setNasFilter(e.target.value); }}>
                 <option value="ALL">NAS: All</option>
                 {nasList.map((n) => <option key={n.id} value={n.id}>{n.nasname}</option>)}
               </select>
-              <input type="date" style={inputSt} value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
-              <input type="date" style={inputSt} value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
+              <input type="date" style={inputSt} value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); }} />
+              <input type="date" style={inputSt} value={dateTo} onChange={(e) => { setDateTo(e.target.value); }} />
             </div>
           )}
 
@@ -1796,7 +1777,6 @@ export default function SubscribersPage() {
               else if (dim === "package") setPackageFilter(k);
               else if (dim === "status") setStatusFilter(k);
               else if (dim === "owner") setSalespersonFilter(k);
-              setPage(1);
             }} />
           )}
 
@@ -1819,88 +1799,59 @@ export default function SubscribersPage() {
             </div>
           )}
 
-          {/* Subscriber Table */}
+          {/* Subscriber Table — SERVER MODE: the DataTable pages via fetchPage.
+              It owns page/pageSize/sort/search; this page owns the filters
+              (serverFilters), the selection and the bulk actions. The mobile
+              list mirrors the same fetched page. */}
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 16px", borderBottom: `1px solid ${t.cardBorder}` }}>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 Subscriber List
-                <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 400, marginLeft: 8 }}>{filtered.length} shown</span>
+                <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 400, marginLeft: 8 }}>{serverTotal.toLocaleString()} shown</span>
               </span>
               <span style={{ fontSize: 11, color: t.textMuted }}>Username + Password → auto-synced to FreeRADIUS on save</span>
             </div>
 
-            {loading ? (
-              <SkeletonTable rows={8} cols={6} />
-            ) : filtered.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 50, color: t.textMuted }}>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>👥</div>
-                No subscribers. Click <b>+ Add Subscriber</b> to register the first one.
-              </div>
-            ) : (
-              <>
-              <SubscriberMobileList
-                rows={paged.map((s: any) => {
-                  const expiryRaw = s.serviceSettings?.expiryDate || null;
-                  const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
-                  const daysLeft = expiryDate ? Math.ceil((expiryDate.getTime() - Date.now()) / 86400000) : null;
-                  return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
-                })}
-                onOpen={openDetail}
-                onEdit={openEdit}
-                onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
-                onDeactivate={deactivateSub}
-                onActivate={(r) => { setActivationForm((p) => ({ ...p, subscriberId: String(r.id), packageId: String(r.packageId || "") })); setShowActivationModal(true); }}
-                onDelete={(r) => setDeleteConfirm(r)}
-              />
+            <SubscriberMobileList
+              rows={serverItems.map((s) => {
+                const expiryRaw = s.serviceSettings?.expiryDate || null;
+                const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
+                const daysLeft = expiryDate ? Math.ceil((expiryDate.getTime() - Date.now()) / 86400000) : null;
+                return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
+              })}
+              onOpen={openDetail}
+              onEdit={openEdit}
+              onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
+              onDeactivate={deactivateSub}
+              onActivate={(r) => { setActivationForm((p) => ({ ...p, subscriberId: String(r.id), packageId: String(r.packageId || "") })); setShowActivationModal(true); }}
+              onDelete={(r) => setDeleteConfirm(r)}
+            />
 
-              <SubscriberTable
-                rows={paged.map((s: any) => {
-                  const expiryRaw = s.serviceSettings?.expiryDate || null;
-                  const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
-                  const daysLeft = expiryDate
-                    ? Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-                    : null;
-                  // The composed table reads isOnline/daysLeft directly; this page
-                  // tracks live state as liveStatus and computes days-left per render,
-                  // so both are added here rather than changing the table's contract.
-                  return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
-                })}
-                selectedIds={selectedIds}
-                onToggle={toggleSelected}
-                onToggleAll={toggleSelectAllCurrentPage}
-                onOpen={openDetail}
-                onEdit={openEdit}
-                onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
-                onDeactivate={deactivateSub}
-                onActivate={(r) => { setActivationForm((p) => ({ ...p, subscriberId: String(r.id), packageId: String(r.packageId || "") })); setShowActivationModal(true); }}
-                onDelete={(r) => setDeleteConfirm(r)}
-                money={money}
-                onRefresh={loadAll}
-              />
-              </>
-            )}
-
-            {!loading && filtered.length > 0 && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderTop: `1px solid ${t.cardBorder}` }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <select style={{ ...inputSt, width: 90, padding: "4px 6px" }} value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
-                    {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}/page</option>)}
-                  </select>
-                  <button onClick={toggleSelectAllCurrentPage} style={{ background: "transparent", border: `1px solid ${t.cardBorder}`, borderRadius: 6, color: t.textSub, fontSize: 11, padding: "5px 8px", cursor: "pointer" }}>
-                    Toggle Page Selection
-                  </button>
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <button onClick={() => setPage((p) => Math.max(p - 1, 1))} disabled={safePage <= 1} style={{ background: "transparent", border: `1px solid ${t.cardBorder}`, borderRadius: 6, color: t.textSub, fontSize: 11, padding: "5px 8px", cursor: "pointer", opacity: safePage <= 1 ? 0.5 : 1 }}>
-                    Prev
-                  </button>
-                  <span style={{ fontSize: 11, color: t.textMuted }}>Page {safePage} of {totalPages}</span>
-                  <button onClick={() => setPage((p) => Math.min(p + 1, totalPages))} disabled={safePage >= totalPages} style={{ background: "transparent", border: `1px solid ${t.cardBorder}`, borderRadius: 6, color: t.textSub, fontSize: 11, padding: "5px 8px", cursor: "pointer", opacity: safePage >= totalPages ? 0.5 : 1 }}>
-                    Next
-                  </button>
-                </div>
-              </div>
-            )}
+            <SubscriberTable
+              fetchPage={fetchPage}
+              filters={serverFilters}
+              refreshToken={listToken}
+              totalCount={serverTotal}
+              rows={serverItems.map((s) => {
+                const expiryRaw = s.serviceSettings?.expiryDate || null;
+                const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
+                const daysLeft = expiryDate
+                  ? Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                  : null;
+                return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
+              })}
+              selectedIds={selectedIds}
+              onToggle={toggleSelected}
+              onToggleAll={toggleSelectAllCurrentPage}
+              onOpen={openDetail}
+              onEdit={openEdit}
+              onMove={(r) => { setSelectedIds([r.id]); openTransfer(); }}
+              onDeactivate={deactivateSub}
+              onActivate={(r) => { setActivationForm((p) => ({ ...p, subscriberId: String(r.id), packageId: String(r.packageId || "") })); setShowActivationModal(true); }}
+              onDelete={(r) => setDeleteConfirm(r)}
+              money={money}
+              onRefresh={() => setListToken((t) => t + 1)}
+            />
           </div>
 
           {/* Compact RADIUS health badge — replaces the old full-width panel.
@@ -3091,7 +3042,7 @@ export default function SubscribersPage() {
         <Portal><div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowActivationModal(false)}>
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Activation / Renewal</div>
-            {String(subscribers.find((s) => String(s.id) === String(activationForm.subscriberId))?.status || "").toUpperCase() === "ACTIVE" && (
+            {String(rowsCache.get(Number(activationForm.subscriberId))?.status || "").toUpperCase() === "ACTIVE" && (
               <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 9, background: "rgba(16,185,129,.10)", border: "1px solid rgba(16,185,129,.4)", fontSize: 11.5, color: t.textSub, lineHeight: 1.6 }}>
                 <b style={{ color: "#10B981" }}>Already activated — locked.</b>{" "}
                 This customer is active, so this will be a <b>renewal</b> (extends their period and charges again).
@@ -3103,7 +3054,7 @@ export default function SubscribersPage() {
                 <label style={labelSt}>Subscriber</label>
                 <select style={{ ...inputSt, cursor: "pointer" }} value={activationForm.subscriberId} onChange={(e) => setActivationForm((p) => ({ ...p, subscriberId: e.target.value }))}>
                   <option value="">Select subscriber</option>
-                  {subscribers.map((s) => <option key={s.id} value={s.id}>{s.fullName} ({s.username})</option>)}
+                  {Array.from(rowsCache.values()).map((s) => <option key={s.id} value={s.id}>{s.fullName} ({s.username})</option>)}
                 </select>
               </div>
               <div>
@@ -3426,7 +3377,7 @@ export default function SubscribersPage() {
             </div>
 
             <div style={{ maxHeight: 120, overflowY: "auto", border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: 8, fontSize: 11.5, marginBottom: 14 }}>
-              {subscribers.filter((s) => selectedIds.includes(s.id)).map((s) => (
+              {Array.from(rowsCache.values()).filter((s) => selectedIds.includes(s.id)).map((s) => (
                 <div key={s.id} style={{ padding: "2px 0" }}>
                   <b>{s.fullName}</b> <span style={{ color: t.textMuted }}>· {s.username}</span>
                 </div>
@@ -3488,7 +3439,7 @@ export default function SubscribersPage() {
             <div style={{ fontWeight: 800, fontSize: 15, color: "#f87171", marginBottom: 8 }}>Mass Delete Subscribers</div>
             <div style={{ fontSize: 12, color: t.textSub, marginBottom: 8 }}>Selected subscribers: {selectedIds.length}</div>
             <div style={{ maxHeight: 140, overflowY: "auto", border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: 8, fontSize: 11 }}>
-              {subscribers.filter((s) => selectedIds.includes(s.id)).map((s) => <div key={s.id}>{s.fullName}</div>)}
+              {Array.from(rowsCache.values()).filter((s) => selectedIds.includes(s.id)).map((s) => <div key={s.id}>{s.fullName}</div>)}
             </div>
             <div style={{ fontSize: 11, color: "#ff7070", marginTop: 8 }}>This action cannot be undone.</div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>

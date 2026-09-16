@@ -34,8 +34,8 @@ export class NetworkController {
   }
 
   @Get('live')
-  live(@Query('nasIp') nasIp: string, @Req() req: any) {
-    return this.network.liveSessions(nasIp, req.user);
+  live(@Query() query: any, @Req() req: any) {
+    return this.network.liveSessions(query?.nasIp, req.user, query);
   }
 
   @Get('live/stats')

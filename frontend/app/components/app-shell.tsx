@@ -15,6 +15,7 @@ import BottomNav from './bottom-nav';
 import Avatar from './avatar';
 import { BRAND } from '../../lib/brand';
 import { LANGS, useI18n } from '../../lib/i18n';
+import { LicenceProvider, LicenceBanner } from './licence';
 
 const API = API_BASE;
 
@@ -182,6 +183,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/users', 'admin'],
   ['/security', 'admin'],
   ['/settings', 'admin'],
+  ['/licence', 'admin'],
   ['/my-profile', 'admin'],
 ];
 
@@ -1186,6 +1188,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="app-shell-page-inner">
             {/* Renders nothing unless there are static IP charges to chase. */}
             <StaticIpBanner />
+            {/* Renders nothing on an ACTIVE licence, which is the normal case. */}
+            <LicenceBanner />
             {children}
           </div>
         </main>
@@ -1214,6 +1218,13 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  return <AppShell>{children}</AppShell>;
+  // The provider goes here, not around the portal or login: it polls an
+  // authenticated endpoint, and it installs the 402 interceptor that the
+  // operator screens need. The subscriber portal has neither concern.
+  return (
+    <LicenceProvider>
+      <AppShell>{children}</AppShell>
+    </LicenceProvider>
+  );
 }
 

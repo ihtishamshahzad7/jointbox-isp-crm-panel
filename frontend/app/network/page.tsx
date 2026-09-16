@@ -1,13 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import {
+  DataTable,
+  type DtColumn,
+  type DataTableFetchParams,
+  type DataTableFetchResult,
+} from "../components/data-table";
 
 const API = API_BASE;
 
-const T = {
+/** Theme tokens shared by the graph/stat cards. */
+interface NetTheme {
+  bg: string; card: string; border: string; row: string;
+  text: string; muted: string; sub: string;
+  accent: string; green: string; red: string; amber: string;
+}
+
+const T: NetTheme = {
   bg: "var(--bg)", card: "var(--surface)", border: "var(--border)", row: "var(--surface-2)",
   text: "var(--text)", muted: "var(--muted)", sub: "var(--muted)",
   accent: "#0ea5e9", green: "#22c55e", red: "#ef4444", amber: "#f59e0b",
@@ -28,7 +41,7 @@ const mbps = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} Gbps` : `${m.
  * over a rolling window. Drops (a session ending) clamp to zero rather than
  * drawing a negative spike.
  */
-function LiveTraffic({ hist, T }: { hist: { d: number; u: number }[]; T: any }) {
+function LiveTraffic({ hist, T }: { hist: { d: number; u: number }[]; T: NetTheme }) {
   const W = 640, H = 150, P = 8;
   const max = Math.max(1, ...hist.map((p) => Math.max(p.d, p.u)));
   const top = max * 1.2;
@@ -63,32 +76,84 @@ function LiveTraffic({ hist, T }: { hist: { d: number; u: number }[]; T: any }) 
   );
 }
 
+/** One live session row — exactly the shape the backend /network/live returns. */
+interface SessionRow {
+  username: string;
+  subscriberId: number | null;
+  fullName: string | null;
+  phone: string | null;
+  package: string | null;
+  nasIp: string;
+  framedIp: string;
+  mac: string;
+  startTime: string;
+  durationSeconds: number;
+  uploadBytes: number;
+  downloadBytes: number;
+  rateBps: number;
+}
+
+/** Stat cards — /network/live/stats. BIGINT values arrive as strings. */
+interface NetStats {
+  online: number;
+  knownSubscribers: number;
+  totalDownloadBytes: string | number;
+  totalUploadBytes: string | number;
+}
+
+/** MAC-binding modal payload — GET /network/mac/:username. */
+interface MacBinding { boundMacs?: string[] }
+
+/** DataTable column key → backend sortBy whitelist key (see ActiveSessionsOpts). */
+const SORT_FIELDS: Record<string, string> = {
+  username: "username",
+  ip: "framedIp",
+  mac: "mac",
+  nas: "nasIp",
+  uptime: "durationSeconds",
+  rate: "rateBps",
+};
+
 export default function NetworkPage() {
   const router = useRouter();
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [stats, setStats] = useState<any>(null);
+  const [stats, setStats] = useState<NetStats | null>(null);
   const [auto, setAuto] = useState(true);
   const [msg, setMsg] = useState("");
-  const [macFor, setMacFor] = useState<any>(null);
-  const [macBinding, setMacBinding] = useState<any>(null);
+  const [macFor, setMacFor] = useState<SessionRow | null>(null);
+  const [macBinding, setMacBinding] = useState<MacBinding | null>(null);
   const [macInput, setMacInput] = useState("");
   const [rateHist, setRateHist] = useState<{ d: number; u: number }[]>([]);
   const prevSample = useRef<{ d: number; u: number; t: number } | null>(null);
-  const timer = useRef<any>(null);
+  /** Bumped to re-fetch the CURRENT page only (5s Live, manual, post-action). */
+  const [listToken, setListToken] = useState(0);
+  /** NAS device filter — "" means every router. Fed from /nas (id → nasIp). */
+  const [nasFilter, setNasFilter] = useState("");
+  const [nasList, setNasList] = useState<{ id: number; nasname: string; nasIp: string }[]>([]);
+
+  // Stable identity: changes only when the NAS filter VALUE changes, so the
+  // DataTable's fetch effect isn't re-triggered by unrelated re-renders
+  // (the 5s stat tick, toasts, modals).
+  const tableFilters = useMemo(() => ({ nasIp: nasFilter }), [nasFilter]);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
-  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+  // Memoized so get/loadStats stay referentially stable — otherwise every
+  // render would recreate the fetch chain and re-run the mount effect.
+  const headers = useCallback(
+    () => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }),
+    [token],
+  );
 
   const get = useCallback(async (path: string) => {
-    const r = await fetch(`${API}${path}`, { headers });
+    const r = await fetch(`${API}${path}`, { headers: headers() });
     if (r.status === 401) { router.push("/login"); throw new Error("unauthorized"); }
     return r.json();
-  }, [token]);
+  }, [router, headers]);
 
-  const load = useCallback(async () => {
+  /** Stats + the throughput graph only. The LIST is paged server-side by the
+   *  DataTable (fetchPage); the browser never holds the full session set. */
+  const loadStats = useCallback(async () => {
     try {
-      const [s, st] = await Promise.all([get("/network/live"), get("/network/live/stats")]);
-      setSessions(Array.isArray(s) ? s : []);
+      const st = await get("/network/live/stats");
       setStats(st);
 
       // Turn cumulative byte totals into a live rate: delta bytes ÷ delta time.
@@ -111,23 +176,63 @@ export default function NetworkPage() {
 
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
-    load();
-  }, []);
+    // Initial load: both fetches land their state AFTER await, so nothing is
+    // set synchronously during this effect's own execution — no render cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadStats();
+    get("/nas").then((d) => {
+      const list = Array.isArray(d) ? d : d?.data ?? [];
+      setNasList(list.map((n: { id: number; nasname: string; nasIp: string }) => ({ id: n.id, nasname: n.nasname, nasIp: n.nasIp }))
+        .filter((n: { nasIp: string }) => n.nasIp));
+    }).catch(() => {});
+  }, [token, router, get, loadStats]);
 
+  // 5s Live: refetch the CURRENT page (token bump) + the stat cards. The
+  // DataTable's own stale-response guard means an older page response can
+  // never overwrite a newer one.
   useEffect(() => {
-    if (auto) { timer.current = setInterval(load, 5000); return () => clearInterval(timer.current); }
-    if (timer.current) clearInterval(timer.current);
-  }, [auto, load]);
+    if (auto) {
+      const iv = setInterval(() => { loadStats(); setListToken((t) => t + 1); }, 5000);
+      return () => clearInterval(iv);
+    }
+  }, [auto, loadStats]);
+
+  /** Server-mode list fetcher — the DataTable contract. Filters/sort/search
+   *  ride along as query params; nasIp is the device filter. */
+  const fetchPage = useCallback(async (p: DataTableFetchParams): Promise<DataTableFetchResult<SessionRow>> => {
+    const qs = new URLSearchParams({ page: String(p.page), limit: String(p.pageSize) });
+    const f = p.filters ?? {};
+    if (p.search.trim()) qs.set("q", p.search.trim());
+    if (f.nasIp) qs.set("nasIp", String(f.nasIp));
+    if (p.sort) {
+      const field = SORT_FIELDS[p.sort.key];
+      if (field) {
+        qs.set("sortBy", field);
+        qs.set("sortOrder", p.sort.dir);
+      }
+    }
+    const res = await fetch(`${API}/network/live?${qs}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: p.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const items: SessionRow[] = Array.isArray(data.items) ? data.items : [];
+    return { items, total: Number(data.total) || 0, page: p.page, pageSize: p.pageSize };
+  }, [token]);
+
+  const bump = () => setListToken((t) => t + 1);
 
   async function disconnect(username: string) {
     if (!confirm(`Disconnect ${username}? They'll be dropped from the network.`)) return;
-    const r = await fetch(`${API}/network/disconnect/${username}`, { method: "POST", headers });
+    const r = await fetch(`${API}/network/disconnect/${username}`, { method: "POST", headers: headers() });
     const data = await r.json();
     setMsg(data?.disconnected ? `Disconnected ${username} (${data.method})` : data?.message || "Failed");
-    load();
+    loadStats();
+    bump();
   }
 
-  async function changeSpeed(s: any) {
+  async function changeSpeed(s: SessionRow) {
     if (!s.subscriberId) { setMsg("This session isn't linked to a subscriber."); return; }
     const dl = prompt(`New DOWNLOAD speed (Mbps) for ${s.username}:`, "10");
     if (dl === null) return;
@@ -137,11 +242,11 @@ export default function NetworkPage() {
     if (!(d > 0) || !(u > 0)) { setMsg("Enter valid speeds in Mbps."); return; }
     try {
       const r = await fetch(`${API}/network/bandwidth/${s.subscriberId}`, {
-        method: "POST", headers, body: JSON.stringify({ downloadSpeed: d, uploadSpeed: u }),
+        method: "POST", headers: headers(), body: JSON.stringify({ downloadSpeed: d, uploadSpeed: u }),
       });
       const data = await r.json();
       setMsg(data?.message || (r.ok ? "Speed updated" : "Speed change failed"));
-      load();
+      bump();
     } catch { setMsg("Speed change failed"); }
   }
 
@@ -150,43 +255,133 @@ export default function NetworkPage() {
     setSyncing(true);
     setMsg("Checking routers…");
     try {
-      const r = await fetch(`${API}/subscribers/integrity/sessions`, { headers });
+      const r = await fetch(`${API}/subscribers/integrity/sessions`, { headers: headers() });
       const d = await r.json();
       if (!r.ok) { setMsg(d?.message || "Sync failed"); return; }
       setMsg(
         `Synced ${d.routers} router(s): closed ${d.closed} ghost session(s)` +
         (d.skipped ? `, skipped ${d.skipped} unreachable` : "") + ".",
       );
-      load();
+      loadStats();
+      bump();
     } catch { setMsg("Sync failed — check router API credentials"); }
     finally { setSyncing(false); }
   }
 
-  async function openMac(s: any) {
+  async function openMac(s: SessionRow) {
     setMacFor(s);
     setMacInput(s.mac || "");
     setMacBinding(await get(`/network/mac/${s.username}`));
   }
   async function bindMac() {
-    const r = await fetch(`${API}/network/mac/${macFor.username}`, { method: "POST", headers, body: JSON.stringify({ mac: macInput }) });
+    if (!macFor) return;
+    const r = await fetch(`${API}/network/mac/${macFor.username}`, { method: "POST", headers: headers(), body: JSON.stringify({ mac: macInput }) });
     const data = await r.json();
     if (data?.bound) { setMacBinding(await get(`/network/mac/${macFor.username}`)); setMsg("MAC bound"); }
     else setMsg(data?.message || "Failed");
   }
   async function autolearn() {
-    const r = await fetch(`${API}/network/mac/${macFor.username}/autolearn`, { method: "POST", headers });
+    if (!macFor) return;
+    const r = await fetch(`${API}/network/mac/${macFor.username}/autolearn`, { method: "POST", headers: headers() });
     const data = await r.json();
     if (data?.bound) { setMacBinding(await get(`/network/mac/${macFor.username}`)); setMsg("MAC learned from live session"); }
     else setMsg(data?.message || "Failed");
   }
   async function unbind(mac: string) {
-    await fetch(`${API}/network/mac/${macFor.username}?mac=${encodeURIComponent(mac)}`, { method: "DELETE", headers });
+    if (!macFor) return;
+    await fetch(`${API}/network/mac/${macFor.username}?mac=${encodeURIComponent(mac)}`, { method: "DELETE", headers: headers() });
     setMacBinding(await get(`/network/mac/${macFor.username}`));
   }
 
+  const columns: DtColumn<SessionRow>[] = [
+    {
+      key: "subscriber",
+      header: "Subscriber",
+      width: 200,
+      render: (s) => (
+        <>
+          <span style={{ fontWeight: 700 }}>{s.fullName || <span style={{ color: T.muted }}>unknown</span>}</span>
+          <div style={{ fontSize: 11, color: T.muted }}>{s.package || ""}</div>
+        </>
+      ),
+    },
+    {
+      key: "username",
+      header: "Username",
+      sortable: true,
+      render: (s) => <span style={{ color: T.sub }}>{s.username}</span>,
+    },
+    {
+      key: "ip",
+      header: "IP",
+      sortable: true,
+      render: (s) => <span style={{ color: T.sub }}>{s.framedIp || "—"}</span>,
+    },
+    {
+      key: "mac",
+      header: "MAC",
+      sortable: true,
+      render: (s) => <span style={{ color: T.sub, fontSize: 11 }}>{s.mac || "—"}</span>,
+    },
+    {
+      key: "nas",
+      header: "NAS",
+      defaultHidden: true,
+      sortable: true,
+      render: (s) => <code style={{ fontSize: 11 }}>{s.nasIp}</code>,
+    },
+    {
+      key: "uptime",
+      header: "Uptime",
+      sortable: true,
+      sortValue: (s) => s.durationSeconds,
+      render: (s) => hms(s.durationSeconds),
+    },
+    {
+      key: "traffic",
+      header: "↓ / ↑",
+      align: "right",
+      sortValue: (s) => s.downloadBytes + s.uploadBytes,
+      render: (s) => (
+        <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>{gb(s.downloadBytes)} / {gb(s.uploadBytes)}</span>
+      ),
+    },
+    {
+      key: "rate",
+      header: "Rate",
+      align: "right",
+      sortable: true,
+      sortValue: (s) => s.rateBps,
+      render: (s) => <span style={{ color: T.green }}>{rate(s.rateBps)}</span>,
+    },
+    {
+      key: "actions",
+      header: "",
+      exportable: false,
+      width: 210,
+      render: (s) => (
+        <span style={{ display: "inline-flex", gap: 6, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+          {s.subscriberId && (
+            <button
+              title="Manage MAC bindings for this user"
+              onClick={() => openMac(s)}
+              style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub }}
+            >MAC</button>
+          )}
+          {s.subscriberId && (
+            <button
+              title="Change this customer's speed live via RADIUS CoA (no reconnect)"
+              onClick={() => changeSpeed(s)}
+              style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub }}
+            >Speed</button>
+          )}
+          <button style={btn(T.red)} onClick={() => disconnect(s.username)}>Disconnect</button>
+        </span>
+      ),
+    },
+  ];
+
   const card: React.CSSProperties = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16 };
-  const th: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: T.muted, fontSize: 11, textTransform: "uppercase" };
-  const td: React.CSSProperties = { padding: "8px 10px", fontSize: 13, color: T.text };
   const input: React.CSSProperties = { background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", color: T.text, fontSize: 13 };
   const btn = (bg: string): React.CSSProperties => ({ background: bg, color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
 
@@ -197,6 +392,15 @@ export default function NetworkPage() {
           the online stats below rise into view. */}
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         {msg && <span style={{ fontSize: 12, color: T.accent, cursor: "pointer", marginRight: "auto" }} onClick={() => setMsg("")}>{msg} ✕</span>}
+        <select
+          value={nasFilter}
+          onChange={(e) => setNasFilter(e.target.value)}
+          title="Show sessions from one router only"
+          style={{ ...input, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}
+        >
+          <option value="">All routers</option>
+          {nasList.map((n) => <option key={n.id} value={n.nasIp}>{n.nasname}</option>)}
+        </select>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 2, background: T.card, border: `1px solid ${T.border}`, borderRadius: 999, padding: 3 }}>
           <button
             onClick={() => setAuto(!auto)}
@@ -206,7 +410,7 @@ export default function NetworkPage() {
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: auto ? "#6EE7B7" : T.sub, boxShadow: auto ? "0 0 6px #6EE7B7" : "none" }} />
             Live 5s
           </button>
-          <button style={{ border: "none", background: "transparent", color: T.sub, cursor: "pointer", borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600 }} onClick={load}>Refresh</button>
+          <button style={{ border: "none", background: "transparent", color: T.sub, cursor: "pointer", borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600 }} onClick={() => { loadStats(); bump(); }}>Refresh</button>
         </div>
         <button
           onClick={syncSessions}
@@ -225,8 +429,9 @@ export default function NetworkPage() {
           {[
             ["Online now", stats.online, T.green],
             ["Known subscribers", stats.knownSubscribers, T.accent],
-            ["Total download", gb(stats.totalDownloadBytes), T.text],
-            ["Total upload", gb(stats.totalUploadBytes), T.text],
+            // BIGINT totals arrive as strings (JSON-safe); coerce for display.
+            ["Total download", gb(Number(stats.totalDownloadBytes)), T.text],
+            ["Total upload", gb(Number(stats.totalUploadBytes)), T.text],
           ].map(([label, val, color]) => (
             <div key={label as string} style={card}>
               <div style={{ fontSize: 11, color: T.muted, textTransform: "uppercase" }}>{label}</div>
@@ -236,35 +441,27 @@ export default function NetworkPage() {
         </div>
       )}
 
-      <div style={card}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-              <th style={th}>Subscriber</th><th style={th}>Username</th><th style={th}>IP</th><th style={th}>MAC</th>
-              <th style={th}>Uptime</th><th style={{ ...th, textAlign: "right" }}>↓ / ↑</th><th style={{ ...th, textAlign: "right" }}>Rate</th><th style={th} />
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((s, i) => (
-              <tr key={s.username + i} style={{ background: i % 2 ? "transparent" : T.row }}>
-                <td style={td}>{s.fullName || <span style={{ color: T.muted }}>unknown</span>}<div style={{ fontSize: 11, color: T.muted }}>{s.package || ""}</div></td>
-                <td style={{ ...td, color: T.sub }}>{s.username}</td>
-                <td style={{ ...td, color: T.sub }}>{s.framedIp || "—"}</td>
-                <td style={{ ...td, color: T.sub, fontSize: 11 }}>{s.mac || "—"}</td>
-                <td style={td}>{hms(s.durationSeconds)}</td>
-                <td style={{ ...td, textAlign: "right", fontSize: 12 }}>{gb(s.downloadBytes)} / {gb(s.uploadBytes)}</td>
-                <td style={{ ...td, textAlign: "right", color: T.green }}>{rate(s.rateBps)}</td>
-                <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
-                  {s.subscriberId && <button style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, marginRight: 6 }} onClick={() => openMac(s)}>MAC</button>}
-                  {s.subscriberId && <button title="Change this customer's speed live via RADIUS CoA (no reconnect)" style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, marginRight: 6 }} onClick={() => changeSpeed(s)}>Speed</button>}
-                  <button style={btn(T.red)} onClick={() => disconnect(s.username)}>Disconnect</button>
-                </td>
-              </tr>
-            ))}
-            {!sessions.length && <tr><td style={{ ...td, color: T.muted }} colSpan={8}>No active sessions right now. (Sessions appear here when subscribers are online via RADIUS.)</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {/* Active sessions — SERVER MODE: one page at a time from /network/live.
+          The 5-second Live toggle above only refetches the current page. */}
+      <DataTable
+        columns={columns}
+        rowKey={(s) => `${s.username}::${s.nasIp}::${s.framedIp}::${s.startTime}`}
+        fetchPage={fetchPage}
+        filters={tableFilters}
+        refreshToken={listToken}
+        searchable
+        searchPlaceholder="Search username, IP, MAC or NAS…"
+        storageKey="jb_netlive"
+        defaultPageSize={50}
+        pageSizes={[25, 50, 100]}
+        exportName="live-sessions"
+        emptySlot={
+          <>
+            <b>No active sessions right now.</b>
+            <span>Sessions appear here when subscribers are online via RADIUS. If the routers are up and the people are connected, check RADIUS accounting (logs → RADIUS diagnostics).</span>
+          </>
+        }
+      />
 
       {macFor && (
         <Portal><div style={{ position: "fixed", inset: 0, background: "#000a", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }} onClick={() => setMacFor(null)}>

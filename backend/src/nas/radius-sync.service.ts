@@ -15,6 +15,35 @@ export interface RadiusPolicyAttr {
 }
 
 /**
+ * Server-mode options for getActiveSessions / countActiveSessions (the Network
+ * page's DataTable). All fields additive — the legacy no-opt call is unchanged.
+ * `sortBy` is NOT free text: it maps through ACTIVE_SESSION_SORTS, so the
+ * client can never inject SQL.
+ */
+export interface ActiveSessionsOpts {
+  limit?: number;
+  offset?: number;
+  q?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+/** Whitelisted ORDER BY targets for live sessions — column names and the two
+ *  SELECT aliases (duration_seconds / rate_bps) that back computed columns.
+ *  Keys are the Network page DataTable column keys. */
+export const ACTIVE_SESSION_SORTS: Record<string, string> = {
+  username: 'username',
+  framedIp: 'framedipaddress',
+  mac: 'callingstationid',
+  nasIp: 'nasipaddress',
+  startTime: 'acctstarttime',
+  durationSeconds: 'duration_seconds',
+  uploadBytes: 'acctinputoctets',
+  downloadBytes: 'acctoutputoctets',
+  rateBps: 'rate_bps',
+};
+
+/**
  * POOL, NOT CLIENT.
  *
  * This service held a single `pg.Client` shared by everything that touches
@@ -928,9 +957,10 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async getActiveSessions(nasIp?: string): Promise<any[]> {
+  async getActiveSessions(nasIp?: string, opts: ActiveSessionsOpts = {}): Promise<any[]> {
     try {
       this.ensureConnected();
+      const params: any[] = [];
       let query = `
         SELECT
           username,
@@ -944,7 +974,13 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
                      EXTRACT(EPOCH FROM (NOW() - acctstarttime))::int)
           ) AS duration_seconds,
           acctinputoctets  AS upload_bytes,
-          acctoutputoctets AS download_bytes
+          acctoutputoctets AS download_bytes,
+          -- Live throughput for the Network page Rate column/sort.
+          ((COALESCE(acctinputoctets, 0) + COALESCE(acctoutputoctets, 0)) * 8)
+            / NULLIF(
+                GREATEST(0, COALESCE(NULLIF(acctsessiontime, 0),
+                          EXTRACT(EPOCH FROM (NOW() - acctstarttime))::int)),
+                0) AS rate_bps
         FROM radacct a
         WHERE acctstoptime IS NULL
           -- Same freshness rule as the subscriber list / overview: a session
@@ -954,17 +990,65 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
           -- every throughput total and top-talkers list they appear in.
           ${demoSessionExclusionSql('a')}
       `;
-      const params: any[] = [];
       if (nasIp) {
-        query += ' AND nasipaddress = $1';
-        params.push(nasIp);
+        query += ' AND nasipaddress = $' + params.push(nasIp);
       }
-      query += ' ORDER BY acctstarttime DESC';
+      // Server-mode search (Network page): username / IP / MAC / NAS.
+      const q = (opts.q ?? '').trim();
+      if (q) {
+        const like = `%${q}%`;
+        query += ` AND (username ILIKE $${params.push(like)}
+                   OR framedipaddress ILIKE $${params.push(like)}
+                   OR callingstationid ILIKE $${params.push(like)}
+                   OR nasipaddress ILIKE $${params.push(like)})`;
+      }
+      // Whitelisted server-side sort; anything unknown keeps the legacy order.
+      const sort = ACTIVE_SESSION_SORTS[`${opts.sortBy ?? ''}`.trim()] ?? null;
+      const dir = String(opts.sortOrder ?? '') === 'asc' ? 'ASC' : 'DESC';
+      query += sort ? ` ORDER BY ${sort} ${dir}` : ' ORDER BY acctstarttime DESC';
+      // Server-mode paging: limit/offset are pushed through the SAME WHERE so
+      // the page is a true subset — not a slice of everything.
+      if (opts.limit != null) {
+        query += ` LIMIT $${params.push(Math.max(1, Math.floor(Number(opts.limit) || 50)))}
+                  OFFSET $${params.push(Math.max(0, Math.floor(Number(opts.offset) || 0)))}`;
+      }
       const result = await this.pgClient.query(query, params);
       return result.rows;
     } catch (error: any) {
       this.logger.error(`Failed to get active sessions: ${error.message}`);
       return [];
+    }
+  }
+
+  /** COUNT of the same live-session window getActiveSessions() selects, for
+   *  the DataTable's "X–Y of Z" pager. Must mirror the WHERE exactly. */
+  async countActiveSessions(nasIp?: string, q?: string): Promise<number> {
+    try {
+      this.ensureConnected();
+      const params: any[] = [];
+      let query = `
+        SELECT COUNT(*)::int AS total
+        FROM radacct a
+        WHERE acctstoptime IS NULL
+          AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'
+          ${demoSessionExclusionSql('a')}
+      `;
+      if (nasIp) {
+        query += ' AND nasipaddress = $' + params.push(nasIp);
+      }
+      const likeQ = (q ?? '').trim();
+      if (likeQ) {
+        const like = `%${likeQ}%`;
+        query += ` AND (username ILIKE $${params.push(like)}
+                   OR framedipaddress ILIKE $${params.push(like)}
+                   OR callingstationid ILIKE $${params.push(like)}
+                   OR nasipaddress ILIKE $${params.push(like)})`;
+      }
+      const res = await this.pgClient.query(query, params);
+      return Number(res.rows[0]?.total ?? 0);
+    } catch (error: any) {
+      this.logger.error(`Failed to count active sessions: ${error.message}`);
+      return 0;
     }
   }
 

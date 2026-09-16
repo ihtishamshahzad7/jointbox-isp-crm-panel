@@ -1,0 +1,36 @@
+Add the panel's licence UI: status banner, 402 dialog and a licence page
+
+The backend has answered GET /licence/status and returned 402 from the guard
+since licence enforcement landed. Nothing in the frontend ever read either, so
+a server that had never been activated, or whose licence had lapsed, looked
+completely normal until a save failed with a generic error toast. That is what
+"it doesn't show any licensing popup" was -- not the agent, not the licence
+server, just a half that was never built.
+
+ - app/components/licence.tsx: LicenceProvider polls /licence/status every five
+   minutes and holds the answer. LicenceBanner renders the server's own banner
+   text and level, and renders NOTHING on an ACTIVE licence. LicenceDialog is
+   shown only when the server actually refuses a write.
+ - The 402 interceptor wraps window.fetch once, rather than editing the ~60
+   screens that each call fetch directly. It never alters, retries or swallows
+   a response; it reads a clone of the body and dispatches an event.
+ - app/licence/page.tsx: state, plan, cap, expiry, and -- per state -- the
+   exact command to run. Not activated shows jointbox-activate; agent down
+   shows the systemctl lines; hardware mismatch explains that a cloned or
+   migrated VM needs the old activation released first.
+ - Wired into AppShellGate so the operator screens get it and the subscriber
+   portal does not. Added to the command palette and the route/role map.
+
+Every surface repeats the one thing an ISP needs to hear: subscribers are
+unaffected. FreeRADIUS reads Postgres directly and never asks the panel for
+permission, so authentication, accounting and bandwidth control keep running
+in every licence state, including EXPIRED.
+
+Fails open throughout. If the status endpoint 404s (a server older than the
+licence module) or is unreachable, this renders nothing rather than inventing
+a licensing problem -- the same posture the backend guard already takes.
+
+Verified: tsc --noEmit exits 0 and 10/10 frontend unit tests pass.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01X7xG929ZbVWHe8ogTG3ZLU

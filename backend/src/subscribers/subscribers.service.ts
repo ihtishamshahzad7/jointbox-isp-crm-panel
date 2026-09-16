@@ -187,16 +187,44 @@ export class SubscribersService implements OnModuleInit {
       ];
     }
 
-    if (query?.status && query.status !== 'ALL') {
+    if (query?.branchId) where.branchId = Number(query.branchId); // Phase 4B tenancy filter
+
+    // STALE — a RADIUS session that is still open per radacct but has not
+    // reported activity in 15+ minutes. Same freshness window as the per-row
+    // isStaleSession flag in attachLiveStatus(), and the exact SQL of the
+    // overview stale-count tile, so the filter, the row badge and the tile
+    // all agree. (A session the router reports as live is never row-stale;
+    // for the FILTER we keep the radacct definition like the tile does.)
+    if (query?.status === 'STALE') {
+      const staleRows = await this.prisma.$queryRaw<Array<{ username: string }>>`
+        SELECT DISTINCT username
+        FROM radacct
+        WHERE acctstoptime IS NULL
+          AND username IS NOT NULL
+          AND COALESCE(acctupdatetime, acctstarttime) <= NOW() - INTERVAL '15 minutes'
+          AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '7 days'
+      `;
+      where.username = { in: staleRows.map((r) => r.username) };
+    } else if (query?.status && query.status !== 'ALL') {
       where.status = this.normalizeStatus(query.status);
     }
+
     if (query?.connectionType && query.connectionType !== 'ALL') {
       where.connectionType = this.normalizeConnectionType(query.connectionType);
     }
     if (query?.packageId) where.packageId = Number(query.packageId);
     if (query?.salespersonId) where.salespersonId = Number(query.salespersonId);
     if (query?.nasId) where.nasId = Number(query.nasId);
-    if (query?.branchId) where.branchId = Number(query.branchId); // Phase 4B tenancy filter
+
+    // Expiring-within-N-days, INCLUDING already-expired rows (matches the UI
+    // chips' "nothing is missed" behaviour): expiryDate <= now + N days.
+    if (query?.expiringDays !== undefined && query?.expiringDays !== null && query?.expiringDays !== '') {
+      const n = Math.max(0, Number(query.expiringDays) || 0);
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() + n);
+      cutoff.setHours(23, 59, 59, 999);
+      where.serviceSettings = { is: { expiryDate: { lte: cutoff } } };
+    }
 
     if (query?.dateFrom || query?.dateTo) {
       where.createdAt = {};
@@ -218,6 +246,32 @@ export class SubscribersService implements OnModuleInit {
     // Hierarchy scoping: a reseller only sees subscribers in its subtree.
     const scopeWhere = await this.scope.subscriberWhere(actor);
     const finalWhere = Object.keys(scopeWhere).length ? { AND: [where, scopeWhere] } : where;
+
+    // Offset pagination when BOTH ?page= and ?limit= are passed (DataTable
+    // server mode). Returns {items,total,page,pageSize} so the client can
+    // render a real "X–Y of Z" pager. Purely additive: ?limit= alone keeps
+    // the legacy cursor path below; no params keeps the capped array shape.
+    if (query?.page !== undefined && query?.limit !== undefined) {
+      const page = Math.max(1, Number(query.page) || 1);
+      const take = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
+      const skip = (page - 1) * take;
+      const [rows, total] = await Promise.all([
+        this.prisma.subscriber.findMany({
+          where: finalWhere,
+          include,
+          orderBy: this.orderByFromQuery(query),
+          skip,
+          take,
+        }),
+        this.prisma.subscriber.count({ where: finalWhere }),
+      ]);
+      return {
+        items: await this.attachLiveStatus(rows),
+        total,
+        page,
+        pageSize: take,
+      };
+    }
 
     // ⚡ Phase 0: cursor pagination when ?limit= is passed (no COUNT, index-driven).
     // Without ?limit= the legacy full-array shape is kept for backward compatibility.
@@ -254,14 +308,43 @@ export class SubscribersService implements OnModuleInit {
   }
 
   /**
-   * Push a subscriber's full profile to RADIUS, including their service type,
-   * static IP and any session limits.
-   *
-   * Callers used to pass only (username, password, package), which silently
-   * meant "PPPoE with a pool" for everyone. Business customers on a fixed IP
-   * and hotspot users need different attributes, so resolve them here in one
-   * place rather than at each call site.
+   * Server-mode sort for the offset-pagination branch. Whitelist-only: every
+   * allowed path maps to a Prisma relation path, and anything unknown falls
+   * back to { id: 'desc' } — the client never controls the shape.
    */
+  private orderByFromQuery(query: any) {
+    const dir: 'asc' | 'desc' =
+      String(query?.sortOrder || '').toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const path = String(query?.sortBy || '').trim();
+    const templates: Record<string, Record<string, any>> = {
+      id: { id: undefined },
+      username: { username: undefined },
+      fullName: { fullName: undefined },
+      phone: { phone: undefined },
+      status: { status: undefined },
+      connectionType: { connectionType: undefined },
+      createdAt: { createdAt: undefined },
+      balance: { balance: undefined },
+      'package.name': { package: { name: undefined } },
+      'area.name': { area: { name: undefined } },
+      'nas.nasname': { nas: { nasname: undefined } },
+      'salesperson.name': { salesperson: { name: undefined } },
+      'user.name': { user: { name: undefined } },
+      'serviceSettings.expiryDate': { serviceSettings: { expiryDate: undefined } },
+    };
+    const template = templates[path];
+    return template ? this.fillDir(template, dir) : { id: 'desc' };
+  }
+
+  private fillDir(obj: any, dir: 'asc' | 'desc'): any {
+    if (typeof obj !== 'object' || obj === null) return dir;
+    const out: any = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] = v === undefined ? dir : this.fillDir(v, dir);
+    }
+    return out;
+  }
+
   /**
    * Build the FULL set of RADIUS opts for a subscriber — package speed, pool
    * OR static IP (never both — see radiusSync.syncSubscriberProfile), MAC,

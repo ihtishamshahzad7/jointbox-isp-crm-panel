@@ -200,3 +200,114 @@ describe('NetworkService.disconnect', () => {
     expect(prisma.$executeRaw).toHaveBeenCalled(); // CoA ACK'd — closing the row is legitimate
   });
 });
+
+// ── Live sessions (server-mode DataTable paging) ────────────────────────────
+describe('NetworkService.liveSessions', () => {
+  function makeNetwork(overrides: any = {}) {
+    const radiusSync: any = {
+      getActiveSessions: jest.fn(),
+      countActiveSessions: jest.fn(),
+    };
+    const prisma: any = {
+      subscriber: { findMany: jest.fn() },
+      ...(overrides.prisma || {}),
+    };
+    const scope: any = {
+      subscriberWhere: jest.fn().mockResolvedValue({}),
+      isAdmin: jest.fn(() => true),
+      ...(overrides.scope || {}),
+    };
+    const service = new NetworkService(prisma, radiusSync, {} as any, scope, {} as any);
+    return { radiusSync, prisma, scope, service };
+  }
+
+  const radacctRow = (username: string, extra: any = {}) => ({
+    username,
+    nasipaddress: '10.0.0.1',
+    framedipaddress: '10.1.1.1',
+    callingstationid: 'AA:BB:CC:DD:EE:FF',
+    acctstarttime: '2026-09-14T10:00:00Z',
+    duration_seconds: 3600,
+    upload_bytes: 1000,
+    download_bytes: 2000,
+    rate_bps: 6,
+    ...extra,
+  });
+
+  it('page+limit → {items,total,page,pageSize}; SQL page built from the same WHERE (LIMIT/OFFSET + COUNT)', async () => {
+    const { radiusSync, prisma, service } = makeNetwork();
+    radiusSync.getActiveSessions.mockResolvedValue([radacctRow('a'), radacctRow('b')]);
+    radiusSync.countActiveSessions.mockResolvedValue(137);
+    prisma.subscriber.findMany.mockResolvedValue([
+      { id: 1, username: 'a', fullName: 'Alice', phone: null, package: { name: '5MB' } },
+      { id: 2, username: 'b', fullName: 'Bob', phone: null, package: { name: '10MB' } },
+    ]);
+
+    const res: any = await service.liveSessions('10.0.0.1', { role: 'admin' }, {
+      page: 2, limit: 50, q: 'alice', sortBy: 'downloadBytes', sortOrder: 'desc',
+    });
+
+    expect(res).toEqual(expect.objectContaining({ total: 137, page: 2, pageSize: 50 }));
+    expect(res.items).toHaveLength(2);
+    expect(res.items[0]).toMatchObject({ username: 'a', fullName: 'Alice', package: '5MB' });
+    // The page request carries the search + sort + offset — the browser never
+    // receives more than one page's rows.
+    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith('10.0.0.1', {
+      limit: 50, offset: 50, q: 'alice', sortBy: 'downloadBytes', sortOrder: 'desc',
+    });
+    expect(radiusSync.countActiveSessions).toHaveBeenCalledWith('10.0.0.1', 'alice');
+  });
+
+  it('clamps limit to 1..200 and page to ≥ 1 (offset = (page-1)*take)', async () => {
+    const { radiusSync, prisma, service } = makeNetwork();
+    radiusSync.getActiveSessions.mockResolvedValue([]);
+    radiusSync.countActiveSessions.mockResolvedValue(0);
+    prisma.subscriber.findMany.mockResolvedValue([]);
+
+    await service.liveSessions(undefined, { role: 'admin' }, { page: 0, limit: 999 });
+    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, {
+      limit: 200, offset: 0, q: undefined, sortBy: undefined, sortOrder: undefined,
+    });
+
+    await service.liveSessions(undefined, { role: 'admin' }, { page: 3, limit: 25 });
+    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, {
+      limit: 25, offset: 50, q: undefined, sortBy: undefined, sortOrder: undefined,
+    });
+  });
+
+  it('legacy call (no page/limit) still returns the plain enriched array, never a page object', async () => {
+    const { radiusSync, prisma, service } = makeNetwork();
+    radiusSync.getActiveSessions.mockResolvedValue([radacctRow('a')]);
+    prisma.subscriber.findMany.mockResolvedValue([
+      { id: 1, username: 'a', fullName: 'Alice', phone: null, package: { name: '5MB' } },
+    ]);
+
+    const res: any = await service.liveSessions();
+
+    expect(Array.isArray(res)).toBe(true);
+    expect(res).not.toHaveProperty('items');
+    expect(res[0]).toMatchObject({ username: 'a', fullName: 'Alice' });
+    // Legacy path never asks for a COUNT.
+    expect(radiusSync.countActiveSessions).not.toHaveBeenCalled();
+    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined);
+  });
+
+  it('non-admin sees ONLY sessions in their own subtree (scope filter drops the rest)', async () => {
+    const { radiusSync, prisma, scope, service } = makeNetwork({
+      scope: { isAdmin: jest.fn(() => false) },
+    });
+    radiusSync.getActiveSessions.mockResolvedValue([radacctRow('mine'), radacctRow('theirs')]);
+    prisma.subscriber.findMany.mockResolvedValue([
+      { id: 1, username: 'mine', fullName: 'Mine', phone: null, package: null },
+    ]);
+
+    const res: any = await service.liveSessions(undefined, { role: 'reseller' }, { page: 1, limit: 50 });
+
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0].username).toBe('mine');
+    // Scoping query still ran against the paged rows only.
+    expect(prisma.subscriber.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ AND: expect.any(Array) }) }),
+    );
+  });
+});

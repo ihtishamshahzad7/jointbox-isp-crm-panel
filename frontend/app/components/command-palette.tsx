@@ -60,6 +60,7 @@ const DESTS: Dest[] = [
   { label: "Users", href: "/users", group: "System", keys: "user staff reseller dealer retailer auditor role add" },
   { label: "Organization / hierarchy", href: "/organization", group: "System", keys: "organization reseller wallet topup hierarchy tree" },
   { label: "Security", href: "/security", group: "System", keys: "security roles permissions 2fa api keys" },
+  { label: "Licence", href: "/licence", group: "System", keys: "licence license activation subscription expiry renew key" },
   { label: "Settings", href: "/settings", group: "System", keys: "settings currency sms email gateway configure" },
   { label: "Background Jobs", href: "/jobs", group: "System", keys: "job queue reconcile integrity progress", ispOnly: true },
   { label: "Server Console", href: "/console", group: "System", keys: "console terminal logs server root", ispOnly: true },
