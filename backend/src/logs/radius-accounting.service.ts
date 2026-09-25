@@ -45,32 +45,56 @@ export class RadiusAccountingService {
     private readonly scope: ScopeService,
   ) {}
 
-  /** Builds the same predicates for both page data and COUNT(*). */
+  /** Builds one predicate fragment and parameter list reused by data and COUNT. */
   private async predicates(actor: Actor, opts: RadiusAccountingOptions) {
     const parts: string[] = [];
     const values: unknown[] = [];
-    const add = (sql: string, value?: unknown) => {
-      if (value === undefined) parts.push(sql);
-      else {
-        values.push(value);
-        parts.push(sql.replace('?', `$${values.length}`));
-      }
+    const add = (sql: string, value: unknown) => {
+      values.push(value);
+      parts.push(sql.replace('?', `$${values.length}`));
     };
 
-    const ids = this.scope.isAdmin(actor?.role)
+    const isAdmin = this.scope.isAdmin(actor?.role);
+    const ids = isAdmin
       ? null
       : await this.scope.descendantIds(await this.scope.rootId(actor));
 
-    if (ids) add('EXISTS (SELECT 1 FROM "Subscriber" s_scope WHERE s_scope.username = a.username AND s_scope."userId" = ANY(?::int[]))', ids);
-    if (ids && ids.length === 0) parts.push('FALSE');
-    if (this.scope.isAdmin(actor?.role)) {
+    if (ids) {
+      add(
+        'EXISTS (SELECT 1 FROM "Subscriber" s_scope WHERE s_scope.username = a.username AND s_scope."userId" = ANY(?::int[]))',
+        ids,
+      );
+      if (ids.length === 0) parts.push('FALSE');
+    }
+
+    // Keep the same demo policy used by the other radacct readers. The
+    // ScopeService call is deliberately made here so this path remains tied to
+    // the canonical Prisma visibility policy as well as its raw-SQL equivalent.
+    const radiusWhere = await this.scope.radiusWhere(actor);
+    if (isAdmin && Object.keys(radiusWhere).length > 0) {
       const demo = this.scope.demoSessionSql('a').trim();
       if (demo) parts.push(demo.replace(/^AND\s+/, ''));
     }
 
     const q = opts.q?.trim();
     if (q) {
-      add(`(a.username ILIKE ? OR a.realm ILIKE $${values.length + 1} OR a.callingstationid ILIKE $${values.length + 1} OR a.calledstationid ILIKE $${values.length + 1} OR a.framedipaddress::text ILIKE $${values.length + 1} OR a.nasipaddress::text ILIKE $${values.length + 1} OR a.acctsessionid ILIKE $${values.length + 1} OR a.servicetype ILIKE $${values.length + 1} OR EXISTS (SELECT 1 FROM nas n_search WHERE n_search.nasname ILIKE $${values.length + 1} AND n_search.nasIp::text = a.nasipaddress::text))`, `%${q}%`);
+      const placeholder = `$${values.length + 1}`;
+      values.push(`%${q}%`);
+      parts.push(`(
+        a.username ILIKE ${placeholder}
+        OR a.realm ILIKE ${placeholder}
+        OR a.callingstationid ILIKE ${placeholder}
+        OR a.calledstationid ILIKE ${placeholder}
+        OR a.framedipaddress::text ILIKE ${placeholder}
+        OR a.nasipaddress::text ILIKE ${placeholder}
+        OR a.acctsessionid ILIKE ${placeholder}
+        OR a.servicetype ILIKE ${placeholder}
+        OR EXISTS (
+          SELECT 1 FROM nas n_search
+          WHERE n_search.nasname ILIKE ${placeholder}
+            AND n_search.nasIp::text = a.nasipaddress::text
+        )
+      )`);
     }
     if (opts.nasIp?.trim()) add('a.nasipaddress::text = ?', opts.nasIp.trim());
     if (opts.username?.trim()) add('a.username ILIKE ?', `%${opts.username.trim()}%`);
@@ -94,34 +118,48 @@ export class RadiusAccountingService {
   }
 
   async getPage(actor: Actor, opts: RadiusAccountingOptions = {}): Promise<RadiusAccountingPage> {
-    const page = Math.max(1, Number.isFinite(Number(opts.page)) ? Math.floor(Number(opts.page)) : 1);
-    const pageSize = Math.min(MAX_LIMIT, Math.max(1, Number.isFinite(Number(opts.limit)) ? Math.floor(Number(opts.limit)) : DEFAULT_LIMIT));
+    const requestedPage = Number(opts.page);
+    const requestedLimit = Number(opts.limit);
+    const page = Math.max(1, Number.isFinite(requestedPage) ? Math.floor(requestedPage) : 1);
+    const pageSize = Math.min(
+      MAX_LIMIT,
+      Math.max(1, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : DEFAULT_LIMIT),
+    );
     const offset = (page - 1) * pageSize;
     const sort = ALLOWED_SORTS[opts.sortBy || ''] || ALLOWED_SORTS.acctstarttime;
     const direction = String(opts.sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-    const predicates = await this.predicates(actor, opts);
-    const values = [...predicates.values, pageSize, offset];
-    const limitParam = values.length - 1;
-    const offsetParam = values.length;
+    const predicate = await this.predicates(actor, opts);
+    const pageValues = [...predicate.values, pageSize, offset];
+    const limitParam = pageValues.length - 1;
+    const offsetParam = pageValues.length;
 
     const rowsSql = `SELECT a.radacctid::text AS id, a.acctsessionid, a.acctuniqueid, a.username, a.realm,
       a.nasipaddress::text AS nasipaddress, a.nasportid, a.nasporttype, a.acctstarttime, a.acctstoptime,
-      a.acctsessiontime, a.acctauthentic, a.connectinfo_start, a.connectinfo_stop, a.acctinputoctets::text AS acctinputoctets,
-      a.acctoutputoctets::text AS acctoutputoctets, a.calledstationid, a.callingstationid, a.acctterminatecause,
-      a.servicetype, a.framedprotocol, a.framedipaddress::text AS framedipaddress, a.acctupdatetime,
+      a.acctsessiontime, a.acctauthentic, a.connectinfo_start, a.connectinfo_stop,
+      a.acctinputoctets::text AS acctinputoctets, a.acctoutputoctets::text AS acctoutputoctets,
+      a.calledstationid, a.callingstationid, a.acctterminatecause, a.servicetype, a.framedprotocol,
+      a.framedipaddress::text AS framedipaddress, a.acctupdatetime,
       COALESCE(n.shortname, n.nasname) AS nasname
-      FROM radacct a LEFT JOIN nas n ON n.nasIp::text = a.nasipaddress::text
-      ${predicates.sql} ORDER BY ${sort} ${direction} NULLS LAST, a.radacctid DESC LIMIT $${limitParam} OFFSET $${offsetParam}`;
-    const countSql = `SELECT COUNT(*)::bigint AS total FROM radacct a ${predicates.sql}`;
+      FROM radacct a
+      LEFT JOIN nas n ON n.nasIp::text = a.nasipaddress::text
+      ${predicate.sql}
+      ORDER BY ${sort} ${direction} NULLS LAST, a.radacctid DESC
+      LIMIT $${limitParam} OFFSET $${offsetParam}`;
+    const countSql = `SELECT COUNT(*)::bigint AS total FROM radacct a ${predicate.sql}`;
 
     try {
       const [rows, count] = await Promise.all([
-        this.prisma.$queryRawUnsafe<Record<string, unknown>[]>(rowsSql, ...values),
-        this.prisma.$queryRawUnsafe<{ total: bigint | string | number }[]>(countSql, ...predicates.values),
+        this.prisma.$queryRawUnsafe<Record<string, unknown>[]>(rowsSql, ...pageValues),
+        this.prisma.$queryRawUnsafe<{ total: bigint | string | number }[]>(countSql, ...predicate.values),
       ]);
       const total = Number(count?.[0]?.total ?? 0);
-      const items = (rows || []).map((row) => this.normalize(row));
-      return { items, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
+      return {
+        items: (rows || []).map((row) => this.normalize(row)),
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      };
     } catch (error: any) {
       this.logger.error(`RADIUS accounting query failed: ${error?.message || error}`);
       throw error;
@@ -131,7 +169,9 @@ export class RadiusAccountingService {
   private normalize(row: Record<string, unknown>) {
     const bigintFields = ['acctinputoctets', 'acctoutputoctets', 'acctsessiontime', 'radacctid'];
     const out = { ...row };
-    for (const field of bigintFields) if (out[field] !== null && out[field] !== undefined) out[field] = String(out[field]);
+    for (const field of bigintFields) {
+      if (out[field] !== null && out[field] !== undefined) out[field] = String(out[field]);
+    }
     return out;
   }
 }
