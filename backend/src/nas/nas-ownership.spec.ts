@@ -48,7 +48,7 @@ describe('NasService — write scoping', () => {
       rootId: jest.fn().mockResolvedValue(5),
       nasWhere: jest.fn().mockResolvedValue({ ownerId: { in: [5, 6] } }),
     };
-    const svc = new NasService(prisma, {} as any, {} as any, scope, {} as any);
+    const svc = new NasService(prisma, {} as any, {} as any, scope, {} as any, { assertCanAddNas: async () => undefined, assertCanAddSubscriber: async () => undefined } as any);
     return { prisma, scope, svc };
   }
 

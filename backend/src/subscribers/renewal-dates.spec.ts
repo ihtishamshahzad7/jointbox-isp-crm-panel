@@ -28,7 +28,7 @@ describe('RenewalService.quote (billing period)', () => {
       // from no one, so parentId: null keeps cost at 0 (cost is not asserted).
       user: { findUnique: jest.fn().mockResolvedValue({ parentId: null }) },
     };
-    return new RenewalService(prisma, {} as any, {} as any, {} as any);
+    return new RenewalService(prisma, {} as any, {} as any, {} as any, { invoiceStamp: async () => ({}) } as any);
   }
 
   const pkg = { id: 3, name: '4MB', price: 400, duration: 30 };

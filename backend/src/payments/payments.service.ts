@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Logger, Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
@@ -10,6 +10,17 @@ import { CurrencyService } from '../common/currency.service';
 
 @Injectable()
 export class PaymentsService {
+  /**
+   * These ledger posts are fire-and-forget: an adjustment or reversal must not
+   * fail because the double-entry write did, so the promise is caught. But the
+   * catch called `this.logger?.warn?.()` on a logger that was never declared —
+   * optional chaining, so no crash, and no record either. A ledger post
+   * silently failing on a money operation is precisely the event that must
+   * leave a trace, because the books and the payment then disagree and nothing
+   * says when it started.
+   */
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     private prisma: PrismaService,
     private accounting: AccountingService,

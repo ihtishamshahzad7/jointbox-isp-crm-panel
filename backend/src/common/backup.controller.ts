@@ -32,10 +32,25 @@ import { BackupService } from './backup.service';
 export class BackupController {
   constructor(private readonly backups: BackupService) {}
 
+  /**
+   * PLATFORM OWNER ONLY — not the ISP.
+   *
+   * This used to admit ADMIN as well, on the reading that an ISP owner should
+   * be able to back up "their" data. That reading stopped being true when one
+   * panel began serving several unrelated ISP companies: a pg_dump is not one
+   * company's data, it is the WHOLE DATABASE — every tenant's subscribers,
+   * their invoices, their credentials, their reseller trees. Handing it to one
+   * ISP hands them their competitors' customer list.
+   *
+   * There is no scoped version of this to offer instead. A per-tenant export
+   * is a different feature with a different shape (selected tables, filtered by
+   * subtree, no credential columns); it is not a restriction of pg_dump, so
+   * this stays shut until that exists.
+   */
   private assertIspOwner(req: any) {
     const role = req?.user?.role;
-    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
-      throw new ForbiddenException('Only the ISP owner can view or manage database backups.');
+    if (role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only the platform owner can view or manage database backups.');
     }
   }
 

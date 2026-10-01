@@ -934,9 +934,16 @@ export class NasService implements OnModuleInit {
 
   // ── RADIUS-wide stats ───────────────────────────────────────
   async getRadiusStats(actor?: any) {
+    // Whose logins to count. Platform owner: all but the sandbox. Anyone else
+    // — an ISP tenant, a franchise — only their own subtree's subscribers.
+    // See RadiusSyncService.getAuthStats for why this was a cross-tenant leak.
+    const scope: number[] | null = this.scope.isAdmin(actor?.role)
+      ? null
+      : await this.scope.descendantIds(await this.scope.rootId(actor));
+
     const [alive, authStats] = await Promise.all([
       this.radiusSync.isRadiusAlive(),
-      this.radiusSync.getAuthStats(),
+      this.radiusSync.getAuthStats(scope),
     ]);
     // NEVER expose the real backend/RADIUS host to non-ISP accounts (resellers,
     // demo). They still get the live health + port numbers, but the address is

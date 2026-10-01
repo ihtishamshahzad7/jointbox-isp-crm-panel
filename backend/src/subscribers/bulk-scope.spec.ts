@@ -43,6 +43,7 @@ describe('SubscribersService bulk-scope (Priority 2)', () => {
       {} as any,      // mikrotik
       {} as any,      // currency
       {} as any,      // liveTraffic
+      { assertCanAddNas: async () => undefined, assertCanAddSubscriber: async () => undefined } as any, // licenceCapacity
     );
     return { prisma, queue, scope, service };
   }

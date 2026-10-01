@@ -40,9 +40,14 @@ export class NotificationsController {
    */
   @Post('alerts/config')
   async setAlertConfig(@Body() body: { key: string; value: string }, @Request() req: any) {
+    // PLATFORM OWNER ONLY. These are the installation's outbound alert
+    // credentials — one Telegram bot token, one webhook, shared by every
+    // company on the panel. A tenant editing them does not reconfigure its own
+    // alerting, it redirects or silences everyone's, including ours. There is
+    // no per-tenant copy of this setting to offer instead yet.
     const role = req?.user?.role;
-    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
-      throw new ForbiddenException('Only the ISP owner can change alert settings.');
+    if (role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Alert settings are managed by the platform owner.');
     }
     await this.alerts.setSecret(body?.key, body?.value ?? '', req?.user?.sub);
     return this.alerts.status();

@@ -72,8 +72,11 @@ describe('StaticIpService', () => {
       clearSecretRemoteAddress: jest.fn().mockResolvedValue(true),
       getActiveAddress: jest.fn().mockResolvedValue(null),
     };
+    // currency: the only call is invoiceStamp() when a static IP is billed,
+    // so the stub returns an empty stamp rather than a fabricated currency.
+    const currency = { invoiceStamp: async () => ({}) } as any;
     const service = new StaticIpService(
-      prisma, scope, subscribers, network, notifications, mikrotik,
+      prisma, scope, subscribers, network, notifications, mikrotik, currency,
     );
     return { prisma, scope, subscribers, network, mikrotik, service };
   }

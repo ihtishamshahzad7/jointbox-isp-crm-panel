@@ -451,12 +451,115 @@ export class OutagesService {
     if (query.days) {
       where.startedAt = { gte: new Date(Date.now() - Number(query.days) * 86400_000) };
     }
-    return this.prisma.powerOutage.findMany({
+    const rows = await this.prisma.powerOutage.findMany({
       where,
       include: { area: { select: { id: true, name: true, city: true } } },
       orderBy: { startedAt: 'desc' },
       take: Number(query.limit) || 200,
     });
+    // The list is what the Outages table renders, and it shows the cause
+    // alongside each row. Shaped here rather than in the UI so one definition
+    // of "attribution" serves the table, the detail route and the refresh.
+    return rows.map((o) => ({ ...o, attribution: this.toAttribution(o) }));
+  }
+
+  // ── Root-cause attribution ────────────────────────────────────────────
+  /**
+   * THE CLASSIFIER WAS BUILT; NOTHING EVER CALLED IT FROM THE UI.
+   *
+   * OutageClassifierService works and is tested, and detect() already uses it
+   * to stamp `cause` / `causeConfidence` / `causeReasons` on a PowerOutage.
+   * But the controller exposed three /attribution routes calling methods that
+   * did not exist on this service, and the Outages page rendered an
+   * `attribution` object nobody produced — so the page showed "Not analysed
+   * yet" for every row and its Analyse button returned a 500. A finished
+   * classifier, invisible behind a broken seam.
+   *
+   * These three methods are that seam, and deliberately nothing more: no new
+   * model, no second store of the verdict. The columns on PowerOutage are the
+   * record; this shapes them for the screen.
+   *
+   * ── WHAT "CONFIRMED" MEANS WITHOUT A COLUMN FOR IT ───────────────────────
+   * An operator confirming a cause is recorded as confidence exactly 1 — the
+   * classifier itself never emits 1, so the value is unambiguous and needs no
+   * migration. It reads correctly everywhere else too: a human who has been to
+   * the site IS the highest-confidence signal available, so the public status
+   * page's 0.6 gate and describe()'s hedging both do the right thing with it
+   * for free.
+   */
+  private toAttribution(o: { cause?: string | null; causeConfidence?: number | null; causeReasons?: string | null }) {
+    const confidence = Number(o.causeConfidence ?? 0);
+    // Nothing has been analysed yet — say so, rather than publishing UNKNOWN
+    // at 0%, which reads as a finding ("we looked, and found nothing").
+    if (!o.cause || (o.cause === 'UNKNOWN' && confidence === 0)) return null;
+
+    const reasons = (o.causeReasons || '').split(';').map((r) => r.trim()).filter(Boolean);
+    return {
+      cause: o.cause,
+      confidence: Math.round(confidence * 100),
+      confirmed: confidence >= 1,
+      summary: this.classifier.describe({ cause: o.cause as any, confidence, reasons }),
+      evidence: reasons,
+    };
+  }
+
+  /** The stored verdict for one outage. */
+  async getAttribution(id: number) {
+    const o = await this.prisma.powerOutage.findUnique({ where: { id } });
+    if (!o) throw new NotFoundException('Outage not found');
+    return this.toAttribution(o);
+  }
+
+  /**
+   * Re-run the classifier now and persist the result.
+   *
+   * Refuses to overwrite a confirmed verdict: someone stood in front of the
+   * cabinet and told us what it was, and no amount of telemetry re-read an
+   * hour later outranks that. Clearing it is an explicit act — confirm a
+   * different cause.
+   */
+  async attribute(id: number) {
+    const o = await this.prisma.powerOutage.findUnique({ where: { id } });
+    if (!o) throw new NotFoundException('Outage not found');
+    if (Number(o.causeConfidence ?? 0) >= 1) return this.toAttribution(o);
+
+    // Every signal the classifier weighs — ONU state, device health, the
+    // load-shedding timetable — is reached through the area. An outage with no
+    // area has nothing to reason from, so there is no verdict to give; saying
+    // so beats inventing UNKNOWN at 0%, which would read as "we looked".
+    if (!o.areaId) return null;
+
+    const scheduled = await this.isAreaScheduledOff(o.areaId, o.startedAt).catch(() => false);
+    const verdict = await this.classifier.classify(o.areaId, { scheduled, at: o.startedAt });
+    const updated = await this.prisma.powerOutage.update({
+      where: { id },
+      data: {
+        cause: verdict.cause as any,
+        causeConfidence: verdict.confidence,
+        causeReasons: verdict.reasons.join('; ').slice(0, 600),
+      },
+    });
+    return this.toAttribution(updated);
+  }
+
+  /** An operator states the cause. Overrides the classifier; see above. */
+  async confirmAttribution(id: number, cause?: string) {
+    const ALLOWED = ['POWER_RELATED', 'FIBER_CUT', 'EQUIPMENT_FAILURE', 'UPSTREAM_ISP', 'UNKNOWN'];
+    const o = await this.prisma.powerOutage.findUnique({ where: { id } });
+    if (!o) throw new NotFoundException('Outage not found');
+
+    const chosen = cause ?? o.cause ?? 'UNKNOWN';
+    if (!ALLOWED.includes(chosen)) {
+      throw new BadRequestException(`"${chosen}" is not a known outage cause.`);
+    }
+    const reason = cause && cause !== o.cause
+      ? `Corrected to ${chosen} by an operator`
+      : 'Confirmed by an operator';
+    const updated = await this.prisma.powerOutage.update({
+      where: { id },
+      data: { cause: chosen as any, causeConfidence: 1, causeReasons: reason },
+    });
+    return this.toAttribution(updated);
   }
 
   /**

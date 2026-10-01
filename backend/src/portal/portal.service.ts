@@ -383,12 +383,8 @@ export class PortalService {
     // Generate a clean username: phone number prefixed
     const username = phone.replace(/[^0-9]/g, '').replace(/^(\+?92|0)/, '92');
 
-    // Find an admin user to assign ownership (first SUPER_ADMIN)
-    const admin = await this.prisma.user.findFirst({
-      where: { role: 'SUPER_ADMIN' },
-      select: { id: true },
-      orderBy: { id: 'asc' },
-    });
+    // Which business does this customer belong to? See resolveSignupOwner().
+    const ownerId = await this.resolveSignupOwner(pkg.ownerId ?? null);
 
     // Create the subscriber
     const sub = await this.prisma.subscriber.create({
@@ -400,7 +396,7 @@ export class PortalService {
         password,
         address: address?.trim() || null,
         packageId: pkg.id,
-        userId: admin?.id || null,
+        userId: ownerId,
         status: 'INACTIVE',
         sellPrice: pkg.price,
         costPrice: pkg.price,
@@ -570,5 +566,64 @@ export class PortalService {
       // opening self-activation on every package.
       return {};
     }
+  }
+
+  /**
+   * WHICH COMPANY DOES A SELF-SIGNUP BELONG TO?
+   *
+   * This used to be "the first SUPER_ADMIN", found by `orderBy: { id: 'asc' }`.
+   * That was a reasonable answer while one business owned the installation. It
+   * is the wrong answer now that several unrelated ISPs run on one panel: every
+   * public signup landed on the PLATFORM OWNER — so the customer appeared in
+   * our books instead of the client's, was invoiced by us, counted against our
+   * figures, and was invisible to the company that is actually meant to serve
+   * them. Nobody would notice until someone asked why the platform owner had
+   * retail customers.
+   *
+   * The signup already carries the answer. A visitor picks a PACKAGE, and a
+   * package has an owner — the company that created and priced it. So the
+   * customer belongs to whoever sells the thing they just bought. That needs no
+   * new column, no portal subdomain and no configuration to get wrong, and it
+   * stays correct when a franchise publishes its own self-activation package:
+   * the customer lands on that franchise, which is exactly right, because the
+   * franchise is who they will call.
+   *
+   * ── THE FALLBACKS, AND WHY THEY STOP WHERE THEY DO ───────────────────────
+   * A package with no owner is a legacy row from before ownership existed.
+   * Then:
+   *   • exactly one ISP company on the panel → it can only be theirs;
+   *   • no ISP companies at all → a single-tenant installation, where the
+   *     SUPER_ADMIN really is the operator, so the old behaviour is right;
+   *   • several companies and no way to choose → REFUSE.
+   *
+   * That last case is the important one. Guessing would file a real paying
+   * customer under the wrong business, and a misfiled customer is not a
+   * visible failure — it is a quiet one that surfaces weeks later as a billing
+   * dispute between two companies. Refusing is loud, happens immediately, and
+   * is fixed by giving the package an owner.
+   */
+  private async resolveSignupOwner(packageOwnerId: number | null): Promise<number | null> {
+    if (packageOwnerId) return packageOwnerId;
+
+    const companies = await this.prisma.user.findMany({
+      where: { role: 'ADMIN', isDemo: false },
+      select: { id: true },
+      take: 2,
+    });
+    if (companies.length === 1) return companies[0].id;
+
+    if (companies.length === 0) {
+      const owner = await this.prisma.user.findFirst({
+        where: { role: 'SUPER_ADMIN' },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      return owner?.id ?? null;
+    }
+
+    throw new BadRequestException(
+      'This package is not assigned to a provider, so the sign-up cannot be completed. ' +
+      'Please contact support.',
+    );
   }
 }

@@ -449,7 +449,12 @@ export class OrganizationService {
     // next minute would still be stamped with the old code.
     this.currency.invalidate();
 
-    const priorCount = existing.reduce((n: number, g: any) => n + (g?._count?._all ?? 0), 0);
+    // reduce<number> explicitly: the callback returns `any`, so TypeScript
+    // resolves the no-seed overload and then complains that the accumulator is
+    // a groupBy row rather than a number. Naming the result type picks the
+    // right overload and keeps the seed meaningful — without it an empty
+    // `existing` would reduce with no initial value, which throws.
+    const priorCount = (existing as any[]).reduce((n: number, g: any) => n + (g?._count?._all ?? 0), 0);
     const priorCodes = existing.map((g: any) => g.currency).filter(Boolean);
 
     return {

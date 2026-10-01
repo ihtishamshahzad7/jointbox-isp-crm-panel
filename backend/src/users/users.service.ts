@@ -53,6 +53,22 @@ export class UsersService {
     // The subscriber ids in scope (for payment/invoice aggregates).
     const subIds = (await this.prisma.subscriber.findMany({ where: subWhere, select: { id: true } })).map((s) => s.id);
 
+    /**
+     * The ACCOUNTS in scope — me and everyone below me.
+     *
+     * Commission is earned by a user, not by a subscriber, so the commission
+     * aggregate below is keyed on userId and cannot use subWhere. This
+     * declaration was missing entirely: the aggregate referenced a bare `ids`
+     * that existed nowhere, which is a ReferenceError the moment this method
+     * runs — the whole My Business screen, for every account. It survived
+     * because the production build compiles with SWC, which strips types
+     * without checking them, so nothing failed until a browser asked.
+     *
+     * Subtree rather than self alone, because a franchise's commission figure
+     * is meant to include what its dealers earned it.
+     */
+    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+
     const [collectedMonth, dueAgg, newThisMonth, commissionMonth] = await Promise.all([
       subIds.length ? this.prisma.payment.aggregate({ _sum: { amount: true }, where: { subscriberId: { in: subIds }, createdAt: { gte: monthStart } } }) : Promise.resolve({ _sum: { amount: 0 } } as any),
       subIds.length ? this.prisma.invoice.aggregate({ _sum: { dueAmount: true }, _count: { _all: true }, where: { subscriberId: { in: subIds }, status: { not: 'PAID' } } }) : Promise.resolve({ _sum: { dueAmount: 0 }, _count: { _all: 0 } } as any),
@@ -681,18 +697,118 @@ export class UsersService {
   }
 
   /**
-   * The reseller ladder: each role may hold ONLY the role directly beneath its
-   * parent. ISP → Franchise → Dealer → Retailer.
+   * THE ISP COMPANIES ON THIS INSTALLATION — platform owner only.
+   *
+   * Users & Staff answers "who works for me". This answers a different
+   * question that the tree alone cannot: "which businesses am I hosting, and
+   * how big is each one". An operator deciding whether a client has outgrown
+   * its plan, or which company is generating the support load, needs the
+   * rollup, and walking the tree by hand in the UI to get it is how people end
+   * up reading numbers off the wrong screen.
+   *
+   * ── WHY ONE RECURSIVE QUERY AND NOT A LOOP ───────────────────────────────
+   * The obvious shape is: list the ADMINs, then for each one count its
+   * subtree. That is N+1 recursive CTEs, and the cost grows with the number of
+   * clients — the exact number we hope grows. One CTE labels every account
+   * with the company it belongs to, and the aggregate falls out of a GROUP BY.
+   *
+   * COUNT(DISTINCT …) is load-bearing, not defensive: the two LEFT JOINs
+   * multiply rows (an account with 40 subscribers and 3 routers yields 120
+   * rows), so a plain COUNT would report each company's size as the product of
+   * its parts. DISTINCT over the primary keys collapses that back.
+   *
+   * Demo accounts are excluded for the same reason they are excluded
+   * everywhere else: the sandbox is 10,000 synthetic subscribers, and a
+   * business figure that includes them is not a business figure.
    */
-  private static readonly NEXT_ROLE: Record<string, string | null> = {
-    SUPER_ADMIN:  'RESELLER',      // ISP creates a Franchise
-    ADMIN:        'RESELLER',      // ISP creates a Franchise
-    RESELLER:     'SUB_RESELLER',  // Franchise creates a Dealer
-    SUB_RESELLER: 'RETAILER',      // Dealer creates a Retailer
-    RETAILER:     null,            // Retailer serves customers, not sub-accounts
+  async listCompanies(actor?: Actor) {
+    if (actor?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only the platform owner can list ISP companies.');
+    }
+
+    const companies = await this.prisma.user.findMany({
+      where: { role: 'ADMIN', isDemo: false },
+      select: {
+        id: true, name: true, email: true, phone: true, city: true,
+        isActive: true, createdAt: true, balance: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!companies.length) return [];
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      root: number; franchises: bigint; dealers: bigint;
+      retailers: bigint; staff: bigint; subscribers: bigint; nas: bigint;
+    }>>`
+      WITH RECURSIVE tree AS (
+        SELECT id AS root, id FROM "User" WHERE role = 'ADMIN' AND "isDemo" = false
+        UNION ALL
+        SELECT t.root, u.id FROM "User" u JOIN tree t ON u."parentId" = t.id
+      )
+      SELECT t.root,
+             COUNT(DISTINCT t.id) FILTER (WHERE u.role = 'RESELLER')     AS franchises,
+             COUNT(DISTINCT t.id) FILTER (WHERE u.role = 'SUB_RESELLER') AS dealers,
+             COUNT(DISTINCT t.id) FILTER (WHERE u.role = 'RETAILER')     AS retailers,
+             COUNT(DISTINCT t.id) FILTER (WHERE u.role = 'SALES')        AS staff,
+             COUNT(DISTINCT s.id) AS subscribers,
+             COUNT(DISTINCT n.id) AS nas
+      FROM tree t
+      JOIN "User" u ON u.id = t.id
+      LEFT JOIN "Subscriber" s ON s."userId" = t.id
+      LEFT JOIN nas n ON n."ownerId" = t.id
+      GROUP BY t.root`;
+
+    const byRoot = new Map(rows.map((r) => [Number(r.root), r]));
+    return companies.map((c) => {
+      const r = byRoot.get(c.id);
+      const n = (v: bigint | undefined) => Number(v ?? 0);
+      return {
+        ...c,
+        franchises:  n(r?.franchises),
+        dealers:     n(r?.dealers),
+        retailers:   n(r?.retailers),
+        staff:       n(r?.staff),
+        subscribers: n(r?.subscribers),
+        nas:         n(r?.nas),
+      };
+    });
+  }
+
+  /**
+   * The ladder: each role may hold ONLY the role directly beneath its parent.
+   *
+   *   Platform → ISP → Franchise → Dealer → Retailer
+   *
+   * ── WHY THE TOP RUNG EXISTS ──────────────────────────────────────────────
+   * One panel serves several unrelated ISPs. Each is an ADMIN with its own
+   * franchise tree, and they must be invisible to one another: isolation comes
+   * from the parentId tree, so two ADMINs under the platform owner share no
+   * ancestor below it and their subtrees can never overlap.
+   *
+   * SUPER_ADMIN is therefore NOT "a bigger ISP". It is the platform operator —
+   * it creates and suspends ISP companies, and it owns the things that belong
+   * to the installation rather than to any one company: the licence, the
+   * server console, the database, the panel updates. An ADMIN runs a business
+   * on this panel; a SUPER_ADMIN runs the panel.
+   *
+   * ── WHY SUPER_ADMIN KEEPS 'RESELLER' AS A SECOND OPTION ──────────────────
+   * Every installation that predates this change has franchises hanging
+   * directly off the SUPER_ADMIN, because that was the only shape available.
+   * Dropping RESELLER here would not move those accounts — it would just stop
+   * the operator adding a sibling to them, and make the ladder lie about a
+   * tree that already exists. So the top rung accepts either, and only the top
+   * rung does: ADMIN creating another ADMIN would put a second company inside
+   * the first one's subtree, which is precisely the isolation this is for.
+   */
+  private static readonly NEXT_ROLE: Record<string, string | string[] | null> = {
+    SUPER_ADMIN:  ['ADMIN', 'RESELLER'], // Platform creates an ISP (or, legacy, a Franchise)
+    ADMIN:        'RESELLER',            // ISP creates a Franchise
+    RESELLER:     'SUB_RESELLER',        // Franchise creates a Dealer
+    SUB_RESELLER: 'RETAILER',            // Dealer creates a Retailer
+    RETAILER:     null,                  // Retailer serves customers, not sub-accounts
   };
   private static readonly ROLE_LABEL: Record<string, string> = {
-    SUPER_ADMIN: 'ISP', ADMIN: 'ISP', RESELLER: 'Franchise',
+    SUPER_ADMIN: 'Platform owner', ADMIN: 'ISP', RESELLER: 'Franchise',
     SUB_RESELLER: 'Dealer', RETAILER: 'Retailer', SALES: 'Staff', AUDITOR: 'Auditor',
   };
 
@@ -740,9 +856,15 @@ export class UsersService {
         `A ${label(parentRole)} can only have Staff accounts beneath it, not sub-resellers.`,
       );
     }
-    if (desiredRole !== allowed) {
+    // Normalized to an array because the top rung accepts two roles. Written as
+    // a list rather than a second special case so there is still ONE rule and
+    // one place that enforces it — the property this function was extracted to
+    // guarantee.
+    const options = Array.isArray(allowed) ? allowed : [allowed];
+    if (!options.includes(desiredRole)) {
+      const names = options.map(label).join(' or a ');
       throw new BadRequestException(
-        `A ${label(parentRole)} can only have a ${label(allowed)} or a Staff account beneath it.`,
+        `A ${label(parentRole)} can only have a ${names} or a Staff account beneath it.`,
       );
     }
   }

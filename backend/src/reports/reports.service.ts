@@ -25,6 +25,28 @@ export class ReportsService {
   async getDashboardStats(actor?: Actor) {
     const sub: any = await this.scoped(actor);
     const bySub: any = await this.viaSubscriber(actor);
+
+    /**
+     * The ACCOUNTS in scope — me and everyone below me, or null for the
+     * platform owner, who is scoped by nothing.
+     *
+     * Packages, areas, routers, vouchers and user counts are keyed on an owner
+     * rather than on a subscriber, so they cannot reuse `sub`/`bySub` above.
+     *
+     * This declaration was missing: the three filters below referenced a bare
+     * `ids` that existed nowhere, which is a ReferenceError the instant this
+     * method runs — the dashboard's headline numbers, for every account. It
+     * survived because the production build compiles with SWC, which strips
+     * types without checking them, so nothing failed until a browser asked.
+     *
+     * null (not []) for the platform owner, because the filters read
+     * `ids ? … : {}` and an empty array would build `{ in: [] }` — a filter
+     * that matches nothing and would report a working installation as empty.
+     */
+    const ids: number[] | null = this.scope.isAdmin(actor?.role)
+      ? null
+      : await this.scope.descendantIds(await this.scope.rootId(actor));
+
     const owned: any = ids ? { ownerId: { in: ids } } : {};
     const userWhere: any = ids ? { id: { in: ids } } : {};
     const voucherWhere: any = ids ? { createdBy: { in: ids } } : {};

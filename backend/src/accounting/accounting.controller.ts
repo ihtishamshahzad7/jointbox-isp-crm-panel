@@ -31,11 +31,25 @@ export class AccountingController {
     return this.accounting.getPeriodLock();
   }
 
-  /** Close/reopen the books through a date. ISP owner only. */
+  /**
+   * Close/reopen the books through a date — PLATFORM OWNER ONLY.
+   *
+   * This used to admit ADMIN, which was right when one company owned the
+   * installation. AccountingLock is a singleton — `upsert({ where: { id: 1 } })`
+   * — so with several ISP companies on one panel, one of them closing its
+   * books froze posting for ALL of them, silently, with no indication to the
+   * others of who did it or why their entries had started failing.
+   *
+   * Per-company period locks are the right feature and a different one: the
+   * table needs an owner column and every posting path needs to resolve the
+   * lock for the entry's own company. Until that exists this stays with the
+   * operator who can see the whole installation, because a shared lock quietly
+   * operated by one tenant is worse than one nobody can reach.
+   */
   @Put('period-lock')
   setPeriodLock(@Body() body: { lockedThrough: string | null }, @Request() req: any) {
-    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') {
-      throw new ForbiddenException('Only the ISP owner can close or reopen an accounting period.');
+    if (req?.user?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Accounting periods are managed by the platform owner.');
     }
     return this.accounting.setPeriodLock(body?.lockedThrough ?? null, req.user?.sub);
   }
@@ -132,13 +146,13 @@ export class AccountingController {
   @Get('pending-approvals')
   getPendingApprovals(@Request() req: any) {
     if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') return { refunds: 0, expenses: 0, total: 0 };
-    return this.accounting.getPendingApprovals();
+    return this.accounting.getPendingApprovals(req.user);
   }
 
   @Get('refund-requests')
   listRefundRequests(@Query('status') status: string, @Request() req: any) {
     this.assertOwner(req);
-    return this.accounting.listRefundRequests(status || 'PENDING');
+    return this.accounting.listRefundRequests(status || 'PENDING', req.user);
   }
 
   @Post('refund-requests/:id/approve')

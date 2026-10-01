@@ -824,18 +824,51 @@ export class AccountingService {
   }
 
   /** Counts for the approval badge — how much is waiting on the ISP owner. */
-  async getPendingApprovals() {
+  /**
+   * The approval queue, scoped to the caller's own business.
+   *
+   * These counts were unscoped. That was harmless when one company owned the
+   * installation; it stopped being harmless the moment several unrelated ISPs
+   * ran on it, because "4 refunds waiting" then meant four refunds belonging
+   * to whoever — a number one operator cannot act on, attached to money that
+   * is not theirs, and a running indicator of how busy a competitor is.
+   *
+   * Scoped by who RAISED the request, which is the only owner a RefundRequest
+   * carries. A request raised by my dealer is mine to approve; one raised
+   * inside another company never appears.
+   *
+   * A row with no requester is kept for the platform owner only: it is either
+   * pre-dating this field or raised by a deleted account, and it still needs
+   * somebody to clear it — but it cannot be attributed to a tenant, so it is
+   * not shown to one.
+   */
+  private async approvalScope(actor?: Actor): Promise<number[] | null> {
+    if (this.scope.isAdmin(actor?.role)) return null;   // platform owner: everything
+    return this.scope.descendantIds(await this.scope.rootId(actor));
+  }
+
+  async getPendingApprovals(actor?: Actor) {
+    const ids = await this.approvalScope(actor);
     const [refunds, expenses] = await Promise.all([
-      this.prisma.refundRequest.count({ where: { status: 'PENDING' } }),
-      this.prisma.expense.count({ where: { status: 'PENDING' } as any }),
+      this.prisma.refundRequest.count({
+        where: ids ? { status: 'PENDING', requestedById: { in: ids } } : { status: 'PENDING' },
+      }),
+      this.prisma.expense.count({
+        where: (ids ? { status: 'PENDING', createdBy: { in: ids } } : { status: 'PENDING' }) as any,
+      }),
     ]);
     return { refunds, expenses, total: refunds + expenses };
   }
 
   /** Pending refund requests for the approval queue. ISP owner only. */
-  async listRefundRequests(status = 'PENDING') {
+  async listRefundRequests(status = 'PENDING', actor?: Actor) {
+    // Same scoping as the counts above — and more important here, because this
+    // returns the rows themselves: amount, reason, and who asked.
+    const ids = await this.approvalScope(actor);
+    const base: any = status === 'ALL' ? {} : { status };
+    if (ids) base.requestedById = { in: ids };
     const rows = await this.prisma.refundRequest.findMany({
-      where: status === 'ALL' ? {} : { status },
+      where: base,
       orderBy: { createdAt: 'desc' }, take: 100,
     });
     const payIds = [...new Set(rows.map((r) => r.paymentId))];

@@ -1123,15 +1123,44 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async getAuthStats(): Promise<{ accepts: number; rejects: number }> {
+  /**
+   * 24-hour RADIUS accept/reject totals.
+   *
+   * `scope` decides WHOSE authentications are counted:
+   *   • undefined — every row, as before. Internal callers only.
+   *   • null      — the platform owner: everything except the demo sandbox.
+   *   • number[]  — an ISP tenant: only logins belonging to subscribers owned
+   *                 inside these accounts.
+   *
+   * This was unscoped for everyone, which was fine with one business on the
+   * panel and is a leak with several: radpostauth is keyed by username alone
+   * and carries no owner, so every company's login traffic — successes,
+   * failures, and therefore a running measure of its size — was shown to all
+   * of them as if it were their own.
+   *
+   * The tenant filter goes through Subscriber.username, the only link from a
+   * RADIUS row to an owner. A reject for a username matching no subscriber at
+   * all (a typo, a stale CPE credential) cannot be attributed to a tenant, so
+   * it is counted for the platform owner and nobody else.
+   */
+  async getAuthStats(scope?: number[] | null): Promise<{ accepts: number; rejects: number }> {
     try {
       this.ensureConnected();
+      let filter = '';
+      const params: any[] = [];
+      if (scope === null) {
+        filter = demoSessionExclusionSql('p');
+      } else if (Array.isArray(scope)) {
+        if (!scope.length) return { accepts: 0, rejects: 0 };
+        params.push(scope);
+        filter = ` AND p.username IN (SELECT s.username FROM "Subscriber" s WHERE s."userId" = ANY($1::int[]))`;
+      }
       const result = await this.pgClient.query(`
         SELECT reply, COUNT(*) as count
-        FROM radpostauth
-        WHERE authdate > NOW() - INTERVAL '24 hours'
+        FROM radpostauth p
+        WHERE authdate > NOW() - INTERVAL '24 hours'${filter}
         GROUP BY reply
-      `);
+      `, params);
       let accepts = 0;
       let rejects = 0;
       for (const row of result.rows) {

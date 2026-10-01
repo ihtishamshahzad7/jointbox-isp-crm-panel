@@ -434,16 +434,23 @@ export class AppController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('system/queues')
   async systemQueues(@Req() req: any) {
+    // Platform owner only. Queue depth is a property of the INSTALLATION, not
+    // of any one ISP on it — a backlog is every tenant's jobs mixed together,
+    // so it tells a tenant about load it has no part in and cannot act on.
+    // `visible: false` rather than a 403: the sidebar tile simply does not
+    // render, which is the same shape the UI already handles.
     const role = req?.user?.role;
-    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') return { visible: false, queues: [] };
+    if (role !== 'SUPER_ADMIN') return { visible: false, queues: [] };
     return { visible: true, ...(await this.queue.getQueueDepths()) };
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('system/stats')
   async systemStats(@Req() req: any) {
+    // Platform owner only — CPU, memory and disk belong to the server, which
+    // is ours to run, not to the ISP renting space on it.
     const role = req?.user?.role;
-    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
+    if (role !== 'SUPER_ADMIN') {
       return { visible: false };
     }
 

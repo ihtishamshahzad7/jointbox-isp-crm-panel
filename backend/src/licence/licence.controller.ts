@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { LicenceService } from './licence.service';
 import { LicenceActivationService } from './licence-activation.service';
@@ -21,8 +21,32 @@ export class LicenceController {
     private readonly counts: LicenceCountsService,
   ) {}
 
+  /**
+   * PLATFORM OWNER ONLY.
+   *
+   * The licence is a contract between us and the operator of this
+   * INSTALLATION, not between us and each ISP company running on it. An ADMIN
+   * is a tenant: the plan name, the expiry, the hardware fingerprint and the
+   * installation-wide subscriber count are none of their business, and the
+   * count in particular is a direct leak — it is the total across every
+   * company on the panel, so publishing it tells one ISP roughly how large its
+   * competitors are.
+   *
+   * 403 rather than a quiet empty object, so the panel's own LicenceProvider
+   * treats it as unreachable and renders nothing at all for a tenant. That is
+   * the same fail-quiet path it already takes on an older server, which is why
+   * no banner, no dialog and no menu row appear — without a second rule
+   * anywhere in the UI deciding who may see licensing.
+   */
+  private assertPlatformOwner(req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Licensing is managed by the platform owner.');
+    }
+  }
+
   @Get('status')
-  status() {
+  status(@Req() req: any) {
+    this.assertPlatformOwner(req);
     return this.licence.status();
   }
 
@@ -36,6 +60,7 @@ export class LicenceController {
    */
   @Post('activate')
   activate(@Body() body: any, @Req() req: any) {
+    this.assertPlatformOwner(req);
     return this.activation.activate(
       {
         key: String(body?.key ?? ''),
@@ -56,7 +81,8 @@ export class LicenceController {
 
   /** Force an immediate re-read, for the "I've just paid" button. */
   @Get('refresh')
-  async refresh() {
+  async refresh(@Req() req: any) {
+    this.assertPlatformOwner(req);
     // Recount before re-reading, so the usage figures on the licence screen are
     // current too. The cron only runs hourly; someone who has just pressed this
     // button is asking "where am I NOW", and an hour-old subscriber count is

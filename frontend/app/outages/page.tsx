@@ -20,13 +20,24 @@ const TYPE: Record<string, { c: string; bg: string; label: string }> = {
   UNKNOWN:     { c: "#94a3b8", bg: "rgba(148,163,184,.14)",label: "Unclassified" },
 };
 
-// Outage Intelligence — root-cause attribution (the OutageAttribution.cause).
+/**
+ * Outage Intelligence — root-cause attribution.
+ *
+ * These keys ARE the PowerOutage.cause enum. They previously were not: this
+ * map listed NETWORK_DEVICE / PORT / ACCESS, which exist nowhere in the
+ * backend, so every row fell through to UNKNOWN and the real verdict — the
+ * one the classifier had already computed and stored — was never shown.
+ *
+ * Keep them in step with `enum OutageCause` in schema.prisma. An unmatched key
+ * degrades to "Cause not established" rather than rendering blank, which is
+ * the right failure: an operator seeing nothing assumes nothing ran.
+ */
 const CAUSE: Record<string, { c: string; bg: string; icon: string; label: string }> = {
-  NETWORK_DEVICE: { c: "#ef4444", bg: "rgba(239,68,68,.14)", icon: "⬇", label: "Core device down" },
-  PORT:           { c: "#f97316", bg: "rgba(249,115,22,.14)", icon: "⇅", label: "Port / link" },
-  POWER:          { c: "#f59e0b", bg: "rgba(245,158,11,.14)", icon: "⚡", label: "Power" },
-  ACCESS:         { c: "#0ea5e9", bg: "rgba(14,165,233,.14)", icon: "⛒", label: "Access / subscriber" },
-  UNKNOWN:        { c: "#94a3b8", bg: "rgba(148,163,184,.14)", icon: "?", label: "No signal" },
+  POWER_RELATED:     { c: "#f59e0b", bg: "rgba(245,158,11,.14)", icon: "⚡", label: "Power failure" },
+  FIBER_CUT:         { c: "#f97316", bg: "rgba(249,115,22,.14)", icon: "⇅", label: "Fibre fault" },
+  EQUIPMENT_FAILURE: { c: "#ef4444", bg: "rgba(239,68,68,.14)", icon: "⬇", label: "Equipment failure" },
+  UPSTREAM_ISP:      { c: "#0ea5e9", bg: "rgba(14,165,233,.14)", icon: "☁", label: "Upstream / transit" },
+  UNKNOWN:           { c: "#94a3b8", bg: "rgba(148,163,184,.14)", icon: "?", label: "Cause not established" },
 };
 
 const DAYS = ["Every day", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

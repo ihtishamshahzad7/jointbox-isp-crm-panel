@@ -20,6 +20,20 @@ export class UsersController {
     return this.usersService.findAll(req.user);
   }
 
+  /**
+   * The ISP companies hosted here. Platform owner only — enforced in the
+   * service, which is also where the subtree rollups are built.
+   *
+   * Declared ABOVE `@Get(':id')` on purpose: Nest matches routes in
+   * declaration order, so a literal path registered after a parameterised one
+   * is never reached — 'companies' would be swallowed as an id and answer 404
+   * for a route that plainly exists.
+   */
+  @Get('companies')
+  listCompanies(@Req() req: any) {
+    return this.usersService.listCompanies(req.user);
+  }
+
   @Get('stats')
   getStats(@Req() req: any) {
     return this.usersService.getStats(req.user);

@@ -41,10 +41,51 @@ const ADMIN_ROLES = ['SUPER_ADMIN'];
  * Exported as a plain fragment rather than a ScopeService method so a poller
  * can use it without taking a dependency it otherwise has no reason to have.
  */
-export const NON_DEMO_OWNED = {
-  // ownerId null is kept: an unowned router is a real one nobody has claimed.
-  OR: [{ ownerId: null }, { owner: { is: { isDemo: false } } }],
-} as const;
+/**
+ * THE MARK EVERY SEEDED DEMO ROUTER CARRIES, independent of who owns it.
+ *
+ * Every demo exclusion in this file used to rest on ONE fact: the owning User
+ * row has `isDemo = true`. That is a single point of failure, and it failed in
+ * the field — 500 synthetic routers (10.255.x.x, "Synthetic MIKROTIK device
+ * for…") appeared in a real operator's Network Center. The filter was correct;
+ * the flag it trusted was not there to trust. An owner whose isDemo was
+ * cleared, or rows orphaned to ownerId NULL (deliberately kept visible, since
+ * an unowned router is normally a real one nobody claimed), both pass straight
+ * through an owner-only rule.
+ *
+ * The seeder stamps `server` with this value on every router it invents, and
+ * nothing else in the product ever writes it — a real router's server is NULL
+ * or a FreeRADIUS virtual-server name. So the row itself says what it is, and
+ * a demo router stays excluded however its ownership has drifted.
+ *
+ * The seeder (demo-data.service.ts) writes the same literal; a ratchet test in
+ * platform-tenancy.spec.ts fails if the two ever disagree, because a marker
+ * spelled in two places is two markers, and they drift.
+ */
+export const DEMO_NAS_SERVER = 'demo-radius';
+
+/**
+ * Keep rows WITHOUT the marker. Spelled as an explicit OR because `server` is
+ * nullable, and `{ server: { not: X } }` compiles to SQL `server <> X`, which
+ * is NULL — i.e. false — for every row whose server is NULL. The obvious
+ * filter would hide every real router that has no server set, which is most
+ * of them.
+ */
+const NOT_DEMO_MARKED = { OR: [{ server: null }, { server: { not: DEMO_NAS_SERVER } }] };
+
+// NOT `as const`. A const assertion makes the OR array `readonly`, and
+// Prisma's generated NasWhereInput wants a mutable array — so every one of the
+// four callers raised a type error that the SWC build silently ignored. The
+// fragment is exported precisely so there is one definition; it should not
+// also be the reason four files fail to typecheck.
+export const NON_DEMO_OWNED: { AND: Array<Record<string, unknown>> } = {
+  AND: [
+    // ownerId null is kept: an unowned router is a real one nobody has claimed.
+    { OR: [{ ownerId: null }, { owner: { is: { isDemo: false } } }] },
+    // …unless the row itself is marked as invented. See DEMO_NAS_SERVER.
+    NOT_DEMO_MARKED,
+  ],
+};
 
 export type Actor = { sub?: number; id?: number; role?: string } | undefined;
 
@@ -135,7 +176,18 @@ export class ScopeService {
     // everything, because background jobs must still reach demo rows to expire
     // and purge them.
     if (!actor) return {};
-    if (this.isAdmin(actor.role)) return this.demoExclusion('owner');
+    if (this.isAdmin(actor.role)) {
+      // Owner rule AND row marker — see DEMO_NAS_SERVER for why the owner rule
+      // alone was not enough. Both respect DEMO_VISIBLE_TO_ADMIN, because this
+      // governs what the operator LOOKS at; the pollers' NON_DEMO_OWNED does
+      // not, because dialling invented addresses is wrong in every mode.
+      if (!this.hidesDemo) return {};
+      return { AND: [this.demoExclusion('owner'), NOT_DEMO_MARKED] };
+    }
+    // The tenant branch below gets no marker filter, on purpose: a tenant only
+    // ever sees routers it owns or was handed, and the one account that
+    // legitimately owns marked routers is the demo sandbox itself — which must
+    // see them, because showing them is the sandbox's whole job.
     const selfId = await this.rootId(actor);
 
     /**

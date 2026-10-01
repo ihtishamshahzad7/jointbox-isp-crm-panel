@@ -142,6 +142,23 @@ export default function SettingsPage() {
 
   const toast_ = (msg: string, type: "ok" | "err" = "ok") => { setToast({ msg, type }); setTimeout(() => setToast(null), 2600); };
 
+  /**
+   * PLATFORM vs TENANT.
+   *
+   * This panel hosts several unrelated ISP companies. An ADMIN owns a business
+   * on it; only the platform owner runs the installation itself. So the
+   * sections describing the SERVER — its build, its API endpoint, the state of
+   * Postgres and FreeRADIUS, the database backups — are the platform owner's,
+   * and an ISP sees its own profile and its own payment gateways.
+   *
+   * This mirrors what the backend now enforces rather than replacing it: the
+   * backup routes refuse a non-owner outright, so hiding them here is about
+   * not advertising a door that is already locked. A tenant who sees "Backup
+   * Database" and gets a 403 learns there is a backup feature and that someone
+   * else controls it; a tenant who never sees it learns nothing at all.
+   */
+  const isPlatformOwner = user?.role === "SUPER_ADMIN";
+
   const settingsSections = [
     {
       title: "Profile Settings",
@@ -152,7 +169,7 @@ export default function SettingsPage() {
         { label: "Role", value: user?.role || "Administrator" },
       ]
     },
-    {
+    ...(isPlatformOwner ? [{
       title: "System Information",
       icon: "⚙️",
       fields: [
@@ -170,7 +187,7 @@ export default function SettingsPage() {
         { label: "Database Status", value: "🟢 Connected" },
         { label: "RADIUS Service", value: "🟢 Running" },
       ]
-    },
+    }] : []),
     {
       title: "Payment Gateways",
       icon: "💳",
@@ -181,7 +198,7 @@ export default function SettingsPage() {
           }))
         : [{ label: "No gateways loaded", value: "—" }],
     },
-    {
+    ...(!isPlatformOwner ? [] : [{
       title: "Database Backups",
       icon: "💾",
       fields: backupStatus
@@ -201,19 +218,26 @@ export default function SettingsPage() {
                 : "🟡 Stored on this server only — set BACKUP_UPLOAD_CMD to protect against server loss",
             },
           ]
-        : [{ label: "Status", value: "Visible to ISP owner accounts only" }],
-    },
+        : [{ label: "Status", value: "Loading…" }],
+    }]),
   ];
 
   const quickActions = [
-    { label: "Clear System Cache", icon: "🗑️", color: t.red, bg: "#450a0a", action: () => alert("Cache cleared successfully!") },
-    {
-      label: backupRunning ? "Backing up…" : "Backup Database",
-      icon: "💾",
-      color: t.green,
-      bg: "#14532d",
-      action: runBackupNow,
-    },
+    // Cache and backups act on the installation, so they are the platform
+    // owner's. Logs and reports are scoped to the caller's own subtree by the
+    // backend, so every account keeps them.
+    ...(isPlatformOwner
+      ? [
+          { label: "Clear System Cache", icon: "🗑️", color: t.red, bg: "#450a0a", action: () => alert("Cache cleared successfully!") },
+          {
+            label: backupRunning ? "Backing up…" : "Backup Database",
+            icon: "💾",
+            color: t.green,
+            bg: "#14532d",
+            action: runBackupNow,
+          },
+        ]
+      : []),
     { label: "View System Logs", icon: "📋", color: t.accent, bg: "var(--surface)", action: () => router.push("/logs") },
     { label: "Generate Report", icon: "📈", color: t.purple, bg: "#3b0764", action: () => router.push("/reports") },
   ];
