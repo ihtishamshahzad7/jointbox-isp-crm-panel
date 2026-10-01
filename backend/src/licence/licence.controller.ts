@@ -1,6 +1,7 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { LicenceService } from './licence.service';
+import { LicenceActivationService } from './licence-activation.service';
 
 /**
  * Licence status for the UI.
@@ -13,11 +14,42 @@ import { LicenceService } from './licence.service';
 @Controller('licence')
 @UseGuards(JwtAuthGuard)
 export class LicenceController {
-  constructor(private readonly licence: LicenceService) {}
+  constructor(
+    private readonly licence: LicenceService,
+    private readonly activation: LicenceActivationService,
+  ) {}
 
   @Get('status')
   status() {
     return this.licence.status();
+  }
+
+  /**
+   * Activate this installation from the browser.
+   *
+   * NOT on the guard's exempt list by accident — it is reachable while
+   * UNLICENSED on purpose, because an unactivated panel is exactly the state
+   * in which someone needs to activate it. Authorisation is enforced inside
+   * the service, which refuses anyone who is not SUPER_ADMIN.
+   */
+  @Post('activate')
+  activate(@Body() body: any, @Req() req: any) {
+    return this.activation.activate(
+      {
+        key: String(body?.key ?? ''),
+        company: body?.company,
+        website: body?.website,
+        contact: body?.contact,
+        email: body?.email,
+        phone: body?.phone,
+      },
+      {
+        id: req?.user?.sub ?? req?.user?.id,
+        role: req?.user?.role,
+        ip: req?.ip ?? req?.headers?.['x-forwarded-for'],
+        userAgent: req?.headers?.['user-agent'],
+      },
+    );
   }
 
   /** Force an immediate re-read, for the "I've just paid" button. */

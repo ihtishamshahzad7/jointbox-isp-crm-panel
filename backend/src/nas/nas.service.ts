@@ -6,6 +6,7 @@ import { Prisma } from '@prisma/client'; // ⚠️ ADD THIS IMPORT
 import { MikrotikSyncService } from './mikrotik-sync.service';
 import { RadiusSyncService } from './radius-sync.service';
 import { SecretsService } from '../common/secrets.service';
+import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credentials';
 
 @Injectable()
@@ -18,6 +19,8 @@ export class NasService implements OnModuleInit {
     private radiusSync: RadiusSyncService,
     private scope: ScopeService,
     private secrets: SecretsService,
+    // Plan capacity. Decided on the licence server, obeyed here.
+    private licenceCapacity: LicenceCapacityService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -414,6 +417,16 @@ export class NasService implements OnModuleInit {
         `A NAS with IP ${data.nasIp} already exists ("${existing.shortname || existing.nasname}"). Edit that device instead of adding a duplicate.`,
       );
     }
+
+    /**
+     * PLAN CAPACITY.
+     *
+     * AFTER the duplicate-IP check on purpose. Re-adding a router that is
+     * already registered is not a new device, and an operator at their cap who
+     * types an existing IP should be told it is a duplicate — the actionable
+     * fact — rather than being sold an upgrade they do not need.
+     */
+    await this.licenceCapacity.assertCanAddNas();
 
     const nas = await this.prisma.nas.create({
       data: {

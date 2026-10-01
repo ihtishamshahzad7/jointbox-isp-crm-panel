@@ -9,7 +9,8 @@ import { CacheService } from '../common/cache.service';
 import { QueueService } from '../common/queue.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ScopeService, Actor } from '../common/scope.service';
+import { ScopeService, Actor } from '../common/scope.service';
+import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { ResellerPricingService } from '../organization/reseller-pricing.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { SecurityService } from '../security/security.service';
@@ -45,6 +46,8 @@ export class SubscribersService implements OnModuleInit {
     private currency: CurrencyService,
     // Keeps the short per-subscriber ring buffer behind the live graph.
     private liveTraffic: LiveTrafficService,
+    // Plan capacity. Decided on the licence server, obeyed here.
+    private licenceCapacity: LicenceCapacityService,
   ) {}
 
   onModuleInit() {
@@ -1557,6 +1560,18 @@ export class SubscribersService implements OnModuleInit {
         return existing;
       }
     }
+    /**
+     * PLAN CAPACITY.
+     *
+     * Deliberately placed AFTER the idempotency check: a retry of a create
+     * that already succeeded must return the existing subscriber, not be
+     * refused for being over the cap it just filled.
+     *
+     * Deliberately placed BEFORE any wallet or RADIUS work, so a refusal
+     * costs nothing and leaves nothing half-done.
+     */
+    await this.licenceCapacity.assertCanAddSubscriber();
+
     if (data.nasId) await this.assertNasAllowed(actor, parseInt(data.nasId));
     /**
      * WHO OWNS THIS CUSTOMER — and therefore WHOSE WALLET PAYS.

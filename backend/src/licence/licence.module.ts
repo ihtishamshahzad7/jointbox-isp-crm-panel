@@ -5,6 +5,8 @@ import { LicenceService } from './licence.service';
 import { LicenceController } from './licence.controller';
 import { LicenceGuard } from './licence.guard';
 import { LicenceCountsService } from './licence-counts.service';
+import { LicenceCapacityService } from './licence-capacity.service';
+import { LicenceActivationService } from './licence-activation.service';
 
 /**
  * Licence enforcement.
@@ -25,8 +27,10 @@ import { LicenceCountsService } from './licence-counts.service';
   providers: [
     LicenceService,
     LicenceCountsService,
+    LicenceCapacityService,
+    LicenceActivationService,
     { provide: APP_GUARD, useClass: LicenceGuard },
   ],
-  exports: [LicenceService],
+  exports: [LicenceService, LicenceCapacityService, LicenceActivationService],
 })
 export class LicenceModule {}

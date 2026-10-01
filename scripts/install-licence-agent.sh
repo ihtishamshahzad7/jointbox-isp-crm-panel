@@ -145,9 +145,49 @@ SyslogIdentifier=jointbox-licensed
 WantedBy=multi-user.target
 UNITEOF
 
+# ---------------------------------------------------------------------------
+# Let the panel activate a licence from the browser
+# ---------------------------------------------------------------------------
+#
+# The panel shells out to this agent when an operator pastes a key into the
+# web UI. PM2 usually runs the API as root, in which case nothing below is
+# needed — the panel detects that and calls the agent directly.
+#
+# This exists for installs where the API runs as an unprivileged user. The rule
+# grants EXACTLY two commands, with no arguments wildcarded beyond the agent's
+# own flags, and NOPASSWD because there is no terminal to type a password into.
+# It is deliberately not a general sudo grant.
+jbx_install_sudoers() {
+  local user="${JBX_API_USER:-}"
+  # Nothing to do when the API runs as root, which is the default deployment.
+  [[ -z "$user" || "$user" == "root" ]] && return 0
+  id "$user" >/dev/null 2>&1 || { warn "Licence agent: user $user not found; skipping sudoers rule"; return 0; }
+
+  local f=/etc/sudoers.d/jointbox-licence
+  cat > "$f" <<SUDOEOF
+# Installed by scripts/install-licence-agent.sh — web licence activation.
+# Two commands only. Do not widen this.
+$user ALL=(root) NOPASSWD: $AGENT_BIN -activate=*
+$user ALL=(root) NOPASSWD: /usr/bin/systemctl restart jointbox-licensed
+SUDOEOF
+  chmod 0440 "$f"
+
+  # A malformed sudoers file can lock the box out of sudo entirely, so it is
+  # validated and removed again if it does not parse.
+  if visudo -cf "$f" >/dev/null 2>&1; then
+    ok "Licence activation from the web UI enabled for $user"
+  else
+    rm -f "$f"
+    warn "Licence agent: generated sudoers rule did not validate; removed it."
+    warn "  Web activation will not work; the command line still does."
+  fi
+  return 0
+}
+
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable jointbox-licensed >/dev/null 2>&1 || true
   ok "Licence agent service enabled"
+  jbx_install_sudoers
 }
 
 # ---------------------------------------------------------------------------

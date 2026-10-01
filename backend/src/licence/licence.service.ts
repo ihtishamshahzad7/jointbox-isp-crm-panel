@@ -44,6 +44,15 @@ export interface Entitlement {
   state: LicenceState;
   plan: string;
   max_subs: number;
+  /**
+   * Cap POLICY, decided and signed by the licence server. Optional because an
+   * older licence server (before migrations 002/004) does not send them, and a
+   * panel talking to one must keep working with no enforcement rather than
+   * refusing creates on an undefined number.
+   */
+  cap_action?: 'block' | 'overage' | 'warn';
+  cap_hard?: number;
+  max_nas?: number;
   feat: string[];
   company: string;
   trial: boolean;
@@ -136,6 +145,43 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
     return this.current?.max_subs ?? 0;
   }
 
+  /**
+   * Whether a VERIFIED entitlement is in hand.
+   *
+   * Distinct from `licensed`, which answers true when the agent is unreachable
+   * because that state must not behave like a lapse. Capacity enforcement
+   * needs the stricter question: do we actually hold numbers the licence
+   * server signed? No entitlement means no enforcement.
+   */
+  get hasEntitlement(): boolean {
+    return !licensingDisabled() && this.current !== null;
+  }
+
+  /**
+   * The count at which creating a subscriber is refused. 0 = never refuse.
+   *
+   * Computed on the licence server (plan cap, per-customer override and any
+   * overage percentage all resolved there) and signed, so this is a number to
+   * obey rather than a calculation to repeat. See jbx_cap_policy() in the
+   * licence server's lib/licence.php.
+   */
+  get capHard(): number {
+    if (licensingDisabled()) return 0;
+    return this.current?.cap_hard ?? 0;
+  }
+
+  /** block | overage | warn. 'warn' never refuses anything. */
+  get capAction(): string {
+    if (licensingDisabled()) return 'warn';
+    return this.current?.cap_action ?? 'warn';
+  }
+
+  /** NAS device cap. 0 = unlimited. */
+  get maxNas(): number {
+    if (licensingDisabled()) return 0;
+    return this.current?.max_nas ?? 0;
+  }
+
   get company(): string {
     return this.current?.company ?? '';
   }
@@ -152,6 +198,9 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       company: e?.company ?? null,
       trial: e?.trial ?? false,
       maxSubscribers: e?.max_subs ?? 0,
+      maxNas: e?.max_nas ?? 0,
+      capAction: e?.cap_action ?? 'warn',
+      capHard: e?.cap_hard ?? 0,
       features: e?.feat ?? [],
       expiresAt: e?.exp ? new Date(e.exp * 1000).toISOString() : null,
       graceEndsAt: e?.grace_ends ? new Date(e.grace_ends * 1000).toISOString() : null,

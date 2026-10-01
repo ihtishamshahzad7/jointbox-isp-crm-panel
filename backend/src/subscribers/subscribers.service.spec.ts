@@ -96,6 +96,9 @@ describe('SubscribersService.activateRenewal', () => {
         sample: jest.fn().mockResolvedValue({ points: [], online: false }),
         reset: jest.fn().mockResolvedValue(undefined),
       } as any,      // liveTraffic
+      // Plan capacity. These tests predate the cap and are not about it,
+      // so the stub always allows — exactly as an unlicensed install behaves.
+      { assertCanAddSubscriber: jest.fn().mockResolvedValue(undefined) } as any, // licenceCapacity
     );
     return { prisma, radiusSync, accounting, notifications, pricing, renewal };
   }
@@ -333,6 +336,9 @@ describe('SubscribersService.findAll pagination', () => {
       {} as any, // mikrotik
       {} as any, // currency
       {} as any, // liveTraffic
+      // Plan capacity. These tests predate the cap and are not about it,
+      // so the stub always allows — exactly as an unlicensed install behaves.
+      { assertCanAddSubscriber: jest.fn().mockResolvedValue(undefined) } as any, // licenceCapacity
     );
     return { prisma, findMany, count };
   }
