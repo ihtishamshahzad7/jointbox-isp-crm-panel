@@ -205,6 +205,7 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       expiresAt: e?.exp ? new Date(e.exp * 1000).toISOString() : null,
       graceEndsAt: e?.grace_ends ? new Date(e.grace_ends * 1000).toISOString() : null,
       message: e?.message ?? '',
+      usage: this.counts,
       banner: this.banner,
     };
   }
@@ -373,7 +374,27 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
    * identifying an end user may leave this box — these are Pakistani ISP
    * subscriber records and the blast radius must stay at zero.
    */
+  /**
+   * The last counts published for the heartbeat, kept in memory as well as on
+   * disk.
+   *
+   * The file is what the AGENT reads — it has no database credentials, so two
+   * integers in a file is the whole of what ever leaves the ISP's server. The
+   * in-memory copy is for the PANEL, so `status()` can tell an operator "412 of
+   * 800" without a second round trip. Same numbers, two readers.
+   *
+   * Null until the first publish, which happens at boot. A null usage is
+   * rendered as "not measured yet" rather than as zero — reporting zero
+   * subscribers to someone who has four hundred is worse than saying nothing.
+   */
+  private counts: { subscribers: number; nas: number; at: string } | null = null;
+
+  get usage(): { subscribers: number; nas: number; at: string } | null {
+    return this.counts;
+  }
+
   publishCounts(subscribers: number, nas: number): void {
+    this.counts = { subscribers, nas, at: new Date().toISOString() };
     try {
       fs.mkdirSync(RUN_DIR, { recursive: true });
       fs.writeFileSync(

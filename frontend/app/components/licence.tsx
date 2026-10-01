@@ -48,6 +48,11 @@ export interface LicenceStatus {
   company: string | null;
   trial: boolean;
   maxSubscribers: number;
+  maxNas: number;
+  capAction: string;
+  capHard: number;
+  /** Null until the first count is published (at boot). Never shown as zero. */
+  usage: { subscribers: number; nas: number; at: string } | null;
   features: string[];
   expiresAt: string | null;
   graceEndsAt: string | null;

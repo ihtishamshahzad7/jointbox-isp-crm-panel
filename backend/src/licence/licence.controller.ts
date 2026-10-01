@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { LicenceService } from './licence.service';
 import { LicenceActivationService } from './licence-activation.service';
+import { LicenceCountsService } from './licence-counts.service';
 
 /**
  * Licence status for the UI.
@@ -17,6 +18,7 @@ export class LicenceController {
   constructor(
     private readonly licence: LicenceService,
     private readonly activation: LicenceActivationService,
+    private readonly counts: LicenceCountsService,
   ) {}
 
   @Get('status')
@@ -55,6 +57,12 @@ export class LicenceController {
   /** Force an immediate re-read, for the "I've just paid" button. */
   @Get('refresh')
   async refresh() {
+    // Recount before re-reading, so the usage figures on the licence screen are
+    // current too. The cron only runs hourly; someone who has just pressed this
+    // button is asking "where am I NOW", and an hour-old subscriber count is
+    // the kind of small wrongness that costs trust in the one number that
+    // matters — the one sitting next to their plan cap.
+    await this.counts.publishNow().catch(() => undefined);
     await this.licence.refresh();
     return this.licence.status();
   }

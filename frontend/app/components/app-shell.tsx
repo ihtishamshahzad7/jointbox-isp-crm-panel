@@ -82,6 +82,11 @@ const menuGroups = [
   ]},
   { label: 'System', items: [
     { id: 'admin', label: 'Administration', href: '/admin-center', Icon: navIcons.Settings },
+    // ISP owner only — licence state, plan caps and activation. It had a page
+    // and a command-palette entry but no menu row, so the only way to reach it
+    // was to already know the URL. Anyone who needs it is by definition someone
+    // whose panel is warning them about it.
+    { id: 'licence', label: 'Licence', href: '/licence', Icon: navIcons.Settings, ispOnly: true },
     // ISP owner only — background job queue (bulk work + integrity reconcile).
     { id: 'jobs', label: 'Background Jobs', href: '/jobs', Icon: navIcons.Reports, ispOnly: true },
     // Sits above Help deliberately: it answers "what do I do next", which is
@@ -183,7 +188,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/users', 'admin'],
   ['/security', 'admin'],
   ['/settings', 'admin'],
-  ['/licence', 'admin'],
+  ['/licence', 'licence'],
   ['/my-profile', 'admin'],
 ];
 

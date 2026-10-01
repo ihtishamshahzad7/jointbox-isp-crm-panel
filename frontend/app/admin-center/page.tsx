@@ -6,6 +6,7 @@ import Organization from "../organization/page";
 import Hierarchy from "../hierarchy/page";
 import Security from "../security/page";
 import Settings from "../settings/page";
+import Licence from "../licence/page";
 
 /**
  * Accounts and configuration. The reseller tree sits here rather than under
@@ -22,6 +23,10 @@ export default function AdminCenter() {
         { id: "users",        label: "Users & Staff", hint: "Logins, roles and permissions.", render: () => <Users /> },
         { id: "security",     label: "Security",     hint: "API keys, webhooks and access control.", render: () => <Security /> },
         { id: "settings",     label: "Settings",     hint: "Currency, branding and system options.", render: () => <Settings /> },
+        // Activation and plan limits. Lives beside Settings because "what does
+        // my plan allow" is a configuration question, not a billing one — the
+        // money side of the licence is on the invoice, not in the panel.
+        { id: "licence",      label: "Licence",      hint: "Activation, plan limits and expiry.", render: () => <Licence /> },
       ]}
     />
   );
