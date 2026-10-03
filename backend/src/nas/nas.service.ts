@@ -879,7 +879,12 @@ export class NasService implements OnModuleInit {
   }
 
   // ── Active sessions from radacct ────────────────────────────
-  async getActiveSessions(id: number) {
+  /**
+   * `actor` is optional so internal callers keep the full list; the controller
+   * always passes it (after assertNas), and then only sessions of subscribers
+   * the caller may see are returned — see onlyVisibleSessions().
+   */
+  async getActiveSessions(id: number, actor?: any) {
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
 
@@ -909,7 +914,7 @@ export class NasService implements OnModuleInit {
             }
             return s;
           };
-          return live.map((u) => ({
+          return this.onlyVisibleSessions(live.map((u) => ({
             username:         u.username,
             nasipaddress:     nas.nasIp,
             framedipaddress:  u.address ?? null,
@@ -919,12 +924,35 @@ export class NasService implements OnModuleInit {
             upload_bytes:     u.uploadBytes ?? 0,
             download_bytes:   u.downloadBytes ?? 0,
             source:           'router',
-          }));
+          })), actor);
         }
       } catch { /* API unreachable — fall through to accounting */ }
     }
     // Pass nasIp to filter sessions only for this NAS
-    return this.radiusSync.getActiveSessions(nas.nasIp ?? undefined);
+    return this.onlyVisibleSessions(await this.radiusSync.getActiveSessions(nas.nasIp ?? undefined), actor);
+  }
+
+  /**
+   * Seeing a router is not the same as seeing every session on it.
+   *
+   * A router can be shared down to a franchise (NasAssignment), and then it
+   * carries the ISP's own customers alongside the franchise's. Being allowed to
+   * open the router must not hand the franchise the usernames, IPs and MACs of
+   * customers it does not own — the same rule /network/live applies. Nobody
+   * can be shown to own a session with no matching subscriber (an orphan in
+   * radacct), so only the platform owner sees those. No actor = internal
+   * caller, which keeps the unfiltered list.
+   */
+  private async onlyVisibleSessions<T extends { username?: string | null }>(rows: T[], actor?: any): Promise<T[]> {
+    if (!actor || this.scope.isPlatformOwner(actor) || !Array.isArray(rows) || !rows.length) return rows;
+    const usernames = [...new Set(rows.map((r) => r.username).filter((u): u is string => !!u))];
+    if (!usernames.length) return [];
+    const visible = await this.prisma.subscriber.findMany({
+      where: { AND: [{ username: { in: usernames } }, await this.scope.subscriberWhere(actor)] },
+      select: { username: true },
+    });
+    const mine = new Set(visible.map((s) => s.username));
+    return rows.filter((r) => !!r.username && mine.has(r.username));
   }
 
   /** Accounting-pipeline health — see RadiusSyncService.accountingHealth. */

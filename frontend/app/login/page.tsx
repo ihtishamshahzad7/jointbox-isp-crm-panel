@@ -6,6 +6,7 @@ import { Logo } from "../components/logo";
 import API_BASE from "../components/api";
 import { BRAND } from "../../lib/brand";
 import { LANGS, useI18n } from "../../lib/i18n";
+import { ensureMediaToken } from "../components/image-upload";
 
 const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const SUPPORT = BRAND.supportEmail;
@@ -20,12 +21,23 @@ export default function LoginPage() {
   const [needs2fa, setNeeds2fa] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
   const [demoCredentials, setDemoCredentials] = useState<{email:string;password:string}|null>(null);
+  // The demo button only exists on a server that hosts the sandbox. On a
+  // customer's panel it is off, and a button that always fails is worse than
+  // no button. Null until the server has answered, so it never flashes in.
+  const [demoEnabled, setDemoEnabled] = useState<boolean | null>(null);
   const { t, setLang, lang } = useI18n();
   const router = useRouter();
 
   useEffect(() => {
     if (localStorage.getItem("token")) router.push("/dashboard");
   }, [router]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/demo/public`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d) => setDemoEnabled(d?.enabled === true))
+      .catch(() => setDemoEnabled(false));
+  }, []);
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) { setMessage("❌ Please enter both email and password"); return; }
@@ -34,7 +46,18 @@ export default function LoginPage() {
       const response = await fetch(`${getBackendUrl()}/auth/login`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({email:email.trim().toLowerCase(),password,code:code||undefined}) });
       let data:any={}; try { data=await response.json(); } catch {}
       if (response.ok && data.requires2fa) { setNeeds2fa(true); setMessage("🔐 Enter the 6-digit code from your authenticator app"); return; }
-      if (response.ok && data.token) { localStorage.setItem("token",data.token); localStorage.setItem("user",JSON.stringify(data.user)); setMessage("✅ Login successful! Redirecting..."); setTimeout(()=>router.push("/dashboard"),700); }
+      if (response.ok && data.token) {
+        localStorage.setItem("token",data.token); localStorage.setItem("user",JSON.stringify(data.user));
+        // Photos and CNIC scans need a media token; fetching it during the
+        // redirect pause means the first screen's images load first time.
+        if (!data.user?.mustChangePassword) void ensureMediaToken(true);
+        // A first-boot admin (or anyone still on the published default) goes to
+        // change their password before anything else — the API would answer
+        // every other screen with 403 until they do.
+        const next = data.user?.mustChangePassword ? "/change-password" : "/dashboard";
+        setMessage(next === "/dashboard" ? "✅ Login successful! Redirecting..." : "🔐 Please choose a new password to continue.");
+        setTimeout(()=>router.push(next),700);
+      }
       else setMessage(`❌ Login failed: ${data.message || "Invalid email or password"}`);
     } catch { setMessage("❌ Unable to connect to the server. Please try again in a moment."); }
     finally { setLoading(false); }
@@ -76,7 +99,7 @@ export default function LoginPage() {
       <label style={{color:"#94a3b8",fontSize:11,marginBottom:7}}>{t("Password")}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyPress} autoComplete="current-password" style={{width:"100%",boxSizing:"border-box",background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,padding:"12px 14px",color:"#fff",marginBottom:18}}/>
       {needs2fa&&<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,""))} onKeyDown={handleKeyPress} placeholder="6-digit authenticator code" style={{width:"100%",boxSizing:"border-box",padding:12,marginBottom:16}}/>}
       <button type="button" disabled={loading} onClick={handleLogin} style={{width:"100%",padding:13,border:0,borderRadius:10,color:"#fff",fontWeight:700,background:NOVA}}>{loading?t("Signing In..."):t("Sign In →")}</button>
-      <button type="button" disabled={loading} onClick={handleDemo} style={{width:"100%",marginTop:10,padding:11,borderRadius:10,border:"1px solid rgba(233,64,139,.35)",background:"rgba(233,64,139,.06)",color:"#f9a8d4",fontWeight:800,cursor:loading?"wait":"pointer"}}>✦ {loading?"Creating new demo…":"Try a NEW demo account"}</button>
+      {demoEnabled && (<button type="button" disabled={loading} onClick={handleDemo} style={{width:"100%",marginTop:10,padding:11,borderRadius:10,border:"1px solid rgba(233,64,139,.35)",background:"rgba(233,64,139,.06)",color:"#f9a8d4",fontWeight:800,cursor:loading?"wait":"pointer"}}>✦ {loading?"Creating new demo…":"Try a NEW demo account"}</button>)}
       {demoCredentials&&<div style={{marginTop:16,padding:15,borderRadius:12,background:"rgba(233,64,139,.08)",border:"1px solid rgba(233,64,139,.35)"}}><div style={{fontSize:13,fontWeight:800,color:"#fff",marginBottom:10}}>🎉 NEW Demo Login Credentials</div><div style={{fontSize:10,color:"#94a3b8"}}>LOGIN EMAIL / USERNAME</div><div style={{display:"flex",gap:6,alignItems:"center",marginBottom:9}}><code style={{flex:1,color:"#fff",overflowWrap:"anywhere"}}>{demoCredentials.email}</code><button type="button" onClick={()=>copy(demoCredentials.email,"Email / username")} style={{padding:"4px 8px",borderRadius:6,border:"1px solid rgba(255,255,255,.12)",background:"#151b29",color:"#fff"}}>Copy</button></div><div style={{fontSize:10,color:"#94a3b8"}}>LOGIN PASSWORD</div><div style={{display:"flex",gap:6,alignItems:"center"}}><code style={{flex:1,color:"#fff",overflowWrap:"anywhere"}}>{demoCredentials.password}</code><button type="button" onClick={()=>copy(demoCredentials.password,"Password")} style={{padding:"4px 8px",borderRadius:6,border:"1px solid rgba(255,255,255,.12)",background:"#151b29",color:"#fff"}}>Copy</button></div><button type="button" onClick={handleLogin} style={{marginTop:12,width:"100%",padding:9,borderRadius:8,border:"1px solid rgba(255,255,255,.12)",background:"#151b29",color:"#fff",fontWeight:700}}>Sign in with this demo account</button></div>}
       {message&&<p style={{textAlign:"center",marginTop:18,color:message.includes("❌")?"#f87171":"#E9408B",fontSize:12,padding:10,borderRadius:8,background:message.includes("❌")?"rgba(248,113,113,.1)":"rgba(233,64,139,.1)"}}>{message}</p>}<div style={{marginTop:20,padding:12,background:"rgba(255,255,255,.03)",borderRadius:8,textAlign:"center",fontSize:10,color:"#64748b"}}>{t("Need help?")} <a href={`mailto:${SUPPORT}`} style={{color:"#F9A8D4"}}>{SUPPORT}</a></div></div>
     </div></div>;

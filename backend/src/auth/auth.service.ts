@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { invalidateAccountStatus, PUBLISHED_DEFAULT_PASSWORD } from './account-status';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { LogsService } from '../logs/logs.service';
@@ -109,6 +111,21 @@ export class AuthService {
 
     // Correct password → clear the failed-attempt counter for this email+IP.
     this.loginAttempts.delete(this.failKey(email, ip));
+
+    // A suspended account does not log in. Checked AFTER the password, so only
+    // someone who already holds the credentials learns the account exists and
+    // is suspended — an attacker probing emails gets the same generic answer.
+    if (user.isActive === false) {
+      await this.logsService.createLoginLog({
+        userId: user.id,
+        email,
+        ipAddress: ip || 'Unknown',
+        userAgent: userAgent || 'Unknown',
+        status: 'FAILED',
+        failReason: 'Account suspended',
+      });
+      throw new UnauthorizedException('This account is suspended. Contact your provider.');
+    }
     console.log('✅ Password valid for:', email);
 
     // Phase 4A: two-factor authentication
@@ -228,17 +245,43 @@ export class AuthService {
       if (!user) {
         throw new UnauthorizedException('User not found');
       }
+      // A refresh is a new session. Without this, a suspended account could
+      // keep minting itself 7-day tokens indefinitely.
+      if (user.isActive === false) {
+        throw new UnauthorizedException('This account is suspended.');
+      }
 
-      // Create new token
-      const payload = {
+      // Same claims as login. isDemo was missing here, so a demo session that
+      // refreshed its token came back as an ordinary account — and every
+      // BlockDemoGuard check reads that claim.
+      const payload: Record<string, unknown> = {
         sub: user.id,
         email: user.email,
         role: user.role,
         name: user.name,
+        isDemo: (user as any).isDemo === true,
       };
 
+      /**
+       * An "act as" session stays one. Refreshing it used to drop `imp`, which
+       * turned a 1-day, audited impersonation into an ordinary 7-day login as
+       * the target: no switch-back, and every later action attributed to the
+       * target instead of the operator who was really at the keyboard. The
+       * operator who started it must still be active, too.
+       */
+      if (decoded?.imp?.by) {
+        const by = await this.prisma.user.findUnique({
+          where: { id: Number(decoded.imp.by) },
+          select: { isActive: true },
+        });
+        if (!by || by.isActive === false) {
+          throw new UnauthorizedException('The operator who started this session is no longer active.');
+        }
+        payload.imp = decoded.imp;
+      }
+
       const newToken = this.jwtService.sign(payload, {
-        expiresIn: '7d',
+        expiresIn: decoded?.imp?.by ? '1d' : '7d',
       });
 
       return { token: newToken };
@@ -329,6 +372,9 @@ export class AuthService {
         parentId: true,
         canTopupDownline: true,
         canSetPackagePrice: true,
+        // The shell reads this to send a first-boot admin straight to the
+        // change-password screen instead of a dashboard full of 403s.
+        mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -339,5 +385,54 @@ export class AuthService {
     }
 
     return user;
+  }
+
+  /**
+   * An operator changes their own password.
+   *
+   * There was no way to do this for staff accounts at all — the only
+   * change-password route belonged to the subscriber portal — so the first-boot
+   * admin created from the published default could only be fixed by another
+   * admin editing the account, and there is no other admin on a new server.
+   *
+   * Returns a fresh token, and blacklists the one used to make the request:
+   * a password change is exactly when an old session should stop, because the
+   * reason for changing it may be that someone else has it.
+   */
+  async changeOwnPassword(userId: number, currentPassword: string, newPassword: string, oldToken?: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    if (!currentPassword || !(await bcrypt.compare(currentPassword, user.password))) {
+      throw new BadRequestException('Your current password is not correct.');
+    }
+    const next = String(newPassword || '');
+    if (next.length < 8) {
+      throw new BadRequestException('Use at least 8 characters.');
+    }
+    if (next === currentPassword) {
+      throw new BadRequestException('Choose a password different from the current one.');
+    }
+    if (next === PUBLISHED_DEFAULT_PASSWORD) {
+      throw new BadRequestException('That is the published default password. Choose your own.');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: await bcrypt.hash(next, 10), mustChangePassword: false },
+    });
+    invalidateAccountStatus(userId);
+
+    const token = this.jwtService.sign(
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        isDemo: (user as any).isDemo === true,
+      },
+      { expiresIn: '7d' },
+    );
+    return { message: 'Password changed', token, oldToken };
   }
 }

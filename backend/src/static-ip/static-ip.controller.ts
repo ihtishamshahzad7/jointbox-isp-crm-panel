@@ -58,14 +58,14 @@ export class StaticIpController {
   }
 
   @Post()
-  create(@Body() body: any) {
-    return this.staticIps.create(body);
+  create(@Body() body: any, @Req() req: any) {
+    return this.staticIps.create(body, req.user);
   }
 
   /** Add a whole block at once — address space is bought in ranges. */
   @Post('range')
-  createRange(@Body() body: any) {
-    return this.staticIps.createRange(body);
+  createRange(@Body() body: any, @Req() req: any) {
+    return this.staticIps.createRange(body, req.user);
   }
 
   /** Allocate to a customer, with price and optional end date. */

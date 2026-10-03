@@ -9,49 +9,108 @@ export class ThrottlePoliciesService {
     private scope: ScopeService,
   ) {}
 
-  async list(query: any) {
-    return this.prisma.throttlePolicy.findMany({
+  /**
+   * ThrottlePolicy is installation-wide config (no owner column): one row
+   * serves every company, so the policy itself is readable by any operator.
+   * What hangs off it is NOT shared — the packages and subscribers attached
+   * to a policy belong to individual companies, so counts and lists of those
+   * are narrowed to the caller's own. The platform owner sees them all.
+   */
+  private async bindingScope(actor?: any): Promise<{ pkg: any; sub: any } | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    const [pkg, sub] = await Promise.all([
+      this.scope.packageWhere(actor),
+      this.scope.subscriberWhere(actor),
+    ]);
+    return { pkg, sub };
+  }
+
+  /** Attach/detach on a package changes it for everyone on it: the caller must own it. */
+  private async assertPackageOwned(actor: any, packageId: number): Promise<void> {
+    if (this.scope.isPlatformOwner(actor)) return;
+    await this.scope.assertPackage(actor, packageId);
+    const pkg = await this.prisma.package.findUnique({ where: { id: packageId }, select: { ownerId: true } });
+    await this.scope.assertOwnerInScope(actor, pkg?.ownerId, `Package ${packageId}`);
+  }
+
+  /** Exists, and is a platform default or the caller's company's own. */
+  private async assertPolicyExists(id: number, actor?: any): Promise<void> {
+    const p = await this.prisma.throttlePolicy.findUnique({ where: { id }, select: { id: true, ownerId: true } });
+    if (!p) throw new NotFoundException(`Policy ${id} not found`);
+    if (actor) await this.scope.assertConfigReadable(actor, p, `Policy ${id}`);
+  }
+
+  // Policies: platform defaults plus each company's own. A company shapes its
+  // own customers' speed without being able to touch anyone else's policy.
+  async list(query: any, actor?: any) {
+    const scoped = await this.bindingScope(actor);
+    const own = actor ? await this.scope.configReadWhere(actor) : {};
+    const rows = await this.prisma.throttlePolicy.findMany({
       where: {
-        ...(query?.isActive ? { isActive: query.isActive === 'true' } : {}),
-        ...(query?.q ? {
-          OR: [
-            { name: { contains: query.q, mode: 'insensitive' } },
-            { description: { contains: query.q, mode: 'insensitive' } },
-          ],
-        } : {}),
+        AND: [
+          own,
+          query?.isActive ? { isActive: query.isActive === 'true' } : {},
+          query?.q ? {
+            OR: [
+              { name: { contains: query.q, mode: 'insensitive' } },
+              { description: { contains: query.q, mode: 'insensitive' } },
+            ],
+          } : {},
+        ],
       },
       orderBy: { name: 'asc' },
       include: {
-        _count: { select: { packages: true, subscribers: true } },
+        _count: {
+          select: scoped
+            ? {
+                packages: { where: { package: scoped.pkg } },
+                subscribers: { where: { subscriber: scoped.sub } },
+              }
+            : { packages: true, subscribers: true },
+        },
       },
     });
+    return rows.map((r: any) => ({ ...r, scope: r.ownerId == null ? 'PLATFORM' : 'COMPANY' }));
   }
 
-  async options() {
+  async options(actor?: any) {
+    const own = actor ? await this.scope.configReadWhere(actor) : {};
     return this.prisma.throttlePolicy.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...own },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, mode: true, value: true, daysOfWeek: true, startTime: true, endTime: true },
     });
   }
 
-  async get(id: number) {
+  async get(id: number, actor?: any) {
+    const scoped = await this.bindingScope(actor);
     const p = await this.prisma.throttlePolicy.findUnique({
       where: { id },
       include: {
-        packages: { include: { package: { select: { id: true, name: true, price: true } } } },
-        subscribers: { include: { subscriber: { select: { id: true, fullName: true, username: true } } } },
+        packages: {
+          ...(scoped ? { where: { package: scoped.pkg } } : {}),
+          include: { package: { select: { id: true, name: true, price: true } } },
+        },
+        subscribers: {
+          ...(scoped ? { where: { subscriber: scoped.sub } } : {}),
+          include: { subscriber: { select: { id: true, fullName: true, username: true } } },
+        },
       },
     });
     if (!p) throw new NotFoundException(`Policy ${id} not found`);
+    if (actor) await this.scope.assertConfigReadable(actor, p, `Policy ${id}`);
     return p;
   }
 
   async create(body: any, actor: any) {
+    // Platform owner: a platform default. A company administrator: the
+    // company's own policy (ScopeService.configOwnerForCreate).
+    const ownerId = await this.scope.configOwnerForCreate(actor);
     if (!body?.name) throw new BadRequestException('name is required');
     if (!body?.mode) throw new BadRequestException('mode is required (PERCENT | ABSOLUTE_KBPS | BURST_TO_KBPS)');
     return this.prisma.throttlePolicy.create({
       data: {
+        ownerId,
         name: body.name,
         description: body.description ?? null,
         mode: body.mode,
@@ -69,6 +128,7 @@ export class ThrottlePoliciesService {
   async update(id: number, body: any, actor: any) {
     const existing = await this.prisma.throttlePolicy.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Policy ${id} not found`);
+    await this.scope.assertConfigWritable(actor, existing, 'Policy');
     return this.prisma.throttlePolicy.update({
       where: { id },
       data: {
@@ -89,14 +149,19 @@ export class ThrottlePoliciesService {
   async remove(id: number, actor: any) {
     const existing = await this.prisma.throttlePolicy.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Policy ${id} not found`);
+    await this.scope.assertConfigWritable(actor, existing, 'Policy');
     await this.prisma.throttlePolicy.delete({ where: { id } });
     return { ok: true };
   }
 
   // ─── Package bindings ────────────────────────────────────────────────
 
-  async attachToPackage(policyId: number, body: any) {
+  async attachToPackage(policyId: number, body: any, actor?: any) {
     if (!body?.packageId) throw new BadRequestException('packageId is required');
+    if (actor) {
+      await this.assertPackageOwned(actor, +body.packageId);
+      await this.assertPolicyExists(policyId, actor);
+    }
     return this.prisma.packageThrottlePolicy.upsert({
       where: { packageId_policyId: { packageId: +body.packageId, policyId } },
       update: {},
@@ -104,7 +169,8 @@ export class ThrottlePoliciesService {
     });
   }
 
-  async detachFromPackage(policyId: number, packageId: number) {
+  async detachFromPackage(policyId: number, packageId: number, actor?: any) {
+    if (actor) await this.assertPackageOwned(actor, packageId);
     await this.prisma.packageThrottlePolicy.delete({
       where: { packageId_policyId: { packageId, policyId } },
     });
@@ -113,8 +179,12 @@ export class ThrottlePoliciesService {
 
   // ─── Subscriber overrides ───────────────────────────────────────────
 
-  async attachToSubscriber(policyId: number, body: any) {
+  async attachToSubscriber(policyId: number, body: any, actor?: any) {
     if (!body?.subscriberId) throw new BadRequestException('subscriberId is required');
+    if (actor) {
+      await this.scope.assertSubscriberVisible(actor, +body.subscriberId);
+      await this.assertPolicyExists(policyId, actor);
+    }
     return this.prisma.subscriberThrottle.upsert({
       where: { subscriberId_policyId: { subscriberId: +body.subscriberId, policyId } },
       update: { isOverride: body.isOverride !== false },
@@ -122,7 +192,8 @@ export class ThrottlePoliciesService {
     });
   }
 
-  async detachFromSubscriber(policyId: number, subscriberId: number) {
+  async detachFromSubscriber(policyId: number, subscriberId: number, actor?: any) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subscriberId);
     await this.prisma.subscriberThrottle.delete({
       where: { subscriberId_policyId: { subscriberId, policyId } },
     });

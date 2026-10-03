@@ -46,6 +46,19 @@ const NO_ACTOR_BY_DESIGN: Record<string, string> = {
   'AppController.ready': 'Same.',
   'PortalController.login': 'The customer portal has its own identity system.',
   'PortalController.register': 'Pre-authentication by definition.',
+  // Oct 2026 tenancy sweep — every other route now receives its caller. These
+  // are the ones that genuinely have none, or whose identity IS the payload.
+  'AuthController.refresh': 'Unguarded; identity is the presented token, refused unless an operator (admin-scope) token that is not blacklisted.',
+  'AuthController.verifyToken': 'Same — verifies the token it is given, operator scope only.',
+  'AppController.advancedFeatures': 'Static product roadmap payload. Same bytes for everyone.',
+  'AppController.resellerCapabilityChecklistPayload': 'Static checklist plus its installation-level answers; no tenant data.',
+  'GatewayController.available': 'Which payment providers are configured — a constant per installation.',
+  'PublicApiController.availableGateways': 'Same, for API keys.',
+  'PublicApiController.triggerBilling': 'Validates the type and returns instructions; performs nothing.',
+  'PublicStatusController.status': 'Public network status page, by design.',
+  'PublicStatusController.history': 'Public network status history, by design.',
+  'PortalController.gateways': 'Customer portal (PortalGuard identity), payment provider list.',
+  'HotspotController.redeem': 'Public hotspot login; identity is the voucher code; rate-limited.',
 };
 
 /**
@@ -99,6 +112,8 @@ const PUBLIC_SURFACE: Record<string, string> = {
   'GET /gateway/razorpay/form/:key': 'Same.',
   'GET /gateway/sandbox/checkout/:key': 'Test-mode checkout page.',
   'POST /gateway/sandbox/confirm/:key': 'Test-mode confirmation.',
+  'GET /uploads/:file':
+    'Uploaded files for <img src>, which cannot send a header. Verifies a media-scope token from ?mt= by hand, then company ownership (uploads-tenancy.spec.ts).',
 };
 
 describe('security: the authorization matrix', () => {
@@ -126,7 +141,10 @@ describe('security: the authorization matrix', () => {
    * When the count goes DOWN, lower this number in the same commit. That is
    * the whole mechanism: it is a high-water mark, not a target.
    */
-  const BASELINE = Number(process.env.AUTHZ_BASELINE ?? '325');
+  // 325 when this suite was written; 0 after the Oct 2026 tenancy sweep, when
+  // every remaining case was either fixed or justified above. Zero means a new
+  // route without its caller fails CI until someone writes down why.
+  const BASELINE = Number(process.env.AUTHZ_BASELINE ?? '0');
 
   it('no NEW route is structurally unable to identify its caller', () => {
     const offenders = matrix
@@ -184,7 +202,7 @@ describe('security: the authorization matrix', () => {
    * delete someone else's row.
    */
   it('the number of unscoped DELETE routes never grows', () => {
-    const DELETE_BASELINE = Number(process.env.AUTHZ_DELETE_BASELINE ?? '21');
+    const DELETE_BASELINE = Number(process.env.AUTHZ_DELETE_BASELINE ?? '0');
     const deletes = matrix
       .filter((r) => r.method === 'DELETE' && !r.actorAware && !NO_ACTOR_BY_DESIGN[key(r)])
       .map((r) => `${r.routePath} (${key(r)})`)

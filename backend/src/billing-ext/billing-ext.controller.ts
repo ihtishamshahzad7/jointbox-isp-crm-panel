@@ -21,13 +21,13 @@ export class BillingExtController {
   // ─── Pro-rata ─────────────────────────────────────────────────────────
 
   @Get('pro-rata')
-  listProRated(@Query() query: any) {
-    return this.svc.listProRated(query);
+  listProRated(@Query() query: any, @Req() req: any) {
+    return this.svc.listProRated(query, req.user);
   }
 
   @Get('pro-rata/package/:pkgId')
-  getProRatedForPackage(@Param('pkgId') pkgId: string) {
-    return this.svc.getProRatedForPackage(+pkgId);
+  getProRatedForPackage(@Param('pkgId') pkgId: string, @Req() req: any) {
+    return this.svc.getProRatedForPackage(+pkgId, req.user);
   }
 
   @Put('pro-rata/package/:pkgId')
@@ -41,15 +41,15 @@ export class BillingExtController {
    * by staff when reviewing a mid-cycle activation.
    */
   @Post('pro-rata/calculate')
-  calculate(@Body() body: any) {
-    return this.svc.calculateProRated(body);
+  calculate(@Body() body: any, @Req() req: any) {
+    return this.svc.calculateProRated(body, req.user);
   }
 
   // ─── Subscriber billing mode ─────────────────────────────────────────
 
   @Get('subscriber-billing/:subId')
-  getBilling(@Param('subId') subId: string) {
-    return this.svc.getSubscriberBilling(+subId);
+  getBilling(@Param('subId') subId: string, @Req() req: any) {
+    return this.svc.getSubscriberBilling(+subId, req.user);
   }
 
   @Put('subscriber-billing/:subId')
@@ -60,13 +60,13 @@ export class BillingExtController {
   // ─── Subscriber balance / wallet ─────────────────────────────────────
 
   @Get('subscriber-balance/:subId')
-  getBalance(@Param('subId') subId: string) {
-    return this.svc.getSubscriberBalance(+subId);
+  getBalance(@Param('subId') subId: string, @Req() req: any) {
+    return this.svc.getSubscriberBalance(+subId, req.user);
   }
 
   @Get('subscriber-balance/:subId/ledger')
-  getLedger(@Param('subId') subId: string, @Query() query: any) {
-    return this.svc.getSubscriberLedger(+subId, query);
+  getLedger(@Param('subId') subId: string, @Query() query: any, @Req() req: any) {
+    return this.svc.getSubscriberLedger(+subId, query, req.user);
   }
 
   @Post('subscriber-balance/:subId/topup')

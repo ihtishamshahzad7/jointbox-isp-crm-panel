@@ -76,14 +76,16 @@ export function currencySymbol(): string {
 export async function loadCurrencyFromApi(apiBase: string, token: string | null) {
   if (!token) return;
   try {
-    const r = await fetch(`${apiBase}/organization/isps`, {
+    // One value for the whole installation, readable by every account — the
+    // ISP records themselves are the platform owner's and come back empty for
+    // a company admin.
+    const r = await fetch(`${apiBase}/organization/currency`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!r.ok) return;
-    const isps = await r.json();
-    const isp = Array.isArray(isps) ? isps[0] : null;
-    if (isp?.currency) {
-      setCurrency({ code: isp.currency, symbol: isp.currencySymbol || isp.currency });
+    const c = await r.json();
+    if (c?.currency) {
+      setCurrency({ code: c.currency, symbol: c.currencySymbol || c.currency });
     }
   } catch {
     /* keep whatever is cached */

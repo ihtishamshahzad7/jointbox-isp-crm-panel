@@ -25,13 +25,13 @@ export class IpPoolController {
   // Compare the panel's pools against what the router actually has.
   // GET  = report only (safe).  POST = make the panel match the router.
   @Get('sync/check')
-  checkPoolSync() {
-    return this.ipPoolService.syncFromNas(false);
+  checkPoolSync(@Req() req: any) {
+    return this.ipPoolService.syncFromNas(false, req.user);
   }
 
   @Post('sync/apply')
-  applyPoolSync() {
-    return this.ipPoolService.syncFromNas(true);
+  applyPoolSync(@Req() req: any) {
+    return this.ipPoolService.syncFromNas(true, req.user);
   }
 
   // ── GET /ip-pools
@@ -56,8 +56,8 @@ export class IpPoolController {
    * session, which is invisible until customers start calling.
    */
   @Get('verify')
-  verify() {
-    return this.ipPoolService.verifyAgainstRouters();
+  verify(@Req() req: any) {
+    return this.ipPoolService.verifyAgainstRouters(req.user);
   }
 
   /**
@@ -76,10 +76,10 @@ export class IpPoolController {
 
   // ── GET /ip-pools/:id
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id') id: string, @Req() req: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) throw new BadRequestException('Pool ID must be a number');
-    return this.ipPoolService.findOne(numId);
+    return this.ipPoolService.findOne(numId, req.user);
   }
 
   // ── POST /ip-pools

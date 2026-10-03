@@ -13,18 +13,18 @@ export class AiController {
    * the docs and the AI can never drift apart.
    */
   @Get('docs')
-  docs() {
+  docs(@Req() req: any) {
     return this.ai.knowledgeBase();
   }
 
   /** Guidance for the screen the user is on, e.g. ?route=/nas. */
   @Get('page-help')
-  pageHelp(@Query('route') route?: string) {
+  pageHelp(@Req() req: any, @Query('route') route?: string) {
     return this.ai.pageHelp(route);
   }
 
   @Get('status')
-  status() {
+  status(@Req() req: any) {
     return { configured: this.ai.configured };
   }
 

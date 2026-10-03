@@ -154,7 +154,19 @@ describe('licence: plan capacity', () => {
   it('enforces the NAS cap on its own number', async () => {
     const { svc, calls } = make({ rows: 10, maxNas: 10 });
     await expect(svc.assertCanAddNas()).rejects.toBeInstanceOf(HttpException);
-    expect(calls[0].sql).toContain('"Nas"');
+    // This used to assert the query contained "Nas" — which pinned the BUG.
+    // The model maps to the FreeRADIUS table `nas`; "Nas" does not exist, so
+    // the real query threw, failed open, and the router cap never applied.
+    // A mock that answers any SQL cannot see that, so assert the table name.
+    expect(calls[0].sql).toMatch(/FROM nas n\b/);
+    expect(calls[0].sql).not.toContain('"Nas"');
+  });
+
+  it('never counts the demo sandbox against a plan', async () => {
+    const { svc, calls } = make({ rows: 10, maxNas: 10 });
+    await svc.assertCanAddNas().catch(() => undefined);
+    expect(calls[0].sql).toMatch(/isDemo" = true/);
+    expect(calls[0].sql).toMatch(/server IS NULL OR n\.server <> \$2/);
   });
 
   it('does not refuse NAS when only the subscriber cap is reached', async () => {

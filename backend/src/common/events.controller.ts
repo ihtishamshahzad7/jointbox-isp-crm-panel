@@ -100,10 +100,15 @@ export class EventsController {
    * signal, but it is still a read of operational activity, and an
    * unauthenticated endpoint on this controller is precisely how the stream
    * above came to be unauthenticated for so long.
+   *
+   * Tenant-free by content: five counters about this worker's broadcast bus
+   * (totals, open streams, Redis fan-out state) — no event payload, no user,
+   * no company data — so the caller is taken only so the route is not blind
+   * to who is asking, and the answer does not depend on it.
    */
   @Get('events/status')
   @UseGuards(SseAuthGuard)
-  status() {
+  status(@Request() _req: any) {
     return this.events.getStats();
   }
 }

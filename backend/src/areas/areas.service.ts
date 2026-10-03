@@ -28,11 +28,20 @@ export class AreasService {
     });
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, actor?: Actor) {
+    // An area addressed by id must be one of the caller's own — and the
+    // customers listed under it only the caller's, since one area name can
+    // hold several companies' customers.
+    if (actor) {
+      const area = await this.prisma.area.findUnique({ where: { id }, select: { ownerId: true } });
+      if (!area) throw new NotFoundException(`Area ${id} not found`);
+      await this.scope.assertOwnerInScope(actor, area.ownerId, 'Area');
+    }
+    const subWhere = actor ? await this.scope.subscriberWhere(actor) : {};
     return this.prisma.area.findUnique({
       where: { id },
       include: {
-        subscribers: true,
+        subscribers: { where: subWhere },
         _count: {
           select: { subscribers: true },
         },

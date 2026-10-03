@@ -27,7 +27,8 @@ export class DemoRepairService implements OnModuleInit {
   }
 
   private async repair() {
-    if (process.env.DEMO_PUBLIC === '0') return;
+    // Same opt-in as DemoService.enabled(): nothing to repair where it is off.
+    if (process.env.DEMO_PUBLIC !== '1') return;
 
     await this.demo.ensureShared();
     const email = (process.env.DEMO_EMAIL || 'demo@jointbox.net').trim().toLowerCase();
@@ -140,7 +141,7 @@ export class DemoRepairService implements OnModuleInit {
    */
   @Cron('*/5 * * * *')
   async refreshDemoSessions(): Promise<number> {
-    if (!isPrimaryInstance() || process.env.DEMO_PUBLIC === '0') return 0;
+    if (!isPrimaryInstance() || process.env.DEMO_PUBLIC !== '1') return 0;
     const updated = await this.prisma.$executeRawUnsafe(`
       UPDATE radacct a
       SET acctupdatetime  = NOW(),

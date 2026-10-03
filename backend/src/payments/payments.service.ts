@@ -4,7 +4,7 @@ import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationService } from '../organization/organization.service';
-import { ScopeService } from '../common/scope.service';
+import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
 import { CurrencyService } from '../common/currency.service';
 
@@ -190,7 +190,59 @@ export class PaymentsService {
     return payment;
   }
 
-  async create(data: any) {
+  /**
+   * A payment belongs to its subscriber, so the subscriber decides who may
+   * touch it. Answered as the same "not found" findOne() gives, so a probe
+   * cannot tell "no such payment" from "another company's payment".
+   */
+  private async assertPaymentVisible(actor: Actor, payment: { id: number; subscriberId: number | null }) {
+    try {
+      await this.scope.assertViaSubscriber(actor, payment.subscriberId, 'Payment');
+    } catch (e) {
+      if (e instanceof NotFoundException) throw new NotFoundException(`Payment with ID ${payment.id} not found`);
+      throw e;
+    }
+  }
+
+  /**
+   * Money may only be recorded against the caller's own customer and the
+   * caller's own invoice. Checked before anything is written; the platform
+   * owner is unrestricted.
+   */
+  private async assertPaymentTarget(actor: Actor, data: any) {
+    if (this.scope.isPlatformOwner(actor)) return;
+    if (data?.invoiceId != null) {
+      const inv = await this.prisma.invoice.findUnique({
+        where: { id: Number(data.invoiceId) },
+        select: { subscriberId: true },
+      });
+      await this.scope.assertViaSubscriber(actor, inv?.subscriberId, 'Invoice');
+      // The invoice's own subscriber has just been checked; a body that names
+      // no subscriber is paying that one.
+      if (data.subscriberId == null) return;
+    }
+    await this.scope.assertViaSubscriber(actor, data?.subscriberId, 'Subscriber');
+  }
+
+  /**
+   * WHO RECEIVED THE MONEY is the signed-in caller — or, when the caller is
+   * recording cash a colleague collected, an account inside the caller's own
+   * tree. It used to be whatever the request body said, so collections could
+   * be booked against any user on the installation (and appear in another
+   * company's collections-by-staff report).
+   */
+  private async receivedByFor(actor: Actor | undefined, requested: any): Promise<number | undefined> {
+    if (!actor) return requested != null && requested !== '' ? Number(requested) : undefined;
+    if (requested != null && requested !== '') {
+      await this.scope.assertUser(actor, Number(requested));
+      return Number(requested);
+    }
+    return this.scope.actorId(actor);
+  }
+
+  async create(data: any, actor?: Actor) {
+    if (actor) await this.assertPaymentTarget(actor, data);
+
     // Refuse a payment dated into a closed accounting period (no backdating).
     await this.accounting.assertPeriodOpen(data.paymentDate);
 
@@ -238,6 +290,7 @@ export class PaymentsService {
 
     const paymentNo = data.paymentNo || `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+    const receivedBy = await this.receivedByFor(actor, data.receivedBy);
     const payment = await this.prisma.payment.create({
       data: {
         ...(await this.currency.paymentStamp(data.amount, { invoiceCurrency: targetInvoice?.currency })),
@@ -248,7 +301,7 @@ export class PaymentsService {
         method: data.method || PaymentMethod.CASH,
         referenceNo: data.referenceNo,
         notes: data.notes,
-        receivedBy: data.receivedBy,
+        receivedBy,
         paymentDate: data.paymentDate ? new Date(data.paymentDate) : new Date(),
       },
       include: {
@@ -273,7 +326,7 @@ export class PaymentsService {
     }
 
     // Phase 1: double-entry posting (Cash ↔ AR)
-    await this.accounting.postPaymentReceived(payment, data.receivedBy);
+    await this.accounting.postPaymentReceived(payment, receivedBy);
 
     // Phase 4B: reseller commission chain
     void this.organization.distributeCommission(payment);
@@ -299,9 +352,17 @@ export class PaymentsService {
     return payment;
   }
 
-  async update(id: number, data: any) {
+  async update(id: number, data: any, actor?: Actor) {
     const existing = await this.prisma.payment.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Payment with ID ${id} not found`);
+    if (actor) {
+      await this.assertPaymentVisible(actor, existing);
+      // The subscriber is not editable here today, but a body that names one
+      // must never be a way to point this money at another company's customer.
+      if (data?.subscriberId != null && Number(data.subscriberId) !== existing.subscriberId) {
+        await this.scope.assertViaSubscriber(actor, data.subscriberId, 'Subscriber');
+      }
+    }
 
     const updateData: any = {};
     if (data.amount !== undefined) updateData.amount = data.amount;
@@ -348,9 +409,10 @@ export class PaymentsService {
     return updated;
   }
 
-  async remove(id: number) {
+  async remove(id: number, actor?: Actor) {
     const payment = await this.prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new NotFoundException(`Payment with ID ${id} not found`);
+    if (actor) await this.assertPaymentVisible(actor, payment);
 
     // Removing a payment must UNDO its effects, not just drop the row:
     //   1) the invoice it paid must go back to PARTIAL/UNPAID,

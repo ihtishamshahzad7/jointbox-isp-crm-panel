@@ -3,6 +3,7 @@ import { MonitoringService } from './monitoring.service';
 import { DiagnosticsService } from './diagnostics.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('monitoring')
@@ -10,6 +11,7 @@ export class MonitoringController {
   constructor(
     private readonly monitoring: MonitoringService,
     private readonly diag: DiagnosticsService,
+    private readonly scope: ScopeService,
   ) {}
 
   // ── History for the detail page ──
@@ -19,18 +21,42 @@ export class MonitoringController {
   }
 
   // ── Diagnostics (on-demand; validated + shell-safe) ──
+  //
+  // Each of these makes THIS SERVER send traffic to whatever target the caller
+  // names, from inside the operator network (assertDestination allows RFC1918
+  // on purpose). On a shared installation that is every company's LAN, so the
+  // tool is the platform owner's alone. The outbound guard in
+  // DiagnosticsService still applies on top of this.
   @Post('diagnostics/ping')
-  dPing(@Body() b: { host: string; count?: number }) { return this.diag.ping(b.host, b.count); }
+  dPing(@Body() b: { host: string; count?: number }, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.diag.ping(b.host, b.count);
+  }
   @Post('diagnostics/traceroute')
-  dTrace(@Body() b: { host: string }) { return this.diag.traceroute(b.host); }
+  dTrace(@Body() b: { host: string }, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.diag.traceroute(b.host);
+  }
   @Post('diagnostics/tcp')
-  dTcp(@Body() b: { host: string; port: number }) { return this.diag.tcpPort(b.host, b.port); }
+  dTcp(@Body() b: { host: string; port: number }, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.diag.tcpPort(b.host, b.port);
+  }
   @Post('diagnostics/tcp-trace')
-  dTcpTrace(@Body() b: { host: string; port: number }) { return this.diag.tcpTrace(b.host, b.port); }
+  dTcpTrace(@Body() b: { host: string; port: number }, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.diag.tcpTrace(b.host, b.port);
+  }
   @Post('diagnostics/dns')
-  dDns(@Body() b: { name: string; type?: string; resolver?: string }) { return this.diag.dnsLookup(b.name, b.type, b.resolver); }
+  dDns(@Body() b: { name: string; type?: string; resolver?: string }, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.diag.dnsLookup(b.name, b.type, b.resolver);
+  }
   @Post('diagnostics/http')
-  dHttp(@Body() b: { url: string }) { return this.diag.httpCheck(b.url); }
+  dHttp(@Body() b: { url: string }, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.diag.httpCheck(b.url);
+  }
 
   /**
    * Unified device list — ping monitors and SNMP devices correlated by address

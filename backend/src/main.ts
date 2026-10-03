@@ -18,6 +18,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
+import { PrismaExceptionFilter } from './common/prisma-exception.filter';
 
 // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
 // BigInt. JSON.stringify throws on BigInt, so ANY endpoint returning them —
@@ -34,21 +35,79 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
   try {
     const prisma = app.get(PrismaService);
     const userCount = await prisma.user.count();
-    if (userCount > 0) return;
 
-    const email = process.env.ADMIN_EMAIL || 'admin@jointbox.com';
-    const password = process.env.ADMIN_PASSWORD || 'admin123';
-    await prisma.user.create({
-      data: {
-        name: 'Super Admin',
-        email,
-        password: await bcrypt.hash(password, 10),
-        role: 'SUPER_ADMIN',
-        isActive: true,
-      },
+    if (userCount === 0) {
+      const email = process.env.ADMIN_EMAIL || 'admin@jointbox.com';
+      const password = process.env.ADMIN_PASSWORD || 'admin123';
+      await prisma.user.create({
+        data: {
+          name: 'Super Admin',
+          email,
+          password: await bcrypt.hash(password, 10),
+          role: 'SUPER_ADMIN',
+          isActive: true,
+          // The first-boot password comes from install.sh, so it is known to
+          // anyone who has read install.sh. The panel refuses to be operated
+          // on it: every route except change-password answers 403 until the
+          // owner picks their own.
+          mustChangePassword: true,
+        },
+      });
+      // The password is NOT printed. It used to be, in full, into the PM2 log —
+      // which is world-readable to anyone with shell access and is shipped
+      // into support bundles. The operator already knows it: it is the
+      // ADMIN_PASSWORD they set in .env.
+      console.log(`👤 First-boot: default admin created → ${email} (password: ADMIN_PASSWORD from .env; must be changed at first login)`);
+      return;
+    }
+
+    /**
+     * AN INSTALLATION MUST HAVE A PLATFORM OWNER.
+     *
+     * Installation-wide settings (role permissions, gateways, ISP/branch
+     * records, tunnels, backups, licence) are SUPER_ADMIN-only, because one row
+     * serves every company on the server. Older single-company installs often
+     * ran their owner account as ADMIN — after that restriction they would
+     * have nobody able to change those settings at all.
+     *
+     * So: if no active SUPER_ADMIN exists, promote the OLDEST top-level ADMIN
+     * (no parent — the account the installer created, never a company created
+     * under a platform owner). Logged, once, and a no-op from then on.
+     */
+    const hasOwner = await prisma.user.count({
+      where: { role: 'SUPER_ADMIN' as any, isActive: true, isDemo: false },
     });
-    console.log('👤 First-boot: default admin created');
-    console.log(`   → login: ${email} / ${password}  (change the password after first login)`);
+    if (hasOwner === 0) {
+      const root = await prisma.user.findFirst({
+        where: { role: 'ADMIN' as any, parentId: null, isActive: true, isDemo: false },
+        orderBy: { id: 'asc' },
+        select: { id: true, email: true },
+      });
+      if (root) {
+        await prisma.user.update({ where: { id: root.id }, data: { role: 'SUPER_ADMIN' as any } });
+        console.warn(`👑 No platform owner existed — ${root.email} (the original top-level admin) is now SUPER_ADMIN.`);
+      }
+    }
+
+    /**
+     * EXISTING INSTALLS STILL ON THE PUBLISHED DEFAULT.
+     *
+     * Every server installed before forced change existed has an owner account
+     * created from `admin123`, and nothing ever made anyone change it. Rather
+     * than leave those panels open, flag any owner-level account whose password
+     * still IS the published default. A bcrypt compare per owner account, once
+     * at boot — there are only ever a handful.
+     */
+    const owners = await prisma.user.findMany({
+      where: { role: { in: ['SUPER_ADMIN', 'ADMIN'] as any }, isDemo: false, mustChangePassword: false },
+      select: { id: true, email: true, password: true },
+    });
+    for (const o of owners) {
+      if (o.password && (await bcrypt.compare('admin123', o.password))) {
+        await prisma.user.update({ where: { id: o.id }, data: { mustChangePassword: true } });
+        console.warn(`🔐 ${o.email} is still using the published default password — it must be changed at next login.`);
+      }
+    }
   } catch (e: any) {
     console.error('⚠️ Default-admin bootstrap failed:', e?.message || e);
   }
@@ -80,6 +139,9 @@ async function bootstrap() {
    * available as usual — this only additionally retains the original buffer.
    */
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+
+  // Duplicate names, blocked deletes, stale ids → 409/404 with a plain sentence, not a 500.
+  app.useGlobalFilters(new PrismaExceptionFilter());
 
   // Create the default admin on a fresh database (first Ubuntu install / new VM).
   await ensureDefaultAdmin(app);
@@ -205,10 +267,12 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
-  // Serve uploaded images (profile pictures / CNIC) statically at /uploads/*
+  // Uploaded files (CNIC scans, photos) are NOT served statically any more:
+  // UploadsController serves /uploads/:file to signed-in staff of the owning
+  // company only. A static mount here would sit in front of it and hand every
+  // CNIC to anyone with the URL, so it must not come back.
   const uploadDir = join(process.cwd(), 'uploads');
   if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true });
-  app.useStaticAssets(uploadDir, { prefix: '/uploads/' });
 
   // Graceful shutdown (queues, redis, prisma)
   app.enableShutdownHooks();

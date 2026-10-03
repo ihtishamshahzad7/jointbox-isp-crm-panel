@@ -18,7 +18,7 @@ export class AreasController {
   getStats(@Req() req: any) { return this.areasService.getStats(req.user); }
 
   @Get(':id')
-  findOne(@Param('id') id: string) { return this.areasService.findOne(+id); }
+  findOne(@Param('id') id: string, @Req() req: any) { return this.areasService.findOne(+id, req.user); }
 
   @Post()
   create(@Body() body: any, @Req() req: any) { return this.areasService.create(body, req.user); }

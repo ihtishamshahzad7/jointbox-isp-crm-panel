@@ -9,35 +9,43 @@ export class SecurityController {
   constructor(private readonly security: SecurityService) {}
 
   // ── Permissions matrix ────────────────────────────────────────
+  // The catalog of resources/roles/actions and the current role matrix are
+  // the same for every caller: they describe what CAN be granted, not anyone's
+  // data. Readable by any operator; only changing them is restricted.
   @Get('meta')
-  meta() {
+  meta(@Request() req: any) {
     return this.security.meta();
   }
 
   @Get('permissions')
-  matrix() {
+  matrix(@Request() req: any) {
     return this.security.getMatrix();
   }
 
+  /**
+   * RolePermission has no owner: one row set per ROLE serves every company on
+   * the installation, so changing it is a platform-owner operation.
+   */
   @Put('permissions/:role')
-  setRole(@Param('role') role: string, @Body() body: { permissions: string[] }) {
-    return this.security.setRolePermissions(role.toUpperCase(), body.permissions || []);
+  setRole(@Param('role') role: string, @Body() body: { permissions: string[] }, @Request() req: any) {
+    return this.security.setRolePermissions(req.user, role.toUpperCase(), body.permissions || []);
   }
 
   // ── Recommended presets (one-click per tier) ───────────────────
   @Get('presets')
-  presets() {
+  presets(@Request() req: any) {
     return this.security.presets();
   }
 
+  /** Same installation-wide write as setRole(), so the same platform-owner gate. */
   @Put('presets/:role')
-  applyPreset(@Param('role') role: string) {
-    return this.security.applyPreset(role.toUpperCase());
+  applyPreset(@Param('role') role: string, @Request() req: any) {
+    return this.security.applyPreset(req.user, role.toUpperCase());
   }
 
   // ── Delegated per-child permissions ───────────────────────────
   @Get('child-permissions/catalog')
-  permCatalog() {
+  permCatalog(@Request() req: any) {
     return this.security.permissionCatalog();
   }
   @Get('child-permissions/:userId')
@@ -71,13 +79,14 @@ export class SecurityController {
   }
 
   // ── Sessions ──────────────────────────────────────────────────
+  /** Login sessions of the accounts the caller can see (all, for the platform owner). */
   @Get('sessions')
-  sessions() {
-    return this.security.activeSessions();
+  sessions(@Request() req: any) {
+    return this.security.activeSessions(req.user);
   }
 
   @Delete('sessions/:sessionId')
   kill(@Param('sessionId') sessionId: string, @Request() req: any) {
-    return this.security.killSession(sessionId, req.user?.sub);
+    return this.security.killSession(sessionId, req.user?.sub, req.user);
   }
 }

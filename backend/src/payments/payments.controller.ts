@@ -41,17 +41,17 @@ export class PaymentsController {
   }
 
   @Post()
-  async create(@Body() createPaymentDto: any) {
-    return this.paymentsService.create(createPaymentDto);
+  async create(@Body() createPaymentDto: any, @Req() req: any) {
+    return this.paymentsService.create(createPaymentDto, req.user);
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() updatePaymentDto: any) {
-    return this.paymentsService.update(+id, updatePaymentDto);
+  async update(@Param('id') id: string, @Body() updatePaymentDto: any, @Req() req: any) {
+    return this.paymentsService.update(+id, updatePaymentDto, req.user);
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string) {
-    return this.paymentsService.remove(+id);
+  async remove(@Param('id') id: string, @Req() req: any) {
+    return this.paymentsService.remove(+id, req.user);
   }
 }

@@ -4,6 +4,7 @@ import { createHmac } from 'crypto';
 import { GatewayService } from './gateway.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Parse a webhook body without letting malformed JSON become a 500.
@@ -21,7 +22,10 @@ function safeJson(raw: string): any {
 
 @Controller('gateway')
 export class GatewayController {
-  constructor(private readonly gateway: GatewayService) {}
+  constructor(
+    private readonly gateway: GatewayService,
+    private readonly scope: ScopeService,
+  ) {}
 
   // ── Admin (JWT-protected) ─────────────────────────────────────
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -32,20 +36,26 @@ export class GatewayController {
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Post('initiate/:invoiceId/:gateway')
-  initiate(@Param('invoiceId') invoiceId: string, @Param('gateway') gateway: string) {
+  async initiate(@Param('invoiceId') invoiceId: string, @Param('gateway') gateway: string, @Req() req: any) {
+    // Starting a payment for an invoice is acting on that customer's bill.
+    const subId = await this.gateway.invoiceSubscriberId(+invoiceId);
+    if (subId === undefined) return this.gateway.initiate(+invoiceId, gateway); // service reports not-found
+    await this.scope.assertViaSubscriber(req.user, subId, 'Invoice');
     return this.gateway.initiate(+invoiceId, gateway);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('transactions')
-  transactions(@Query() query: any) {
-    return this.gateway.getTransactions(query);
+  async transactions(@Query() query: any, @Req() req: any) {
+    // Every company's online payments sat in one list for anyone with the
+    // gateways screen. A company sees its own customers' transactions.
+    return this.gateway.getTransactions(query, await this.scope.visibleSubscriberIds(req.user));
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('reconcile')
-  reconcile() {
-    return this.gateway.reconcile();
+  async reconcile(@Req() req: any) {
+    return this.gateway.reconcile(await this.scope.visibleSubscriberIds(req.user));
   }
 
   // ── Public callbacks (gateways redirect the payer here) ───────

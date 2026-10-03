@@ -32,10 +32,31 @@ export class IpPoolService {
   // `apply = false` reports differences only; `apply = true` makes the panel
   // match the router (import missing pools, correct ranges).
   // ─────────────────────────────────────────────────────────────
-  async syncFromNas(apply = false) {
+  /**
+   * TENANCY for the router-comparison tools (sync/check, sync/apply, verify).
+   *
+   * These read every router's pool list and compare it with every pool row,
+   * so unscoped they showed one company another company's routers, address
+   * ranges and package names — and sync/apply rewrote other companies' pools.
+   * A company now only compares ITS routers (nasWhere) against ITS pools
+   * (poolWhere). null = platform owner or an internal call: unchanged.
+   */
+  private async routerScope(actor?: Actor): Promise<{ nas: any; pool: any } | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    const [nas, pool] = await Promise.all([
+      this.scope.nasWhere(actor as any),
+      this.scope.poolWhere(actor as any),
+    ]);
+    return { nas, pool };
+  }
+
+  async syncFromNas(apply = false, actor?: Actor) {
+    const scoped = await this.routerScope(actor);
     // Demo routers are unreachable by construction, so including them makes
     // every sync report hundreds of spurious failures.
-    const nasList = await this.prisma.nas.findMany({ where: { AND: [{ isActive: true }, NON_DEMO_OWNED] } });
+    const nasList = await this.prisma.nas.findMany({
+      where: { AND: [{ isActive: true }, NON_DEMO_OWNED, ...(scoped ? [scoped.nas] : [])] },
+    });
     const report: Array<{
       nas: string; pool: string; routerRange: string;
       panelRange: string | null; status: 'MATCH' | 'DIFFERENT' | 'MISSING_IN_PANEL' | 'MISSING_ON_ROUTER';
@@ -55,7 +76,7 @@ export class IpPoolService {
         continue;
       }
 
-      const panelPools = await this.prisma.ipPool.findMany();
+      const panelPools = await this.prisma.ipPool.findMany(scoped ? { where: scoped.pool } : undefined);
 
       // Router → panel
       for (const rp of routerPools) {
@@ -76,6 +97,8 @@ export class IpPoolService {
                 network: rp.ranges,
                 subnet: this.rangeToCidr(rp.ranges),
                 nasId: nas.id,
+                // A tenant's import is theirs, or it would vanish from their list.
+                ...(scoped && actor ? { ownerId: this.scope.actorId(actor) } : {}),
               },
             }).catch((e) => { this.logger?.warn?.('createPool: ' + (e?.message || e)); });
           }
@@ -143,9 +166,12 @@ export class IpPoolService {
    * That failure is invisible from the panel and cost real downtime, so it is
    * checked explicitly rather than discovered through a customer complaint.
    */
-  async verifyAgainstRouters() {
+  async verifyAgainstRouters(actor?: Actor) {
+    const scoped = await this.routerScope(actor);
+    const nasBase = { isActive: true, nasIp: { not: null }, apiUsername: { not: null } };
     const [pools, nasList] = await Promise.all([
       this.prisma.ipPool.findMany({
+        ...(scoped ? { where: scoped.pool } : {}),
         include: {
           nas: { select: { id: true, nasname: true, nasIp: true } },
           _count: { select: { packages: true } },
@@ -153,7 +179,7 @@ export class IpPoolService {
         },
       }),
       this.prisma.nas.findMany({
-        where: { isActive: true, nasIp: { not: null }, apiUsername: { not: null } },
+        where: scoped ? { AND: [nasBase, scoped.nas] } : nasBase,
       }),
     ]);
 
@@ -319,7 +345,9 @@ export class IpPoolService {
   // ─────────────────────────────────────────────────────────────
   // GET ONE
   // ─────────────────────────────────────────────────────────────
-  async findOne(id: number) {
+  async findOne(id: number, actor?: Actor) {
+    // Same visibility as the list (poolWhere): not-found outside the caller's scope.
+    await this.assertOwnsPool(id, actor);
     const pool = await this.prisma.ipPool.findUnique({
       where: { id },
       include: {

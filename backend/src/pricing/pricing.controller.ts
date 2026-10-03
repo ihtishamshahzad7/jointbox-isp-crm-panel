@@ -21,19 +21,22 @@ export class PricingController {
 
   // ─── Extra fees ──────────────────────────────────────────────────────
 
+  // An ExtraFee has no owner — one catalogue for the installation, so any
+  // signed-in user may read it. What a fee is ATTACHED to (packages) is
+  // tenant data, and the service narrows that to the caller's packages.
   @Get('fees')
-  listFees(@Query() query: any) {
-    return this.svc.listFees(query);
+  listFees(@Query() query: any, @Req() req: any) {
+    return this.svc.listFees(query, req.user);
   }
 
   @Get('fees/options')
-  feeOptions() {
-    return this.svc.feeOptions();
+  feeOptions(@Req() req: any) {
+    return this.svc.feeOptions(req.user);
   }
 
   @Get('fees/:id')
-  getFee(@Param('id') id: string) {
-    return this.svc.getFee(+id);
+  getFee(@Param('id') id: string, @Req() req: any) {
+    return this.svc.getFee(+id, req.user);
   }
 
   @Post('fees')
@@ -54,13 +57,13 @@ export class PricingController {
   // ─── Subscriber discounts ────────────────────────────────────────────
 
   @Get('subscriber-discounts')
-  listDiscounts(@Query() query: any) {
-    return this.svc.listDiscounts(query);
+  listDiscounts(@Query() query: any, @Req() req: any) {
+    return this.svc.listDiscounts(query, req.user);
   }
 
   @Get('subscriber-discounts/:id')
-  getDiscount(@Param('id') id: string) {
-    return this.svc.getDiscount(+id);
+  getDiscount(@Param('id') id: string, @Req() req: any) {
+    return this.svc.getDiscount(+id, req.user);
   }
 
   @Post('subscriber-discounts')

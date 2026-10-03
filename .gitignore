@@ -32,3 +32,6 @@ jbx-agent.tgz
 # Nothing in it is source; delete the folder whenever you like.
 _to_delete/
 .jbtest/
+# Hostinger licence-server secrets (pepper, DB dumps) -- NEVER commit.
+hostinger-DO-NOT-UPLOAD/
+_LICENCE-SERVER-MOVE-ME-OUT/

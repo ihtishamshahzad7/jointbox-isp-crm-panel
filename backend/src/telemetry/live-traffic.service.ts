@@ -6,6 +6,13 @@ interface LivePoint {
   t: number; // epoch ms
   upBps: number; // bytes/sec upload (from subscribers → routers)
   downBps: number; // bytes/sec download (routers → subscribers)
+  /**
+   * The same tick split per router (nasId → [upBps, downBps]), only for the
+   * routers that contributed a rate. The totals above are the whole
+   * installation; this is what lets one company's view be summed from its own
+   * routers alone.
+   */
+  byNas: Map<number, [number, number]>;
 }
 
 interface NasCounters {
@@ -64,6 +71,8 @@ export class LiveTrafficService {
   private lastPollAt = 0;
   private busy = false;
   private lastOkAt = 0;
+  /** nasId → epoch ms of that router's last successful poll (per-tenant staleness). */
+  private lastOkByNas = new Map<number, number>();
   private devices: Array<{ nasId: number; ip: string; ok: boolean; error?: string }> = [];
 
   constructor(
@@ -71,11 +80,23 @@ export class LiveTrafficService {
     private readonly mikrotik: MikrotikSyncService,
   ) {}
 
-  /** Read the live view; triggers a device poll only when one is due. */
-  async snapshot() {
+  /**
+   * Read the live view; triggers a device poll only when one is due.
+   *
+   * `nasIds` narrows the view to those routers — a tenant's own, from
+   * TelemetryService.visibleNasIds(): their points are summed from those
+   * routers only and the device list shows only them. Null/omitted is the
+   * whole-installation meter (platform owner). The poll itself stays global
+   * and coalesced either way, so a tenant's dashboard costs no extra router
+   * traffic.
+   */
+  async snapshot(nasIds?: number[] | null) {
     const now = Date.now();
     if (now - this.lastPollAt >= this.POLL_MS && !this.busy) {
       this.busy = true;
+      // Recorded up front: it was never set, so the 2-second coalescing never
+      // happened and every open dashboard polled every router on every tick.
+      this.lastPollAt = now;
       try {
         await this.collect(now);
       } catch (e: any) {
@@ -84,7 +105,7 @@ export class LiveTrafficService {
         this.busy = false;
       }
     }
-    return this.view(now);
+    return this.view(now, nasIds);
   }
 
   /** Poll every API-enabled NAS in parallel, then fold the rates into the ring. */
@@ -106,6 +127,7 @@ export class LiveTrafficService {
     let totalUp = 0;
     let totalDown = 0;
     let producedRate = 0; // nases that contributed a rate this tick
+    const byNas = new Map<number, [number, number]>();
     const prevBaselineAt = this.baselineAt;
 
     for (let i = 0; i < creds.length; i++) {
@@ -121,10 +143,12 @@ export class LiveTrafficService {
             const dDown = Math.max(0, r.value.down - prev.down);
             totalUp += dUp / secs;
             totalDown += dDown / secs;
+            byNas.set(n.id, [dUp / secs, dDown / secs]);
             producedRate++;
           }
         }
         this.baselines.set(n.id, r.value);
+        this.lastOkByNas.set(n.id, now);
       } else {
         const msg = (r.reason as Error)?.message || 'unreachable';
         devices.push({ nasId: n.id, ip: n.nasIp, ok: false, error: msg.slice(0, 120) });
@@ -143,7 +167,7 @@ export class LiveTrafficService {
     // Only publish a point when at least one NAS had a real baseline to
     // delta against. The very first poll of a session is baseline-only.
     if (producedRate > 0) {
-      this.points.push({ t: now, upBps: totalUp, downBps: totalDown });
+      this.points.push({ t: now, upBps: totalUp, downBps: totalDown, byNas });
       if (this.points.length > this.MAX_POINTS) {
         this.points.splice(0, this.points.length - this.MAX_POINTS);
       }
@@ -167,20 +191,45 @@ export class LiveTrafficService {
     return { up, down };
   }
 
-  private view(now: number) {
-    const okDevices = this.devices.filter((d) => d.ok).length;
+  private view(now: number, nasIds?: number[] | null) {
+    let points: Array<{ t: number; upBps: number; downBps: number }> = this.points;
+    let devices = this.devices;
+    let lastOkAt = this.lastOkAt;
+    if (Array.isArray(nasIds)) {
+      // Same rule as collect(): a point exists only for a tick in which at
+      // least one of THESE routers produced a rate. Another company's routers
+      // reporting must not draw a zero line on this one's graph.
+      const allowed = new Set(nasIds);
+      points = [];
+      for (const p of this.points) {
+        let up = 0;
+        let down = 0;
+        let hit = false;
+        for (const [id, [u, d]] of p.byNas) {
+          if (!allowed.has(id)) continue;
+          up += u;
+          down += d;
+          hit = true;
+        }
+        if (hit) points.push({ t: p.t, upBps: up, downBps: down });
+      }
+      devices = this.devices.filter((d) => allowed.has(d.nasId));
+      lastOkAt = 0;
+      for (const id of allowed) lastOkAt = Math.max(lastOkAt, this.lastOkByNas.get(id) ?? 0);
+    }
+    const okDevices = devices.filter((d) => d.ok).length;
     return {
-      points: this.points.map((p) => ({
+      points: points.map((p) => ({
         t: new Date(p.t).toISOString(),
         upBps: Math.round(p.upBps),
         downBps: Math.round(p.downBps),
       })),
       sampleMs: this.POLL_MS,
       maxPoints: this.MAX_POINTS,
-      lastSampleAt: this.points.length ? new Date(this.points[this.points.length - 1].t).toISOString() : null,
-      staleSec: this.lastOkAt ? Math.round((now - this.lastOkAt) / 1000) : null,
-      devices: this.devices,
-      deviceSummary: `${okDevices}/${this.devices.length} routers reporting`,
+      lastSampleAt: points.length ? new Date(points[points.length - 1].t).toISOString() : null,
+      staleSec: lastOkAt ? Math.round((now - lastOkAt) / 1000) : null,
+      devices,
+      deviceSummary: `${okDevices}/${devices.length} routers reporting`,
       now: new Date(now).toISOString(),
     };
   }

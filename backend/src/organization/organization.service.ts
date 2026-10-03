@@ -25,68 +25,164 @@ export class OrganizationService {
   ) {}
 
   // ── ISPs ──────────────────────────────────────────────────────
-  getIsps() {
-    return this.prisma.isp.findMany({ include: { _count: { select: { branches: true } } }, orderBy: { id: 'asc' } });
+  //
+  // Isp and Branch have no owner column: each row is installation-level, so a
+  // company creating, renaming or deleting one changes it for every company on
+  // the server. Writes are therefore platform-owner only. Reads are narrowed to
+  // the branches (and their ISPs) that accounts in the caller's own subtree are
+  // assigned to — which is all an ISP or reseller can be shown to belong to.
+
+  /**
+   * Branch ids referenced by users in the caller's subtree, or null meaning
+   * "all" (platform owner). Users are the link: a branch carries only ispId.
+   */
+  private async scopedBranchIds(actor: Actor): Promise<{ branchIds: number[]; userIds: number[] } | null> {
+    const userIds = await this.scope.visibleUserIds(actor);
+    if (userIds === null) return null;
+    if (!userIds.length) return { branchIds: [], userIds };
+    const rows = await this.prisma.user.findMany({
+      where: { id: { in: userIds }, branchId: { not: null } },
+      select: { branchId: true },
+      distinct: ['branchId'],
+    });
+    const branchIds = rows.map((r) => Number(r.branchId)).filter((id) => Number.isFinite(id));
+    return { branchIds, userIds };
   }
-  createIsp(data: any) {
+
+  /** Deployment display currency — see OrganizationController.currency. */
+  async displayCurrency(): Promise<{ currency: string | null; currencySymbol: string | null }> {
+    const isp = await this.prisma.isp.findFirst({
+      orderBy: { id: 'asc' },
+      select: { currency: true, currencySymbol: true },
+    });
+    return {
+      currency: isp?.currency ?? null,
+      currencySymbol: isp?.currencySymbol || isp?.currency || null,
+    };
+  }
+
+  async getIsps(actor: Actor) {
+    const scoped = await this.scopedBranchIds(actor);
+    if (scoped === null) {
+      return this.prisma.isp.findMany({ include: { _count: { select: { branches: true } } }, orderBy: { id: 'asc' } });
+    }
+    if (!scoped.branchIds.length) return [];
+    return this.prisma.isp.findMany({
+      where: { branches: { some: { id: { in: scoped.branchIds } } } },
+      // Count only the branches this caller can see, not the ISP's whole estate.
+      include: { _count: { select: { branches: { where: { id: { in: scoped.branchIds } } } } } },
+      orderBy: { id: 'asc' },
+    });
+  }
+  createIsp(actor: Actor, data: any) {
+    this.scope.assertPlatformOwner(actor);
     if (!data.name?.trim()) throw new BadRequestException('Name is required');
     return this.prisma.isp.create({ data: { name: data.name.trim(), logoUrl: data.logoUrl || null } });
   }
-  updateIsp(id: number, data: any) {
+  updateIsp(actor: Actor, id: number, data: any) {
+    this.scope.assertPlatformOwner(actor);
     return this.prisma.isp.update({ where: { id }, data: { name: data.name, logoUrl: data.logoUrl, isActive: data.isActive } });
   }
-  async deleteIsp(id: number) {
+  async deleteIsp(actor: Actor, id: number) {
+    this.scope.assertPlatformOwner(actor);
     const branches = await this.prisma.branch.count({ where: { ispId: id } });
     if (branches > 0) throw new BadRequestException('Delete or move its branches first');
     return this.prisma.isp.delete({ where: { id } });
   }
 
   // ── Branches ──────────────────────────────────────────────────
-  getBranches(ispId?: number) {
+  async getBranches(actor: Actor, ispId?: number) {
+    const scoped = await this.scopedBranchIds(actor);
+    if (scoped === null) {
+      return this.prisma.branch.findMany({
+        where: ispId ? { ispId } : {},
+        include: { isp: { select: { name: true } }, _count: { select: { subscribers: true, users: true } } },
+        orderBy: { id: 'asc' },
+      });
+    }
+    if (!scoped.branchIds.length) return [];
+    // A branch can be shared by several companies; its member counts must not
+    // reveal how many subscribers/accounts the OTHER companies keep there.
+    const subscriberWhere = await this.scope.subscriberWhere(actor);
     return this.prisma.branch.findMany({
-      where: ispId ? { ispId } : {},
-      include: { isp: { select: { name: true } }, _count: { select: { subscribers: true, users: true } } },
+      where: { id: { in: scoped.branchIds }, ...(ispId ? { ispId } : {}) },
+      include: {
+        isp: { select: { name: true } },
+        _count: {
+          select: {
+            subscribers: { where: subscriberWhere },
+            users: { where: { id: { in: scoped.userIds } } },
+          },
+        },
+      },
       orderBy: { id: 'asc' },
     });
   }
-  createBranch(data: any) {
+  createBranch(actor: Actor, data: any) {
+    this.scope.assertPlatformOwner(actor);
     if (!data.name?.trim() || !data.ispId) throw new BadRequestException('Name and ispId are required');
     return this.prisma.branch.create({
       data: { name: data.name.trim(), ispId: Number(data.ispId), address: data.address || null },
     });
   }
-  updateBranch(id: number, data: any) {
+  updateBranch(actor: Actor, id: number, data: any) {
+    this.scope.assertPlatformOwner(actor);
     return this.prisma.branch.update({
       where: { id },
       data: { name: data.name, address: data.address, isActive: data.isActive, ispId: data.ispId ? Number(data.ispId) : undefined },
     });
   }
-  async deleteBranch(id: number) {
+  async deleteBranch(actor: Actor, id: number) {
+    this.scope.assertPlatformOwner(actor);
     const subs = await this.prisma.subscriber.count({ where: { branchId: id } });
     if (subs > 0) throw new BadRequestException('Move its subscribers to another branch first');
     return this.prisma.branch.delete({ where: { id } });
   }
 
-  /** Bulk-assign subscribers (or users) to a branch. */
-  async assign(branchId: number, body: { subscriberIds?: number[]; userIds?: number[] }) {
+  /**
+   * Bulk-assign subscribers (or users) to a branch.
+   *
+   * Platform owner only (branches are installation-level). The ids are ALSO
+   * intersected with the caller's own scope, so that if this gate is ever
+   * widened it still cannot move another company's customers or accounts.
+   * For the platform owner both lists are "all", so nothing is filtered.
+   */
+  async assign(actor: Actor, branchId: number, body: { subscriberIds?: number[]; userIds?: number[] }) {
+    this.scope.assertPlatformOwner(actor);
     const branch = await this.prisma.branch.findUnique({ where: { id: branchId } });
     if (!branch) throw new NotFoundException('Branch not found');
     const results = { subscribers: 0, users: 0 };
     if (body.subscriberIds?.length) {
-      const r = await this.prisma.subscriber.updateMany({
-        where: { id: { in: body.subscriberIds.map(Number) } },
-        data: { branchId },
-      });
-      results.subscribers = r.count;
+      const visible = await this.scope.visibleSubscriberIds(actor); // null = all
+      const ids = this.withinScope(body.subscriberIds, visible);
+      if (ids.length) {
+        const r = await this.prisma.subscriber.updateMany({
+          where: { id: { in: ids } },
+          data: { branchId },
+        });
+        results.subscribers = r.count;
+      }
     }
     if (body.userIds?.length) {
-      const r = await this.prisma.user.updateMany({
-        where: { id: { in: body.userIds.map(Number) } },
-        data: { branchId },
-      });
-      results.users = r.count;
+      const visible = await this.scope.visibleUserIds(actor); // null = all
+      const ids = this.withinScope(body.userIds, visible);
+      if (ids.length) {
+        const r = await this.prisma.user.updateMany({
+          where: { id: { in: ids } },
+          data: { branchId },
+        });
+        results.users = r.count;
+      }
     }
     return results;
+  }
+
+  /** Requested ids narrowed to a visible set (null = everything is visible). */
+  private withinScope(requested: number[], visible: number[] | null): number[] {
+    const ids = requested.map(Number);
+    if (visible === null) return ids;
+    const allowed = new Set(visible);
+    return ids.filter((id) => allowed.has(id));
   }
 
   // ── Reseller tree + wallets ───────────────────────────────────

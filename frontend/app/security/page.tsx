@@ -68,6 +68,10 @@ export default function SecurityPage() {
   const [keyExpiry, setKeyExpiry] = useState("");
   const [justCreated, setJustCreated] = useState<{ key: string; name: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  // Role permissions are one table for the whole installation — every company
+  // on it — so only the platform owner may change them (the backend refuses
+  // everyone else). Others see the matrix read-only.
+  const [isOwner, setIsOwner] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -81,6 +85,7 @@ export default function SecurityPage() {
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
     get("/security/meta").then(setMeta).catch(silent("loadSecurityMeta"));
+    get("/profile").then((d) => setIsOwner(d?.user?.role === "SUPER_ADMIN")).catch(() => setIsOwner(false));
     get("/security/permissions").then(setMatrix).catch(silent("loadPermissions"));
     get("/security/2fa").then(setTfa).catch(silent("loadTwoFactorStatus"));
     get("/security/presets").then((d) => setPresets(d || { roles: {}, labels: {} })).catch(silent("loadSecurityPresets"));
@@ -189,9 +194,15 @@ export default function SecurityPage() {
   async function saveRole() {
     setBusy(true);
     try {
-      await fetch(`${API}/security/permissions/${selectedRole}`, {
+      const res = await fetch(`${API}/security/permissions/${selectedRole}`, {
         method: "PUT", headers, body: JSON.stringify({ permissions: rolePerms }),
       });
+      // It used to report "saved" whatever the server answered.
+      if (!res.ok) {
+        const er = await res.json().catch(() => ({}));
+        setMsg(er.message || `${selectedRole} permissions were not saved.`);
+        return;
+      }
       setDirty(false);
       setMsg(rolePerms.length ? `${selectedRole} permissions saved` : `${selectedRole} is now unrestricted (no rows)`);
     } finally { setBusy(false); }
@@ -284,8 +295,8 @@ export default function SecurityPage() {
             <select style={input} value={selectedRole} onChange={(e) => { setSelectedRole(e.target.value); setDirty(false); }}>
               {meta.roles.map((r: string) => <option key={r} value={r}>{r}</option>)}
             </select>
-            <button style={btn(T.green)} disabled={busy || !dirty} onClick={saveRole}>Save {selectedRole}</button>
-            {presets?.roles?.[selectedRole] && (
+            {isOwner && <button style={btn(T.green)} disabled={busy || !dirty} onClick={saveRole}>Save {selectedRole}</button>}
+            {isOwner && presets?.roles?.[selectedRole] && (
               <button
                 style={{ ...btn("#6C3CE1"), padding: "8px 12px", fontSize: 12.5 }}
                 disabled={busy}
@@ -296,6 +307,7 @@ export default function SecurityPage() {
               </button>
             )}
             <span style={{ fontSize: 12, color: T.muted }}>
+              {!isOwner && "Read-only — role permissions apply to every company on this server and are set by the platform owner. "}
               {rolePerms.length === 0
                 ? "⚠ No permissions configured — this role is currently UNRESTRICTED. Tick anything to start enforcing, or load a preset."
                 : `${rolePerms.length} permissions granted. Write implies read. SUPER_ADMIN always bypasses.`}
@@ -318,7 +330,7 @@ export default function SecurityPage() {
                       <td style={td}>{res}</td>
                       {["read", "write"].map((action) => (
                         <td key={action} style={{ ...td, textAlign: "center" }}>
-                          <input type="checkbox" checked={has(`${res}.${action}`)} onChange={() => toggle(`${res}.${action}`)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                          <input type="checkbox" checked={has(`${res}.${action}`)} disabled={!isOwner} onChange={() => toggle(`${res}.${action}`)} style={{ width: 16, height: 16, cursor: isOwner ? "pointer" : "default" }} />
                         </td>
                       ))}
                       <td style={{ ...td, textAlign: "right" }}>
@@ -341,7 +353,7 @@ export default function SecurityPage() {
                                   style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, padding: "4px 9px", borderRadius: 7,
                                     border: `1px solid ${on ? "#C6E9D3" : "#E2E8F0"}`, background: on ? "#E7F6EC" : "#F7F9FC",
                                     color: on ? "#157F43" : "#64748B", cursor: "pointer" }}>
-                                  <input type="checkbox" checked={on} onChange={() => toggleGranular(a.key)} />
+                                  <input type="checkbox" checked={on} disabled={!isOwner} onChange={() => toggleGranular(a.key)} />
                                   {a.label}
                                 </label>
                               );

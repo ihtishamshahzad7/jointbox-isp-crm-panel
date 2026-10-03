@@ -52,7 +52,11 @@ export class TicketsService {
     return t;
   }
 
-  async findBySubscriber(subscriberId: number) {
+  async findBySubscriber(subscriberId: number, actor?: Actor) {
+    if (actor && !this.scope.isPlatformOwner(actor)) {
+      if (!Number.isInteger(subscriberId)) throw new NotFoundException('Subscriber not found');
+      await this.scope.assertSubscriberVisible(actor, subscriberId);
+    }
     return this.prisma.ticket.findMany({
       where: { subscriberId },
       orderBy: { createdAt: 'desc' },
@@ -92,7 +96,18 @@ export class TicketsService {
     return `TKT-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
   }
 
-  async create(data: any) {
+  /**
+   * Ticket.subscriberId is required, so there is no subscriber-less ticket to
+   * allow: a tenant may only open one for its own subscriber, and only assign
+   * it to an account in its own tree.
+   */
+  async create(data: any, actor?: Actor) {
+    if (actor && !this.scope.isPlatformOwner(actor)) {
+      const sid = Number(data?.subscriberId);
+      if (!Number.isInteger(sid) || sid <= 0) throw new NotFoundException('Subscriber not found');
+      await this.scope.assertSubscriberVisible(actor, sid);
+      await this.assertAssignee(actor, data?.assignedTo);
+    }
     const ticketNo = await this.generateTicketNo();
 
     // SLA deadlines are stamped at creation from the priority, so the ticket
@@ -117,39 +132,72 @@ export class TicketsService {
     });
   }
 
-  async update(id: number, data: any) {
+  async update(id: number, data: any, actor?: Actor) {
+    if (actor) {
+      await this.assertTicket(actor, id);
+      await this.assertAssignee(actor, data?.assignedTo);
+    }
     return this.prisma.ticket.update({
       where: { id },
       data: {
         category:   data.category,
         priority:   data.priority,
         status:     data.status,
-        assignedTo: data.assignedTo ? Number(data.assignedTo) : null,
+        // Absent means "leave it": the complaints board sends only {status},
+        // and every status change used to wipe the assignee.
+        assignedTo:
+          data.assignedTo === undefined ? undefined : data.assignedTo ? Number(data.assignedTo) : null,
         resolution: data.resolution,
         resolvedAt: data.status === 'RESOLVED' ? new Date() : undefined,
       },
     });
   }
 
-  async addMessage(ticketId: number, data: any) {
+  async addMessage(ticketId: number, data: any, actor?: Actor) {
+    if (actor) await this.assertTicket(actor, Number(ticketId));
     const msg = await this.prisma.ticketMessage.create({
       data: {
         ticketId:      Number(ticketId),
         message:       data.message,
         attachmentUrl: data.attachmentUrl,
-        sentBy:        Number(data.sentBy),
-        sentByType:    data.sentByType || 'STAFF',
+        // From the operator API the sender IS the caller — the body used to
+        // name it, so a reply could be posted as any user or as the customer.
+        sentBy:        actor ? this.scope.actorId(actor) : Number(data.sentBy),
+        sentByType:    actor ? 'STAFF' : data.sentByType || 'STAFF',
       },
     });
     // A reply from staff stops the response clock. Customer replies don't —
     // otherwise a customer chasing for an update would clear our own SLA.
-    if ((data.sentByType || 'STAFF') === 'STAFF') {
+    if ((actor ? 'STAFF' : data.sentByType || 'STAFF') === 'STAFF') {
       void this.sla.markFirstResponse(Number(ticketId)).catch((e) => { this.logger?.warn?.('markFirstResponse: ' + (e?.message || e)); });
     }
     return msg;
   }
 
-  async delete(id: number) {
+  async delete(id: number, actor?: Actor) {
+    if (actor) await this.assertTicket(actor, id);
     return this.prisma.ticket.delete({ where: { id } });
+  }
+
+  /**
+   * By-id guard: the ticket's subscriber must be the caller's. 404 for a
+   * ticket in another company (or one that does not exist), so ids cannot be
+   * enumerated. The platform owner passes untouched.
+   */
+  private async assertTicket(actor: Actor, id: number): Promise<void> {
+    if (this.scope.isPlatformOwner(actor)) return;
+    const t = Number.isInteger(id)
+      ? await this.prisma.ticket.findUnique({ where: { id }, select: { subscriberId: true } })
+      : null;
+    await this.scope.assertViaSubscriber(actor, t?.subscriberId ?? null, 'Ticket');
+  }
+
+  /** An assignee named in the body must be an account in the caller's own tree. */
+  private async assertAssignee(actor: Actor, assignedTo: any): Promise<void> {
+    if (!assignedTo || this.scope.isPlatformOwner(actor)) return;
+    const uid = Number(assignedTo);
+    if (!Number.isInteger(uid) || !(await this.scope.canAccessUser(actor, uid))) {
+      throw new NotFoundException('User not found');
+    }
   }
 }

@@ -49,6 +49,8 @@ interface TaxFee {
   description?: string;
   isActive: boolean;
   createdAt: string;
+  /** PLATFORM = a default shared with every company; COMPANY = this company's own. */
+  scope?: 'PLATFORM' | 'COMPANY';
 }
 
 interface PolicyRule {
@@ -645,7 +647,24 @@ export class PackagesService {
     description: t.description ?? undefined,
     isActive: t.isActive,
     createdAt: t.createdAt instanceof Date ? t.createdAt.toISOString() : t.createdAt,
+    scope: t.ownerId == null ? 'PLATFORM' : 'COMPANY',
   });
+
+  /**
+   * A package may only carry taxes its company can see — a platform default
+   * or the company's own. Ids that are neither are dropped rather than
+   * rejected, so an old form posting a stale id still saves.
+   */
+  private async visibleTaxIds(ids: number[] | undefined, actor?: Actor): Promise<number[] | undefined> {
+    if (!Array.isArray(ids) || !actor || this.scope.isPlatformOwner(actor)) return ids;
+    if (!ids.length) return ids;
+    const rows = await this.prisma.packageTax.findMany({
+      where: { AND: [{ id: { in: ids } }, await this.scope.configReadWhere(actor)] },
+      select: { id: true },
+    });
+    const ok = new Set(rows.map((r) => r.id));
+    return ids.filter((i) => ok.has(i));
+  }
 
   private policyOut = (p: any): PolicyRule => ({
     id: p.id,
@@ -798,7 +817,11 @@ export class PackagesService {
   // ─────────────────────────────────────────────────────────────
   // GET ONE
   // ─────────────────────────────────────────────────────────────
-  async findOne(id: number) {
+  async findOne(id: number, actor?: Actor) {
+    // Own / assigned packages only (any, for the platform owner); 404 otherwise
+    // so ids cannot be enumerated across companies. Internal callers (overview,
+    // duplicate) pass no actor and keep the unscoped read they always had.
+    if (actor) await this.scope.assertPackage(actor, id);
     const pkg = await this.prisma.package.findUnique({
       where: { id },
       include: {
@@ -891,14 +914,36 @@ export class PackagesService {
   //   1. The pool exists
   //   2. The pool is not already assigned to another package
   // ─────────────────────────────────────────────────────────────
-  /** Loop-create for bulk import — validate-and-continue, report per-row errors. */
-  async importMany(rows: any[]) {
+  /**
+   * Loop-create for bulk import — validate-and-continue, report per-row errors.
+   *
+   * OWNERSHIP. A company importing its catalogue must end up OWNING those
+   * packages: every row is stamped with the caller's root account (a SALES
+   * user's parent), whatever the file says, so the import neither lands in the
+   * installation-level pool (ownerId null — invisible to the importer, visible
+   * to the platform owner) nor in another company's account. The platform
+   * owner keeps today's behaviour (ownerId null, like POST /packages) unless a
+   * row names an owner explicitly. A tenant's rows may also only reference an
+   * IP pool / follow-on package it can see.
+   */
+  async importMany(rows: any[], actor?: Actor) {
     let success = 0, failed = 0;
     const errors: Array<{ index: number; name?: string; error: string }> = [];
+    const tenant = !!actor && !this.scope.isPlatformOwner(actor);
+    const tenantOwner = tenant ? await this.scope.rootId(actor) : undefined;
     for (let i = 0; i < rows.length; i++) {
       try {
         if (!rows[i]?.name) throw new Error('name is required');
-        await this.create(rows[i]);
+        let ownerId: number | undefined = tenantOwner;
+        if (tenant) {
+          await this.assertImportRefs(rows[i], actor);
+        } else {
+          const requested = Number(rows[i]?.ownerId);
+          if (rows[i]?.ownerId != null && rows[i]?.ownerId !== '' && Number.isInteger(requested) && requested > 0) {
+            ownerId = requested;
+          }
+        }
+        await this.create(rows[i], actor, ownerId !== undefined ? { ownerId } : undefined);
         success++;
       } catch (e: any) {
         failed++;
@@ -908,8 +953,65 @@ export class PackagesService {
     return { total: rows.length, success, failed, errors };
   }
 
-  async create(data: any, actor?: Actor) {
+  /** A tenant's import row may only point at a pool / package that tenant can see. */
+  private async assertImportRefs(row: any, actor: Actor) {
+    if (row?.poolId) {
+      const poolId = parseInt(row.poolId);
+      const where = await this.scope.poolWhere(actor);
+      const hit = Number.isInteger(poolId)
+        ? await this.prisma.ipPool.findFirst({ where: { AND: [{ id: poolId }, where] }, select: { id: true } })
+        : null;
+      if (!hit) throw new NotFoundException(`IP pool ${row.poolId} not found`);
+    }
+    for (const key of ['nextExpiredPackageId', 'nextDisabledPackageId']) {
+      const v = row?.[key];
+      if (v === undefined || v === null || v === '') continue;
+      const id = Number(v);
+      if (!Number.isInteger(id)) throw new NotFoundException(`Package ${v} not found`);
+      await this.scope.assertPackage(actor, id);
+    }
+  }
+
+  /**
+   * `opts.ownerId` is for importMany() only; POST /packages passes nothing and
+   * creates exactly what it always did.
+   */
+  /**
+   * Changing a package changes it for every subscriber on it, so the test is
+   * OWNERSHIP, not visibility: a reseller sees packages assigned to it from
+   * above but must not edit the ISP's plan. A package outside the caller's
+   * own subtree answers "not found". Internal calls (no actor) are unchanged.
+   */
+  private async assertOwnsPackage(actor: Actor | undefined, pkg: { ownerId: number | null } | null): Promise<void> {
+    if (!pkg) throw new NotFoundException('Package not found');
+    if (!actor) return;
+    await this.scope.assertOwnerInScope(actor, pkg.ownerId, 'Package');
+  }
+
+  /**
+   * Who owns a package created by this caller. A company (or anyone below
+   * the platform owner) owns what it creates — without this, a company's new
+   * package had no owner, so packageWhere() hid it from the very company that
+   * made it and only the platform owner could see it. The platform owner's
+   * own packages stay installation-level (null), as before.
+   */
+  private async defaultOwnerFor(actor: Actor | undefined): Promise<number | null | undefined> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return undefined;
+    return this.scope.rootId(actor);
+  }
+
+  async create(data: any, actor?: Actor, opts?: { ownerId?: number | null }) {
     const poolId = data.poolId ? parseInt(data.poolId) : null;
+    if (opts?.ownerId === undefined) {
+      const owner = await this.defaultOwnerFor(actor);
+      if (owner !== undefined) opts = { ...(opts || {}), ownerId: owner };
+    }
+    // A pool named in the body must be one the caller may use.
+    if (poolId && actor && !this.scope.isPlatformOwner(actor)) {
+      const pw = await this.scope.poolWhere(actor);
+      const ok = await this.prisma.ipPool.findFirst({ where: { AND: [{ id: poolId }, pw] }, select: { id: true } });
+      if (!ok) throw new NotFoundException(`IP pool ${poolId} not found`);
+    }
 
     // ── Numeric validation before anything hits the DB
     const { warnings, numbers, fupAction } = this.validateNumbers(data);
@@ -921,8 +1023,11 @@ export class PackagesService {
     }
 
     // Duplicate-name check — warn, don't hard-block, but make it visible.
+    // Only the caller's own packages count as a clash — matching across the
+    // installation told one company another company's package names and ids.
+    const clashScope = actor ? await this.scope.packageWhere(actor) : {};
     const nameClash = await this.prisma.package.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' } },
+      where: { AND: [{ name: { equals: data.name, mode: 'insensitive' } }, clashScope] },
       select: { id: true, name: true },
     });
     if (nameClash) {
@@ -959,6 +1064,9 @@ export class PackagesService {
 
         // Pool relation
         poolId,
+
+        // Owner — only when the caller (importMany) decided one.
+        ...(opts?.ownerId !== undefined && { ownerId: opts.ownerId }),
       },
       include: {
         pool:   true,
@@ -989,7 +1097,7 @@ export class PackagesService {
       fixedExpireTime: data.fixedExpireTime || null,
       nextExpiredPackageId: data.nextExpiredPackageId !== undefined && data.nextExpiredPackageId !== null && data.nextExpiredPackageId !== '' ? Number(data.nextExpiredPackageId) : null,
       nextDisabledPackageId: data.nextDisabledPackageId !== undefined && data.nextDisabledPackageId !== null && data.nextDisabledPackageId !== '' ? Number(data.nextDisabledPackageId) : null,
-      taxIds: Array.isArray(data.taxIds) ? data.taxIds.map(Number) : [],
+      taxIds: (await this.visibleTaxIds(Array.isArray(data.taxIds) ? data.taxIds.map(Number) : [], actor)) ?? [],
       policyIds: Array.isArray(data.policyIds) ? data.policyIds.map(Number) : [],
       allocationIds: Array.isArray(data.allocationIds) ? data.allocationIds.map(Number) : [],
     });
@@ -1017,7 +1125,17 @@ export class PackagesService {
   // ─────────────────────────────────────────────────────────────
   async update(id: number, data: any, actor?: Actor) {
     const existing = await this.prisma.package.findUnique({ where: { id } });
+    await this.assertOwnsPackage(actor, existing);
     if (!existing) throw new NotFoundException('Package not found');
+    if (data?.poolId && actor && !this.scope.isPlatformOwner(actor)) {
+      const pw = await this.scope.poolWhere(actor);
+      const ok = await this.prisma.ipPool.findFirst({
+        where: { AND: [{ id: parseInt(data.poolId) }, pw] }, select: { id: true },
+      });
+      if (!ok) throw new NotFoundException(`IP pool ${data.poolId} not found`);
+    }
+    // Ownership is not editable through a plain update.
+    if (actor && !this.scope.isPlatformOwner(actor) && data && 'ownerId' in data) delete data.ownerId;
 
     // ── Numeric validation — undefined keys keep their current value
     const { warnings, numbers, fupAction } = this.validateNumbers(data, existing);
@@ -1103,7 +1221,7 @@ export class PackagesService {
             ? null
             : Number(data.nextDisabledPackageId)
           : undefined,
-      taxIds: Array.isArray(data.taxIds) ? data.taxIds.map(Number) : undefined,
+      taxIds: await this.visibleTaxIds(Array.isArray(data.taxIds) ? data.taxIds.map(Number) : undefined, actor),
       policyIds: Array.isArray(data.policyIds) ? data.policyIds.map(Number) : undefined,
       allocationIds: Array.isArray(data.allocationIds) ? data.allocationIds.map(Number) : undefined,
     });
@@ -1134,6 +1252,7 @@ export class PackagesService {
     }
 
     const existing = await this.prisma.package.findUnique({ where: { id } });
+    await this.assertOwnsPackage(actor, existing);
     if (!existing) throw new NotFoundException('Package not found');
 
     /**
@@ -1180,6 +1299,7 @@ export class PackagesService {
   // ─────────────────────────────────────────────────────────────
   async toggleStatus(id: number, actor?: Actor) {
     const pkg = await this.prisma.package.findUnique({ where: { id } });
+    await this.assertOwnsPackage(actor, pkg);
     if (!pkg) throw new NotFoundException('Package not found');
     const next = await this.prisma.package.update({
       where: { id },
@@ -1202,6 +1322,7 @@ export class PackagesService {
    */
   async archive(id: number, actor?: Actor) {
     const pkg = await this.prisma.package.findUnique({ where: { id } });
+    await this.assertOwnsPackage(actor, pkg);
     if (!pkg) throw new NotFoundException('Package not found');
     const updated = await this.prisma.package.update({
       where: { id },
@@ -1217,6 +1338,9 @@ export class PackagesService {
   }
 
   async duplicate(id: number, actor?: Actor) {
+    // Copying needs only visibility (a reseller may base its own plan on one
+    // assigned to it); the copy is owned by the caller via create().
+    if (actor) await this.scope.assertPackage(actor, id);
     const original = await this.findOne(id);
     const nameClash = await this.prisma.package.findFirst({
       where: { name: { equals: `${original.name} (Copy)`, mode: 'insensitive' } },
@@ -1276,15 +1400,20 @@ export class PackagesService {
   }
 
   // ── Taxes & fees ───────────────────────────────────────────────────────
-  async getTaxes(): Promise<TaxFee[]> {
-    const rows = await this.prisma.packageTax.findMany({ orderBy: { id: 'asc' } });
+  // Taxes: platform defaults plus each company's own — a company in another
+  // jurisdiction charges its own rates without touching anyone else's.
+  async getTaxes(actor?: Actor): Promise<TaxFee[]> {
+    const where = actor ? await this.scope.configReadWhere(actor) : {};
+    const rows = await this.prisma.packageTax.findMany({ where, orderBy: { id: 'asc' } });
     return rows.map(this.taxOut);
   }
 
-  async createTax(payload: any): Promise<TaxFee> {
+  async createTax(payload: any, actor?: Actor): Promise<TaxFee> {
     if (!String(payload?.name || '').trim()) throw new BadRequestException('A name is required.');
+    const ownerId = actor ? await this.scope.configOwnerForCreate(actor) : null;
     const row = await this.prisma.packageTax.create({
       data: {
+        ownerId,
         groupName: payload.groupName || 'Default',
         name: String(payload.name),
         type: payload.type || 'FIXED',
@@ -1296,9 +1425,10 @@ export class PackagesService {
     return this.taxOut(row);
   }
 
-  async updateTax(id: number, payload: any): Promise<TaxFee> {
+  async updateTax(id: number, payload: any, actor?: Actor): Promise<TaxFee> {
     const existing = await this.prisma.packageTax.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Tax/Fee not found');
+    if (actor) await this.scope.assertConfigWritable(actor, existing, 'Tax');
     // Partial update: only fields actually supplied are touched, matching the
     // spread-merge the file version did.
     const data: any = {};
@@ -1311,9 +1441,10 @@ export class PackagesService {
     return this.taxOut(await this.prisma.packageTax.update({ where: { id }, data }));
   }
 
-  async deleteTax(id: number) {
+  async deleteTax(id: number, actor?: Actor) {
     const existing = await this.prisma.packageTax.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Tax/Fee not found');
+    if (actor) await this.scope.assertConfigWritable(actor, existing, 'Tax');
     await this.prisma.packageTax.delete({ where: { id } });
     await this.detachIdFromSettings('taxIds', id);
     return { success: true };
@@ -1412,9 +1543,9 @@ export class PackagesService {
     return { success: true };
   }
 
-  async getManagementOptions() {
+  async getManagementOptions(actor?: Actor) {
     const [taxes, policies, allocations] = await Promise.all([
-      this.getTaxes(), this.getPolicies(), this.getAllocations(),
+      this.getTaxes(actor), this.getPolicies(), this.getAllocations(),
     ]);
     return { taxes, policies, allocations };
   }

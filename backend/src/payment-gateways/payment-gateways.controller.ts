@@ -13,8 +13,10 @@ import { PermissionsGuard } from '../security/permissions.guard';
  *   /payment-gateways/portal/*  — public, used by the subscriber portal at
  *                                 checkout (no auth, only safe publicConfig
  *                                 is exposed)
- *   /payment-gateways/admin/*   — protected, full CRUD + secret management
- *                                 for ISP staff
+ *   /payment-gateways/admin/*   — protected, full CRUD + secret management,
+ *                                 PLATFORM OWNER only: a gateway row has no
+ *                                 owner (it serves every company) and its
+ *                                 transaction log spans all of them
  *
  * The actual gateway integrations live in the service. Each provider has its
  * own method (createOrder, verifySignature, parseWebhook). The controller is
@@ -58,14 +60,14 @@ export class PaymentGatewaysController {
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('admin')
-  adminList(@Query() query: any) {
-    return this.svc.adminList(query);
+  adminList(@Query() query: any, @Req() req: any) {
+    return this.svc.adminList(query, req.user);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('admin/:id')
-  adminGet(@Param('id') id: string) {
-    return this.svc.adminGet(+id);
+  adminGet(@Param('id') id: string, @Req() req: any) {
+    return this.svc.adminGet(+id, req.user);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -88,13 +90,13 @@ export class PaymentGatewaysController {
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Patch('admin/:id/toggle')
-  adminToggle(@Param('id') id: string) {
-    return this.svc.adminToggle(+id);
+  adminToggle(@Param('id') id: string, @Req() req: any) {
+    return this.svc.adminToggle(+id, req.user);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Get('admin/:id/transactions')
-  adminTransactions(@Param('id') id: string, @Query() query: any) {
-    return this.svc.adminTransactions(+id, query);
+  adminTransactions(@Param('id') id: string, @Query() query: any, @Req() req: any) {
+    return this.svc.adminTransactions(+id, query, req.user);
   }
 }

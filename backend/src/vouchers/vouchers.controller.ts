@@ -58,8 +58,8 @@ export class VouchersController {
   }
 
   @Post('redeem')
-  redeem(@Body() body: any) {
-    return this.vouchersService.redeemVoucher(body.code, body.pin, body.subscriberId);
+  redeem(@Body() body: any, @Req() req: any) {
+    return this.vouchersService.redeemVoucher(body.code, body.pin, body.subscriberId, req.user);
   }
 
   @Delete(':id')

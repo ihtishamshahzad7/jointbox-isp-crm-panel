@@ -25,8 +25,8 @@ export class InvoicesController {
   }
 
   @Get('subscriber/:subscriberId')
-  findBySubscriber(@Param('subscriberId') subscriberId: string) {
-    return this.invoicesService.findBySubscriber(+subscriberId);
+  findBySubscriber(@Param('subscriberId') subscriberId: string, @Req() req: any) {
+    return this.invoicesService.findBySubscriber(+subscriberId, req.user);
   }
 
   @Get(':id')
@@ -37,18 +37,18 @@ export class InvoicesController {
   /** Printable HTML invoice (browser print → Save as PDF). */
   @Get(':id/pdf')
   @Header('Content-Type', 'text/html; charset=utf-8')
-  async getPdf(@Param('id') id: string, @Res() res: any) {
-    const html = await this.invoicesService.getInvoicePdf(+id);
+  async getPdf(@Param('id') id: string, @Req() req: any, @Res() res: any) {
+    const html = await this.invoicesService.getInvoicePdf(+id, req.user);
     res.send(html);
   }
 
   @Post()
-  create(@Body() body: any) {
-    return this.invoicesService.create(body);
+  create(@Body() body: any, @Req() req: any) {
+    return this.invoicesService.create(body, req.user);
   }
 
   @Post(':id/payment')
-  recordPayment(@Param('id') id: string, @Body() body: any) {
-    return this.invoicesService.recordPayment(+id, body);
+  recordPayment(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.invoicesService.recordPayment(+id, body, req.user);
   }
 }

@@ -79,8 +79,10 @@ export class ReportAnalyticsService {
     }
 
     const unit = this.trunc(grain);
+    // ONE array parameter. Prisma.join expanded the ids into `$1,$2,…` inside
+    // ANY(…::int[]) — invalid SQL, so every scoped revenue report errored.
     const filter: Prisma.Sql = ids
-      ? Prisma.sql`AND "subscriberId" = ANY(${Prisma.join(ids)}::int[])`
+      ? Prisma.sql`AND "subscriberId" = ANY(${ids}::int[])`
       : Prisma.sql``;
 
     const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
@@ -155,7 +157,7 @@ export class ReportAnalyticsService {
     if (ids && ids.length === 0) return { grain, points: [], summary: { joined: 0, left: 0, net: 0, churnRate: 0 } };
 
     const filter: Prisma.Sql = ids
-      ? Prisma.sql`AND id = ANY(${Prisma.join(ids)}::int[])`
+      ? Prisma.sql`AND id = ANY(${ids}::int[])`
       : Prisma.sql``;
 
     const joined = await this.prisma.$queryRaw<any[]>(Prisma.sql`

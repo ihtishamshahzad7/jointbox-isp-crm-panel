@@ -22,8 +22,8 @@ export class OutagesController {
 
   /** Uptime split into ISP fault vs power — the honest version. */
   @Get('uptime')
-  uptime(@Query('days') days?: string) {
-    return this.outages.uptimeReport(days ? +days : 30);
+  uptime(@Req() req: any, @Query('days') days?: string) {
+    return this.outages.uptimeReport(days ? +days : 30, req.user);
   }
 
   @Get()
@@ -36,60 +36,65 @@ export class OutagesController {
     return this.outages.createManual(body, req.user);
   }
 
+  // Every per-outage route below is checked in OutagesService against the
+  // caller's own areas (assertOutage) — out of scope reads as not found.
+
   /** Reclassify: power vs network. Changes whether it counts against uptime. */
   @Patch(':id/classify')
-  classify(@Param('id') id: string, @Body() body: { type: string; notes?: string }) {
-    return this.outages.classify(+id, body.type, body.notes);
+  classify(@Param('id') id: string, @Body() body: { type: string; notes?: string }, @Req() req: any) {
+    return this.outages.classify(+id, body.type, body.notes, req.user);
   }
 
   @Patch(':id/close')
-  close(@Param('id') id: string) {
-    return this.outages.close(+id);
+  close(@Param('id') id: string, @Req() req: any) {
+    return this.outages.close(+id, req.user);
   }
 
-  /** Message everyone in the affected area before they call you. */
+  /** Message the caller's own customers in the affected area before they call. */
   @Post(':id/notify')
-  notify(@Param('id') id: string, @Body() body: { message?: string }) {
-    return this.outages.notifyArea(+id, body?.message);
+  notify(@Param('id') id: string, @Body() body: { message?: string }, @Req() req: any) {
+    return this.outages.notifyArea(+id, body?.message, req.user);
   }
 
   // ── Outage Intelligence (root-cause attribution) ────────────
   /** Read the persisted root-cause attribution for an outage. */
   @Get(':id/attribution')
-  attribution(@Param('id') id: string) {
-    return this.outages.getAttribution(+id);
+  attribution(@Param('id') id: string, @Req() req: any) {
+    return this.outages.getAttribution(+id, req.user);
   }
 
   /** Recompute attribution from current NDM signals and persist. */
   @Post(':id/attribution/refresh')
-  refreshAttribution(@Param('id') id: string) {
-    return this.outages.attribute(+id);
+  refreshAttribution(@Param('id') id: string, @Req() req: any) {
+    return this.outages.attribute(+id, req.user);
   }
 
   /** Operator confirms (optionally correcting) the attribution. */
   @Patch(':id/attribution/confirm')
-  confirmAttribution(@Param('id') id: string, @Body() body: { cause?: string }) {
-    return this.outages.confirmAttribution(+id, body?.cause);
+  confirmAttribution(@Param('id') id: string, @Body() body: { cause?: string }, @Req() req: any) {
+    return this.outages.confirmAttribution(+id, body?.cause, req.user);
   }
 
   // ── Load-shedding timetable ─────────────────────────────────
+  // A schedule belongs to its area; only the area's owner (or the platform
+  // owner) may see or change it.
   @Get('schedules/all')
-  listSchedules(@Query('areaId') areaId?: string) {
-    return this.outages.listSchedules(areaId ? +areaId : undefined);
+  listSchedules(@Req() req: any, @Query('areaId') areaId?: string) {
+    return this.outages.listSchedules(areaId ? +areaId : undefined, req.user);
   }
 
   @Post('schedules')
-  createSchedule(@Body() body: any) {
-    return this.outages.createSchedule(body);
+  createSchedule(@Body() body: any, @Req() req: any) {
+    return this.outages.createSchedule(body, req.user);
   }
 
   @Put('schedules/:id')
-  updateSchedule(@Param('id') id: string, @Body() body: any) {
-    return this.outages.updateSchedule(+id, body);
+  updateSchedule(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.outages.updateSchedule(+id, body, req.user);
   }
 
   @Delete('schedules/:id')
-  removeSchedule(@Param('id') id: string) {
-    return this.outages.removeSchedule(+id);
+  removeSchedule(@Param('id') id: string, @Req() req: any) {
+    return this.outages.removeSchedule(+id, req.user);
   }
 }

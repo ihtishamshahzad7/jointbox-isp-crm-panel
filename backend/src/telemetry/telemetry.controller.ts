@@ -67,10 +67,13 @@ export class TelemetryController {
     return this.health.interfaceHistory(id, ifIndex, range || '1h');
   }
 
-  /** Health of every NAS: online count + throughput + reporting status. */
+  /**
+   * Health of every NAS the caller can see: online count + throughput +
+   * reporting status. The platform owner sees the whole installation.
+   */
   @Get('nas-health')
-  nasHealth() {
-    return this.monitor.healthOverview();
+  async nasHealth(@Req() req: any) {
+    return this.monitor.healthOverview(await this.telemetry.visibleNasIds(req.user));
   }
 
   /** Recent operational alerts (admin ops screen). Demo accounts blocked. */
@@ -92,26 +95,33 @@ export class TelemetryController {
     return this.monitor.traffic(id, range || '7d', vlan || undefined);
   }
 
-  /** Aggregate throughput across EVERY NAS — the whole-network MRTG series. */
+  /**
+   * Aggregate throughput across every NAS the caller can see — the
+   * whole-network MRTG series (the whole installation for the platform owner).
+   */
   @Get('network-traffic')
-  networkTraffic(@Query('range') range?: string) {
-    return this.monitor.networkTraffic(range || '1h');
+  async networkTraffic(@Req() req: any, @Query('range') range?: string) {
+    return this.monitor.networkTraffic(range || '1h', await this.telemetry.visibleNasIds(req.user));
   }
 
-  /** Top-N subscribers by live throughput — dashboard "who's using now" list. */
+  /**
+   * Top-N subscribers by live throughput — dashboard "who's using now" list,
+   * ranked among the caller's own subscribers only.
+   */
   @Get('top-subscribers')
-  topSubscribers(@Query('limit') limit?: string) {
-    return this.monitor.topSubscribers(limit ? Number(limit) : 8);
+  async topSubscribers(@Req() req: any, @Query('limit') limit?: string) {
+    return this.monitor.topSubscribers(limit ? Number(limit) : 8, await this.scope.visibleUserIds(req.user));
   }
 
   /**
    * Real-time whole-network meter (2s resolution, last 60 points). Polls the
    * routers' live PPPoE session counters on demand — NOT the 5/10-minute DB
-   * sample tables — so both series move every ~2 seconds.
+   * sample tables — so both series move every ~2 seconds. Summed over the
+   * caller's routers only; the platform owner gets the whole installation.
    */
   @Get('live-traffic')
-  liveTraffic() {
-    return this.live.snapshot();
+  async liveTraffic(@Req() req: any) {
+    return this.live.snapshot(await this.telemetry.visibleNasIds(req.user));
   }
 
   /** Current per-VLAN online + throughput breakdown for a NAS. */
@@ -133,10 +143,13 @@ export class TelemetryController {
   // decision. Subscriber traffic graphs are unaffected: they come from
   // radacct, not from SNMP.
 
-  /** Live network feed for the sidebar widget (in-memory, newest first). */
+  /**
+   * Live network feed for the sidebar widget (in-memory, newest first) —
+   * events from the caller's routers only.
+   */
   @Get('feed')
-  feed(@Query('limit') limit?: string) {
-    return this.telemetry.liveFeed(limit ? Number(limit) : 50);
+  async feed(@Req() req: any, @Query('limit') limit?: string) {
+    return this.telemetry.liveFeed(limit ? Number(limit) : 50, await this.telemetry.visibleNasIds(req.user));
   }
 
   /** Durable event log, optionally filtered to one NAS. */

@@ -60,6 +60,11 @@ export default function FiberPage() {
   const [onuTotal, setOnuTotal] = useState(0);
   const [onuPages, setOnuPages] = useState(0);
   const [subscribers, setSubscribers] = useState<any[]>([]);
+  // Routers the caller may attach an OLT to. An OLT is scoped through its
+  // NAS, so a company's OLT must name one of its own routers; only the
+  // platform owner may keep an OLT with no router.
+  const [nasOptions, setNasOptions] = useState<Array<{ id: number; label: string }>>([]);
+  const [oltError, setOltError] = useState("");
   const [oltTree, setOltTree] = useState<OltTree | null>(null);
 
   // Filters
@@ -75,7 +80,7 @@ export default function FiberPage() {
   const [provisionCommands, setProvisionCommands] = useState<string[]>([]);
 
   // Forms
-  const [oltForm, setOltForm] = useState({ name: "", vendor: "", model: "", mgmtIp: "", location: "" });
+  const [oltForm, setOltForm] = useState({ name: "", vendor: "", model: "", mgmtIp: "", location: "", nasId: "" });
   const [portForm, setPortForm] = useState({ oltId: "", portName: "", slot: "", port: "", splitRatio: "", splitterLocation: "" });
   const [assignSubId, setAssignSubId] = useState("");
   const [editingOlt, setEditingOlt] = useState<Olt | null>(null);
@@ -104,12 +109,22 @@ export default function FiberPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [sumRes, oltRes, portRes, subRes] = await Promise.all([
+      const [sumRes, oltRes, portRes, subRes, nasRes] = await Promise.all([
         fetch(`${API}/fiber/summary`,{headers}),
         fetch(`${API}/fiber/olts`,{headers}),
         fetch(`${API}/fiber/ports`,{headers}),
         fetch(`${API}/subscribers`,{headers}),
+        fetch(`${API}/nas`,{headers}).catch(() => null),
       ]);
+      if (nasRes && nasRes.ok) {
+        const d = await nasRes.json().catch(() => []);
+        const list = Array.isArray(d) ? d : d?.data || d?.items || [];
+        setNasOptions(list.map((n: any) => {
+          const addr = n.nasIp || n.nasname;
+          const name = n.shortname || n.nasname;
+          return { id: n.id, label: name && addr && name !== addr ? `${name} (${addr})` : String(name || addr || `NAS ${n.id}`) };
+        }));
+      }
       if (sumRes.ok) setSummary(await sumRes.json());
       if (oltRes.ok) {
         const d = await oltRes.json();
@@ -156,21 +171,28 @@ export default function FiberPage() {
     setShowTreeModal(olt);
   };
 
+  const oltPayload = () => ({ ...oltForm, nasId: oltForm.nasId ? Number(oltForm.nasId) : null });
+
   const handleCreateOlt = async (e: any) => {
     e.preventDefault();
+    setOltError("");
     try {
-      await fetch(`${API}/fiber/olts`,{method:"POST",headers,body:JSON.stringify(oltForm)});
+      const res = await fetch(`${API}/fiber/olts`,{method:"POST",headers,body:JSON.stringify(oltPayload())});
+      // A refused create used to close the form as if it had worked.
+      if (!res.ok) { const er = await res.json().catch(()=>({})); setOltError(er.message || "The OLT could not be created."); return; }
       setShowOltForm(false); resetOltForm(); loadAll();
-    } catch { alert("Failed to create OLT"); }
+    } catch { setOltError("Failed to create OLT"); }
   };
 
   const handleUpdateOlt = async (e: any) => {
     e.preventDefault();
     if (!editingOlt) return;
+    setOltError("");
     try {
-      await fetch(`${API}/fiber/olts/${editingOlt.id}`,{method:"PUT",headers,body:JSON.stringify(oltForm)});
+      const res = await fetch(`${API}/fiber/olts/${editingOlt.id}`,{method:"PUT",headers,body:JSON.stringify(oltPayload())});
+      if (!res.ok) { const er = await res.json().catch(()=>({})); setOltError(er.message || "The OLT could not be saved."); return; }
       setShowOltForm(false); setEditingOlt(null); resetOltForm(); loadAll();
-    } catch { alert("Failed to update OLT"); }
+    } catch { setOltError("Failed to update OLT"); }
   };
 
   const handleDeleteOlt = async (id: number) => {
@@ -253,12 +275,12 @@ export default function FiberPage() {
     setShowProvisionModal(onu);
   };
 
-  const resetOltForm = () => setOltForm({ name: "", vendor: "", model: "", mgmtIp: "", location: "" });
+  const resetOltForm = () => { setOltError(""); setOltForm({ name: "", vendor: "", model: "", mgmtIp: "", location: "", nasId: "" }); };
   const resetPortForm = () => setPortForm({ oltId: "", portName: "", slot: "", port: "", splitRatio: "", splitterLocation: "" });
 
   const openEditOlt = (olt: Olt) => {
     setEditingOlt(olt);
-    setOltForm({ name: olt.name, vendor: olt.vendor||"", model: olt.model||"", mgmtIp: olt.mgmtIp||"", location: olt.location||"" });
+    setOltForm({ name: olt.name, vendor: olt.vendor||"", model: olt.model||"", mgmtIp: olt.mgmtIp||"", location: olt.location||"", nasId: olt.nasId ? String(olt.nasId) : "" });
     setShowOltForm(true);
   };
 
@@ -602,6 +624,19 @@ export default function FiberPage() {
                 <label style={{display:"block",fontSize:11,fontWeight:600,color:t.textSub,marginBottom:5}}>Location</label>
                 <input value={oltForm.location} onChange={e=>setOltForm(p=>({...p,location:e.target.value}))} placeholder="e.g. HQ Server Room" style={{width:"100%",padding:"8px 12px",border:`1px solid ${t.cardBorder}`,borderRadius:8,fontSize:12,background:t.card,color:t.text}}/>
               </div>
+              <div style={{marginBottom:16}}>
+                <label htmlFor="olt-nas" style={{display:"block",fontSize:11,fontWeight:600,color:t.textSub,marginBottom:5}}>
+                  Router (NAS){user?.role === "SUPER_ADMIN" ? " — optional" : ""}
+                </label>
+                <select id="olt-nas" value={oltForm.nasId} required={user?.role !== "SUPER_ADMIN"} onChange={e=>setOltForm(p=>({...p,nasId:e.target.value}))} style={{width:"100%",padding:"8px 12px",border:`1px solid ${t.cardBorder}`,borderRadius:8,fontSize:12,background:t.card,color:t.text}}>
+                  <option value="">{user?.role === "SUPER_ADMIN" ? "None (installation-level)" : "Choose the router this OLT hangs off"}</option>
+                  {nasOptions.map(n => <option key={n.id} value={String(n.id)}>{n.label}</option>)}
+                </select>
+                <div style={{fontSize:10.5,color:t.textMuted,marginTop:4}}>The OLT, its ports and its ONUs belong to whoever owns this router.</div>
+              </div>
+              {oltError && (
+                <div role="alert" style={{marginBottom:12,padding:"8px 12px",borderRadius:8,fontSize:12,background:"rgba(211,64,83,.10)",color:"#b02a37",border:"1px solid rgba(211,64,83,.35)"}}>{oltError}</div>
+              )}
               <div style={{display:"flex",gap:10}}>
                 <button type="submit" style={{flex:1,background:t.accent,color:"#fff",border:"none",padding:"10px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>{editingOlt?"Update OLT":"Add OLT"}</button>
                 <button type="button" onClick={()=>{setShowOltForm(false);setEditingOlt(null);}} style={{flex:1,background:"transparent",border:`1px solid ${t.cardBorder}`,color:t.textSub,padding:"10px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>Cancel</button>

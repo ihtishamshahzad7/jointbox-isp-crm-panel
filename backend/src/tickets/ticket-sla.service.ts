@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { ScopeService, Actor } from '../common/scope.service';
 
 /**
  * TicketSlaService — response/resolution targets and escalation.
@@ -25,6 +27,7 @@ export class TicketSlaService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private scope: ScopeService,
   ) {}
 
   /** Minutes allowed, by priority. Sensible ISP defaults. */
@@ -145,30 +148,44 @@ export class TicketSlaService {
   /**
    * Live SLA picture for the dashboard: what's late, what's about to be, and
    * how the team is actually performing.
+   *
+   * A tenant's figures are over its own subscribers' tickets only (the same
+   * subscriberWhere() rule as the ticket list); unscoped they were every
+   * company's queue added together. Platform owner / no actor: unchanged.
    */
-  async slaReport(days = 30) {
+  async slaReport(days = 30, actor?: Actor) {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const soon = new Date(Date.now() + 60 * 60 * 1000); // next hour
 
+    const tenant = !!actor && !this.scope.isPlatformOwner(actor);
+    const subWhere = tenant ? await this.scope.subscriberWhere(actor) : null;
+    const w = (extra: any) => (subWhere ? { AND: [{ subscriber: subWhere }, extra] } : extra);
+    let sqlScope = Prisma.empty;
+    if (tenant) {
+      const owners = (await this.scope.visibleUserIds(actor)) ?? [];
+      const ids = owners.length ? owners : [-1];
+      sqlScope = Prisma.sql`AND "subscriberId" IN (SELECT s.id FROM "Subscriber" s WHERE s."userId" = ANY(${ids}::int[]))`;
+    }
+
     const [open, breached, dueSoon, resolved, breachedInPeriod] = await Promise.all([
-      this.prisma.ticket.count({ where: { status: { in: ['OPEN', 'IN_PROGRESS'] } } }),
-      this.prisma.ticket.count({ where: { slaBreached: true, status: { notIn: ['CLOSED', 'RESOLVED'] } } }),
+      this.prisma.ticket.count({ where: w({ status: { in: ['OPEN', 'IN_PROGRESS'] } }) }),
+      this.prisma.ticket.count({ where: w({ slaBreached: true, status: { notIn: ['CLOSED', 'RESOLVED'] } }) }),
       this.prisma.ticket.count({
-        where: {
+        where: w({
           status: { in: ['OPEN', 'IN_PROGRESS'] },
           slaBreached: false,
           resolutionDueAt: { gte: new Date(), lte: soon },
-        },
+        }),
       }),
-      this.prisma.ticket.count({ where: { resolvedAt: { gte: since } } }),
-      this.prisma.ticket.count({ where: { breachedAt: { gte: since } } }),
+      this.prisma.ticket.count({ where: w({ resolvedAt: { gte: since } }) }),
+      this.prisma.ticket.count({ where: w({ breachedAt: { gte: since } }) }),
     ]);
 
     // Average hours to resolve, over the window.
     const rows = await this.prisma.$queryRaw<any[]>`
       SELECT AVG(EXTRACT(EPOCH FROM ("resolvedAt" - "createdAt")) / 3600)::numeric(10,2) AS avg_hours
          FROM "Ticket"
-        WHERE "resolvedAt" IS NOT NULL AND "resolvedAt" >= ${since}`
+        WHERE "resolvedAt" IS NOT NULL AND "resolvedAt" >= ${since} ${sqlScope}`
     .catch(() => [] as any[]);
 
     const compliance = resolved + breachedInPeriod > 0

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -439,6 +439,12 @@ export class SecurityService {
   /** Set the child's permissions. `denied` = list of keys to block; everything else allowed. */
   async setChildPermissions(actor: Actor, childUserId: number, denied: string[]) {
     await this.scope.assertUser(actor, childUserId);
+    // assertUser() admits the caller's own id (a subtree includes its root), so
+    // without this an account could clear a deny its PARENT placed on it.
+    // These keys are the parent's to set, never the account's own.
+    if (!this.scope.isPlatformOwner(actor) && Number(childUserId) === this.scope.actorId(actor)) {
+      throw new ForbiddenException('Your own permissions are set by the account above you.');
+    }
     const validKeys = new Set(PERMISSION_CATALOG.flatMap((g) => g.actions.map((a) => a.key)));
     const clean = [...new Set(denied)].filter((k) => validKeys.has(k));
     await this.prisma.$transaction([
@@ -480,8 +486,15 @@ export class SecurityService {
     return matrix;
   }
 
-  /** Replace a role's permission set atomically. Empty list = unrestricted. */
-  async setRolePermissions(role: string, permissions: string[]) {
+  /**
+   * Replace a role's permission set atomically. Empty list = unrestricted.
+   *
+   * RolePermission is keyed by role alone — one set per role for the WHOLE
+   * installation — so an ISP changing "RESELLER" here would change it for
+   * every other company's resellers too. Platform owner only.
+   */
+  async setRolePermissions(actor: Actor, role: string, permissions: string[]) {
+    this.scope.assertPlatformOwner(actor);
     if (!ROLES.includes(role)) throw new BadRequestException(`Unknown role ${role}`);
     const clean = [...new Set(permissions.map((p) => String(p).trim()).filter(Boolean))];
     await this.prisma.$transaction([
@@ -508,12 +521,13 @@ export class SecurityService {
   }
 
   /** Load a tier's recommended set into a role (same atomic replace as manual save). */
-  applyPreset(role: string) {
+  async applyPreset(actor: Actor, role: string) {
+    this.scope.assertPlatformOwner(actor);
     const key = role.toUpperCase();
     if (!ROLES.includes(key)) throw new BadRequestException(`Unknown role ${key}`);
     const preset = PERMISSION_PRESETS[key];
     if (!preset) throw new BadRequestException(`No preset defined for ${key}`);
-    return this.setRolePermissions(key, preset);
+    return this.setRolePermissions(actor, key, preset);
   }
 
   /** Catalog groups, so the UI can render section headers with labels. */
@@ -560,15 +574,36 @@ export class SecurityService {
   }
 
   // ── Active sessions / remote logout ───────────────────────────
-  async activeSessions() {
+  /**
+   * Login sessions of the accounts the caller can see — its own subtree. The
+   * platform owner sees every session on the installation, as before.
+   */
+  async activeSessions(actor: Actor) {
+    const visible = await this.scope.visibleUserIds(actor); // null = all
     return this.prisma.sessionLog.findMany({
-      where: { isActive: true, expiresAt: { gt: new Date() } },
+      where: {
+        isActive: true,
+        expiresAt: { gt: new Date() },
+        ...(visible ? { userId: { in: visible } } : {}),
+      },
       include: { user: { select: { name: true, email: true, role: true } } },
       orderBy: { lastActiveAt: 'desc' },
     });
   }
 
-  async killSession(sessionId: string, byUserId?: number) {
+  /**
+   * Remote logout. Was unscoped: any operator able to reach the route could
+   * end any session on the installation — another company's, or the platform
+   * owner's — by its id. Now limited to sessions of accounts the caller can
+   * see; anything else is "not found" so session ids cannot be probed.
+   */
+  async killSession(sessionId: string, byUserId: number | undefined, actor: Actor) {
+    if (!this.scope.isPlatformOwner(actor)) {
+      const row = await this.prisma.sessionLog.findUnique({ where: { sessionId }, select: { userId: true } });
+      if (!row || !(await this.scope.canAccessUser(actor, row.userId))) {
+        throw new NotFoundException('Session not found');
+      }
+    }
     await this.prisma.sessionLog.update({
       where: { sessionId },
       data: { isActive: false, logoutAt: new Date() },

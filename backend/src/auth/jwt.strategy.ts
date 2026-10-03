@@ -1,11 +1,16 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { TokenBlacklistService } from './token-blacklist.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { accountStatus, PASSWORD_CHANGE_ALLOWED } from './account-status';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private readonly blacklist: TokenBlacklistService) {
+  constructor(
+    private readonly blacklist: TokenBlacklistService,
+    private readonly prisma: PrismaService,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -44,6 +49,28 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('This token is not valid for the operator API.');
     }
 
+    /**
+     * SUSPENSION AND FORCED PASSWORD CHANGE — checked here, on every request.
+     *
+     * This is the one place every operator request passes after its token is
+     * verified, which is why the check lives here rather than in login alone:
+     * login only stops NEW sessions, and a 7-day token issued before the
+     * suspension would otherwise keep working for a week.
+     *
+     * An "act as" session (imp) is exempt from the suspension check: the
+     * platform owner driving a suspended company's view to investigate it is
+     * exactly when that view is needed.
+     */
+    const status = payload?.sub ? await accountStatus(this.prisma, Number(payload.sub)) : null;
+    if (!status) throw new UnauthorizedException('Account not found');
+    if (!payload.imp && !status.active) {
+      throw new UnauthorizedException('This account is suspended. Contact your provider.');
+    }
+    const path = String(req?.originalUrl || req?.url || '').split('?')[0];
+    if (!payload.imp && status.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.test(path)) {
+      throw new ForbiddenException('PASSWORD_CHANGE_REQUIRED');
+    }
+
     // IMPORTANT: Return 'sub' not 'userId' - matches what controller expects
     return {
       sub: payload.sub,     // ← This matches req.user.sub in controller
@@ -52,6 +79,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       name: payload.name,
       imp: payload.imp,     // present when this is an "act as" session
       isDemo: payload.isDemo === true,
+      mustChangePassword: status.mustChangePassword,
     };
   }
 }

@@ -32,10 +32,50 @@ export class DemoService implements OnModuleInit {
 
   private get sharedEmail() { return (process.env.DEMO_EMAIL || 'demo@jointbox.net').trim().toLowerCase(); }
   private get sharedPassword() { return process.env.DEMO_PASSWORD || 'JointboxDemo2026'; }
-  publicCredentials() { return { enabled: process.env.DEMO_PUBLIC !== '0', email: this.sharedEmail, username: this.sharedEmail, password: this.sharedPassword, role: 'Franchise (sandbox)', note: 'Synthetic sandbox only. Real tenant data is never exposed.' }; }
+  /**
+   * OFF UNLESS ASKED FOR. This used to be on unless explicitly disabled, and
+   * install.sh never set it, so every CUSTOMER's production panel seeded
+   * itself with 10,000 synthetic subscribers and 500 synthetic routers on boot,
+   * and carried a login whose password is printed on our own website. The
+   * sandbox is a sales tool for OUR demo server; a client ISP's database is not
+   * the place for it. Set DEMO_PUBLIC=1 on the one server that should host it.
+   */
+  static enabled(): boolean { return process.env.DEMO_PUBLIC === '1'; }
+
+  /** Never returns credentials when the sandbox is off — not even the stale ones. */
+  publicCredentials() {
+    if (!DemoService.enabled()) return { enabled: false };
+    return { enabled: true, email: this.sharedEmail, username: this.sharedEmail, password: this.sharedPassword, role: 'Franchise (sandbox)', note: 'Synthetic sandbox only. Real tenant data is never exposed.' };
+  }
+
+  /**
+   * Remove the sandbox from a server that should not have it.
+   *
+   * Switching the default off stops NEW seeding, but every install that
+   * already booted once still holds the dataset, and its public login still
+   * works. So on a server where the sandbox is off, the shared demo account and
+   * everything it owns are removed once at boot.
+   *
+   * Only through purgeAccount(), which refuses any account whose isDemo is not
+   * true and walks only the isDemo subtree — so a real account can never be
+   * reached by this, whatever its email. Synthetic data only, and recreated in
+   * full by setting DEMO_PUBLIC=1 if it was wanted after all.
+   */
+  private async removeSandboxIfPresent() {
+    if (!isPrimaryInstance()) return;
+    const root = await this.prisma.user.findFirst({ where: { email: this.sharedEmail, isDemo: true }, select: { id: true } });
+    if (!root) return;
+    const kids = await this.prisma.user.findMany({ where: { parentId: root.id, isDemo: true }, select: { id: true } });
+    for (const k of kids) await this.purgeAccount(k.id).catch((e) => this.log.warn(`Demo child #${k.id} removal failed: ${e?.message || e}`));
+    await this.purgeAccount(root.id);
+    this.log.log(`Demo sandbox removed from this server (DEMO_PUBLIC is not 1). Set DEMO_PUBLIC=1 to host it.`);
+  }
 
   async ensureShared() {
-    if (process.env.DEMO_PUBLIC === '0') return;
+    if (!DemoService.enabled()) {
+      await this.removeSandboxIfPresent().catch((e) => this.log.warn(`Demo sandbox removal failed: ${e?.message || e}`));
+      return;
+    }
     const existing = await this.prisma.user.findFirst({ where: { email: this.sharedEmail }, select: { id: true, isDemo: true } });
     if (existing && !existing.isDemo) { this.log.error(`Refusing shared demo initialization: ${this.sharedEmail} belongs to real user #${existing.id}. Configure DEMO_EMAIL to a dedicated demo address.`); return; }
     const hash = await bcrypt.hash(this.sharedPassword, 10), far = new Date(Date.now() + 3650 * 86400_000);
@@ -59,7 +99,7 @@ export class DemoService implements OnModuleInit {
 
   @Cron('0 4 * * 1')
   async resetShared() {
-    if (!isPrimaryInstance() || process.env.DEMO_PUBLIC === '0') return;
+    if (!isPrimaryInstance() || !DemoService.enabled()) return;
     const u = await this.prisma.user.findFirst({ where: { email: this.sharedEmail, isDemo: true }, select: { id: true } }); if (!u) return;
     const kids = await this.prisma.user.findMany({ where: { parentId: u.id, isDemo: true }, select: { id: true } });
     for (const k of kids) await this.purgeAccount(k.id).catch(() => null);

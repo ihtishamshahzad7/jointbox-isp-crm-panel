@@ -30,14 +30,19 @@ export class GroupsController {
     return this.groups.listGroups(query, req.user);
   }
 
+  // Tenant-free: the installation's active group names/colours for filter
+  // dropdowns — the same list GET /groups already returns to every caller.
   @Get('options')
-  options() {
+  options(@Req() _req: any) {
     return this.groups.listOptions();
   }
 
+  // Readable by anyone the permission guard admits, but members / NAS /
+  // packages are cut down to what the caller can already see. Every write
+  // below is platform-owner only: groups are one set for the installation.
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.groups.getGroup(+id);
+  get(@Param('id') id: string, @Req() req: any) {
+    return this.groups.getGroup(+id, req.user);
   }
 
   @Post()
@@ -58,8 +63,8 @@ export class GroupsController {
   // ─── MEMBERSHIP ───────────────────────────────────────────────────────
 
   @Get(':id/members')
-  members(@Param('id') id: string) {
-    return this.groups.listMembers(+id);
+  members(@Param('id') id: string, @Req() req: any) {
+    return this.groups.listMembers(+id, req.user);
   }
 
   @Post(':id/members')
@@ -72,45 +77,46 @@ export class GroupsController {
     @Param('id') id: string,
     @Param('userId') userId: string,
     @Body() body: any,
+    @Req() req: any,
   ) {
-    return this.groups.updateMember(+id, +userId, body);
+    return this.groups.updateMember(+id, +userId, body, req.user);
   }
 
   @Delete(':id/members/:userId')
-  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
-    return this.groups.removeMember(+id, +userId);
+  removeMember(@Param('id') id: string, @Param('userId') userId: string, @Req() req: any) {
+    return this.groups.removeMember(+id, +userId, req.user);
   }
 
   // ─── RESOURCE BINDINGS ────────────────────────────────────────────────
 
   @Get(':id/nas')
-  listNas(@Param('id') id: string) {
-    return this.groups.listNasInGroup(+id);
+  listNas(@Param('id') id: string, @Req() req: any) {
+    return this.groups.listNasInGroup(+id, req.user);
   }
 
   @Post(':id/nas')
-  bindNas(@Param('id') id: string, @Body() body: any) {
-    return this.groups.bindNas(+id, body);
+  bindNas(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.groups.bindNas(+id, body, req.user);
   }
 
   @Delete(':id/nas/:nasId')
-  unbindNas(@Param('id') id: string, @Param('nasId') nasId: string) {
-    return this.groups.unbindNas(+id, +nasId);
+  unbindNas(@Param('id') id: string, @Param('nasId') nasId: string, @Req() req: any) {
+    return this.groups.unbindNas(+id, +nasId, req.user);
   }
 
   @Get(':id/packages')
-  listPackages(@Param('id') id: string) {
-    return this.groups.listPackagesInGroup(+id);
+  listPackages(@Param('id') id: string, @Req() req: any) {
+    return this.groups.listPackagesInGroup(+id, req.user);
   }
 
   @Post(':id/packages')
-  bindPackage(@Param('id') id: string, @Body() body: any) {
-    return this.groups.bindPackage(+id, body);
+  bindPackage(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.groups.bindPackage(+id, body, req.user);
   }
 
   @Delete(':id/packages/:pkgId')
-  unbindPackage(@Param('id') id: string, @Param('pkgId') pkgId: string) {
-    return this.groups.unbindPackage(+id, +pkgId);
+  unbindPackage(@Param('id') id: string, @Param('pkgId') pkgId: string, @Req() req: any) {
+    return this.groups.unbindPackage(+id, +pkgId, req.user);
   }
 
   // ─── VISIBILITY HELPERS ───────────────────────────────────────────────

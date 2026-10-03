@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { TopologyService } from '../topology/topology.service';
@@ -23,11 +23,110 @@ export class FiberService {
   ) {}
 
   // ─────────────────────────────────────────────────────────────
+  // TENANCY
+  // ─────────────────────────────────────────────────────────────
+  //
+  // An OLT has no owner column: it belongs to whoever may use the NAS (BRAS)
+  // its traffic terminates on, so it is scoped through that NAS. An OLT with
+  // no NAS is installation-level — the platform owner's alone. Ports inherit
+  // from their OLT. An ONU bound to a subscriber is decided by that subscriber
+  // (the binding is subscriber PII — see listOnus); an unassigned ONU by its
+  // OLT.
+  //
+  // `actor` is optional on the service so internal callers keep their
+  // unscoped path; every controller route passes req.user. Out-of-scope ids
+  // answer "not found", never "forbidden", so they cannot be enumerated.
+
+  /** OLTs the actor may see. null = no filter (platform owner / internal). */
+  private async oltWhere(actor?: Actor): Promise<any | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    return { nas: { is: await this.scope.nasWhere(actor) } };
+  }
+
+  /** Subscribers whose ONU binding the actor may see. null = no filter. */
+  private async subscriberFilter(actor?: Actor): Promise<any | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    return this.scope.subscriberWhere(actor);
+  }
+
+  /**
+   * ONUs the actor may see: bound to one of its own subscribers, or
+   * unassigned on an OLT it may see. null = no filter.
+   */
+  private async onuWhere(actor?: Actor): Promise<any | null> {
+    const olt = await this.oltWhere(actor);
+    if (!olt) return null;
+    const subs = await this.scope.subscriberWhere(actor);
+    return { OR: [{ subscriber: { is: subs } }, { subscriberId: null, olt: { is: olt } }] };
+  }
+
+  private async canSeeOlt(actor: Actor, oltId: number): Promise<boolean> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return true;
+    const olt = await this.prisma.olt.findUnique({ where: { id: oltId }, select: { nasId: true } });
+    // No NAS => installation-level OLT, reachable by the platform owner only.
+    if (!olt || olt.nasId == null) return false;
+    return this.scope.canAccessNas(actor, olt.nasId);
+  }
+
+  private async assertOlt(actor: Actor, oltId: number): Promise<void> {
+    if (!(await this.canSeeOlt(actor, oltId))) throw new NotFoundException('OLT not found');
+  }
+
+  private async assertPort(actor: Actor, portId: number): Promise<void> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return;
+    const port = await this.prisma.ponPort.findUnique({ where: { id: portId }, select: { oltId: true } });
+    if (!port || !(await this.canSeeOlt(actor, port.oltId))) {
+      throw new NotFoundException('PON port not found');
+    }
+  }
+
+  private async assertOnu(actor: Actor, onuId: number): Promise<void> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return;
+    const onu = await this.prisma.onu.findUnique({
+      where: { id: onuId },
+      select: { oltId: true, subscriberId: true },
+    });
+    const ok = !!onu && (onu.subscriberId != null
+      ? await this.scope.canAccessSubscriber(actor, onu.subscriberId)
+      : await this.canSeeOlt(actor, onu.oltId));
+    if (!ok) throw new NotFoundException('ONU not found');
+  }
+
+  /**
+   * The NAS / area an OLT is being pointed at must be the caller's own. A
+   * tenant may not create an installation-level (NAS-less) OLT: nobody but
+   * the platform owner could ever see it again.
+   */
+  private async assertOltRefs(actor: Actor, data: { nasId?: any; areaId?: any }, creating: boolean) {
+    if (!actor || this.scope.isPlatformOwner(actor)) return;
+    if (creating || data.nasId !== undefined) {
+      if (!data.nasId) {
+        throw new ForbiddenException(
+          'Choose the NAS this OLT connects to. Only the platform owner can keep an OLT without one.',
+        );
+      }
+      if (!(await this.scope.canAccessNas(actor, Number(data.nasId)))) {
+        throw new NotFoundException('NAS not found');
+      }
+    }
+    if (data.areaId) {
+      const area = await this.prisma.area.findUnique({
+        where: { id: Number(data.areaId) },
+        select: { ownerId: true },
+      });
+      if (!area) throw new NotFoundException('Area not found');
+      await this.scope.assertOwnerInScope(actor, area.ownerId, 'Area');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // OLT CRUD
   // ─────────────────────────────────────────────────────────────
 
-  async listOlts() {
+  async listOlts(actor?: Actor) {
+    const where = await this.oltWhere(actor);
     return this.prisma.olt.findMany({
+      ...(where ? { where } : {}),
       include: {
         nas: { select: { id: true, nasname: true, nasIp: true } },
         area: { select: { id: true, name: true } },
@@ -37,7 +136,11 @@ export class FiberService {
     });
   }
 
-  async getOlt(id: number) {
+  async getOlt(id: number, actor?: Actor) {
+    await this.assertOlt(actor, id);
+    // A shared OLT carries other accounts' customers too; the ONU→customer
+    // binding stays limited to the caller's own subscribers.
+    const subs = await this.subscriberFilter(actor);
     const olt = await this.prisma.olt.findUnique({
       where: { id },
       include: {
@@ -47,7 +150,9 @@ export class FiberService {
           include: {
             _count: { select: { onus: true } },
             onus: {
-              where: { subscriberId: { not: null } },
+              where: subs
+                ? { subscriberId: { not: null }, subscriber: { is: subs } }
+                : { subscriberId: { not: null } },
               select: { id: true, subscriberId: true, serialNumber: true, onuIndex: true },
               take: 20,
             },
@@ -55,6 +160,7 @@ export class FiberService {
           orderBy: { portName: 'asc' },
         },
         onus: {
+          ...(subs ? { where: { OR: [{ subscriberId: null }, { subscriber: { is: subs } }] } } : {}),
           include: { subscriber: { select: { id: true, fullName: true, username: true, phone: true, status: true } } },
           orderBy: { id: 'desc' },
           take: 50,
@@ -68,8 +174,9 @@ export class FiberService {
   async createOlt(data: {
     name: string; vendor?: string; model?: string; mgmtIp?: string;
     location?: string; nasId?: number; areaId?: number;
-  }) {
+  }, actor?: Actor) {
     if (!data.name?.trim()) throw new BadRequestException('OLT name is required');
+    await this.assertOltRefs(actor, data, true);
     const existing = await this.prisma.olt.findUnique({ where: { name: data.name.trim() } });
     if (existing) throw new BadRequestException('An OLT with this name already exists');
 
@@ -89,7 +196,9 @@ export class FiberService {
   async updateOlt(id: number, data: {
     name?: string; vendor?: string; model?: string; mgmtIp?: string;
     location?: string; nasId?: number; areaId?: number;
-  }) {
+  }, actor?: Actor) {
+    await this.assertOlt(actor, id);
+    await this.assertOltRefs(actor, data, false);
     const olt = await this.prisma.olt.findUnique({ where: { id } });
     if (!olt) throw new NotFoundException('OLT not found');
 
@@ -112,7 +221,8 @@ export class FiberService {
     });
   }
 
-  async deleteOlt(id: number) {
+  async deleteOlt(id: number, actor?: Actor) {
+    await this.assertOlt(actor, id);
     const olt = await this.prisma.olt.findUnique({
       where: { id },
       include: { onus: { where: { subscriberId: { not: null } }, take: 1 } },
@@ -129,9 +239,11 @@ export class FiberService {
   // PON PORT CRUD
   // ─────────────────────────────────────────────────────────────
 
-  async listPorts(oltId?: number) {
+  async listPorts(oltId?: number, actor?: Actor) {
     const where: any = {};
     if (oltId) where.oltId = oltId;
+    const olt = await this.oltWhere(actor);
+    if (olt) where.olt = { is: olt };
     return this.prisma.ponPort.findMany({
       where,
       include: {
@@ -145,9 +257,10 @@ export class FiberService {
   async createPort(data: {
     oltId: number; portName: string; slot?: string; port?: string;
     splitRatio?: number; splitterLocation?: string;
-  }) {
+  }, actor?: Actor) {
     if (!data.oltId) throw new BadRequestException('OLT ID is required');
     if (!data.portName?.trim()) throw new BadRequestException('Port name is required');
+    await this.assertOlt(actor, data.oltId);
 
     const olt = await this.prisma.olt.findUnique({ where: { id: data.oltId } });
     if (!olt) throw new NotFoundException('OLT not found');
@@ -172,7 +285,8 @@ export class FiberService {
   async updatePort(id: number, data: {
     portName?: string; slot?: string; port?: string;
     splitRatio?: number; splitterLocation?: string; isActive?: boolean;
-  }) {
+  }, actor?: Actor) {
+    await this.assertPort(actor, id);
     const port = await this.prisma.ponPort.findUnique({ where: { id } });
     if (!port) throw new NotFoundException('PON port not found');
 
@@ -189,7 +303,8 @@ export class FiberService {
     });
   }
 
-  async deletePort(id: number) {
+  async deletePort(id: number, actor?: Actor) {
+    await this.assertPort(actor, id);
     const port = await this.prisma.ponPort.findUnique({
       where: { id },
       include: { onus: { where: { subscriberId: { not: null } }, take: 1 } },
@@ -216,16 +331,13 @@ export class FiberService {
     if (query.subscriberId) where.subscriberId = query.subscriberId;
     if (query.unassigned) where.subscriberId = null;
 
-    // TENANT ISOLATION: a reseller must only see ONUs that are unassigned OR
-    // bound to a subscriber in their own subtree — never another tenant's
-    // customer name/phone. OLT/PON infrastructure is shared, but this binding is
-    // subscriber PII.
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.AND = [
-        ...(where.AND || []),
-        { OR: [{ subscriberId: null }, { subscriber: { userId: { in: ids.length ? ids : [-1] } } }] },
-      ];
+    // TENANT ISOLATION: a reseller must only see ONUs bound to a subscriber in
+    // their own subtree — never another tenant's customer name/phone — or
+    // unassigned ONUs on an OLT they may use (one whose NAS they can see).
+    // Unassigned ONUs on another company's OLT used to be listed too.
+    const scoped = await this.onuWhere(actor);
+    if (scoped) {
+      where.AND = [...(where.AND || []), scoped];
     }
 
     const limit = Math.min(Number(query.limit) || 50, 200);
@@ -250,7 +362,11 @@ export class FiberService {
     return { items, total, page, limit, pages: Math.ceil(total / limit) };
   }
 
-  async assignOnu(onuId: number, subscriberId: number) {
+  async assignOnu(onuId: number, subscriberId: number, actor?: Actor) {
+    // The subscriber is checked by the controller; the ONU must be ours too —
+    // not an unassigned ONU on another company's OLT, nor one already bound to
+    // another company's customer.
+    await this.assertOnu(actor, onuId);
     const onu = await this.prisma.onu.findUnique({ where: { id: onuId } });
     if (!onu) throw new NotFoundException('ONU not found');
 
@@ -274,7 +390,8 @@ export class FiberService {
     });
   }
 
-  async unassignOnu(onuId: number) {
+  async unassignOnu(onuId: number, actor?: Actor) {
+    await this.assertOnu(actor, onuId);
     const onu = await this.prisma.onu.findUnique({ where: { id: onuId } });
     if (!onu) throw new NotFoundException('ONU not found');
     if (!onu.subscriberId) return onu; // already unassigned
@@ -288,7 +405,8 @@ export class FiberService {
   async updateOnu(id: number, data: {
     serialNumber?: string; macAddress?: string; model?: string;
     onuIndex?: string; isActive?: boolean; notes?: string;
-  }) {
+  }, actor?: Actor) {
+    await this.assertOnu(actor, id);
     const onu = await this.prisma.onu.findUnique({ where: { id } });
     if (!onu) throw new NotFoundException('ONU not found');
 
@@ -305,7 +423,8 @@ export class FiberService {
     });
   }
 
-  async deleteOnu(id: number) {
+  async deleteOnu(id: number, actor?: Actor) {
+    await this.assertOnu(actor, id);
     const onu = await this.prisma.onu.findUnique({ where: { id } });
     if (!onu) throw new NotFoundException('ONU not found');
     if (onu.subscriberId) {
@@ -319,7 +438,10 @@ export class FiberService {
   // ONU PROVISIONING COMMANDS
   // ─────────────────────────────────────────────────────────────
 
-  async generateProvisionCommands(onuId: number, vlan?: number) {
+  // The generated CLI reveals the OLT's vendor, port layout and the ONU serial,
+  // so the same ONU check as every other per-ONU route applies.
+  async generateProvisionCommands(onuId: number, vlan?: number, actor?: Actor) {
+    await this.assertOnu(actor, onuId);
     const onu = await this.prisma.onu.findUnique({
       where: { id: onuId },
       include: { olt: true, ponPort: true },
@@ -338,7 +460,8 @@ export class FiberService {
     );
   }
 
-  async generateUnprovisionCommands(onuId: number) {
+  async generateUnprovisionCommands(onuId: number, actor?: Actor) {
+    await this.assertOnu(actor, onuId);
     const onu = await this.prisma.onu.findUnique({
       where: { id: onuId },
       include: { olt: true, ponPort: true },
@@ -353,7 +476,8 @@ export class FiberService {
     );
   }
 
-  async generateDiagnosticCommands(onuId: number) {
+  async generateDiagnosticCommands(onuId: number, actor?: Actor) {
+    await this.assertOnu(actor, onuId);
     const onu = await this.prisma.onu.findUnique({
       where: { id: onuId },
       include: { olt: true, ponPort: true },
@@ -372,14 +496,21 @@ export class FiberService {
   // FIBER DISTRIBUTION & TOPOLOGY
   // ─────────────────────────────────────────────────────────────
 
-  async getFiberSummary() {
+  async getFiberSummary(actor?: Actor) {
+    // Same visibility as the lists: OLTs/ports through the NAS, ONUs through
+    // their subscriber (or their OLT when unassigned). Platform owner: no filter.
+    const olt = await this.oltWhere(actor);
+    const onu = await this.onuWhere(actor);
+    const oltW = olt ?? {};
+    const portW = olt ? { olt: { is: olt } } : {};
+    const onuW = (extra: any) => (onu ? { AND: [onu, extra] } : extra);
     const [olts, ports, onus, assignedOnus, activeOnus] = await Promise.all([
-      this.prisma.olt.count(),
-      this.prisma.ponPort.count(),
-      this.prisma.onu.count(),
-      this.prisma.onu.count({ where: { subscriberId: { not: null } } }),
+      this.prisma.olt.count({ where: oltW }),
+      this.prisma.ponPort.count({ where: portW }),
+      this.prisma.onu.count({ where: onu ?? {} }),
+      this.prisma.onu.count({ where: onuW({ subscriberId: { not: null } }) }),
       this.prisma.onu.count({
-        where: { subscriberId: { not: null }, isActive: true },
+        where: onuW({ subscriberId: { not: null }, isActive: true }),
       }),
     ]);
 
@@ -393,14 +524,19 @@ export class FiberService {
     };
   }
 
-  async getFiberTree(oltId: number) {
+  async getFiberTree(oltId: number, actor?: Actor) {
+    await this.assertOlt(actor, oltId);
+    // As getOlt(): on a shared OLT only the caller's own customers are shown.
+    const subs = await this.subscriberFilter(actor);
     const olt = await this.prisma.olt.findUnique({
       where: { id: oltId },
       include: {
         ports: {
           include: {
             onus: {
-              where: { subscriberId: { not: null } },
+              where: subs
+                ? { subscriberId: { not: null }, subscriber: { is: subs } }
+                : { subscriberId: { not: null } },
               include: {
                 subscriber: { select: { id: true, fullName: true, username: true, status: true } },
               },

@@ -36,6 +36,7 @@ export type LicenceState =
   | "HARDWARE_MISMATCH"
   | "INVALID"
   | "UNLICENSED"
+  | "SUSPENDED"
   | "TAMPERED"
   | "UNAVAILABLE";
 
@@ -52,7 +53,15 @@ export interface LicenceStatus {
   capAction: string;
   capHard: number;
   /** Null until the first count is published (at boot). Never shown as zero. */
-  usage: { subscribers: number; nas: number; at: string } | null;
+  usage: {
+    subscribers: number;
+    nas: number;
+    /** Franchises, dealers and sub-dealers. Absent from panels before 1.1. */
+    dealers?: number;
+    /** ISP companies hosted under the platform owner. */
+    companies?: number;
+    at: string;
+  } | null;
   features: string[];
   expiresAt: string | null;
   graceEndsAt: string | null;

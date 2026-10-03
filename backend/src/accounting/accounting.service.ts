@@ -1,6 +1,7 @@
 import {
   BadRequestException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -144,8 +145,58 @@ export class AccountingService {
     return { items, nextCursor: hasMore ? items[items.length - 1].id : null, hasMore };
   }
 
+  /**
+   * WHOSE BOOKS. The ledger, payments and expenses are each one table for the
+   * whole installation, so every aggregate over them used to add every
+   * company's money together and show the sum to whoever asked.
+   *
+   * null = the whole installation: the platform owner, or an internal call
+   * with no actor (which keeps behaving exactly as before). Otherwise the
+   * caller's account subtree, plus a cache-key suffix — these reports are
+   * cached, and a cache entry keyed only by the report would hand one
+   * company's figures to the next caller.
+   */
+  private async tenantScope(actor?: Actor): Promise<{ key: string; ids: number[] } | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    const root = await this.scope.rootId(actor);
+    const ids = await this.scope.descendantIds(root);
+    return { key: `t${root}`, ids: ids.length ? ids : [-1] };
+  }
+
+  /**
+   * A ledger line is the caller's when it is about one of their subscribers,
+   * or was posted by one of their accounts (expenses carry no subscriber).
+   * LedgerEntry has no Prisma relations, so this is SQL: a sub-select on the
+   * subscriber owner rather than a list of every subscriber id.
+   */
+  private ledgerScopeSql(ids: number[]): Prisma.Sql {
+    return Prisma.sql`("subscriberId" IN (SELECT s.id FROM "Subscriber" s WHERE s."userId" = ANY(${ids}::int[]))
+      OR "createdBy" = ANY(${ids}::int[]))`;
+  }
+
   /** Per-account totals + net position (cached 30s). */
-  async getLedgerSummary() {
+  async getLedgerSummary(actor?: Actor) {
+    const tenant = await this.tenantScope(actor);
+    if (tenant) {
+      return this.cache.wrap(`accounting:summary:${tenant.key}`, 30, async () => {
+        const grouped = await this.prisma.$queryRaw<
+          Array<{ account: string; currency: string | null; debit: number; credit: number }>
+        >(Prisma.sql`
+          SELECT account, currency,
+                 COALESCE(SUM(debit), 0)::float AS debit,
+                 COALESCE(SUM(credit), 0)::float AS credit
+          FROM "LedgerEntry"
+          WHERE ${this.ledgerScopeSql(tenant.ids)}
+          GROUP BY account, currency`);
+        return grouped.map((g) => ({
+          account: g.account,
+          currency: g.currency || null,
+          debit: Number(g.debit ?? 0),
+          credit: Number(g.credit ?? 0),
+          net: Number(g.debit ?? 0) - Number(g.credit ?? 0),
+        }));
+      });
+    }
     return this.cache.wrap('accounting:summary', 30, async () => {
       /**
        * Grouped by CURRENCY as well as account.
@@ -178,9 +229,11 @@ export class AccountingService {
    * (a bug, a manual DB edit, a partial failure) and the books no longer add up.
    * Report-only; it names the drift so a human can find the cause.
    */
-  async getTrialBalance() {
-    return this.cache.wrap('accounting:trial-balance', 30, async () => {
-      const rows = await this.getLedgerSummary();
+  async getTrialBalance(actor?: Actor) {
+    const tenant = await this.tenantScope(actor);
+    const cacheKey = tenant ? `accounting:trial-balance:${tenant.key}` : 'accounting:trial-balance';
+    return this.cache.wrap(cacheKey, 30, async () => {
+      const rows = await this.getLedgerSummary(actor);
 
       /**
        * A trial balance is PER CURRENCY, always.
@@ -235,14 +288,23 @@ export class AccountingService {
 
       // Also flag any individual ledger row that is itself unbalanced — a single
       // entry that carries both a debit and a credit, or neither, is malformed.
-      const malformed = await this.prisma.ledgerEntry.count({
-        where: {
-          OR: [
-            { debit: { gt: 0 }, credit: { gt: 0 } },
-            { debit: { lte: 0 }, credit: { lte: 0 } },
-          ],
-        },
-      });
+      const malformed = tenant
+        ? Number(
+            (
+              await this.prisma.$queryRaw<Array<{ n: number }>>(Prisma.sql`
+                SELECT COUNT(*)::int AS n FROM "LedgerEntry"
+                WHERE ((debit > 0 AND credit > 0) OR (debit <= 0 AND credit <= 0))
+                  AND ${this.ledgerScopeSql(tenant.ids)}`)
+            )[0]?.n ?? 0,
+          )
+        : await this.prisma.ledgerEntry.count({
+            where: {
+              OR: [
+                { debit: { gt: 0 }, credit: { gt: 0 } },
+                { debit: { lte: 0 }, credit: { lte: 0 } },
+              ],
+            },
+          });
 
       const unbalanced = currencies.filter((c) => !c.balanced);
 
@@ -279,24 +341,32 @@ export class AccountingService {
   // CASHFLOW — payments in vs expenses out, grouped per day
   // ─────────────────────────────────────────────────────────────
 
-  async getCashflow(query: any) {
+  async getCashflow(query: any, actor?: Actor) {
     const days = Math.min(Number(query?.days) || 30, 365);
     const from = new Date();
     from.setDate(from.getDate() - days);
     from.setHours(0, 0, 0, 0);
 
-    const cacheKey = `accounting:cashflow:${days}`;
+    // Money in = payments from the caller's subscribers; money out = expenses
+    // raised by the caller's accounts. Unscoped for the platform owner.
+    const tenant = await this.tenantScope(actor);
+    const payScope = tenant
+      ? Prisma.sql`AND "subscriberId" IN (SELECT s.id FROM "Subscriber" s WHERE s."userId" = ANY(${tenant.ids}::int[]))`
+      : Prisma.empty;
+    const expScope = tenant ? Prisma.sql`AND "createdBy" = ANY(${tenant.ids}::int[])` : Prisma.empty;
+
+    const cacheKey = tenant ? `accounting:cashflow:${days}:${tenant.key}` : `accounting:cashflow:${days}`;
     return this.cache.wrap(cacheKey, 60, async () => {
       const [inflow, outflow] = await Promise.all([
         this.prisma.$queryRaw<Array<{ day: Date; total: number }>>`
           SELECT date_trunc('day', "paymentDate") AS day, COALESCE(SUM(amount), 0)::float AS total
           FROM "Payment"
-          WHERE "paymentDate" >= ${from} AND "refundedAt" IS NULL
+          WHERE "paymentDate" >= ${from} AND "refundedAt" IS NULL ${payScope}
           GROUP BY 1 ORDER BY 1`,
         this.prisma.$queryRaw<Array<{ day: Date; total: number }>>`
           SELECT date_trunc('day', "expenseDate") AS day, COALESCE(SUM(amount), 0)::float AS total
           FROM "Expense"
-          WHERE "expenseDate" >= ${from} AND "status" = 'APPROVED'
+          WHERE "expenseDate" >= ${from} AND "status" = 'APPROVED' ${expScope}
           GROUP BY 1 ORDER BY 1`,
       ]);
 
@@ -326,8 +396,12 @@ export class AccountingService {
   // EXPENSES
   // ─────────────────────────────────────────────────────────────
 
-  async getExpenses(query: any) {
+  async getExpenses(query: any, actor?: Actor) {
     const where: any = {};
+    // An Expense's only owner is who raised it — same rule as the approval
+    // queue (approvalScope). Unscoped for the platform owner.
+    const tenant = await this.tenantScope(actor);
+    if (tenant) where.createdBy = { in: tenant.ids };
     if (query?.category) where.category = query.category;
     if (query?.dateFrom || query?.dateTo) {
       where.expenseDate = {};
@@ -384,9 +458,12 @@ export class AccountingService {
   }
 
   /** Expenses waiting on ISP sign-off. */
-  async listExpenseRequests(status = 'PENDING') {
+  async listExpenseRequests(status = 'PENDING', actor?: Actor) {
+    const ids = actor ? await this.approvalScope(actor) : null;
+    const where: any = status === 'ALL' ? {} : { status };
+    if (ids) where.createdBy = { in: ids };
     return this.prisma.expense.findMany({
-      where: status === 'ALL' ? {} : { status } as any,
+      where,
       orderBy: { createdAt: 'desc' }, take: 100,
     });
   }
@@ -845,6 +922,57 @@ export class AccountingService {
   private async approvalScope(actor?: Actor): Promise<number[] | null> {
     if (this.scope.isAdmin(actor?.role)) return null;   // platform owner: everything
     return this.scope.descendantIds(await this.scope.rootId(actor));
+  }
+
+  // ── Tenancy checks for the money-moving routes ───────────────────────────
+  //
+  // Every one of these routes took an id from the URL and acted on it: any
+  // company could approve, reject or delete another company's expense, top up
+  // another company's customer, reverse its invoice or refund its payment.
+  // "Not found" for anything outside the caller's account.
+
+  /** A row attributed to an account (expense.createdBy, refund.requestedById). */
+  async assertRaisedInScope(actor: Actor | undefined, userId: number | null | undefined, what: string): Promise<void> {
+    if (!actor) return;
+    const ids = await this.approvalScope(actor);
+    if (ids === null) return;
+    if (userId == null || !ids.includes(Number(userId))) throw new NotFoundException(`${what} not found`);
+  }
+
+  async assertExpenseInScope(actor: Actor | undefined, id: number): Promise<void> {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const e = await this.prisma.expense.findUnique({ where: { id }, select: { createdBy: true } });
+    if (!e) throw new NotFoundException('Expense not found');
+    await this.assertRaisedInScope(actor, e.createdBy, 'Expense');
+  }
+
+  async assertSubscriberInScope(actor: Actor | undefined, subscriberId: number): Promise<void> {
+    if (!actor) return;
+    await this.scope.assertSubscriberVisible(actor, subscriberId);
+  }
+
+  async assertPaymentInScope(actor: Actor | undefined, paymentId: number): Promise<void> {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const p = await this.prisma.payment.findUnique({ where: { id: paymentId }, select: { subscriberId: true } });
+    if (!p) throw new NotFoundException('Payment not found');
+    await this.scope.assertViaSubscriber(actor, p.subscriberId, 'Payment');
+  }
+
+  async assertInvoiceInScope(actor: Actor | undefined, invoiceId: number): Promise<void> {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const i = await this.prisma.invoice.findUnique({ where: { id: invoiceId }, select: { subscriberId: true } });
+    if (!i) throw new NotFoundException('Invoice not found');
+    await this.scope.assertViaSubscriber(actor, i.subscriberId, 'Invoice');
+  }
+
+  async assertRefundRequestInScope(actor: Actor | undefined, requestId: number): Promise<void> {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const rr = await this.prisma.refundRequest.findUnique({
+      where: { id: requestId }, select: { requestedById: true, paymentId: true },
+    });
+    if (!rr) throw new NotFoundException('Refund request not found');
+    await this.assertRaisedInScope(actor, rr.requestedById, 'Refund request');
+    await this.assertPaymentInScope(actor, rr.paymentId);
   }
 
   async getPendingApprovals(actor?: Actor) {

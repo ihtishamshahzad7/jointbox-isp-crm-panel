@@ -373,12 +373,17 @@ model NasTrafficSample {
 /// — the subscriber bandwidth graph had nothing to plot for a live PPPoE user.
 /// This append-only sample table (written every 10 minutes for all ONLINE
 /// subscribers in a single INSERT) is what the graph actually draws from.
+/// The table comes from migration 20260907000000 with snake_case columns, and
+/// every raw query (the writer, the per-subscriber rate maths) uses them. The
+/// model lacked the @map, so every Prisma-client read or write of it — the
+/// demo seeder, any future findMany — failed on "column subscriberId does not
+/// exist", and a `prisma db push` would have tried to rebuild the table.
 model SubscriberTrafficSample {
   id           BigInt   @id @default(autoincrement())
-  subscriberId Int
+  subscriberId Int      @map("subscriber_id")
   ts           DateTime @default(now())
-  inBytes      BigInt   @default(0) // cumulative octets FROM subscriber (upload)
-  outBytes     BigInt   @default(0) // cumulative octets TO subscriber (download)
+  inBytes      BigInt   @default(0) @map("in_bytes") // cumulative octets FROM subscriber (upload)
+  outBytes     BigInt   @default(0) @map("out_bytes") // cumulative octets TO subscriber (download)
 
   subscriber Subscriber @relation("SubscriberTrafficSamples", fields: [subscriberId], references: [id], onDelete: Cascade)
 
@@ -645,6 +650,11 @@ model User {
   // after demoExpiresAt (7 days), so nothing it touches leaks or persists.
   isDemo        Boolean   @default(false)
   demoExpiresAt DateTime?
+  /// Set on the first-boot default admin, and on any owner account still using
+  /// the published default password. While true, the API answers every route
+  /// except change-password / profile / logout with 403, so a panel cannot be
+  /// operated on credentials that are printed in our own install script.
+  mustChangePassword Boolean @default(false)
 
   // ── KYC for the account holder (reseller / staff), mirroring Subscriber KYC.
   // Regulators require a verified identity behind every account, not just every
@@ -2362,7 +2372,11 @@ model GatewayTransaction {
 /// {expiry} {invoiceNo} {package} {balance} {dueAmount}
 model MessageTemplate {
   id        Int      @id @default(autoincrement())
-  name      String   @unique
+  /// Unique per company (ownerId), so two ISPs can both have "Welcome (SMS)".
+  name      String
+  /// Company that owns this row: the top-most account of that ISP company.
+  /// NULL = a platform default, shared read-only with every company.
+  ownerId   Int?
   channel   String // SMS | EMAIL
   subject   String? // email only
   body      String
@@ -2371,7 +2385,9 @@ model MessageTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([ownerId, name])
   @@index([event, channel])
+  @@index([ownerId])
 }
 
 /// Every message ever sent — per-subscriber communication log (🔍 feeds the Timeline)
@@ -2911,6 +2927,9 @@ model SubscriberBalanceLedger {
 /// written at session start.
 model ThrottlePolicy {
   id             Int      @id @default(autoincrement())
+  /// Company that owns this row: the top-most account of that ISP company.
+  /// NULL = a platform default, shared read-only with every company.
+  ownerId        Int?
   name           String   @db.VarChar(100)
   description    String?  @db.VarChar(500)
   /// PERCENT | ABSOLUTE_KBPS | BURST_TO_KBPS
@@ -2934,6 +2953,7 @@ model ThrottlePolicy {
   subscribers SubscriberThrottle[]
 
   @@index([isActive])
+  @@index([ownerId])
   @@map("throttle_policy")
 }
 
@@ -2970,6 +2990,9 @@ model SubscriberThrottle {
 /// connection fee", "router installation fee"), taxes are recurring.
 model ExtraFee {
   id          Int      @id @default(autoincrement())
+  /// Company that owns this row: the top-most account of that ISP company.
+  /// NULL = a platform default, shared read-only with every company.
+  ownerId     Int?
   name        String   @db.VarChar(100)
   /// FIXED | PERCENT
   type        String   @default("FIXED") @db.VarChar(20)
@@ -2983,6 +3006,7 @@ model ExtraFee {
   packages ExtraFeePackage[]
 
   @@index([isActive])
+  @@index([ownerId])
   @@map("extra_fee")
 }
 
@@ -3901,6 +3925,9 @@ model PackageSetting {
 /// Taxes and fees that can be attached to packages.
 model PackageTax {
   id          Int      @id @default(autoincrement())
+  /// Company that owns this row: the top-most account of that ISP company.
+  /// NULL = a platform default, shared read-only with every company.
+  ownerId     Int?
   groupName   String   @default("") @db.VarChar(120)
   name        String   @db.VarChar(120)
   /// PERCENTAGE | FIXED
@@ -3912,6 +3939,7 @@ model PackageTax {
   updatedAt   DateTime @updatedAt
 
   @@index([isActive])
+  @@index([ownerId])
   @@map("package_tax")
 }
 
@@ -3965,4 +3993,23 @@ model DeviceHealthMetric {
   @@index([deviceId, metric, ts])
   @@index([deviceId, ts])
   @@map("device_health_metric")
+}
+
+/// Every file stored under /uploads (CNIC scans, photos, identity documents),
+/// with the COMPANY it belongs to. Files used to be served statically to
+/// anyone holding the URL; they are now served only to signed-in staff of the
+/// owning company (the platform owner sees all). Files uploaded before this
+/// table existed have no row and stay readable by any signed-in operator.
+model UploadedFile {
+  id         Int      @id @default(autoincrement())
+  filename   String   @unique @db.VarChar(200)
+  /// Top-most account of the uploader's company (null = the platform owner's).
+  ownerId    Int?
+  uploadedBy Int?
+  mimeType   String?  @db.VarChar(100)
+  size       Int?
+  createdAt  DateTime @default(now())
+
+  @@index([ownerId])
+  @@map("uploaded_file")
 }

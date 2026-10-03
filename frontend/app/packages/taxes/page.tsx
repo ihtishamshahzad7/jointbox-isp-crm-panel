@@ -15,6 +15,14 @@ type Tax = {
   value: string;
   description?: string;
   isActive: boolean;
+  /** PLATFORM = installation default (platform owner edits); COMPANY = this company's own. */
+  scope?: "PLATFORM" | "COMPANY";
+};
+
+const errText = async (res: Response) => {
+  const b = await res.json().catch(() => null);
+  const m = b?.message;
+  return Array.isArray(m) ? m.join(", ") : m || res.statusText;
 };
 
 type Stats = {
@@ -56,6 +64,10 @@ export default function TaxesPage() {
   useEffect(() => {
     setToken(localStorage.getItem("token"));
   }, []);
+
+  const isOwner = useMemo(() => {
+    try { return JSON.parse(atob((token || "").split(".")[1].replace(/-/g, "+").replace(/_/g, "/")))?.role === "SUPER_ADMIN"; } catch { return false; }
+  }, [token]);
 
   const fetcher = useCallback(async (url: string) => {
     const res = await fetch(url, {
@@ -156,10 +168,7 @@ export default function TaxesPage() {
       body: JSON.stringify(form),
     });
 
-    if (!res.ok) {
-      const error = await res.text();
-      return showToast(`Failed to save: ${error}`, "err");
-    }
+    if (!res.ok) return showToast(`Failed to save: ${await errText(res)}`, "err");
 
     setShowModal(false);
     await mutate();
@@ -175,7 +184,7 @@ export default function TaxesPage() {
         Authorization: `Bearer ${token || ""}`,
       },
     });
-    if (!res.ok) return showToast("❌ Delete failed", "err");
+    if (!res.ok) return showToast(`❌ Delete failed: ${await errText(res)}`, "err");
     setDeleteId(null);
     await mutate();
     showToast("🗑️ Tax/Fee deleted", "ok");
@@ -359,17 +368,26 @@ export default function TaxesPage() {
                       </span>
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "#fff" }}>{t.groupName}</td>
-                    <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.8)" }}>{t.name}</td>
+                    <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.8)" }}>
+                      {t.name}
+                      {t.scope === "PLATFORM" && (
+                        <span title="Platform default — available to every company" style={{ marginLeft: "6px", padding: "1px 6px", borderRadius: "10px", fontSize: "9px", fontWeight: "700", background: "rgba(100,64,245,0.15)", color: "#a58bff" }}>DEFAULT</span>
+                      )}
+                    </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px" }}>
                       <span style={{ padding: "4px 12px", borderRadius: "20px", fontSize: "10px", fontWeight: "600", background: typeInfo.bg, color: typeInfo.color }}>{typeInfo.label}</span>
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", fontFamily: "monospace", color: "#10B981" }}>{t.value}</td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "rgba(255,255,255,0.4)" }}>{t.description || "-"}</td>
                     <td style={{ padding: "12px 16px", fontSize: "13px" }}>
+                      {t.scope === "PLATFORM" && !isOwner ? (
+                        <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)" }} title="Only the platform owner edits defaults. Add your own instead.">Read-only</span>
+                      ) : (
                       <div style={{ display: "flex", gap: "6px" }}>
                         <button style={{ padding: "4px 10px", borderRadius: "6px", fontSize: "10px", fontWeight: "600", border: "none", cursor: "pointer", background: "#1e3a8a", color: "#dbeafe" }} onClick={() => openEdit(t)}>Edit</button>
                         <button style={{ padding: "4px 10px", borderRadius: "6px", fontSize: "10px", fontWeight: "600", border: "none", cursor: "pointer", background: "rgba(127,29,29,0.8)", color: "#fecaca" }} onClick={() => setDeleteId(t.id)}>Delete</button>
                       </div>
+                      )}
                     </td>
                   </tr>
                 );

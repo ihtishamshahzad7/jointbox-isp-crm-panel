@@ -63,6 +63,7 @@ describe('StaticIpService', () => {
       assertSubscriber: jest.fn().mockResolvedValue(null),
       actorId: jest.fn().mockReturnValue(9),
       isAdmin: jest.fn().mockReturnValue(true),
+      assertViaSubscriber: jest.fn().mockResolvedValue(undefined),
     };
     const subscribers: any = { syncToRadius: jest.fn().mockResolvedValue({ synced: true }) };
     const network: any = { disconnect: jest.fn() };

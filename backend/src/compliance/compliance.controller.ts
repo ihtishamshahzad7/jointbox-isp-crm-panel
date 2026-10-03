@@ -40,9 +40,12 @@ export class ComplianceController {
     return this.kyc.register(req.user, skip ? Number(skip) : 0);
   }
 
-  /** Check a CNIC's format without saving it. */
+  /**
+   * Check a CNIC's format without saving it. Tenant-free: a pure format
+   * check — no lookup, so it reveals nothing about any company's subscribers.
+   */
   @Get('kyc/validate/:cnic')
-  validateCnic(@Param('cnic') cnic: string) {
+  validateCnic(@Param('cnic') cnic: string, @Req() _req: any) {
     return this.kyc.validate(cnic);
   }
 

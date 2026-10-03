@@ -1,6 +1,7 @@
 import { UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { JwtStrategy } from './jwt.strategy';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { invalidateAllAccountStatus } from './account-status';
 
 /**
  * A SUBSCRIBER PORTAL TOKEN MUST NEVER BE AN OPERATOR TOKEN.
@@ -29,7 +30,24 @@ import { PermissionsGuard } from '../security/permissions.guard';
  * password, take the token, point it at the operator API.
  */
 describe('security: portal tokens are not operator tokens', () => {
-  const strategy = () => new JwtStrategy({ isBlacklisted: () => false } as any);
+  /**
+   * The strategy now asks the database whether the account may act (suspended?
+   * must change password?). An active, unremarkable account by default, so the
+   * scope tests below keep testing scope and nothing else.
+   */
+  const prismaFor = (
+    u: { isActive?: boolean; mustChangePassword?: boolean } | null = {},
+    chainActive = true,
+  ) => ({
+    user: {
+      findUnique: async () =>
+        u ? { isActive: u.isActive ?? true, mustChangePassword: u.mustChangePassword ?? false } : null,
+    },
+    $queryRaw: async () => [{ ok: chainActive }],
+  }) as any;
+  const strategy = (prisma = prismaFor()) => new JwtStrategy({ isBlacklisted: () => false } as any, prisma);
+  // The status cache is per user id and module-level; each test starts cold.
+  beforeEach(() => invalidateAllAccountStatus());
 
   // ── the strategy ─────────────────────────────────────────────────────────
   it('THE FIX: a subscriber-scoped token is refused by the operator strategy', async () => {
@@ -95,5 +113,70 @@ describe('security: portal tokens are not operator tokens', () => {
     const scoped = src.match(/scope:\s*'subscriber'/g) || [];
     expect(signs.length).toBeGreaterThan(0);
     expect(scoped.length).toBe(signs.length);
+  });
+});
+
+/**
+ * SUSPENSION AND FORCED PASSWORD CHANGE.
+ *
+ * Nothing in the auth path used to read isActive: every "suspend" button in the
+ * product changed a column no request consulted, so a suspended account kept
+ * full access on the 7-day token it already held. These pin the strategy —
+ * the one point every operator request passes — to enforcing both.
+ */
+describe('security: account status is enforced on every request', () => {
+  const prismaFor = (
+    u: { isActive?: boolean; mustChangePassword?: boolean } | null = {},
+    chainActive = true,
+  ) => ({
+    user: {
+      findUnique: async () =>
+        u ? { isActive: u.isActive ?? true, mustChangePassword: u.mustChangePassword ?? false } : null,
+    },
+    $queryRaw: async () => [{ ok: chainActive }],
+  }) as any;
+  const strategy = (prisma: any) => new JwtStrategy({ isBlacklisted: () => false } as any, prisma);
+  const req = (url = '/subscribers') => ({ headers: {}, originalUrl: url });
+  const op = { sub: 11, email: 'a@b.c', role: 'ADMIN', name: 'A' };
+
+  beforeEach(() => invalidateAllAccountStatus());
+
+  it('refuses a suspended account holding a still-valid token', async () => {
+    await expect(strategy(prismaFor({ isActive: false })).validate(req(), op))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('refuses an active account whose company (an ancestor) is suspended', async () => {
+    await expect(strategy(prismaFor({}, false)).validate(req(), op))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('refuses a token for an account that no longer exists', async () => {
+    await expect(strategy(prismaFor(null)).validate(req(), op))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('lets the platform owner act-as a suspended company to investigate it', async () => {
+    const user = await strategy(prismaFor({ isActive: false })).validate(req(), { ...op, imp: 1 });
+    expect(user).toMatchObject({ sub: 11 });
+  });
+
+  it('blocks a must-change-password account from the rest of the API', async () => {
+    await expect(strategy(prismaFor({ mustChangePassword: true })).validate(req('/subscribers'), op))
+      .rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it.each(['/auth/change-password', '/auth/profile', '/auth/logout', '/profile', '/api/auth/change-password'])(
+    'but still lets it reach %p',
+    async (url) => {
+      const user = await strategy(prismaFor({ mustChangePassword: true })).validate(req(url), op);
+      expect(user).toMatchObject({ sub: 11, mustChangePassword: true });
+    },
+  );
+
+  it('does not let a look-alike path through the change-password allowance', async () => {
+    await expect(
+      strategy(prismaFor({ mustChangePassword: true })).validate(req('/auth/change-password-and-more'), op),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

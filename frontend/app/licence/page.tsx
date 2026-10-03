@@ -22,6 +22,7 @@ const LABEL: Record<LicenceState, { text: string; tone: "ok" | "warn" | "bad" }>
   HARDWARE_MISMATCH: { text: "Hardware changed", tone: "bad" },
   INVALID: { text: "Invalid", tone: "bad" },
   UNLICENSED: { text: "Not activated", tone: "bad" },
+  SUSPENDED: { text: "Suspended", tone: "bad" },
   TAMPERED: { text: "Verification failed", tone: "bad" },
   UNAVAILABLE: { text: "Agent not running", tone: "warn" },
 };
@@ -183,6 +184,15 @@ export default function LicencePage() {
             />
           )}
           <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 7 }}>
+            {status.usage && typeof status.usage.dealers === "number" && (
+              <>
+                {status.usage.dealers} {status.usage.dealers === 1 ? "dealer account" : "dealer accounts"}
+                {typeof status.usage.companies === "number" && status.usage.companies > 1 && (
+                  <> across {status.usage.companies} companies</>
+                )}
+                {". "}
+              </>
+            )}
             {status.usage
               ? `Counted ${fmt(status.usage.at)}. Press Re-check now to recount.`
               : "Not measured yet — the first count runs shortly after the panel starts."}
@@ -233,6 +243,17 @@ jointbox-licensed -status`}
           If the service does not exist at all, the agent was never installed —
           run <code>scripts/install-licence-agent.sh</code> from the panel
           directory.
+        </Card>
+      )}
+
+      {status.state === "SUSPENDED" && (
+        <Card tone="bad" title="This licence has been suspended">
+          Jointbox has put this licence on hold, so the panel is read-only:
+          existing records can be viewed, exported and collected against, but
+          nothing new can be created. Subscribers stay online — RADIUS is not
+          involved. Once the hold is lifted the panel returns to normal within
+          about 15 minutes on its own; press <strong>Re-check now</strong> to
+          pick it up sooner.
         </Card>
       )}
 

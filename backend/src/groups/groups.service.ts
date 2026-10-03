@@ -38,7 +38,7 @@ export class GroupsService {
 
   async listGroups(query: any, actor: any) {
     const q = (query?.q || '').trim().toLowerCase();
-    return this.prisma.accessGroup.findMany({
+    const rows = await this.prisma.accessGroup.findMany({
       where: {
         AND: [
           q ? { OR: [
@@ -51,6 +51,19 @@ export class GroupsService {
       orderBy: { name: 'asc' },
       include: { _count: { select: { members: true, nasResources: true, pkgResources: true } } },
     });
+    if (!actor || this.scope.isPlatformOwner(actor)) return rows;
+    // Counts are installation-wide; a company sees its own share only.
+    const [uw, nw, pw] = await Promise.all([
+      this.scope.userWhere(actor), this.scope.nasWhere(actor), this.scope.packageWhere(actor),
+    ]);
+    return Promise.all(rows.map(async (g: any) => {
+      const [members, nasResources, pkgResources] = await Promise.all([
+        this.prisma.accessGroupMember.count({ where: { groupId: g.id, user: uw } as any }),
+        this.prisma.accessGroupNas.count({ where: { groupId: g.id, nas: nw } as any }),
+        this.prisma.accessGroupPackage.count({ where: { groupId: g.id, package: pw } as any }),
+      ]);
+      return { ...g, _count: { members, nasResources, pkgResources } };
+    }));
   }
 
   async listOptions() {
@@ -61,19 +74,55 @@ export class GroupsService {
     });
   }
 
-  async getGroup(id: number) {
+  // ────────────────────────────────────────────────────────────────────
+  // TENANCY
+  // ────────────────────────────────────────────────────────────────────
+  //
+  // Groups have no owner column: one set of groups serves the whole
+  // installation, and a group's members can be accounts of ANY company. So:
+  //   • changing what a group holds or who is in it is an installation-wide
+  //     privilege change — platform owner only;
+  //   • reading a group is allowed, but its members / NAS / packages are cut
+  //     down to the ones the caller can already see. Without that, any company
+  //     could list every other company's accounts (names, emails) and routers
+  //     just by walking group ids.
+  // Each filter is null for the platform owner (and for an internal call with
+  // no actor), which keeps their view exactly as it was.
+
+  private async memberFilter(actor?: any): Promise<any | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    return { user: { is: await this.scope.userWhere(actor) } };
+  }
+
+  private async nasFilter(actor?: any): Promise<any | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    return { nas: { is: await this.scope.nasWhere(actor) } };
+  }
+
+  private async packageFilter(actor?: any): Promise<any | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    return { package: { is: await this.scope.packageWhere(actor) } };
+  }
+
+  async getGroup(id: number, actor?: any) {
+    const [member, nas, pkg] = await Promise.all([
+      this.memberFilter(actor), this.nasFilter(actor), this.packageFilter(actor),
+    ]);
     const group = await this.prisma.accessGroup.findUnique({
       where: { id },
       include: {
         members: {
+          ...(member ? { where: member } : {}),
           include: {
             user: { select: { id: true, name: true, email: true, role: true, parentId: true } },
           },
         },
         nasResources: {
+          ...(nas ? { where: nas } : {}),
           include: { nas: { select: { id: true, nasname: true, shortname: true, isActive: true } } },
         },
         pkgResources: {
+          ...(pkg ? { where: pkg } : {}),
           include: { package: { select: { id: true, name: true, price: true, isActive: true } } },
         },
       },
@@ -83,9 +132,10 @@ export class GroupsService {
   }
 
   async createGroup(body: any, actor: any) {
-    if (!this.scope.isAdmin(actor?.role) && actor?.role !== 'ADMIN') {
-      throw new ForbiddenException('Only ISP staff can create access groups.');
-    }
+    // Access groups are ONE set for the whole installation and membership
+    // grants routers and packages, so only the platform owner edits them —
+    // a company ADMIN could otherwise add itself to another company's group.
+    this.scope.assertPlatformOwner(actor);
     if (!body?.name) throw new BadRequestException('name is required');
     const exists = await this.prisma.accessGroup.findUnique({ where: { name: body.name } });
     if (exists) throw new BadRequestException(`Group "${body.name}" already exists`);
@@ -101,9 +151,10 @@ export class GroupsService {
   }
 
   async updateGroup(id: number, body: any, actor: any) {
-    if (!this.scope.isAdmin(actor?.role) && actor?.role !== 'ADMIN') {
-      throw new ForbiddenException('Only ISP staff can update access groups.');
-    }
+    // Access groups are ONE set for the whole installation and membership
+    // grants routers and packages, so only the platform owner edits them —
+    // a company ADMIN could otherwise add itself to another company's group.
+    this.scope.assertPlatformOwner(actor);
     const existing = await this.prisma.accessGroup.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Group ${id} not found`);
     return this.prisma.accessGroup.update({
@@ -119,9 +170,10 @@ export class GroupsService {
   }
 
   async removeGroup(id: number, actor: any) {
-    if (!this.scope.isAdmin(actor?.role) && actor?.role !== 'ADMIN') {
-      throw new ForbiddenException('Only ISP staff can delete access groups.');
-    }
+    // Access groups are ONE set for the whole installation and membership
+    // grants routers and packages, so only the platform owner edits them —
+    // a company ADMIN could otherwise add itself to another company's group.
+    this.scope.assertPlatformOwner(actor);
     const existing = await this.prisma.accessGroup.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Group ${id} not found`);
     // Cascade: members, nas bindings, package bindings all clear automatically.
@@ -133,9 +185,10 @@ export class GroupsService {
   // MEMBERS
   // ────────────────────────────────────────────────────────────────────
 
-  async listMembers(groupId: number) {
+  async listMembers(groupId: number, actor?: any) {
+    const member = await this.memberFilter(actor);
     return this.prisma.accessGroupMember.findMany({
-      where: { groupId },
+      where: member ? { AND: [{ groupId }, member] } : { groupId },
       include: { user: { select: { id: true, name: true, email: true, role: true, parentId: true, isActive: true } } },
       orderBy: { id: 'asc' },
     });
@@ -143,9 +196,10 @@ export class GroupsService {
 
   async addMember(groupId: number, body: any, actor: any) {
     if (!body?.userId) throw new BadRequestException('userId is required');
-    if (!this.scope.isAdmin(actor?.role) && actor?.role !== 'ADMIN') {
-      throw new ForbiddenException('Only ISP staff can manage group members.');
-    }
+    // Access groups are ONE set for the whole installation and membership
+    // grants routers and packages, so only the platform owner edits them —
+    // a company ADMIN could otherwise add itself to another company's group.
+    this.scope.assertPlatformOwner(actor);
     return this.prisma.accessGroupMember.upsert({
       where: { groupId_userId: { groupId, userId: +body.userId } },
       update: { propagate: body.propagate ?? false },
@@ -153,14 +207,16 @@ export class GroupsService {
     });
   }
 
-  async updateMember(groupId: number, userId: number, body: any) {
+  async updateMember(groupId: number, userId: number, body: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     return this.prisma.accessGroupMember.update({
       where: { groupId_userId: { groupId, userId } },
       data: { propagate: body.propagate ?? false },
     });
   }
 
-  async removeMember(groupId: number, userId: number) {
+  async removeMember(groupId: number, userId: number, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     await this.prisma.accessGroupMember.delete({
       where: { groupId_userId: { groupId, userId } },
     });
@@ -171,14 +227,16 @@ export class GroupsService {
   // RESOURCE BINDINGS
   // ────────────────────────────────────────────────────────────────────
 
-  async listNasInGroup(groupId: number) {
+  async listNasInGroup(groupId: number, actor?: any) {
+    const nas = await this.nasFilter(actor);
     return this.prisma.accessGroupNas.findMany({
-      where: { groupId },
+      where: nas ? { AND: [{ groupId }, nas] } : { groupId },
       include: { nas: { select: { id: true, nasname: true, shortname: true, isActive: true, nasIp: true } } },
     });
   }
 
-  async bindNas(groupId: number, body: any) {
+  async bindNas(groupId: number, body: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     if (!body?.nasId) throw new BadRequestException('nasId is required');
     return this.prisma.accessGroupNas.upsert({
       where: { groupId_nasId: { groupId, nasId: +body.nasId } },
@@ -187,21 +245,24 @@ export class GroupsService {
     });
   }
 
-  async unbindNas(groupId: number, nasId: number) {
+  async unbindNas(groupId: number, nasId: number, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     await this.prisma.accessGroupNas.delete({
       where: { groupId_nasId: { groupId, nasId } },
     });
     return { ok: true };
   }
 
-  async listPackagesInGroup(groupId: number) {
+  async listPackagesInGroup(groupId: number, actor?: any) {
+    const pkg = await this.packageFilter(actor);
     return this.prisma.accessGroupPackage.findMany({
-      where: { groupId },
+      where: pkg ? { AND: [{ groupId }, pkg] } : { groupId },
       include: { package: { select: { id: true, name: true, price: true, isActive: true } } },
     });
   }
 
-  async bindPackage(groupId: number, body: any) {
+  async bindPackage(groupId: number, body: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     if (!body?.packageId) throw new BadRequestException('packageId is required');
     return this.prisma.accessGroupPackage.upsert({
       where: { groupId_packageId: { groupId, packageId: +body.packageId } },
@@ -210,7 +271,8 @@ export class GroupsService {
     });
   }
 
-  async unbindPackage(groupId: number, packageId: number) {
+  async unbindPackage(groupId: number, packageId: number, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     await this.prisma.accessGroupPackage.delete({
       where: { groupId_packageId: { groupId, packageId } },
     });

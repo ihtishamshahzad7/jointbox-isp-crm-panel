@@ -1,5 +1,6 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DemoController } from './demo.controller';
+import { DemoService } from './demo.service';
 
 /**
  * THE CAP HAS TO BOUND ROWS, NOT ACCOUNTS.
@@ -20,11 +21,52 @@ import { DemoController } from './demo.controller';
  * The fix is to stop minting accounts by default and share one sandbox, which
  * makes the cost fixed however many visitors arrive. These tests pin that.
  */
+/**
+ * THE SANDBOX IS OPT-IN.
+ *
+ * It used to be on unless DEMO_PUBLIC=0, and install.sh never set it — so every
+ * customer's production panel seeded 10,000 invented subscribers and 500
+ * invented routers into its own database, and carried a login whose password
+ * is printed on our website. These pin the default to OFF.
+ */
+describe('demo: off unless DEMO_PUBLIC=1', () => {
+  const ORIGINAL = process.env.DEMO_PUBLIC;
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.DEMO_PUBLIC;
+    else process.env.DEMO_PUBLIC = ORIGINAL;
+  });
+
+  it.each([undefined, '', '0', 'true', 'yes'])('is off when DEMO_PUBLIC is %p', (v) => {
+    if (v === undefined) delete process.env.DEMO_PUBLIC; else process.env.DEMO_PUBLIC = v;
+    expect(DemoService.enabled()).toBe(false);
+  });
+
+  it('answers 404 to POST /demo/create on a server without the sandbox', async () => {
+    delete process.env.DEMO_PUBLIC;
+    const demo = { publicCredentials: jest.fn(), create: jest.fn(), liveCount: jest.fn() };
+    await expect(new DemoController(demo as any).create('1.2.3.4')).rejects.toBeInstanceOf(NotFoundException);
+    expect(demo.create).not.toHaveBeenCalled();
+    expect(demo.publicCredentials).not.toHaveBeenCalled();
+  });
+
+  it('publishes no credentials at all while off', () => {
+    delete process.env.DEMO_PUBLIC;
+    const res: any = new DemoService({} as any, {} as any, {} as any).publicCredentials();
+    expect(res).toEqual({ enabled: false });
+    expect(JSON.stringify(res)).not.toMatch(/password|email/i);
+  });
+});
+
 describe('demo: bounded sandbox', () => {
+  // These describe the sandbox WHERE IT IS HOSTED, so they switch it on.
   const ORIGINAL = process.env.DEMO_SELF_SERVE;
+  const ORIGINAL_PUBLIC = process.env.DEMO_PUBLIC;
+  beforeEach(() => { process.env.DEMO_PUBLIC = '1'; });
   afterEach(() => {
     if (ORIGINAL === undefined) delete process.env.DEMO_SELF_SERVE;
     else process.env.DEMO_SELF_SERVE = ORIGINAL;
+    if (ORIGINAL_PUBLIC === undefined) delete process.env.DEMO_PUBLIC;
+    else process.env.DEMO_PUBLIC = ORIGINAL_PUBLIC;
   });
 
   const makeDemo = () => ({

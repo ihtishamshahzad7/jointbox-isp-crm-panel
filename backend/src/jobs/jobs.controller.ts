@@ -10,7 +10,7 @@ export class JobsController {
 
   /** Registered job types (for a "run" dropdown in the UI). */
   @Get('types')
-  types() {
+  types(@Request() req: any) {
     return this.jobs.registeredTypes();
   }
 

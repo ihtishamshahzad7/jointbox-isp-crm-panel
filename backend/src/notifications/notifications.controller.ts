@@ -4,6 +4,7 @@ import { AlertsService } from './alerts.service';
 import { NotificationFeedService } from './notification-feed.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('communication')
@@ -12,6 +13,7 @@ export class NotificationsController {
     private readonly notifications: NotificationsService,
     private readonly alerts: AlertsService,
     private readonly feed: NotificationFeedService,
+    private readonly scope: ScopeService,
   ) {}
 
   /**
@@ -23,14 +25,29 @@ export class NotificationsController {
     return this.feed.feed(req.user, since);
   }
 
+  /**
+   * SMS/email gateway state ("configured" / "simulated") is harmless and the
+   * Communication page header shows it to every account. The `alerts` block is
+   * the installation's own alert credentials (masked hints of the webhook URL,
+   * phone and keys) — one set for every company — so only the platform owner
+   * gets it. Tenants get the gateway part alone; the page reads `alerts` with
+   * optional chaining.
+   */
   @Get('status')
-  async status() {
-    return { ...this.notifications.gatewayStatus(), alerts: await this.alerts.status() };
+  async status(@Request() req: any) {
+    const gateway = this.notifications.gatewayStatus();
+    if (!this.scope.isPlatformOwner(req.user)) return gateway;
+    return { ...gateway, alerts: await this.alerts.status() };
   }
 
-  /** Which alert channels are configured (Discord / WhatsApp), masked. */
+  /**
+   * Which alert channels are configured (Discord / WhatsApp), masked.
+   * PLATFORM OWNER ONLY — these are the installation's shared alert
+   * credentials, same as POST alerts/config below.
+   */
   @Get('alerts/status')
-  alertStatus() {
+  alertStatus(@Request() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.alerts.status();
   }
 
@@ -86,9 +103,14 @@ export class NotificationsController {
     return { sent };
   }
 
-  /** Send a test alert so you can confirm the webhook works. */
+  /**
+   * Send a test alert so you can confirm the webhook works. PLATFORM OWNER
+   * ONLY: it fires the installation's single shared channel, not the caller's
+   * own (that is alerts/my-channels/test).
+   */
   @Post('alerts/test')
-  async alertTest() {
+  async alertTest(@Request() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     const r = await this.alerts.send({
       title: '✅ Jointbox test alert',
       message: 'If you can read this, your alert channel is configured correctly.',
@@ -99,30 +121,37 @@ export class NotificationsController {
   }
 
   // ── Templates ─────────────────────────────────────────────────
+  // Templates: platform defaults (edited by the platform owner) plus each
+  // company's own (edited by that company's administrator). A company's own
+  // template for an event replaces the default for its customers — see
+  // NotificationsService.templatesFor().
   @Get('templates')
-  templates() {
-    return this.notifications.getTemplates();
+  templates(@Request() req: any) {
+    return this.notifications.getTemplates(req.user);
   }
 
   @Post('templates')
-  createTemplate(@Body() body: any) {
-    return this.notifications.createTemplate(body);
+  createTemplate(@Body() body: any, @Request() req: any) {
+    return this.notifications.createTemplate(body, req.user);
   }
 
   @Put('templates/:id')
-  updateTemplate(@Param('id') id: string, @Body() body: any) {
-    return this.notifications.updateTemplate(+id, body);
+  updateTemplate(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    return this.notifications.updateTemplate(+id, body, req.user);
   }
 
   @Delete('templates/:id')
-  deleteTemplate(@Param('id') id: string) {
-    return this.notifications.deleteTemplate(+id);
+  deleteTemplate(@Param('id') id: string, @Request() req: any) {
+    return this.notifications.deleteTemplate(+id, req.user);
   }
 
   // ── Sending ───────────────────────────────────────────────────
   @Post('send')
   bulkSend(@Body() body: any, @Request() req: any) {
-    return this.notifications.bulkSend({ ...body, createdBy: req.user?.sub });
+    // The actor decides the AUDIENCE: a company's bulk SMS reaches its own
+    // customers only. Before this, "send to all" texted every company's
+    // customers on the installation.
+    return this.notifications.bulkSend({ ...body, createdBy: req.user?.sub, actor: req.user });
   }
 
   @Post('test')
@@ -140,13 +169,14 @@ export class NotificationsController {
     return this.notifications.getLatestNotice(req.user);
   }
   // ── Log ───────────────────────────────────────────────────────
+  /** Scoped by the service to the caller's subscribers (and its own test sends). */
   @Get('messages')
-  messages(@Query() query: any) {
-    return this.notifications.getMessages(query);
+  messages(@Query() query: any, @Request() req: any) {
+    return this.notifications.getMessages(query, req.user);
   }
 
   @Post('messages/:id/retry')
-  retry(@Param('id') id: string) {
-    return this.notifications.retryMessage(+id);
+  retry(@Param('id') id: string, @Request() req: any) {
+    return this.notifications.retryMessage(+id, req.user);
   }
 }

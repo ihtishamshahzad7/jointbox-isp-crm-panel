@@ -329,12 +329,19 @@ export class NasMonitorService {
    * few seconds apart on the same cron tick. Downsampling is automatic: the
    * bucket size grows with the range (5m / 1h / 6h), so 30 days stays a
    * handful of points instead of tens of thousands.
+   *
+   * `nasIds` narrows the sum to those routers — a tenant's own, from
+   * TelemetryService.visibleNasIds(). Null/omitted keeps the whole-installation
+   * series (platform owner, internal callers). The ids travel as a bound
+   * parameter, never as SQL text.
    */
-  async networkTraffic(range = '1h'): Promise<{
+  async networkTraffic(range = '1h', nasIds?: number[] | null): Promise<{
     range: string;
     points: Array<{ ts: Date; inBps: number; outBps: number; online: number }>;
     peakIn: number; peakOut: number; peakOnline: number; samples: number;
   }> {
+    const ids = Array.isArray(nasIds) ? nasIds : null;
+    if (ids && !ids.length) return { range, points: [], peakIn: 0, peakOut: 0, peakOnline: 0, samples: 0 };
     const { since, bucketSec } = this.rangeToInterval(range);
     // Align buckets to the epoch floor of bucketSec so consecutive queries
     // produce identical buckets (no drift from a moving window).
@@ -347,13 +354,13 @@ export class NasMonitorService {
         SELECT date_trunc('second', to_timestamp(
                  floor(EXTRACT(EPOCH FROM ts) / ${bucketSec}) * ${bucketSec}
                )) AS bucket,
-               SUM(in_bytes)::bigint AS inb,
-               SUM(out_bytes)::bigint AS outb
+               SUM("inBytes")::bigint AS inb,
+               SUM("outBytes")::bigint AS outb
           FROM nas_traffic_sample
-         WHERE vlan IS NULL AND ts >= $1::timestamptz
+         WHERE vlan IS NULL AND ts >= $1::timestamptz${ids ? ' AND "nasId" = ANY($2::int[])' : ''}
          GROUP BY 1
          ORDER BY 1 ASC`,
-        startIso,
+        ...(ids ? [startIso, ids] : [startIso]),
       );
 
       const points: Array<{ ts: Date; inBps: number; outBps: number; online: number }> = [];
@@ -390,8 +397,15 @@ export class NasMonitorService {
    * A subscriber with a single sample (session just started) is included at
    * zero. Returns download and upload directions separately; sort is by total
    * (down+up) descending.
+   *
+   * `ownerIds` limits the ranking to subscribers owned by those accounts — the
+   * caller's subtree (ScopeService.visibleUserIds), the same ownership rule as
+   * subscriberWhere(). Null/omitted ranks the whole installation (platform
+   * owner). Bound as a parameter.
    */
-  async topSubscribers(limit = 8) {
+  async topSubscribers(limit = 8, ownerIds?: number[] | null) {
+    const ids = Array.isArray(ownerIds) ? ownerIds : null;
+    if (ids && !ids.length) return [];
     try {
       const cap = Math.min(Math.max(limit, 1), 25);
       const rows = await this.prisma.$queryRawUnsafe<Array<{
@@ -402,8 +416,14 @@ export class NasMonitorService {
           SELECT s."subscriber_id", s."ts", s."in_bytes", s."out_bytes",
                  ROW_NUMBER() OVER (PARTITION BY s."subscriber_id" ORDER BY s."ts" DESC) AS rn
             FROM subscriber_traffic_sample s
+            ${ids ? 'WHERE s."subscriber_id" IN (SELECT id FROM "Subscriber" WHERE "userId" = ANY($1::int[]))' : ''}
         ),
         latest AS (SELECT * FROM ranked WHERE rn <= 2)
+        -- Wrapped so ORDER BY can add the two rates: PostgreSQL accepts an
+        -- output alias in ORDER BY only on its own, never inside an
+        -- expression, so "(in_bps + out_bps)" failed with "column in_bps does
+        -- not exist" and Top talkers was always empty.
+        SELECT * FROM (
         SELECT l."subscriber_id",
                COALESCE(sub."fullName", sub."username") AS full_name,
                sub."username",
@@ -425,8 +445,9 @@ export class NasMonitorService {
           LEFT JOIN (SELECT * FROM latest WHERE rn = 2) prev
                  ON prev."subscriber_id" = l."subscriber_id"
           JOIN "Subscriber" sub ON sub.id = l."subscriber_id"
-         ORDER BY (in_bps + out_bps) DESC
-         LIMIT ${cap}`);
+        ) t
+         ORDER BY (t.in_bps + t.out_bps) DESC
+         LIMIT ${cap}`, ...(ids ? [ids] : []));
       return rows.map((r) => ({
         subscriberId: Number(r.subscriber_id),
         name: r.full_name || r.username,
@@ -443,18 +464,34 @@ export class NasMonitorService {
   /**
    * Health of every NAS on one screen: online count, current in/out bit-rate
    * (from the two latest samples), and whether it's reporting (fresh sample).
+   *
+   * `nasIds` narrows the board to those routers — a tenant's own, from
+   * TelemetryService.visibleNasIds(). Null/omitted is every router on the
+   * installation (platform owner, internal callers).
    */
-  async healthOverview() {
+  async healthOverview(nasIds?: number[] | null) {
+    const ids = Array.isArray(nasIds) ? nasIds : null;
+    if (ids && !ids.length) return { nas: [] };
     const nases = await this.prisma.nas.findMany({
       // This is the NOC's "NAS / Router health" panel. Unfiltered it read
       // "488/488 reporting" over a page of invented routers, with the ISP's
       // one real device lost among them.
-      where: { AND: [{ isActive: true }, NON_DEMO_OWNED] },
+      //
+      // A tenant's id list already comes from nasWhere(), which settles demo
+      // visibility for tenants itself (the sandbox account must see its own
+      // routers), so the demo-owner rule is the platform owner's alone.
+      where: ids
+        ? { AND: [{ isActive: true }, { id: { in: ids } }] }
+        : { AND: [{ isActive: true }, NON_DEMO_OWNED] },
       select: { id: true, nasname: true, nasIp: true, shortname: true },
     });
     // Last ~20 min of whole-NAS samples for every NAS, newest last.
     const samples = await this.prisma.nasTrafficSample.findMany({
-      where: { vlan: null, ts: { gte: new Date(Date.now() - 20 * 60_000) } },
+      where: {
+        vlan: null,
+        ts: { gte: new Date(Date.now() - 20 * 60_000) },
+        ...(ids ? { nasId: { in: ids } } : {}),
+      },
       orderBy: { ts: 'asc' },
       select: { nasId: true, ts: true, inBytes: true, outBytes: true, online: true },
     });

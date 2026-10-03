@@ -139,8 +139,10 @@ describe('demo: RADIUS exposure', () => {
     delete process.env.CRON_DISABLED;
     delete process.env.JOINTBOX_ROLE;
     process.env.NODE_APP_INSTANCE = '0';
+    process.env.DEMO_PUBLIC = '1'; // the sandbox is opt-in; this server hosts it
 
     await new DemoRepairService(prisma, {} as any).refreshDemoSessions();
+    delete process.env.DEMO_PUBLIC;
     const sql: string = prisma.$executeRawUnsafe.mock.calls[0][0];
 
     expect(sql).toMatch(/UPDATE radacct/);
@@ -152,7 +154,11 @@ describe('demo: RADIUS exposure', () => {
   it('runs on one worker only — twelve would fight over the same rows', async () => {
     const { prisma } = recordingPrisma();
     process.env.NODE_APP_INSTANCE = '5';
+    // Sandbox ON, so this tests the worker gate rather than passing trivially
+    // because the sandbox is off.
+    process.env.DEMO_PUBLIC = '1';
     await new DemoRepairService(prisma, {} as any).refreshDemoSessions();
+    delete process.env.DEMO_PUBLIC;
     expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     process.env.NODE_APP_INSTANCE = '0';
   });
@@ -164,5 +170,13 @@ describe('demo: RADIUS exposure', () => {
     await new DemoRepairService(prisma, {} as any).refreshDemoSessions();
     expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     delete process.env.DEMO_PUBLIC;
+  });
+
+  it('does nothing when DEMO_PUBLIC is simply unset — the default', async () => {
+    const { prisma } = recordingPrisma();
+    process.env.NODE_APP_INSTANCE = '0';
+    delete process.env.DEMO_PUBLIC;
+    await new DemoRepairService(prisma, {} as any).refreshDemoSessions();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildCursorPage, parseCursor } from '../common/pagination';
 import { AccountingService } from '../accounting/accounting.service';
@@ -114,7 +114,10 @@ export class InvoicesService {
     return inv;
   }
 
-  async findBySubscriber(subscriberId: number) {
+  async findBySubscriber(subscriberId: number, actor?: Actor) {
+    // A customer's whole billing history, addressed by their id — check the
+    // customer is the caller's before listing it.
+    if (actor) await this.scope.assertSubscriberVisible(actor, subscriberId);
     return this.prisma.invoice.findMany({
       where: { subscriberId },
       include: {
@@ -309,7 +312,11 @@ export class InvoicesService {
     }
   }
 
-  async create(data: any) {
+  async create(data: any, actor?: Actor) {
+    // Billing someone else's customer is still a cross-company write: the
+    // subscriber in the body must be the caller's. No subscriber = an
+    // installation-level invoice, which only the platform owner may raise.
+    if (actor) await this.scope.assertViaSubscriber(actor, data?.subscriberId, 'Subscriber');
     const invoiceNo = await this.generateInvoiceNo();
     const total     = data.amount + (data.tax || 0) - (data.discount || 0);
 
@@ -358,12 +365,14 @@ export class InvoicesService {
    * Generate printable HTML invoice page.
    * The user can print → Save as PDF from the browser.
    */
-  async getInvoicePdf(id: number) {
+  async getInvoicePdf(id: number, actor?: Actor) {
     const invoice = await this.prisma.invoice.findUnique({
       where: { id },
       include: { items: true, payments: true, subscriber: { include: { package: true } } },
     });
-    if (!invoice) throw new Error('Invoice not found');
+    // NotFound for both "missing" and "not yours", so ids cannot be probed.
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    if (actor) await this.scope.assertViaSubscriber(actor, invoice.subscriberId, 'Invoice');
 
     return renderInvoiceHtml({
       invoiceNo: invoice.invoiceNo,
@@ -398,9 +407,29 @@ export class InvoicesService {
     });
   }
 
-  async recordPayment(invoiceId: number, data: any) {
+  /**
+   * WHO RECEIVED THE MONEY is the signed-in caller — or, when the caller is
+   * recording cash a colleague collected, an account inside the caller's own
+   * tree. It used to be whatever the request body said, so collections could
+   * be booked against any user on the installation (and appear in another
+   * company's collections-by-staff report).
+   */
+  private async receivedByFor(actor: Actor | undefined, requested: any): Promise<number | undefined> {
+    if (!actor) return requested != null && requested !== '' ? Number(requested) : undefined;
+    if (requested != null && requested !== '') {
+      await this.scope.assertUser(actor, Number(requested));
+      return Number(requested);
+    }
+    return this.scope.actorId(actor);
+  }
+
+  async recordPayment(invoiceId: number, data: any, actor?: Actor) {
     const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId } });
-    if (!invoice) throw new Error('Invoice not found');
+    // NotFound for both "missing" and "not yours", so ids cannot be probed.
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    // The invoice's subscriber decides who may put money against it. The
+    // gateway callback calls this with no actor and is unaffected.
+    if (actor) await this.scope.assertViaSubscriber(actor, invoice.subscriberId, 'Invoice');
 
     // Same period-lock guard as the direct payment path — no backdating a
     // payment into a closed month through the invoice screen either.
@@ -432,6 +461,7 @@ export class InvoicesService {
     if (newPaidAmount >= invoice.total) status = 'PAID';
 
     const paymentNo = `PAY-${Date.now()}`;
+    const receivedBy = await this.receivedByFor(actor, data.receivedBy);
 
     const payment = await this.prisma.payment.create({
       data: {
@@ -443,12 +473,12 @@ export class InvoicesService {
         method:       data.method,
         referenceNo:  data.referenceNo,
         notes:        data.notes,
-        receivedBy:   data.receivedBy,
+        receivedBy,
       },
     });
 
     // Phase 1: double-entry posting (Cash ↔ AR)
-    await this.accounting.postPaymentReceived(payment, data.receivedBy);
+    await this.accounting.postPaymentReceived(payment, receivedBy);
 
     // Phase 4B: reseller commission chain
     void this.organization.distributeCommission(payment);

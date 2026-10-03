@@ -18,18 +18,19 @@ export class ThrottlePoliciesController {
   constructor(private readonly svc: ThrottlePoliciesService) {}
 
   @Get()
-  list(@Query() query: any) {
-    return this.svc.list(query);
+  list(@Query() query: any, @Req() req: any) {
+    return this.svc.list(query, req.user);
   }
 
+  // Shared installation config (policy names/windows only): tenant-free.
   @Get('options')
-  options() {
-    return this.svc.options();
+  options(@Req() req: any) {
+    return this.svc.options(req.user);
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.svc.get(+id);
+  get(@Param('id') id: string, @Req() req: any) {
+    return this.svc.get(+id, req.user);
   }
 
   @Post()
@@ -50,24 +51,24 @@ export class ThrottlePoliciesController {
   // ─── Package bindings ────────────────────────────────────────────────
 
   @Post(':id/packages')
-  attachToPackage(@Param('id') id: string, @Body() body: any) {
-    return this.svc.attachToPackage(+id, body);
+  attachToPackage(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.svc.attachToPackage(+id, body, req.user);
   }
 
   @Delete(':id/packages/:pkgId')
-  detachFromPackage(@Param('id') id: string, @Param('pkgId') pkgId: string) {
-    return this.svc.detachFromPackage(+id, +pkgId);
+  detachFromPackage(@Param('id') id: string, @Param('pkgId') pkgId: string, @Req() req: any) {
+    return this.svc.detachFromPackage(+id, +pkgId, req.user);
   }
 
   // ─── Subscriber overrides ───────────────────────────────────────────
 
   @Post(':id/subscribers')
-  attachToSubscriber(@Param('id') id: string, @Body() body: any) {
-    return this.svc.attachToSubscriber(+id, body);
+  attachToSubscriber(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.svc.attachToSubscriber(+id, body, req.user);
   }
 
   @Delete(':id/subscribers/:subId')
-  detachFromSubscriber(@Param('id') id: string, @Param('subId') subId: string) {
-    return this.svc.detachFromSubscriber(+id, +subId);
+  detachFromSubscriber(@Param('id') id: string, @Param('subId') subId: string, @Req() req: any) {
+    return this.svc.detachFromSubscriber(+id, +subId, req.user);
   }
 }

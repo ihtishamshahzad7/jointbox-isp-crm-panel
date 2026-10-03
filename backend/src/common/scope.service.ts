@@ -65,6 +65,26 @@ const ADMIN_ROLES = ['SUPER_ADMIN'];
 export const DEMO_NAS_SERVER = 'demo-radius';
 
 /**
+ * The subscriber equivalent: every seeded demo subscriber has an email at
+ * `.invalid`, a TLD reserved by RFC 2606 so that it can never belong to a real
+ * customer. Same purpose as DEMO_NAS_SERVER — exclusion that survives the
+ * owner's isDemo flag going missing.
+ */
+export const DEMO_SUBSCRIBER_EMAIL_SUFFIX = '@example.invalid';
+
+/**
+ * Real subscribers only, for INSTALLATION-WIDE counts (licensing). Owner rule
+ * AND row marker, with the NULL cases kept explicitly — an ownerless or
+ * emailless subscriber is a real one.
+ */
+export const NON_DEMO_SUBSCRIBER: { AND: Array<Record<string, unknown>> } = {
+  AND: [
+    { OR: [{ userId: null }, { user: { is: { isDemo: false } } }] },
+    { OR: [{ email: null }, { email: { not: { endsWith: DEMO_SUBSCRIBER_EMAIL_SUFFIX } } }] },
+  ],
+};
+
+/**
  * Keep rows WITHOUT the marker. Spelled as an explicit OR because `server` is
  * nullable, and `{ server: { not: X } }` compiles to SQL `server <> X`, which
  * is NULL — i.e. false — for every row whose server is NULL. The obvious
@@ -568,5 +588,175 @@ export class ScopeService {
     if (!(await this.canAccessUser(actor, targetUserId))) {
       throw new ForbiddenException('This account is outside your hierarchy.');
     }
+  }
+
+  // ── Route-level tenancy checks ──────────────────────────────────────────
+  //
+  // Every cross-company leak found so far had the same shape: a handler that
+  // takes an id from the URL and never asks whose it is. These are the checks
+  // such a handler makes BEFORE touching the record. All of them answer
+  // "not found" for something outside the caller's account, never
+  // "forbidden", so ids cannot be enumerated across companies.
+
+  /** The installation owner (SUPER_ADMIN). */
+  isPlatformOwner(actor: Actor): boolean {
+    return actor?.role === 'SUPER_ADMIN';
+  }
+
+  /**
+   * Installation-wide settings and operations: anything that is one row for
+   * the whole server, so changing it changes it for every company on it.
+   */
+  assertPlatformOwner(actor: Actor): void {
+    if (!this.isPlatformOwner(actor)) {
+      throw new ForbiddenException(
+        'This is an installation-wide setting. Only the platform owner can change it.',
+      );
+    }
+  }
+
+  /**
+   * A record that belongs to a subscriber (invoice, payment, ticket, boost,
+   * message…). A record with NO subscriber is installation-level, so only the
+   * platform owner may reach it.
+   */
+  async assertViaSubscriber(
+    actor: Actor,
+    subscriberId: number | null | undefined,
+    what = 'Record',
+  ): Promise<void> {
+    if (this.isAdmin(actor?.role)) return;
+    if (subscriberId == null || !(await this.canAccessSubscriber(actor, Number(subscriberId)))) {
+      throw new NotFoundException(`${what} not found`);
+    }
+  }
+
+  /** Subscriber addressed by id — the not-found flavour of assertSubscriber. */
+  async assertSubscriberVisible(actor: Actor, subscriberId: number): Promise<void> {
+    await this.assertViaSubscriber(actor, subscriberId, 'Subscriber');
+  }
+
+  /**
+   * Subscriber addressed by RADIUS username. A username with no subscriber
+   * row (an orphan left in radcheck) is reachable by the platform owner only:
+   * nobody else can be shown to own it.
+   */
+  async assertSubscriberUsername(actor: Actor, username: string): Promise<void> {
+    if (this.isAdmin(actor?.role)) return;
+    const sub = await this.prisma.subscriber.findFirst({
+      where: { username: String(username ?? '') },
+      select: { id: true },
+    });
+    await this.assertViaSubscriber(actor, sub?.id, 'Subscriber');
+  }
+
+  /** A package the caller may see (own, assigned, or — for the owner — any). */
+  async assertPackage(actor: Actor, packageId: number): Promise<void> {
+    if (this.isAdmin(actor?.role)) return;
+    const where = await this.packageWhere(actor);
+    const hit = await this.prisma.package.findFirst({
+      where: { AND: [{ id: Number(packageId) }, where] },
+      select: { id: true },
+    });
+    if (!hit) throw new NotFoundException(`Package ${packageId} not found`);
+  }
+
+  /**
+   * A row keyed purely by ownerId (areas, pools, monitor targets…): the
+   * caller's subtree, or anything for the platform owner. ownerId null is an
+   * installation-level row.
+   */
+  async assertOwnerInScope(actor: Actor, ownerId: number | null | undefined, what = 'Record'): Promise<void> {
+    if (this.isAdmin(actor?.role)) return;
+    if (ownerId == null) throw new NotFoundException(`${what} not found`);
+    const ids = await this.descendantIds(await this.rootId(actor));
+    if (!ids.includes(Number(ownerId))) throw new NotFoundException(`${what} not found`);
+  }
+
+  /**
+   * The top-most account of a user's COMPANY: walk up the tree and stop
+   * below the platform owner. Null for the platform owner itself (and for an
+   * unknown id). Two users are in the same company exactly when this is equal.
+   */
+  async companyRootId(userId: number): Promise<number | null> {
+    if (!userId || Number.isNaN(Number(userId))) return null;
+    const chain = await this.ancestorIds(Number(userId)); // [self, parent, …, top]
+    if (!chain.length) return null;
+    const rows = await this.prisma.user.findMany({
+      where: { id: { in: chain } },
+      select: { id: true, role: true },
+    });
+    const roleOf = new Map(rows.map((r) => [Number(r.id), String(r.role)]));
+    let root: number | null = null;
+    for (const id of chain) {
+      if (roleOf.get(id) === 'SUPER_ADMIN') break;
+      root = id;
+    }
+    return root;
+  }
+
+  // ── Company-owned configuration ─────────────────────────────────────────
+  //
+  // Templates, taxes, fees and throttle policies come in two kinds: platform
+  // defaults (ownerId NULL), which every company reads and only the platform
+  // owner edits, and a company's own rows (ownerId = its top-most account),
+  // which only that company sees and only its top level edits.
+
+  /** Rows the caller may read: platform defaults plus its own company's. */
+  async configReadWhere(actor: Actor): Promise<any> {
+    if (this.isPlatformOwner(actor)) return {};
+    const company = await this.companyRootId(this.actorId(actor));
+    return company == null ? { ownerId: null } : { OR: [{ ownerId: null }, { ownerId: company }] };
+  }
+
+  /**
+   * Owner for a row this caller creates: NULL (a platform default) for the
+   * platform owner, the company for the company's own top level (its ADMIN,
+   * or that ADMIN's staff). A franchise or dealer may not set its whole
+   * company's templates or taxes.
+   */
+  async configOwnerForCreate(actor: Actor): Promise<number | null> {
+    if (this.isPlatformOwner(actor)) return null;
+    const company = await this.companyRootId(this.actorId(actor));
+    if (company == null || (await this.rootId(actor)) !== company) {
+      throw new ForbiddenException('Only your company administrator can change company-wide settings.');
+    }
+    return company;
+  }
+
+  /** May this caller change (or delete) this row? Same rule as creating. */
+  async assertConfigWritable(actor: Actor, row: { ownerId: number | null } | null, what = 'Setting'): Promise<void> {
+    if (!row) throw new NotFoundException(`${what} not found`);
+    if (this.isPlatformOwner(actor)) return;
+    const company = await this.companyRootId(this.actorId(actor));
+    if (row.ownerId == null) {
+      throw new ForbiddenException(
+        `${what} is a platform default. Create your own instead — yours will be used for your customers.`,
+      );
+    }
+    if (company == null || row.ownerId !== company) throw new NotFoundException(`${what} not found`);
+    await this.configOwnerForCreate(actor); // company top level only
+  }
+
+  /** Readable by this caller? (platform default, or its company's own.) */
+  async assertConfigReadable(actor: Actor, row: { ownerId: number | null } | null, what = 'Setting'): Promise<void> {
+    if (!row) throw new NotFoundException(`${what} not found`);
+    if (this.isPlatformOwner(actor) || row.ownerId == null) return;
+    const company = await this.companyRootId(this.actorId(actor));
+    if (company == null || row.ownerId !== company) throw new NotFoundException(`${what} not found`);
+  }
+
+  /** Subscriber ids the caller may see, or null meaning "all" (platform owner). */
+  async visibleSubscriberIds(actor: Actor): Promise<number[] | null> {
+    if (this.isAdmin(actor?.role)) return null;
+    const where = await this.subscriberWhere(actor);
+    const rows = await this.prisma.subscriber.findMany({ where, select: { id: true } });
+    return rows.map((r) => r.id);
+  }
+
+  /** Account ids in the caller's subtree, or null meaning "all". */
+  async visibleUserIds(actor: Actor): Promise<number[] | null> {
+    if (this.isAdmin(actor?.role)) return null;
+    return this.descendantIds(await this.rootId(actor));
   }
 }

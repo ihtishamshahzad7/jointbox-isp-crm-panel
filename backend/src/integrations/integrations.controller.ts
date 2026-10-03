@@ -22,7 +22,7 @@ export class IntegrationsController {
   // ── Webhooks ────────────────────────────────────────────────
   /** The list of events an endpoint can subscribe to. */
   @Get('webhooks/events')
-  events() {
+  events(@Req() req: any) {
     return { events: WEBHOOK_EVENTS };
   }
 

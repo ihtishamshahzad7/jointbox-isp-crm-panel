@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
 import { CurrencyService } from '../common/currency.service';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Payment Gateways
@@ -20,6 +21,7 @@ export class PaymentGatewaysService {
   constructor(
     private prisma: PrismaService,
     private currency: CurrencyService,
+    private scope: ScopeService,
   ) {}
 
   // ─── PUBLIC ──────────────────────────────────────────────────────────
@@ -159,20 +161,36 @@ export class PaymentGatewaysService {
    * Payment row.
    */
   async handleWebhook(provider: string, body: any, req: any) {
-    const providerKey = provider.toUpperCase();
-    // Signature check — per provider. For sandbox/unsupported providers we
-    // accept the call but log a warning so devs can wire it up.
-    const verified = await this.verifySignature(providerKey, body, req);
-    if (!verified.ok) {
-      return { ok: false, reason: verified.reason };
-    }
-    const reference = body?.reference || body?.orderRefNum || body?.BillReference;
+    const providerKey = String(provider || '').toUpperCase();
+    const reference =
+      body?.reference || body?.orderRefNum || body?.BillReference || body?.pp_BillReference;
     if (!reference) return { ok: false, reason: 'missing reference' };
 
     const tx = await this.prisma.paymentTransaction.findUnique({
-      where: { reference }, include: { gateway: true },
+      where: { reference: String(reference) }, include: { gateway: true },
     });
     if (!tx) return { ok: false, reason: 'unknown reference' };
+
+    /**
+     * NOTHING CHANGES UNTIL THE CALLBACK IS PROVEN TO COME FROM THE GATEWAY.
+     *
+     * This endpoint is public, and `verifySignature` used to answer ok for
+     * every request. Together with the public checkout that meant anyone could
+     * create a PENDING transaction for any invoice and then post
+     * `{reference, status: "SUCCESS"}` here — and the invoice was marked PAID,
+     * with a Payment row, without a rupee changing hands.
+     *
+     * The transaction's OWN gateway decides how it is verified, never the
+     * provider named in the URL, so a JazzCash payment cannot be "confirmed"
+     * through a laxer path.
+     */
+    if (String(tx.gateway?.provider || '').toUpperCase() !== providerKey) {
+      return { ok: false, reason: 'provider does not match this transaction' };
+    }
+    const verified = await this.verifySignature(providerKey, body, req, tx);
+    if (!verified.ok) {
+      return { ok: false, reason: verified.reason };
+    }
     if (tx.status === 'SUCCESS' || tx.status === 'REFUNDED') {
       // Idempotent: same callback fired twice.
       return { ok: true, status: tx.status };
@@ -234,14 +252,68 @@ export class PaymentGatewaysService {
     return { ok: true, status: newStatus, transactionId: updated.id };
   }
 
-  private async verifySignature(provider: string, body: any, req: any): Promise<{ ok: boolean; reason?: string }> {
-    // Real implementation: look up the gateway config for the provider, check
-    // HMAC of the body against the configured secret. For now we accept all
-    // callbacks in development so the rest of the system is testable.
-    if (process.env.NODE_ENV === 'production') {
-      // TODO: implement per-provider signature checks
+  /**
+   * Proves a callback came from the gateway. FAILS CLOSED: a provider with no
+   * verification configured is refused, never waved through.
+   *
+   *   JAZZCASH  pp_SecureHash — HMAC-SHA256, keyed with the integrity salt,
+   *             over the salt and every non-empty pp_ field in key order,
+   *             joined with '&' (JazzCash's documented scheme). The signed
+   *             pp_Amount must also equal the amount this transaction was
+   *             opened for, in paisa.
+   *   others    a shared `webhookSecret` in the gateway's secretConfig:
+   *             X-Signature / X-Webhook-Signature = hex HMAC-SHA256 of the raw
+   *             request body.
+   *
+   * Local testing only: PAYMENT_WEBHOOK_INSECURE=1 with NODE_ENV not
+   * 'production' skips the check, loudly.
+   */
+  private async verifySignature(
+    provider: string,
+    body: any,
+    req: any,
+    tx: any,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    if (process.env.PAYMENT_WEBHOOK_INSECURE === '1' && process.env.NODE_ENV !== 'production') {
+      console.warn(`⚠️  payment webhook for ${provider} accepted WITHOUT verification (PAYMENT_WEBHOOK_INSECURE=1)`);
+      return { ok: true };
     }
-    return { ok: true };
+    const secret = ((tx?.gateway?.secretConfig ?? {}) as Record<string, any>) || {};
+    const equal = (a: string, b: string) => {
+      const x = Buffer.from(String(a || '').toLowerCase());
+      const y = Buffer.from(String(b || '').toLowerCase());
+      return x.length > 0 && x.length === y.length && crypto.timingSafeEqual(x, y);
+    };
+
+    if (provider === 'JAZZCASH') {
+      const salt = String(secret.integritySalt || secret.salt || '');
+      if (!salt) return { ok: false, reason: 'JazzCash integrity salt is not configured' };
+      const given = String(body?.pp_SecureHash || '');
+      const keys = Object.keys(body || {})
+        .filter((k) => /^pp_/i.test(k) && k !== 'pp_SecureHash')
+        .filter((k) => body[k] !== '' && body[k] != null)
+        .sort();
+      const material = [salt, ...keys.map((k) => String(body[k]))].join('&');
+      const expected = crypto.createHmac('sha256', salt).update(material).digest('hex');
+      if (!equal(given, expected)) return { ok: false, reason: 'bad signature' };
+      const paisa = Math.round(Number(tx?.amount || 0) * 100);
+      if (body?.pp_Amount != null && Number(body.pp_Amount) !== paisa) {
+        return { ok: false, reason: 'amount does not match the transaction' };
+      }
+      return { ok: true };
+    }
+
+    const whsec = String(secret.webhookSecret || '');
+    if (!whsec) {
+      return { ok: false, reason: `webhook verification is not configured for ${provider}` };
+    }
+    const raw: string = req?.rawBody ? req.rawBody.toString('utf8') : '';
+    if (!raw) return { ok: false, reason: 'raw body unavailable' };
+    const given = String(
+      req?.headers?.['x-signature'] || req?.headers?.['x-webhook-signature'] || '',
+    ).replace(/^sha256=/i, '');
+    const expected = crypto.createHmac('sha256', whsec).update(raw).digest('hex');
+    return equal(given, expected) ? { ok: true } : { ok: false, reason: 'bad signature' };
   }
 
   private isSuccessStatus(provider: string, body: any, tx: any): boolean {
@@ -261,8 +333,15 @@ export class PaymentGatewaysService {
   }
 
   // ─── ADMIN ───────────────────────────────────────────────────────────
+  //
+  // PaymentGateway has no owner: one row (with its provider secretConfig)
+  // collects money for EVERY company on the installation, and its transaction
+  // log spans all of them. Every admin method is therefore platform-owner only
+  // — reading exposes credentials and other companies' payments, and writing
+  // could redirect every company's customer payments.
 
-  async adminList(query: any) {
+  async adminList(query: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     return this.prisma.paymentGateway.findMany({
       where: {
         ...(query?.provider ? { provider: query.provider } : {}),
@@ -277,13 +356,15 @@ export class PaymentGatewaysService {
     });
   }
 
-  async adminGet(id: number) {
+  async adminGet(id: number, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     const g = await this.prisma.paymentGateway.findUnique({ where: { id } });
     if (!g) throw new NotFoundException(`Gateway ${id} not found`);
     return g;
   }
 
   async adminCreate(body: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     if (!body?.name) throw new BadRequestException('name is required');
     if (!body?.provider) throw new BadRequestException('provider is required');
     return this.prisma.paymentGateway.create({
@@ -303,6 +384,7 @@ export class PaymentGatewaysService {
   }
 
   async adminUpdate(id: number, body: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     const existing = await this.prisma.paymentGateway.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Gateway ${id} not found`);
     return this.prisma.paymentGateway.update({
@@ -322,17 +404,20 @@ export class PaymentGatewaysService {
   }
 
   async adminRemove(id: number, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     await this.prisma.paymentGateway.delete({ where: { id } });
     return { ok: true };
   }
 
-  async adminToggle(id: number) {
+  async adminToggle(id: number, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     const g = await this.prisma.paymentGateway.findUnique({ where: { id } });
     if (!g) throw new NotFoundException(`Gateway ${id} not found`);
     return this.prisma.paymentGateway.update({ where: { id }, data: { isActive: !g.isActive } });
   }
 
-  async adminTransactions(gatewayId: number, query: any) {
+  async adminTransactions(gatewayId: number, query: any, actor: any) {
+    this.scope.assertPlatformOwner(actor);
     const page = +query.page || 1;
     const size = Math.min(+query.pageSize || 25, 100);
     const where = { gatewayId, ...(query.status ? { status: query.status } : {}) };

@@ -107,8 +107,19 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /**
  * States in which writes are refused. Anything not listed — including
  * UNAVAILABLE and GRACE — is allowed to write.
+ *
+ * An allowlist of NAMES, so every new agent state must be added here or it
+ * writes freely. SUSPENDED was nearly shipped without it: the agent would have
+ * reported the suspension, the banner would have shown it, and every create
+ * would still have gone through.
  */
-const BLOCKING_STATES = new Set(['EXPIRED', 'HARDWARE_MISMATCH', 'INVALID', 'TAMPERED']);
+const BLOCKING_STATES = new Set([
+  'EXPIRED',
+  'HARDWARE_MISMATCH',
+  'INVALID',
+  'TAMPERED',
+  'SUSPENDED',
+]);
 
 export function normalisePath(url: string): string {
   const p = (url || '').split('?')[0];

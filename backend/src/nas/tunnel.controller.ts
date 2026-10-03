@@ -3,6 +3,7 @@ import { TunnelService } from './tunnel.service';
 import { NasService } from './nas.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Management-tunnel endpoints.
@@ -24,6 +25,7 @@ export class TunnelController {
   constructor(
     private readonly tunnels: TunnelService,
     private readonly nas: NasService,
+    private readonly scope: ScopeService,
   ) {}
 
   /** Every tunnel the caller can see, for the network overview. */
@@ -36,15 +38,23 @@ export class TunnelController {
   /**
    * Re-apply every stored peer to the kernel. Needed after a panel reboot,
    * because WireGuard keeps its peer list in memory only.
+   *
+   * Platform owner only: it rewrites the server's own WireGuard interface for
+   * EVERY company's tunnels, and its error list names their routers.
    */
   @Post('tunnels/reconcile')
-  reconcile() {
+  reconcile(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.tunnels.reconcile();
   }
 
-  /** Pull fresh handshake/byte counters off the interface. */
+  /**
+   * Pull fresh handshake/byte counters off the interface. Same rule as
+   * reconcile: one interface, every company's peers.
+   */
   @Post('tunnels/refresh')
-  refresh() {
+  refresh(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.tunnels.refreshStatus();
   }
 

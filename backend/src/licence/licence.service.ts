@@ -37,6 +37,13 @@ export type LicenceState =
   | 'HARDWARE_MISMATCH'
   | 'INVALID'
   | 'UNLICENSED'
+  /**
+   * The licence server suspended, revoked or blocked this licence. Read-only
+   * at once rather than when the licence's own expiry runs out. RADIUS is
+   * untouched, as in every other state. Sent by agent 1.1+ only on a verdict
+   * the licence server signed for this installation.
+   */
+  | 'SUSPENDED'
   | 'TAMPERED'
   | 'UNAVAILABLE';
 
@@ -64,6 +71,14 @@ export interface Entitlement {
   nonce: string;
   session_pub: string;
   sig: string;
+}
+
+export interface LicenceUsage {
+  subscribers: number;
+  nas: number;
+  dealers?: number;
+  companies?: number;
+  at: string;
 }
 
 const SOCKET_PATH = process.env.JBX_LICENCE_SOCKET || '/run/jointbox/licensed.sock';
@@ -234,6 +249,14 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
     if (e.state === 'GRACE') {
       return { level: 'info', message: e.message || 'Your licence is being renewed.' };
     }
+    if (e.state === 'SUSPENDED') {
+      return {
+        level: 'error',
+        message:
+          e.message ||
+          'This licence has been suspended. The panel is read-only; subscribers stay online.',
+      };
+    }
     if (e.state === 'TAMPERED') {
       return {
         level: 'error',
@@ -296,7 +319,12 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       sock.on('timeout', () => finish(() => reject(new Error('timed out'))));
       sock.on('error', (e) => finish(() => reject(e)));
       sock.on('close', () => finish(() => reject(new Error('closed before reply'))));
-      sock.on('connect', () => sock.write(JSON.stringify({ nonce }) + '\n'));
+      // v:2 asks for the cap policy as well. An agent before 1.1 ignores
+      // the field and answers in the v1 layout, which verifySignature also
+      // accepts — so the panel and the agent can be upgraded in either order.
+      sock.on('connect', () =>
+        sock.write(JSON.stringify({ nonce, v: 2 }) + '\n'),
+      );
       sock.on('data', (d) => {
         buf += d.toString();
         if (!buf.includes('\n')) return;
@@ -321,6 +349,14 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
    * matches JSON.stringify byte for byte. With Go's default, any company name
    * containing `&` — "Ahmed & Sons" — would fail here and be reported as
    * tampering. There is a regression test on the Go side.
+   *
+   * max_nas, cap_action and cap_hard sit right after max_subs, in that order,
+   * and only when the agent sent them (agent 1.1+, asked for v2, non-zero).
+   * JSON.stringify drops a key whose value is undefined, so ONE layout covers
+   * both: from an older agent the three are absent and this is byte for byte
+   * the v1 payload. They were missing from this list before, which is why the
+   * agent could never be taught to send them — any panel would have reported
+   * every licence carrying a cap as TAMPERED.
    */
   private verifySignature(r: Entitlement, expectNonce: string): boolean {
     try {
@@ -332,6 +368,9 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
         state: r.state,
         plan: r.plan,
         max_subs: r.max_subs,
+        max_nas: r.max_nas,
+        cap_action: r.cap_action,
+        cap_hard: r.cap_hard,
         feat: r.feat,
         company: r.company,
         trial: r.trial,
@@ -387,19 +426,38 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
    * rendered as "not measured yet" rather than as zero — reporting zero
    * subscribers to someone who has four hundred is worse than saying nothing.
    */
-  private counts: { subscribers: number; nas: number; at: string } | null = null;
+  private counts: LicenceUsage | null = null;
 
-  get usage(): { subscribers: number; nas: number; at: string } | null {
+  get usage(): LicenceUsage | null {
     return this.counts;
   }
 
-  publishCounts(subscribers: number, nas: number): void {
-    this.counts = { subscribers, nas, at: new Date().toISOString() };
+  /**
+   * `dealers` is franchises, dealers and sub-dealers; `companies` is ISP
+   * companies (ADMIN accounts) under the platform owner. Both are counts of
+   * accounts, never their names, and both are optional so a caller that only
+   * knows the original two numbers still works.
+   */
+  publishCounts(
+    subscribers: number,
+    nas: number,
+    dealers?: number,
+    companies?: number,
+  ): void {
+    this.counts = {
+      subscribers,
+      nas,
+      dealers,
+      companies,
+      at: new Date().toISOString(),
+    };
     try {
       fs.mkdirSync(RUN_DIR, { recursive: true });
       fs.writeFileSync(
         path.join(RUN_DIR, 'counts.json'),
-        JSON.stringify({ subscribers, nas }),
+        // undefined keys vanish here, which the agent reads as "not reported"
+        // rather than as zero.
+        JSON.stringify({ subscribers, nas, dealers, companies }),
         { mode: 0o644 },
       );
     } catch {

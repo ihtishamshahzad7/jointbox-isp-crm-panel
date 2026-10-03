@@ -6,11 +6,73 @@ import API_BASE from "./api";
 const API =
   API_BASE;
 
+/**
+ * MEDIA TOKENS — how an <img> proves the viewer is signed in.
+ *
+ * Uploaded files (CNIC scans, photos) are no longer public: the server shows
+ * one only to signed-in staff of the company that uploaded it. An <img src>
+ * cannot send an Authorization header, so the URL carries a short-lived media
+ * token (`?mt=`) that opens pictures and nothing else — the operator API
+ * refuses it. It is tied to the signed-in account (`sub`), so switching
+ * account ("act as") fetches a fresh one.
+ */
+const MEDIA_KEY = "mediaToken";
+type Media = { token: string; sub: number; exp: number };
+
+function readMedia(): Media | null {
+  if (typeof window === "undefined") return null;
+  try { return JSON.parse(localStorage.getItem(MEDIA_KEY) || "null"); } catch { return null; }
+}
+
+function currentSub(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const t = localStorage.getItem("token") || "";
+    const p = JSON.parse(atob(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return Number(p?.sub) || null;
+  } catch { return null; }
+}
+
+/** A media token for the signed-in account that is good for at least `minMs` more. */
+export function hasFreshMediaToken(minMs = 60 * 60 * 1000): boolean {
+  const m = readMedia();
+  return !!m && m.sub === currentSub() && m.exp - Date.now() > minMs;
+}
+
+let inflight: Promise<void> | null = null;
+
+/** Fetch (or renew) the media token. Never throws; images just fail to load without one. */
+export function ensureMediaToken(force = false): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (!force && hasFreshMediaToken()) return Promise.resolve();
+  if (inflight) return inflight;
+  const token = localStorage.getItem("token");
+  if (!token) return Promise.resolve();
+  inflight = fetch(`${API}/uploads/media-token`, { headers: { Authorization: `Bearer ${token}` } })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (d?.token) {
+        localStorage.setItem(MEDIA_KEY, JSON.stringify({ token: d.token, sub: Number(d.sub), exp: Date.parse(d.expiresAt) }));
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => { inflight = null; });
+  return inflight;
+}
+
+/** Forget the media token (sign-out). */
+export function clearMediaToken() {
+  try { localStorage.removeItem(MEDIA_KEY); } catch { /* ignore */ }
+}
+
 // Turn a stored "/uploads/xyz.jpg" into a full URL the browser can load.
 export function fileUrl(u?: string | null): string {
   if (!u) return "";
   if (/^https?:\/\//i.test(u)) return u;
-  return `${API}${u.startsWith("/") ? "" : "/"}${u}`;
+  const url = `${API}${u.startsWith("/") ? "" : "/"}${u}`;
+  if (!/(^|\/)uploads\//.test(u)) return url;
+  const m = readMedia();
+  return m?.token ? `${url}${url.includes("?") ? "&" : "?"}mt=${encodeURIComponent(m.token)}` : url;
 }
 
 type Props = {

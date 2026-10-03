@@ -16,6 +16,7 @@ import Avatar from './avatar';
 import { BRAND } from '../../lib/brand';
 import { LANGS, useI18n } from '../../lib/i18n';
 import { LicenceProvider, LicenceBanner } from './licence';
+import { ensureMediaToken, hasFreshMediaToken, clearMediaToken } from './image-upload';
 
 const API = API_BASE;
 
@@ -209,6 +210,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [date, setDate] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  /**
+   * Uploaded files need a media token (see image-upload.tsx). Fetched once and
+   * renewed every half hour while it has under an hour left. If there was no
+   * valid one when the shell opened (first load after sign-in, or after a long
+   * idle), the page is re-mounted ONCE when it arrives so its photos load —
+   * renewals never re-mount anything.
+   */
+  const [mediaKey, setMediaKey] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const hadOne = hasFreshMediaToken(0);
+    ensureMediaToken().then(() => {
+      if (alive && !hadOne && hasFreshMediaToken(0)) setMediaKey((k) => k + 1);
+    });
+    const t = setInterval(() => { void ensureMediaToken(); }, 30 * 60 * 1000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   /**
    * Smart-sidebar state:
    *  - `peeking`  — while collapsed, hovering the rail temporarily expands it
@@ -536,7 +554,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           if (!res.ok) throw new Error('Profile fetch failed');
           return res.json();
         })
-        .then((data) => setUser(data?.user ?? data))
+        .then((data) => {
+          const u = data?.user ?? data;
+          // Belt and braces with the login redirect: a session that reaches the
+          // shell while a forced change is pending is sent back to it.
+          if (u?.mustChangePassword) { router.replace('/change-password'); return; }
+          setUser(u);
+        })
         .catch(() => router.replace('/login'));
     loadProfile();
 
@@ -586,6 +610,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const handleLogout = () => {
     localStorage.removeItem('token');
+    clearMediaToken();
     router.replace('/login');
   };
 
@@ -1195,7 +1220,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <StaticIpBanner />
             {/* Renders nothing on an ACTIVE licence, which is the normal case. */}
             <LicenceBanner />
-            {children}
+            <div key={mediaKey} style={{ display: 'contents' }}>{children}</div>
           </div>
         </main>
 
@@ -1216,7 +1241,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
 export function AppShellGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const publicPaths = ['/login', '/'];
+  // /change-password renders without the shell: a forced change happens before
+  // the account may load anything else, and the shell fetches a dozen
+  // endpoints that would each answer 403 until the password is changed.
+  const publicPaths = ['/login', '/', '/change-password'];
 
   // Subscriber portal has its own lightweight UI — never wrap it in the admin shell
   if (publicPaths.includes(pathname || '/') || (pathname || '').startsWith('/portal')) {

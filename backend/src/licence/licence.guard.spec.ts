@@ -44,11 +44,18 @@ const ALL_STATES: LicenceState[] = [
   'HARDWARE_MISMATCH',
   'INVALID',
   'UNLICENSED',
+  'SUSPENDED',
   'TAMPERED',
   'UNAVAILABLE',
 ];
 
-const BLOCKED_STATES: LicenceState[] = ['EXPIRED', 'HARDWARE_MISMATCH', 'INVALID', 'TAMPERED'];
+const BLOCKED_STATES: LicenceState[] = [
+  'EXPIRED',
+  'HARDWARE_MISMATCH',
+  'INVALID',
+  'TAMPERED',
+  'SUSPENDED',
+];
 const ALLOWED_STATES: LicenceState[] = ['ACTIVE', 'GRACE', 'UNLICENSED', 'UNAVAILABLE'];
 
 beforeEach(() => {
@@ -247,6 +254,28 @@ describe('writes are blocked only in a definitely-unlicensed state', () => {
     const guard = guardIn(state);
     for (const [method, url] of WRITES) {
       expect(() => guard.canActivate(ctxFor(method, url))).not.toThrow();
+    }
+  });
+
+  /**
+   * RATCHET. The guard decides by state NAME, so a state added to
+   * LicenceState and forgotten here writes freely — which is exactly how
+   * SUSPENDED nearly shipped. Read the union from the source and require every
+   * member to be classified, once.
+   */
+  it('every LicenceState is classified as blocking or allowed, exactly once', () => {
+    const src = fs.readFileSync(path.join(__dirname, 'licence.service.ts'), 'utf8');
+    const union = src.match(/export type LicenceState =([\s\S]*?);/);
+    expect(union).not.toBeNull();
+    const declared = [...union![1].matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort();
+
+    expect([...ALL_STATES].sort()).toEqual(declared);
+    for (const st of declared) {
+      const inBlocked = BLOCKED_STATES.includes(st as LicenceState);
+      const inAllowed = ALLOWED_STATES.includes(st as LicenceState);
+      expect(`${st}: ${inBlocked !== inAllowed ? 'classified' : 'UNCLASSIFIED or both'}`).toBe(
+        `${st}: classified`,
+      );
     }
   });
 

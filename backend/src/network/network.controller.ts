@@ -61,9 +61,13 @@ export class NetworkController {
    * Find any username online from more than one device right now, log it, and
    * disconnect ALL of that user's sessions. Runs automatically every 2 minutes;
    * this endpoint lets an operator force it on demand.
+   *
+   * Platform owner only: the sweep is installation-wide — it cuts every
+   * company's duplicate logins and returns their usernames.
    */
   @Post('duplicate-sessions/sweep')
-  async sweepDuplicates() {
+  async sweepDuplicates(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.coa.disconnectDuplicateSessions();
   }
 
@@ -78,9 +82,14 @@ export class NetworkController {
     return this.coa.changeBandwidth(+subscriberId, Number(body.downloadSpeed), Number(body.uploadSpeed));
   }
 
-  /** Probe whether a NAS accepts RADIUS CoA (harmless, changes nothing). */
+  /**
+   * Probe whether a NAS accepts RADIUS CoA (harmless, changes nothing). It
+   * still signs a packet with that router's shared secret and sends it from
+   * this server, so the caller must be able to see the router.
+   */
   @Get('nas/:id/test-coa')
-  testCoa(@Param('id') id: string) {
+  async testCoa(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertNas(req.user, +id);
     return this.coa.testCoa(+id);
   }
 

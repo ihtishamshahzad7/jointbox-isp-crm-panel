@@ -1,0 +1,67 @@
+Enforce the plan cap, and let a licence be activated from the panel
+
+Two gaps closed. The licence server has been signing cap_hard and max_nas
+into every licence since migration 002/004; the panel read them and did
+nothing, so a customer on an 800-subscriber plan could add subscriber 801.
+And activation was command line only, which loses every trial that reaches
+somebody without an SSH client.
+
+PLAN CAPACITY — licence-capacity.service.ts
+
+Compares a count to a number the licence server signed. It holds no opinion
+about what a plan allows: cap_hard arrives inside the Ed25519 signature with
+the plan, any per-customer override and the overage percentage already
+resolved. So pricing changes stay an edit in the admin, and a customer with
+root on their own box cannot soften the limit by editing TypeScript.
+
+Gated on subscriber creation and on NAS creation.
+
+ - After the idempotency check: a retry of a create that already succeeded
+   must return the existing subscriber, not be refused for filling the cap
+   it just filled.
+ - Before any wallet or RADIUS work, so a refusal costs nothing.
+ - For NAS, after the duplicate-IP check: an operator at their cap retyping
+   an existing router IP should be told it is a duplicate, not sold an
+   upgrade they do not need.
+ - No COUNT(*). That is a full scan on the hot path of every create. It asks
+   OFFSET cap-1 LIMIT 1 instead, so Postgres stops after `cap` rows however
+   large the table grows. A test asserts the SQL contains no COUNT.
+
+Fails open in five states, each tested: licensing disabled, no entitlement
+from the agent, cap 0, a licence server too old to send cap_hard, and the
+capacity query itself failing. An ISP must never be unable to add a customer
+because our service is confused.
+
+The 402 body says plainly that nobody was disconnected, and a test pins that
+sentence. An operator refused at 2am who is not told that starts restarting
+services.
+
+WEB ACTIVATION — licence-activation.service.ts
+
+The agent socket answers one question (sign this nonce) and has no activation
+operation, so the panel drives the CLI already installed on every server.
+
+execFile with an argument array, never exec: no shell exists, so shell
+metacharacters are inert. On top of that the key is matched against a strict
+pattern first, and every flag uses -flag=value so a value can never be read
+as the next flag. Ten injection attempts are tested. Two ratchets fail the
+build if exec or shell:true ever appears, or if the flags revert to separated
+form -- each guard tested independently, so loosening one leaves the other
+standing.
+
+The key is a credential: masked to JBX-XXXXX-...-XXXXX in the log line, the
+audit row and any error shown to the browser. Agent output is scrubbed of any
+key pattern, not only the submitted one.
+
+PM2 usually runs the API as root, so sudo is used only when we are not
+already root -- requiring it would fail with a baffling ENOENT on minimal
+images that do not ship it. For non-root installs the agent installer now
+writes a sudoers rule granting exactly two commands, validated with
+visudo -cf and removed again if it does not parse.
+
+Verified: 52 suites / 796 tests pass. The 3 failures are pre-existing and
+are repo-root shell scripts absent from a backend-only test tarball.
+TypeScript clean on every file touched.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01X7xG929ZbVWHe8ogTG3ZLU

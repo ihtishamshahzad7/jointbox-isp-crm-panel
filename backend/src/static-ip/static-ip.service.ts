@@ -37,6 +37,41 @@ export class StaticIpService {
   ) {}
 
   // ── Read ─────────────────────────────────────────────────────
+  /**
+   * THE FREE POOL A CALLER MAY ALLOCATE FROM.
+   *
+   * "Every AVAILABLE address" used to be visible — and editable, deletable and
+   * assignable — by every company on the installation. A free address belongs
+   * to whoever loaded it: rows owned inside the caller's company (its own
+   * subtree, or an account above it that is not the platform owner), plus
+   * unowned rows on a router the caller can use. Platform owner: everything.
+   */
+  private async freePoolWhere(actor: Actor): Promise<any> {
+    const root = await this.scope.rootId(actor);
+    const [down, up] = await Promise.all([this.scope.descendantIds(root), this.scope.ancestorIds(root)]);
+    const company = await this.prisma.user.findMany({
+      where: { id: { in: [...new Set([...down, ...up])] }, role: { not: 'SUPER_ADMIN' as any } },
+      select: { id: true },
+    });
+    return {
+      status: 'AVAILABLE',
+      OR: [
+        { ownerId: { in: company.map((u) => u.id) } },
+        { AND: [{ ownerId: null }, { nas: await this.scope.nasWhere(actor) }] },
+      ],
+    };
+  }
+
+  /** An unallocated row outside the caller's free pool answers "not found". */
+  private async assertFreeRowInScope(actor: Actor | undefined, ip: { id: number; subscriberId: number | null }): Promise<void> {
+    if (!actor || this.scope.isAdmin(actor.role) || ip.subscriberId) return;
+    const hit = await this.prisma.staticIp.findFirst({
+      where: { AND: [{ id: ip.id }, await this.freePoolWhere(actor)] },
+      select: { id: true },
+    });
+    if (!hit) throw new NotFoundException(`Static IP ${ip.id} not found`);
+  }
+
   async findAll(actor?: Actor, query: any = {}) {
     const filters: any[] = [];
     if (query.status && query.status !== 'ALL') filters.push({ status: query.status });
@@ -61,7 +96,7 @@ export class StaticIpService {
       filters.push({
         OR: [
           { subscriber: { userId: { in: ids } } },
-          { status: 'AVAILABLE' },
+          await this.freePoolWhere(actor),
         ],
       });
     }
@@ -152,6 +187,7 @@ export class StaticIpService {
     if (actor && !this.scope.isAdmin(actor.role) && ip.subscriberId) {
       await this.scope.assertSubscriber(actor, ip.subscriberId);
     }
+    await this.assertFreeRowInScope(actor, ip);
 
     // Attach names to the history so it reads properly.
     const subIds = [...new Set(ip.history.map((h) => h.subscriberId))];
@@ -170,9 +206,33 @@ export class StaticIpService {
   }
 
   // ── Write ────────────────────────────────────────────────────
-  async create(data: any) {
+
+  /**
+   * TENANCY for new register entries. An address is only routable on the NAS
+   * that owns its subnet, so a company may only load addresses onto a router
+   * it can see — never pin rows onto another company's NAS. The row is stamped
+   * with the account that loaded it (or an explicitly chosen owner inside the
+   * caller's subtree). The platform owner is unchanged: any NAS, and ownerId
+   * only when one is supplied.
+   */
+  private async ownerForNew(
+    actor: Actor | undefined,
+    data: { nasId?: any; ownerId?: any },
+  ): Promise<number | null> {
+    if (!actor) return data.ownerId ? Number(data.ownerId) : null;
+    if (data.nasId) await this.scope.assertNas(actor, Number(data.nasId));
+    if (this.scope.isPlatformOwner(actor)) return data.ownerId ? Number(data.ownerId) : null;
+    if (data.ownerId) {
+      await this.scope.assertOwnerInScope(actor, Number(data.ownerId), 'Account');
+      return Number(data.ownerId);
+    }
+    return this.scope.rootId(actor);
+  }
+
+  async create(data: any, actor?: Actor) {
     const ip = String(data.ipAddress || '').trim();
     if (!this.isIpv4(ip)) throw new BadRequestException(`"${ip}" is not a valid IPv4 address.`);
+    const ownerId = await this.ownerForNew(actor, data);
 
     const exists = await this.prisma.staticIp.findUnique({ where: { ipAddress: ip } });
     if (exists) throw new ConflictException(`${ip} is already in the pool.`);
@@ -186,6 +246,7 @@ export class StaticIpService {
         monthlyPrice: data.monthlyPrice ? Number(data.monthlyPrice) : null,
         status: data.status || 'AVAILABLE',
         notes: data.notes || null,
+        ...(ownerId != null ? { ownerId } : {}),
       },
     });
   }
@@ -196,8 +257,8 @@ export class StaticIpService {
    */
   async createRange(data: {
     startIp: string; endIp: string; gateway?: string;
-    nasId?: number; monthlyPrice?: number; reserveFirst?: boolean;
-  }) {
+    nasId?: number; monthlyPrice?: number; reserveFirst?: boolean; ownerId?: number;
+  }, actor?: Actor) {
     const start = this.ipToInt(data.startIp);
     const end = this.ipToInt(data.endIp);
     if (start === null || end === null) throw new BadRequestException('Invalid start or end address.');
@@ -205,6 +266,7 @@ export class StaticIpService {
     if (end - start > 1024) {
       throw new BadRequestException('Range too large — add at most 1024 addresses at a time.');
     }
+    const ownerId = await this.ownerForNew(actor, data);
 
     const created: string[] = [];
     const skipped: string[] = [];
@@ -220,6 +282,7 @@ export class StaticIpService {
             monthlyPrice: data.monthlyPrice ? Number(data.monthlyPrice) : null,
             // The first address of a block is nearly always the gateway.
             status: data.reserveFirst && n === start ? 'RESERVED' : 'AVAILABLE',
+            ...(ownerId != null ? { ownerId } : {}),
           },
         });
         created.push(ip);
@@ -254,6 +317,7 @@ export class StaticIpService {
       );
     }
     if (actor) await this.scope.assertSubscriber(actor, Number(body.subscriberId));
+    await this.assertFreeRowInScope(actor, ip);
 
     // ── NETWORK VALIDATION — before ANY row is written ─────────────
     // The address must be routable on the subscriber's NAS, the gateway must
@@ -571,6 +635,8 @@ export class StaticIpService {
       await this.release(h.id, 'Replaced by a new address', actor).catch(() => null);
     }
 
+    // A new register entry may only be pinned to a router the caller can see.
+    const newOwnerId = existing ? null : await this.ownerForNew(actor, { nasId: body.nasId });
     const record = existing
       ? existing
       : await this.prisma.staticIp.create({
@@ -580,6 +646,7 @@ export class StaticIpService {
             nasId: body.nasId ? Number(body.nasId) : null,
             status: 'AVAILABLE',
             notes: body.notes || 'Added from the subscriber page',
+            ...(newOwnerId != null ? { ownerId: newOwnerId } : {}),
           },
         });
 
@@ -607,6 +674,8 @@ export class StaticIpService {
     const ip = await this.prisma.staticIp.findUnique({ where: { id } });
     if (!ip) throw new NotFoundException(`Static IP ${id} not found`);
     if (!ip.subscriberId) return ip;
+    // Releasing cuts a customer's address — the customer must be the caller's.
+    if (actor) await this.scope.assertViaSubscriber(actor, ip.subscriberId, `Static IP ${id}`);
 
     const subscriberId = ip.subscriberId;
 
@@ -685,6 +754,8 @@ export class StaticIpService {
 
   async update(id: number, data: any, actor?: Actor) {
     await this.findOne(id, actor); // privacy + existence check
+    // Moving the address onto a router: only one the caller can see.
+    if (actor && data.nasId) await this.scope.assertNas(actor, Number(data.nasId));
     return this.prisma.staticIp.update({
       where: { id },
       data: {

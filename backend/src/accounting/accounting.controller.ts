@@ -14,20 +14,28 @@ export class AccountingController {
     return this.accounting.getLedger(query, req.user);
   }
 
+  /**
+   * Per-account totals. Scoped to the caller's own business: the ledger is
+   * one table for the whole installation, so an unscoped sum is every
+   * company's books added together.
+   */
   @Get('ledger/summary')
-  getLedgerSummary() {
-    return this.accounting.getLedgerSummary();
+  getLedgerSummary(@Request() req: any) {
+    return this.accounting.getLedgerSummary(req.user);
   }
 
-  /** Trial balance — total debits vs credits + malformed-entry count. */
+  /** Trial balance — total debits vs credits + malformed-entry count. Scoped as above. */
   @Get('trial-balance')
-  getTrialBalance() {
-    return this.accounting.getTrialBalance();
+  getTrialBalance(@Request() req: any) {
+    return this.accounting.getTrialBalance(req.user);
   }
 
-  /** Accounting-period lock — the date through which the books are closed. */
+  /**
+   * Accounting-period lock — the date through which the books are closed.
+   * An installation singleton (see PUT below); reading the date is harmless.
+   */
   @Get('period-lock')
-  getPeriodLock() {
+  getPeriodLock(@Request() req: any) {
     return this.accounting.getPeriodLock();
   }
 
@@ -56,14 +64,14 @@ export class AccountingController {
 
   // ── Cashflow ──────────────────────────────────────────────────
   @Get('cashflow')
-  getCashflow(@Query() query: any) {
-    return this.accounting.getCashflow(query);
+  getCashflow(@Query() query: any, @Request() req: any) {
+    return this.accounting.getCashflow(query, req.user);
   }
 
   // ── Expenses ──────────────────────────────────────────────────
   @Get('expenses')
-  getExpenses(@Query() query: any) {
-    return this.accounting.getExpenses(query);
+  getExpenses(@Query() query: any, @Request() req: any) {
+    return this.accounting.getExpenses(query, req.user);
   }
 
   @Post('expenses')
@@ -74,23 +82,26 @@ export class AccountingController {
   @Get('expense-requests')
   listExpenseRequests(@Query('status') status: string, @Request() req: any) {
     this.assertOwner(req);
-    return this.accounting.listExpenseRequests(status || 'PENDING');
+    return this.accounting.listExpenseRequests(status || 'PENDING', req.user);
   }
 
   @Post('expense-requests/:id/approve')
-  approveExpense(@Param('id') id: string, @Request() req: any) {
+  async approveExpense(@Param('id') id: string, @Request() req: any) {
     this.assertOwner(req);
+    await this.accounting.assertExpenseInScope(req.user, +id);
     return this.accounting.approveExpense(+id, req.user?.sub);
   }
 
   @Post('expense-requests/:id/reject')
-  rejectExpense(@Param('id') id: string, @Request() req: any) {
+  async rejectExpense(@Param('id') id: string, @Request() req: any) {
     this.assertOwner(req);
+    await this.accounting.assertExpenseInScope(req.user, +id);
     return this.accounting.rejectExpense(+id, req.user?.sub);
   }
 
   @Delete('expenses/:id')
-  deleteExpense(@Param('id') id: string, @Request() req: any) {
+  async deleteExpense(@Param('id') id: string, @Request() req: any) {
+    await this.accounting.assertExpenseInScope(req.user, +id);
     return this.accounting.deleteExpense(+id, req.user?.sub);
   }
 
@@ -106,22 +117,25 @@ export class AccountingController {
   }
 
   @Post('balances/:subscriberId/topup')
-  topUp(@Param('subscriberId') subscriberId: string, @Body() body: { amount: number; notes?: string }, @Request() req: any) {
+  async topUp(@Param('subscriberId') subscriberId: string, @Body() body: { amount: number; notes?: string }, @Request() req: any) {
+    await this.accounting.assertSubscriberInScope(req.user, +subscriberId);
     return this.accounting.topUpBalance(+subscriberId, Number(body.amount), body.notes, req.user?.sub);
   }
 
   // ── Reversal / Refund ─────────────────────────────────────────
   @Post('invoices/:id/reverse')
-  reverseInvoice(@Param('id') id: string, @Body() body: { reason: string }, @Request() req: any) {
+  async reverseInvoice(@Param('id') id: string, @Body() body: { reason: string }, @Request() req: any) {
+    await this.accounting.assertInvoiceInScope(req.user, +id);
     return this.accounting.reverseInvoice(+id, body.reason, req.user?.sub);
   }
 
   @Post('payments/:id/refund')
-  refundPayment(
+  async refundPayment(
     @Param('id') id: string,
     @Body() body: { reason: string; toBalance?: boolean; amount?: number },
     @Request() req: any,
   ) {
+    await this.accounting.assertPaymentInScope(req.user, +id);
     return this.accounting.requestRefund(+id, body, req.user);
   }
 
@@ -132,8 +146,9 @@ export class AccountingController {
     }
   }
 
+  /** Installation singleton (approval thresholds) — reading it is harmless. */
   @Get('finance-settings')
-  getFinanceSettings() {
+  getFinanceSettings(@Request() req: any) {
     return this.accounting.getFinanceSettings();
   }
 
@@ -156,14 +171,16 @@ export class AccountingController {
   }
 
   @Post('refund-requests/:id/approve')
-  approveRefundRequest(@Param('id') id: string, @Body() body: { note?: string }, @Request() req: any) {
+  async approveRefundRequest(@Param('id') id: string, @Body() body: { note?: string }, @Request() req: any) {
     this.assertOwner(req);
+    await this.accounting.assertRefundRequestInScope(req.user, +id);
     return this.accounting.approveRefundRequest(+id, req.user?.sub, body?.note);
   }
 
   @Post('refund-requests/:id/reject')
-  rejectRefundRequest(@Param('id') id: string, @Body() body: { note?: string }, @Request() req: any) {
+  async rejectRefundRequest(@Param('id') id: string, @Body() body: { note?: string }, @Request() req: any) {
     this.assertOwner(req);
+    await this.accounting.assertRefundRequestInScope(req.user, +id);
     return this.accounting.rejectRefundRequest(+id, req.user?.sub, body?.note);
   }
 }

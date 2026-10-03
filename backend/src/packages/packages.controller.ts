@@ -5,11 +5,15 @@ import {
 import { PackagesService } from './packages.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('packages')
 export class PackagesController {
-  constructor(private readonly packagesService: PackagesService) {}
+  constructor(
+    private readonly packagesService: PackagesService,
+    private readonly scope: ScopeService,
+  ) {}
 
   @Get()
   findAll(@Query() query: any, @Req() req: any): any {
@@ -23,68 +27,89 @@ export class PackagesController {
     return this.packagesService.getStats(req.user);
   }
 
+  // ── Taxes / policies / allocations ─────────────────────────────
+  // package_tax, package_policy and package_allocation have NO owner column:
+  // one catalogue serves every company on the installation, and deleting a
+  // row also detaches it from every package's settings. Reading them is
+  // harmless shared config; writing them changes every company's packages,
+  // so writes are platform owner only.
+
+  /** Tax list (platform defaults + the caller's company's own), policies, allocations. */
   @Get('options')
-  getManagementOptions(): any {
-    return this.packagesService.getManagementOptions();
+  getManagementOptions(@Req() req: any): any {
+    return this.packagesService.getManagementOptions(req.user);
   }
 
+  /** Platform default taxes plus the caller's company's own. */
   @Get('taxes')
-  getTaxes(): any {
-    return this.packagesService.getTaxes();
+  getTaxes(@Req() req: any): any {
+    return this.packagesService.getTaxes(req.user);
   }
 
+  // A company's administrator manages the company's own taxes; platform
+  // defaults stay the platform owner's (ScopeService.assertConfigWritable).
   @Post('taxes')
-  createTax(@Body() body: any): any {
-    return this.packagesService.createTax(body);
+  createTax(@Body() body: any, @Req() req: any): any {
+    return this.packagesService.createTax(body, req.user);
   }
 
   @Put('taxes/:id')
-  updateTax(@Param('id') id: string, @Body() body: any): any {
-    return this.packagesService.updateTax(+id, body);
+  updateTax(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
+    return this.packagesService.updateTax(+id, body, req.user);
   }
 
   @Delete('taxes/:id')
-  deleteTax(@Param('id') id: string): any {
-    return this.packagesService.deleteTax(+id);
+  deleteTax(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.deleteTax(+id, req.user);
   }
 
+  /** Tenant-free read: shared RADIUS policy catalogue. */
   @Get('policies')
-  getPolicies(): any {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  getPolicies(@Req() req: any): any {
     return this.packagesService.getPolicies();
   }
 
   @Post('policies')
-  createPolicy(@Body() body: any): any {
+  createPolicy(@Body() body: any, @Req() req: any): any {
+    this.scope.assertPlatformOwner(req.user);
     return this.packagesService.createPolicy(body);
   }
 
   @Put('policies/:id')
-  updatePolicy(@Param('id') id: string, @Body() body: any): any {
+  updatePolicy(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
+    this.scope.assertPlatformOwner(req.user);
     return this.packagesService.updatePolicy(+id, body);
   }
 
   @Delete('policies/:id')
-  deletePolicy(@Param('id') id: string): any {
+  deletePolicy(@Param('id') id: string, @Req() req: any): any {
+    this.scope.assertPlatformOwner(req.user);
     return this.packagesService.deletePolicy(+id);
   }
 
+  /** Tenant-free read: shared time-window allocation catalogue. */
   @Get('allocations')
-  getAllocations(): any {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  getAllocations(@Req() req: any): any {
     return this.packagesService.getAllocations();
   }
 
   @Post('allocations')
-  createAllocation(@Body() body: any): any {
+  createAllocation(@Body() body: any, @Req() req: any): any {
+    this.scope.assertPlatformOwner(req.user);
     return this.packagesService.createAllocation(body);
   }
 
   @Put('allocations/:id')
-  updateAllocation(@Param('id') id: string, @Body() body: any): any {
+  updateAllocation(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
+    this.scope.assertPlatformOwner(req.user);
     return this.packagesService.updateAllocation(+id, body);
   }
 
   @Delete('allocations/:id')
-  deleteAllocation(@Param('id') id: string): any {
+  deleteAllocation(@Param('id') id: string, @Req() req: any): any {
+    this.scope.assertPlatformOwner(req.user);
     return this.packagesService.deleteAllocation(+id);
   }
 
@@ -110,8 +135,8 @@ export class PackagesController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string): any {
-    return this.packagesService.findOne(+id);
+  findOne(@Param('id') id: string, @Req() req: any): any {
+    return this.packagesService.findOne(+id, req.user);
   }
 
   /**
@@ -149,10 +174,13 @@ export class PackagesController {
     return this.packagesService.create(body, req.user);
   }
 
-  /** Bulk import packages from a file (used by the Import dialog). */
+  /**
+   * Bulk import packages from a file (used by the Import dialog). Each row is
+   * stamped with the caller's own account as owner — see importMany().
+   */
   @Post('import')
-  importMany(@Body() body: { rows: any[] }): any {
-    return this.packagesService.importMany(body?.rows || []);
+  importMany(@Body() body: { rows: any[] }, @Req() req: any): any {
+    return this.packagesService.importMany(body?.rows || [], req.user);
   }
 
   @Put(':id')

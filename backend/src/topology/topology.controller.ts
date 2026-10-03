@@ -36,9 +36,9 @@ export class TopologyController {
     });
   }
 
-  /** Identify a single MAC address. */
+  /** Identify a single MAC address. Tenant-free: in-memory OUI table lookup. */
   @Post('mac')
-  mac(@Body() body: { mac: string }) {
+  mac(@Body() body: { mac: string }, @Req() _req: any) {
     return this.devices.identifyMac(body?.mac);
   }
 
@@ -63,9 +63,12 @@ export class TopologyController {
     return this.topology.traceSubscriber(+id, req.user);
   }
 
-  /** Test what a circuit-id parses to — useful when adding a new OLT vendor. */
+  /**
+   * Test what a circuit-id parses to — useful when adding a new OLT vendor.
+   * Tenant-free: pure regex parse of the posted string, no DB or network.
+   */
   @Post('parse')
-  parse(@Body() body: { circuitId: string }) {
+  parse(@Body() body: { circuitId: string }, @Req() _req: any) {
     return this.topology.parseCircuitId(body?.circuitId);
   }
 

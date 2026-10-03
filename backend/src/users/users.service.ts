@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { invalidateAllAccountStatus } from '../auth/account-status';
 import * as bcrypt from 'bcrypt';
 import { validatePassword } from '../security/security.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -1271,13 +1272,21 @@ export class UsersService {
 
   async toggleStatus(id: number, actor?: Actor) {
     if (actor) await this.scope.assertUser(actor, id);
+    // Suspension is now enforced on every request, so suspending yourself
+    // would lock you out mid-click with nobody above you to undo it.
+    if (actor && this.scope.actorId(actor) === id) {
+      throw new BadRequestException('You cannot suspend your own account.');
+    }
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id },
       data:  { isActive: !user.isActive },
       select: { id: true, name: true, isActive: true },
     });
+    // Takes effect on the next request, for this account and its whole tree.
+    invalidateAllAccountStatus();
+    return updated;
   }
 
   async changeRole(id: number, role: string) {

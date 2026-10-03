@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { DEMO_NAS_SERVER, DEMO_SUBSCRIBER_EMAIL_SUFFIX } from '../common/scope.service';
 import { LicenceService, licensingDisabled } from './licence.service';
 
 /**
@@ -107,12 +108,36 @@ export class LicenceCapacityService {
    * hazard — it is safe only because the two call sites pass string literals.
    * Keep it that way: no caller may pass a name that came from a request.
    */
+  /**
+   * Two explicit queries rather than one interpolated table name, for two
+   * reasons that were both live bugs:
+   *
+   *   • the NAS model maps to the FreeRADIUS table `nas` (@@map), so the old
+   *     query quoted the model name, a table that does not exist. Every NAS capacity
+   *     check threw, the catch below allowed the create, and the router cap
+   *     was never enforced at all;
+   *   • neither query excluded the demo sandbox, so a 25-subscriber trial saw
+   *     10,016 rows and refused real customers on behalf of invented ones.
+   *
+   * The demo rules here are the SQL spelling of NON_DEMO_SUBSCRIBER and
+   * NON_DEMO_OWNED in scope.service.ts — owner flag AND row marker.
+   */
   private async atLeast(table: 'Subscriber' | 'Nas', n: number): Promise<boolean> {
     try {
-      const rows = await this.prisma.$queryRawUnsafe<Array<{ one: number }>>(
-        `SELECT 1 AS one FROM "${table}" OFFSET $1 LIMIT 1`,
-        n - 1,
-      );
+      const sql =
+        table === 'Subscriber'
+          ? `SELECT 1 AS one FROM "Subscriber" s
+               WHERE (s."userId" IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM "User" u WHERE u.id = s."userId" AND u."isDemo" = true))
+                 AND (s.email IS NULL OR s.email NOT LIKE '%' || $2)
+               OFFSET $1 LIMIT 1`
+          : `SELECT 1 AS one FROM nas n
+               WHERE (n."ownerId" IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM "User" u WHERE u.id = n."ownerId" AND u."isDemo" = true))
+                 AND (n.server IS NULL OR n.server <> $2)
+               OFFSET $1 LIMIT 1`;
+      const marker = table === 'Subscriber' ? DEMO_SUBSCRIBER_EMAIL_SUFFIX : DEMO_NAS_SERVER;
+      const rows = await this.prisma.$queryRawUnsafe<Array<{ one: number }>>(sql, n - 1, marker);
       return rows.length > 0;
     } catch (err) {
       // A failed capacity check must not block a create. Licensing is not

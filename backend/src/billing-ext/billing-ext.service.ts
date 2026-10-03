@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ScopeService } from '../common/scope.service';
+import { ScopeService, Actor } from '../common/scope.service';
 
 /**
  * Billing extensions — pro-rata, balance modes, reversals.
@@ -18,13 +18,21 @@ export class BillingExtService {
 
   // ─── PRO-RATA ─────────────────────────────────────────────────────────
 
-  async listProRated(query: any) {
+  /**
+   * Pro-rata settings hang off a package, so they are visible exactly where
+   * the package is (own, or assigned via ResellerPackagePrice). The platform
+   * owner and an internal call with no actor still see every row.
+   */
+  async listProRated(query: any, actor?: Actor) {
+    const pkgWhere = actor && !this.scope.isPlatformOwner(actor) ? await this.scope.packageWhere(actor) : {};
     return this.prisma.proRatedBilling.findMany({
+      ...(Object.keys(pkgWhere).length ? { where: { package: pkgWhere } } : {}),
       include: { package: { select: { id: true, name: true, price: true, duration: true } } },
     });
   }
 
-  async getProRatedForPackage(pkgId: number) {
+  async getProRatedForPackage(pkgId: number, actor?: Actor) {
+    if (actor) await this.scope.assertPackage(actor, pkgId);
     let row = await this.prisma.proRatedBilling.findUnique({ where: { packageId: pkgId } });
     if (!row) {
       // Default view: pretend it's enabled with sensible values. Saving is
@@ -72,9 +80,11 @@ export class BillingExtService {
    *   total = proRated + setupFee
    *   then: apply minCharge floor, then apply roundTo (0 = no rounding)
    */
-  async calculateProRated(body: any) {
+  async calculateProRated(body: any, actor?: Actor) {
     if (!body?.packageId) throw new BadRequestException('packageId is required');
     if (!body?.activationDate) throw new BadRequestException('activationDate is required');
+    // Another company's package price is not ours to quote.
+    if (actor) await this.scope.assertPackage(actor, +body.packageId);
     const pkg = await this.prisma.package.findUnique({ where: { id: +body.packageId } });
     if (!pkg) throw new NotFoundException(`Package ${body.packageId} not found`);
     const settings = await this.prisma.proRatedBilling.findUnique({ where: { packageId: pkg.id } });
@@ -144,7 +154,8 @@ export class BillingExtService {
 
   // ─── SUBSCRIBER BILLING MODE ─────────────────────────────────────────
 
-  async getSubscriberBilling(subId: number) {
+  async getSubscriberBilling(subId: number, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subId);
     let row = await this.prisma.subscriberBilling.findUnique({ where: { subscriberId: subId } });
     if (!row) {
       row = {
@@ -188,7 +199,8 @@ export class BillingExtService {
 
   // ─── SUBSCRIBER BALANCE ───────────────────────────────────────────────
 
-  async getSubscriberBalance(subId: number) {
+  async getSubscriberBalance(subId: number, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subId);
     const bal = await this.prisma.subscriberBalance.findUnique({ where: { subscriberId: subId } });
     if (!bal) {
       return { subscriberId: subId, balance: 0, reservedBalance: 0, currency: 'PKR' };
@@ -196,7 +208,8 @@ export class BillingExtService {
     return bal;
   }
 
-  async getSubscriberLedger(subId: number, query: any) {
+  async getSubscriberLedger(subId: number, query: any, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subId);
     const page = +query.page || 1;
     const size = Math.min(+query.pageSize || 50, 200);
     const [rows, total] = await Promise.all([

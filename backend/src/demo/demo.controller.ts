@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Ip, Post } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Ip, NotFoundException, Post } from '@nestjs/common';
 import { DemoService } from './demo.service';
 
 /**
@@ -59,6 +59,11 @@ export class DemoController {
 
   @Post('create')
   async create(@Ip() ip: string) {
+    // Off by default; see DemoService.enabled(). A 404 rather than a 403 — on
+    // a customer's server there is no demo, not a demo you may not have.
+    if (!DemoService.enabled()) {
+      throw new NotFoundException('There is no demo on this server.');
+    }
     if (!DemoController.selfServeEnabled()) {
       // Answer with the shared sandbox rather than an error: the login screen's
       // "Try a NEW demo account" button must still do something useful, and

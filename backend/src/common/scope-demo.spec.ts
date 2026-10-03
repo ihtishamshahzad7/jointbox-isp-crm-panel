@@ -43,11 +43,17 @@ describe('scope: demo isolation', () => {
     ]);
   });
 
+  /**
+   * Owner rule AND row marker. The owner rule alone let 500 synthetic routers
+   * into a real operator's list when the owner's isDemo flag was missing; the
+   * marker (DEMO_NAS_SERVER) excludes them however ownership has drifted, and
+   * keeps NULL-server rows explicitly so real routers are never hidden.
+   */
   it('excludes demo-owned routers from the ISP NAS count too', async () => {
     const where = await scope.nasWhere(admin);
-    expect(where.OR).toEqual([
-      { ownerId: null },
-      { owner: { is: { isDemo: false } } },
+    expect(where.AND).toEqual([
+      { OR: [{ ownerId: null }, { owner: { is: { isDemo: false } } }] },
+      { OR: [{ server: null }, { server: { not: 'demo-radius' } }] },
     ]);
   });
 

@@ -189,43 +189,62 @@ export class OrganizationController {
   }
 
   // ── ISPs ──────────────────────────────────────────────────────
+  // Isp and Branch rows have no owner: one row serves the whole installation.
+  // Writes are platform-owner only; reads are narrowed to what the caller's
+  // own accounts reference (see OrganizationService.scopedBranchIds).
+  /**
+   * The deployment's display currency, for every signed-in user. The panel
+   * used to read it off `GET /isps`[0] — which, now that ISP records are the
+   * platform owner's, came back empty for a company admin and every amount
+   * fell back to "Rs". The currency is one value for the installation and
+   * reveals nothing about anyone.
+   */
+  @Get('currency')
+  currency(@Request() _req: any) {
+    return this.org.displayCurrency();
+  }
+
   @Get('isps')
-  isps() {
-    return this.org.getIsps();
+  isps(@Request() req: any) {
+    return this.org.getIsps(req.user);
   }
   @Post('isps')
-  createIsp(@Body() body: any) {
-    return this.org.createIsp(body);
+  createIsp(@Body() body: any, @Request() req: any) {
+    return this.org.createIsp(req.user, body);
   }
   @Put('isps/:id')
-  updateIsp(@Param('id') id: string, @Body() body: any) {
-    return this.org.updateIsp(+id, body);
+  updateIsp(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    return this.org.updateIsp(req.user, +id, body);
   }
   @Delete('isps/:id')
-  deleteIsp(@Param('id') id: string) {
-    return this.org.deleteIsp(+id);
+  deleteIsp(@Param('id') id: string, @Request() req: any) {
+    return this.org.deleteIsp(req.user, +id);
   }
 
   // ── Branches ──────────────────────────────────────────────────
   @Get('branches')
-  branches(@Query('ispId') ispId?: string) {
-    return this.org.getBranches(ispId ? +ispId : undefined);
+  branches(@Request() req: any, @Query('ispId') ispId?: string) {
+    return this.org.getBranches(req.user, ispId ? +ispId : undefined);
   }
   @Post('branches')
-  createBranch(@Body() body: any) {
-    return this.org.createBranch(body);
+  createBranch(@Body() body: any, @Request() req: any) {
+    return this.org.createBranch(req.user, body);
   }
   @Put('branches/:id')
-  updateBranch(@Param('id') id: string, @Body() body: any) {
-    return this.org.updateBranch(+id, body);
+  updateBranch(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    return this.org.updateBranch(req.user, +id, body);
   }
   @Delete('branches/:id')
-  deleteBranch(@Param('id') id: string) {
-    return this.org.deleteBranch(+id);
+  deleteBranch(@Param('id') id: string, @Request() req: any) {
+    return this.org.deleteBranch(req.user, +id);
   }
   @Post('branches/:id/assign')
-  assign(@Param('id') id: string, @Body() body: { subscriberIds?: number[]; userIds?: number[] }) {
-    return this.org.assign(+id, body);
+  assign(
+    @Param('id') id: string,
+    @Body() body: { subscriberIds?: number[]; userIds?: number[] },
+    @Request() req: any,
+  ) {
+    return this.org.assign(req.user, +id, body);
   }
 
   // ── Resellers ─────────────────────────────────────────────────

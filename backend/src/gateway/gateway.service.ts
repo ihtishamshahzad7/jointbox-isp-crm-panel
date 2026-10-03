@@ -301,8 +301,19 @@ export class GatewayService {
     void this.notifications.fireEvent('RENEWAL', sub, { expiry: base });
   }
 
-  async getTransactions(query: any) {
+  /** Whose invoice this is — for the operator route's tenancy check. */
+  async invoiceSubscriberId(invoiceId: number): Promise<number | null | undefined> {
+    const inv = await this.prisma.invoice.findUnique({ where: { id: invoiceId }, select: { subscriberId: true } });
+    return inv ? inv.subscriberId : undefined;
+  }
+
+  /**
+   * `subscriberIds` narrows to the caller's own customers (a company's view);
+   * null or omitted is the whole installation (platform owner, internal).
+   */
+  async getTransactions(query: any, subscriberIds?: number[] | null) {
     const where: any = {};
+    if (Array.isArray(subscriberIds)) where.subscriberId = { in: subscriberIds };
     if (query?.status) where.status = query.status;
     if (query?.gateway) where.gateway = query.gateway;
     const limit = Math.min(Number(query?.limit) || 50, 200);
@@ -324,8 +335,10 @@ export class GatewayService {
   }
 
   /** Reconciliation: SUCCESS gateway transactions without a matching payment row. */
-  async reconcile() {
-    const success = await this.prisma.gatewayTransaction.findMany({ where: { status: 'SUCCESS' } });
+  async reconcile(subscriberIds?: number[] | null) {
+    const success = await this.prisma.gatewayTransaction.findMany({
+      where: { status: 'SUCCESS', ...(Array.isArray(subscriberIds) ? { subscriberId: { in: subscriberIds } } : {}) },
+    });
     const mismatches: any[] = [];
     for (const tx of success) {
       const payment = await this.prisma.payment.findFirst({

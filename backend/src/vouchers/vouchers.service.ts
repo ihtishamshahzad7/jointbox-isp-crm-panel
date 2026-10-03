@@ -333,7 +333,32 @@ export class VouchersService {
     };
   }
 
-  async redeemVoucher(code: string, pin: string, subscriberId: number) {
+  /**
+   * A card the caller's company may spend: created by the caller, by an
+   * account above it (the ISP / franchise that printed the stock it sells),
+   * or by an account beneath it. Anything else — another company's card, or
+   * a legacy card with no creator — is "not found", checked BEFORE the PIN so
+   * the endpoint cannot be used to test PINs on other companies' cards.
+   */
+  private async assertVoucherInCompany(actor: Actor, voucher: { createdBy: number | null }) {
+    if (this.scope.isPlatformOwner(actor)) return;
+    const root = await this.scope.rootId(actor);
+    const [up, down] = await Promise.all([this.scope.ancestorIds(root), this.scope.descendantIds(root)]);
+    const by = voucher.createdBy;
+    if (by == null || (!up.includes(by) && !down.includes(by))) {
+      throw new NotFoundException('Voucher not found');
+    }
+  }
+
+  /**
+   * Staff redemption onto an existing subscriber. With an actor (the panel
+   * route) the subscriber must be the caller's and the card must belong to
+   * the caller's company. Without one (the customer portal, which redeems
+   * onto the logged-in customer's own account) behaviour is unchanged.
+   */
+  async redeemVoucher(code: string, pin: string, subscriberId: number, actor?: Actor) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, Number(subscriberId));
+
     const voucher = await this.prisma.voucher.findUnique({
       where: { code },
     });
@@ -341,13 +366,15 @@ export class VouchersService {
     if (!voucher) {
       throw new NotFoundException('Voucher not found');
     }
+
+    if (actor) await this.assertVoucherInCompany(actor, voucher);
     
     if (voucher.pin !== pin) {
-      throw new Error('Invalid PIN');
+      throw new BadRequestException('Invalid PIN');
     }
     
     if (voucher.status !== 'UNUSED') {
-      throw new Error(`Voucher is already ${voucher.status}`);
+      throw new BadRequestException(`Voucher is already ${voucher.status}`);
     }
 
     if (voucher.expireDate && new Date() > voucher.expireDate) {
@@ -355,7 +382,7 @@ export class VouchersService {
         where: { id: voucher.id },
         data: { status: 'EXPIRED' },
       });
-      throw new Error('Voucher has expired');
+      throw new BadRequestException('Voucher has expired');
     }
 
     const subscriber = await this.prisma.subscriber.findUnique({

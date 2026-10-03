@@ -16,6 +16,7 @@ const T = {
 
 const EVENTS = ["MANUAL", "WELCOME", "INVOICE_CREATED", "PAYMENT_RECEIVED", "EXPIRY_REMINDER", "RENEWAL", "SUSPENSION"];
 const VARS = "{name} {username} {phone} {package} {amount} {dueAmount} {expiry} {invoiceNo} {balance} {daysLeft}";
+const PREVIEW = { name: "Rashid Ahmed", username: "rashid01", amount: "1500", expiry: "2026-08-15", package: "Home 20M", invoiceNo: "INV-2026-00042", daysLeft: "3", dueAmount: "1500", phone: "017XXXXXXXX", balance: "500" };
 const TABS = ["Templates", "Send", "Log", "Alerts"] as const;
 type Tab = (typeof TABS)[number];
 
@@ -46,6 +47,16 @@ export default function CommunicationPage() {
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+  // Platform owner edits the platform defaults; a company edits only its own templates.
+  const isOwner = (() => {
+    try { return JSON.parse(atob((token || "").split(".")[1].replace(/-/g, "+").replace(/_/g, "/")))?.role === "SUPER_ADMIN"; } catch { return false; }
+  })();
+  const fail = async (r: Response, what: string) => {
+    if (r.ok) return false;
+    const b = await r.json().catch(() => ({}));
+    setMsg(`${what}: ${Array.isArray(b?.message) ? b.message.join(", ") : b?.message || r.statusText}`);
+    return true;
+  };
 
   const get = useCallback(async (path: string) => {
     const r = await fetch(`${API}${path}`, { headers });
@@ -80,7 +91,8 @@ export default function CommunicationPage() {
     setBusy(true);
     try {
       const url = editingTpl ? `/communication/templates/${editingTpl}` : "/communication/templates";
-      await fetch(`${API}${url}`, { method: editingTpl ? "PUT" : "POST", headers, body: JSON.stringify(tplForm) });
+      const r = await fetch(`${API}${url}`, { method: editingTpl ? "PUT" : "POST", headers, body: JSON.stringify(tplForm) });
+      if (await fail(r, "Could not save")) return;
       setTplForm({ name: "", channel: "SMS", event: "MANUAL", subject: "", body: "" });
       setEditingTpl(null);
       setTemplates(await get("/communication/templates"));
@@ -90,12 +102,12 @@ export default function CommunicationPage() {
 
   async function deleteTemplate(id: number) {
     if (!confirm("Delete this template?")) return;
-    await fetch(`${API}/communication/templates/${id}`, { method: "DELETE", headers });
+    if (await fail(await fetch(`${API}/communication/templates/${id}`, { method: "DELETE", headers }), "Could not delete")) return;
     setTemplates(await get("/communication/templates"));
   }
 
   async function toggleTemplate(tpl: any) {
-    await fetch(`${API}/communication/templates/${tpl.id}`, { method: "PUT", headers, body: JSON.stringify({ ...tpl, isActive: !tpl.isActive }) });
+    if (await fail(await fetch(`${API}/communication/templates/${tpl.id}`, { method: "PUT", headers, body: JSON.stringify({ ...tpl, isActive: !tpl.isActive }) }), "Could not change")) return;
     setTemplates(await get("/communication/templates"));
   }
 
@@ -339,7 +351,7 @@ export default function CommunicationPage() {
               <div style={{ fontSize: 11, color: T.muted }}>Variables: {VARS}</div>
               {tplForm.body && (
                 <div style={{ fontSize: 12, color: T.sub, background: T.bg, borderRadius: 8, padding: 8 }}>
-                  Preview: {tplForm.body.replace("{name}", "Rashid Ahmed").replace("{username}", "rashid01").replace("{amount}", "1500").replace("{expiry}", "2026-08-15").replace("{package}", "Home 20M").replace("{invoiceNo}", "INV-2026-00042").replace("{daysLeft}", "3").replace("{dueAmount}", "1500").replace("{phone}", "017XXXXXXXX").replace("{balance}", "500")}
+                  Preview: {String(tplForm.body).replace(/\{(\w+)\}/g, (m: string, k: string) => (PREVIEW as Record<string, string>)[k] ?? m)}
                 </div>
               )}
               <div style={{ display: "flex", gap: 8 }}>
@@ -364,21 +376,39 @@ export default function CommunicationPage() {
               <tbody>
                 {templates.map((tpl, i) => (
                   <tr key={tpl.id} style={{ background: i % 2 ? "transparent" : T.row }}>
-                    <td style={td}>{tpl.name}</td>
+                    <td style={td}>
+                      {tpl.name}
+                      {tpl.scope === "PLATFORM" && (
+                        <span title="Platform default — used until your company creates its own template for this channel and event"
+                          style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 10, background: `${T.accent}22`, color: T.accent }}>
+                          Default
+                        </span>
+                      )}
+                    </td>
                     <td style={td}>{tpl.channel}</td>
                     <td style={{ ...td, fontSize: 12, color: T.sub }}>{tpl.event}</td>
                     <td style={{ ...td, color: T.sub, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tpl.body}>{tpl.body}</td>
                     <td style={td}>
-                      <span onClick={() => toggleTemplate(tpl)} style={{ cursor: "pointer", fontSize: 11, padding: "2px 8px", borderRadius: 20, background: tpl.isActive ? "#22c55e22" : "var(--muted)22", color: tpl.isActive ? T.green : T.muted }}>
+                      <span onClick={() => (tpl.scope !== "PLATFORM" || isOwner) && toggleTemplate(tpl)} style={{ cursor: tpl.scope !== "PLATFORM" || isOwner ? "pointer" : "default", fontSize: 11, padding: "2px 8px", borderRadius: 20, background: tpl.isActive ? "#22c55e22" : "var(--muted)22", color: tpl.isActive ? T.green : T.muted }}>
                         {tpl.isActive ? "ON" : "OFF"}
                       </span>
                     </td>
                     <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
-                      <button style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, padding: "4px 10px", fontSize: 12, marginRight: 6 }}
-                        onClick={() => { setEditingTpl(tpl.id); setTplForm({ name: tpl.name, channel: tpl.channel, event: tpl.event, subject: tpl.subject || "", body: tpl.body, isActive: tpl.isActive }); }}>
-                        Edit
-                      </button>
-                      <button style={{ ...btn(T.red), padding: "4px 10px", fontSize: 12 }} onClick={() => deleteTemplate(tpl.id)}>Delete</button>
+                      {tpl.scope === "PLATFORM" && !isOwner ? (
+                        <button style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, padding: "4px 10px", fontSize: 12 }}
+                          title="Copy this default into a template of your own and edit it"
+                          onClick={() => { setEditingTpl(null); setTplForm({ name: tpl.name, channel: tpl.channel, event: tpl.event, subject: tpl.subject || "", body: tpl.body, isActive: true }); }}>
+                          Customize
+                        </button>
+                      ) : (
+                        <>
+                          <button style={{ ...btn(T.card), border: `1px solid ${T.border}`, color: T.sub, padding: "4px 10px", fontSize: 12, marginRight: 6 }}
+                            onClick={() => { setEditingTpl(tpl.id); setTplForm({ name: tpl.name, channel: tpl.channel, event: tpl.event, subject: tpl.subject || "", body: tpl.body, isActive: tpl.isActive }); }}>
+                            Edit
+                          </button>
+                          <button style={{ ...btn(T.red), padding: "4px 10px", fontSize: 12 }} onClick={() => deleteTemplate(tpl.id)}>Delete</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

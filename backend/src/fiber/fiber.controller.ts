@@ -24,67 +24,69 @@ export class FiberController {
 
   // ── Summary ──────────────────────────────────────────────────
   @Get('summary')
-  summary() {
-    return this.fiber.getFiberSummary();
+  summary(@Req() req: any) {
+    return this.fiber.getFiberSummary(req.user);
   }
 
   // ── OLT CRUD ─────────────────────────────────────────────────
+  // An OLT is scoped through its NAS; ports and ONUs inherit from it. The
+  // checks live in FiberService so every route goes through the same ones.
   @Get('olts')
-  listOlts() {
-    return this.fiber.listOlts();
+  listOlts(@Req() req: any) {
+    return this.fiber.listOlts(req.user);
   }
 
   @Get('olts/:id')
-  getOlt(@Param('id') id: string) {
-    return this.fiber.getOlt(+id);
+  getOlt(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.getOlt(+id, req.user);
   }
 
   @Post('olts')
   createOlt(@Body() body: {
     name: string; vendor?: string; model?: string; mgmtIp?: string;
     location?: string; nasId?: number; areaId?: number;
-  }) {
-    return this.fiber.createOlt(body);
+  }, @Req() req: any) {
+    return this.fiber.createOlt(body, req.user);
   }
 
   @Put('olts/:id')
-  updateOlt(@Param('id') id: string, @Body() body: any) {
-    return this.fiber.updateOlt(+id, body);
+  updateOlt(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.fiber.updateOlt(+id, body, req.user);
   }
 
   @Delete('olts/:id')
-  deleteOlt(@Param('id') id: string) {
-    return this.fiber.deleteOlt(+id);
+  deleteOlt(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.deleteOlt(+id, req.user);
   }
 
   // ── Fiber Topology Tree ──────────────────────────────────────
   @Get('olts/:id/tree')
-  getTree(@Param('id') id: string) {
-    return this.fiber.getFiberTree(+id);
+  getTree(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.getFiberTree(+id, req.user);
   }
 
   // ── PON Ports ────────────────────────────────────────────────
   @Get('ports')
-  listPorts(@Query('oltId') oltId?: string) {
-    return this.fiber.listPorts(oltId ? +oltId : undefined);
+  listPorts(@Req() req: any, @Query('oltId') oltId?: string) {
+    return this.fiber.listPorts(oltId ? +oltId : undefined, req.user);
   }
 
   @Post('ports')
   createPort(@Body() body: {
     oltId: number; portName: string; slot?: string; port?: string;
     splitRatio?: number; splitterLocation?: string;
-  }) {
-    return this.fiber.createPort(body);
+  }, @Req() req: any) {
+    return this.fiber.createPort(body, req.user);
   }
 
   @Put('ports/:id')
-  updatePort(@Param('id') id: string, @Body() body: any) {
-    return this.fiber.updatePort(+id, body);
+  updatePort(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.fiber.updatePort(+id, body, req.user);
   }
 
   @Delete('ports/:id')
-  deletePort(@Param('id') id: string) {
-    return this.fiber.deletePort(+id);
+  deletePort(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.deletePort(+id, req.user);
   }
 
   // ── ONUs ─────────────────────────────────────────────────────
@@ -106,43 +108,45 @@ export class FiberController {
   @Post('onus/:id/assign/:subscriberId')
   async assignOnu(@Param('id') id: string, @Param('subscriberId') subscriberId: string, @Req() req: any) {
     await this.assertOwns(req.user, +subscriberId);
-    return this.fiber.assignOnu(+id, +subscriberId);
+    return this.fiber.assignOnu(+id, +subscriberId, req.user);
   }
 
   @Post('onus/:id/unassign')
-  unassignOnu(@Param('id') id: string) {
-    return this.fiber.unassignOnu(+id);
+  unassignOnu(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.unassignOnu(+id, req.user);
   }
 
   @Put('onus/:id')
-  updateOnu(@Param('id') id: string, @Body() body: any) {
-    return this.fiber.updateOnu(+id, body);
+  updateOnu(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.fiber.updateOnu(+id, body, req.user);
   }
 
   @Delete('onus/:id')
-  deleteOnu(@Param('id') id: string) {
-    return this.fiber.deleteOnu(+id);
+  deleteOnu(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.deleteOnu(+id, req.user);
   }
 
   // ── ONU Provisioning ─────────────────────────────────────────
   @Get('onus/:id/provision-commands')
-  getProvisionCommands(@Param('id') id: string, @Query('vlan') vlan?: string) {
-    return this.fiber.generateProvisionCommands(+id, vlan ? +vlan : undefined);
+  getProvisionCommands(@Param('id') id: string, @Req() req: any, @Query('vlan') vlan?: string) {
+    return this.fiber.generateProvisionCommands(+id, vlan ? +vlan : undefined, req.user);
   }
 
   @Get('onus/:id/unprovision-commands')
-  getUnprovisionCommands(@Param('id') id: string) {
-    return this.fiber.generateUnprovisionCommands(+id);
+  getUnprovisionCommands(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.generateUnprovisionCommands(+id, req.user);
   }
 
   @Get('onus/:id/diagnostic-commands')
-  getDiagnosticCommands(@Param('id') id: string) {
-    return this.fiber.generateDiagnosticCommands(+id);
+  getDiagnosticCommands(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.generateDiagnosticCommands(+id, req.user);
   }
 
   // ── Circuit-ID Parser ────────────────────────────────────────
+  // Tenant-free: a pure string parser (TopologyService.parseCircuitId), no
+  // database read. The actor is taken only so the route is identity-aware.
   @Get('parse-circuit')
-  parseCircuit(@Query('circuitId') circuitId?: string) {
+  parseCircuit(@Req() _req: any, @Query('circuitId') circuitId?: string) {
     return this.fiber.parseCircuitId(circuitId || '');
   }
 

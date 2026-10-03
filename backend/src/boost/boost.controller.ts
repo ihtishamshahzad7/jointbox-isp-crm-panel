@@ -17,17 +17,19 @@ export class BoostController {
       durationHours: b?.durationHours != null ? Number(b.durationHours) : 0,
       reason: b?.reason,
       charge: b?.charge != null ? Number(b.charge) : 0,
-      createdById: req?.user?.id ?? null,
-    });
+      // The JWT carries the user id as `sub`; `id` is never set, so every
+      // boost was recorded with no creator.
+      createdById: req?.user?.sub ?? req?.user?.id ?? null,
+    }, req.user);
   }
 
   @Get('active')
-  active(@Query('subscriberId') s?: string) {
-    return this.svc.active(s ? Number(s) : undefined);
+  active(@Query('subscriberId') s: string | undefined, @Req() req: any) {
+    return this.svc.active(s ? Number(s) : undefined, req.user);
   }
 
   @Post(':id/revert')
-  revert(@Param('id', ParseIntPipe) id: number) {
-    return this.svc.revert(id);
+  revert(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.svc.revert(id, req.user);
   }
 }

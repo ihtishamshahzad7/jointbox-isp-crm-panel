@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CoaService } from '../network/coa.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Temporary speed boost / change.
@@ -18,7 +19,11 @@ import { isPrimaryInstance } from '../common/cluster-util';
 export class BoostService {
   private readonly log = new Logger('Boost');
 
-  constructor(private prisma: PrismaService, private coa: CoaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private coa: CoaService,
+    private readonly scope: ScopeService,
+  ) {}
 
   /** The plan's normal speed, used as the restore target. */
   private async planSpeed(subscriberId: number): Promise<{ down: number; up: number }> {
@@ -32,11 +37,13 @@ export class BoostService {
   async apply(input: {
     subscriberId: number; downMbps: number; upMbps: number;
     durationHours?: number; reason?: string; charge?: number; createdById?: number;
-  }) {
+  }, actor?: any) {
     const { subscriberId } = input;
     const down = Math.round(Number(input.downMbps));
     const up = Math.round(Number(input.upMbps));
     if (!subscriberId || !(down > 0) || !(up > 0)) throw new BadRequestException('Valid subscriber and speeds are required.');
+    // A boost changes a live session's speed: only on a subscriber the caller owns.
+    if (actor) await this.scope.assertSubscriberVisible(actor, subscriberId);
 
     const original = await this.planSpeed(subscriberId);
 
@@ -72,19 +79,27 @@ export class BoostService {
     };
   }
 
-  /** Active (not-yet-reverted, still-timed) boosts, optionally for one subscriber. */
-  async active(subscriberId?: number) {
+  /**
+   * Active (not-yet-reverted, still-timed) boosts, optionally for one subscriber.
+   * With a tenant actor, only boosts on subscribers that actor can see; the
+   * platform owner and internal callers are unchanged.
+   */
+  async active(subscriberId?: number, actor?: any) {
+    const scoped = actor && !this.scope.isPlatformOwner(actor)
+      ? { subscriber: await this.scope.subscriberWhere(actor) }
+      : {};
     return this.prisma.temporaryBoost.findMany({
-      where: { reverted: false, expiresAt: { not: null }, ...(subscriberId ? { subscriberId } : {}) },
+      where: { reverted: false, expiresAt: { not: null }, ...(subscriberId ? { subscriberId } : {}), ...scoped },
       orderBy: { expiresAt: 'asc' },
       include: { subscriber: { select: { fullName: true, username: true } } },
     });
   }
 
   /** Revert one boost now (manual "cancel boost"). */
-  async revert(id: number) {
+  async revert(id: number, actor?: any) {
     const b = await this.prisma.temporaryBoost.findUnique({ where: { id } });
     if (!b) throw new NotFoundException('Boost not found');
+    if (actor) await this.scope.assertViaSubscriber(actor, b.subscriberId, 'Boost');
     if (b.reverted) return { ok: true, alreadyReverted: true };
     await this.coa.changeBandwidth(b.subscriberId, b.originalDown, b.originalUp).catch(() => undefined);
     await this.prisma.temporaryBoost.update({ where: { id }, data: { reverted: true, revertedAt: new Date() } });

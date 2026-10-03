@@ -5,11 +5,15 @@ import {
 import { NasService } from './nas.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('nas')
 export class NasController {
-  constructor(private readonly nasService: NasService) {}
+  constructor(
+    private readonly nasService: NasService,
+    private readonly scope: ScopeService,
+  ) {}
 
   // ── CRUD ────────────────────────────────────────────────────
   @Get()
@@ -44,8 +48,16 @@ export class NasController {
   @Get('grouped')
   grouped(@Query('by') by: string, @Req() req: any) { return this.nasService.groupedBy(by || 'owner', req.user); }
 
+  /**
+   * Dumps EVERY router on the installation — both the FreeRADIUS `nas` table
+   * (shared secrets included) and every company's Nas rows. Installation
+   * diagnostics, so the platform owner only.
+   */
   @Get('debug/radius-sync')
-  debugRadiusSync() { return this.nasService.debugRadiusSync(); }
+  debugRadiusSync(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.nasService.debugRadiusSync();
+  }
 
   // IMPORTANT: named routes like 'stats' and 'radius/stats' must come
   // BEFORE ':id' — otherwise NestJS treats them as id params
@@ -81,37 +93,54 @@ export class NasController {
   remove(@Param('id') id: string, @Req() req: any) { return this.nasService.remove(+id, req.user); }
 
   // ── MikroTik + RADIUS endpoints ─────────────────────────────
+  //
+  // Every one of these makes the server talk to the router (API login, ICMP,
+  // RADIUS lookups) using credentials stored on the row, so the caller must be
+  // able to see that router first. Out of scope reads as "not found".
   @Get(':id/reachability')
-  checkReachability(@Param('id') id: string) {
+  async checkReachability(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertNas(req.user, +id);
     return this.nasService.checkReachability(+id);
   }
 
   @Get(':id/ping')
-  ping(@Param('id') id: string) {
+  async ping(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertNas(req.user, +id);
     return this.nasService.ping(+id);
   }
 
   @Get(':id/sync')
-  syncDetails(@Param('id') id: string) {
+  async syncDetails(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertNas(req.user, +id);
     return this.nasService.syncDetails(+id);
   }
 
   @Get(':id/quick-check')
-  quickCheck(@Param('id') id: string) {
+  async quickCheck(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertNas(req.user, +id);
     return this.nasService.quickCheck(+id);
   }
 
+  /**
+   * Live sessions on one router. A shared router carries more than one
+   * account's customers, so the service also drops sessions whose subscriber
+   * the caller cannot see.
+   */
   @Get(':id/sessions')
-  getActiveSessions(@Param('id') id: string) {
-    return this.nasService.getActiveSessions(+id);
+  async getActiveSessions(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertNas(req.user, +id);
+    return this.nasService.getActiveSessions(+id, req.user);
   }
 
   /**
    * Accounting-pipeline health — a one-call answer to "why is nobody online?".
-   * Not per-NAS: it inspects the whole radacct/radpostauth flow.
+   * Not per-NAS: it inspects the whole radacct/radpostauth flow — every
+   * company's sessions and logins — so it is installation diagnostics and
+   * reserved for the platform owner.
    */
   @Get('diagnostics/accounting')
-  accountingHealth() {
+  accountingHealth(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.nasService.accountingHealth();
   }
 }

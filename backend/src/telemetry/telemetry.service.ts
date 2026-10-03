@@ -16,9 +16,33 @@ export class TelemetryService {
     private scope: ScopeService,
   ) {}
 
-  /** Live sidebar feed — in-memory recent events (newest first). */
-  liveFeed(limit = 50) {
-    return this.aggregator.getFeed(limit);
+  /**
+   * Live sidebar feed — in-memory recent events (newest first).
+   *
+   * `nasIds` narrows it to those routers (see visibleNasIds); null/omitted is
+   * the whole installation, for the platform owner and internal callers.
+   */
+  liveFeed(limit = 50, nasIds?: number[] | null) {
+    return this.aggregator.getFeed(limit, nasIds);
+  }
+
+  /**
+   * Router ids this caller may see, or null meaning "every router" (the
+   * platform owner).
+   *
+   * The feed, the NAS health board and the whole-network traffic graphs all
+   * aggregate across routers, and each of them used to sum or list every
+   * company's equipment for whoever asked. They narrow to this list instead.
+   * A missing actor fails closed: these are only ever called for a request.
+   */
+  async visibleNasIds(actor: any): Promise<number[] | null> {
+    if (this.scope.isPlatformOwner(actor)) return null;
+    if (!actor) return [];
+    const rows = await this.prisma.nas.findMany({
+      where: await this.scope.nasWhere(actor),
+      select: { id: true },
+    });
+    return rows.map((n) => n.id);
   }
 
   /** All network events for a NAS or globally, from the durable log. */

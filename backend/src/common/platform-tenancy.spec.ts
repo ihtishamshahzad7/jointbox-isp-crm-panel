@@ -28,7 +28,7 @@ describe('platform owner vs ISP tenant', () => {
     const m = src.match(/const ADMIN_ROLES = \[([^\]]*)\]/);
     expect(m).toBeTruthy();
     expect(m![1]).toContain('SUPER_ADMIN');
-    expect(m![1]).not.toContain('ADMIN_');     // guard against a renamed constant
+    expect(m![1]).not.toContain('ADMIN_'); // guard against a renamed constant
     expect(m![1].replace(/SUPER_ADMIN/g, '')).not.toMatch(/'ADMIN'/);
   });
 
@@ -70,7 +70,8 @@ describe('platform owner vs ISP tenant', () => {
     const m = src.match(/NEXT_ROLE[^=]*=\s*\{([\s\S]*?)\};/);
     expect(m).toBeTruthy();
     const map = m![1];
-    const superLine = map.split('\n').find((l) => l.includes('SUPER_ADMIN:')) || '';
+    const superLine =
+      map.split('\n').find((l) => l.includes('SUPER_ADMIN:')) || '';
     const adminLine = map.split('\n').find((l) => /^\s*ADMIN:/.test(l)) || '';
     expect(superLine).toContain("'ADMIN'");
     expect(adminLine).not.toContain("'ADMIN'");
@@ -100,7 +101,9 @@ describe('platform owner vs ISP tenant', () => {
     const src = read('accounting/accounting.service.ts');
     expect(src).toMatch(/approvalScope/);
     expect(src).toMatch(/getPendingApprovals\(actor\?: Actor\)/);
-    expect(src).toMatch(/listRefundRequests\(status = 'PENDING', actor\?: Actor\)/);
+    expect(src).toMatch(
+      /listRefundRequests\(status = 'PENDING', actor\?: Actor\)/,
+    );
     const ctl = read('accounting/accounting.controller.ts');
     expect(ctl).toMatch(/getPendingApprovals\(req\.user\)/);
     expect(ctl).toMatch(/listRefundRequests\([^)]*req\.user\)/);
@@ -117,7 +120,10 @@ describe('platform owner vs ISP tenant', () => {
     expect(src).toMatch(/resolveSignupOwner/);
     expect(src).toMatch(/userId: ownerId/);
     // The old shortcut must be gone from the registration path.
-    const reg = src.slice(src.indexOf('async selfRegister'), src.indexOf('resolveSignupOwner('));
+    const reg = src.slice(
+      src.indexOf('async selfRegister'),
+      src.indexOf('resolveSignupOwner('),
+    );
     expect(reg).not.toMatch(/role: 'SUPER_ADMIN'/);
   });
 
@@ -139,9 +145,15 @@ describe('platform owner vs ISP tenant', () => {
 
   it('excludes marked demo routers from the pollers and the platform view', () => {
     const scope = read('common/scope.service.ts');
-    const fragment = scope.slice(scope.indexOf('export const NON_DEMO_OWNED'), scope.indexOf('export const NON_DEMO_OWNED') + 400);
+    const fragment = scope.slice(
+      scope.indexOf('export const NON_DEMO_OWNED'),
+      scope.indexOf('export const NON_DEMO_OWNED') + 400,
+    );
     expect(fragment).toMatch(/NOT_DEMO_MARKED/);
-    const nasWhere = scope.slice(scope.indexOf('async nasWhere'), scope.indexOf('async poolWhere'));
+    const nasWhere = scope.slice(
+      scope.indexOf('async nasWhere'),
+      scope.indexOf('async poolWhere'),
+    );
     expect(nasWhere).toMatch(/NOT_DEMO_MARKED/);
     // Nullable column: the marker filter must keep NULL server rows explicitly.
     expect(scope).toMatch(/\{ server: null \}/);
@@ -156,5 +168,68 @@ describe('platform owner vs ISP tenant', () => {
     expect(sync).toMatch(/getAuthStats\(scope\?: number\[\] \| null\)/);
     const nas = read('nas/nas.service.ts');
     expect(nas).toMatch(/getAuthStats\(scope\)/);
+  });
+
+  /**
+   * Nothing in the auth path read isActive, so every "suspend" and
+   * "deactivate" in the product changed a column no request consulted.
+   */
+  it('refuses suspended accounts at login, refresh and on every request', () => {
+    const auth = read('auth/auth.service.ts');
+    const login = auth.slice(
+      auth.indexOf('async login('),
+      auth.indexOf('async refreshToken'),
+    );
+    expect(login).toMatch(/user\.isActive === false/);
+    const refresh = auth.slice(auth.indexOf('async refreshToken'));
+    expect(refresh.slice(0, 900)).toMatch(/user\.isActive === false/);
+    // Refresh must keep the demo claim, or a demo session sheds its guard.
+    expect(refresh.slice(0, 1400)).toMatch(/isDemo:/);
+    const strat = read('auth/jwt.strategy.ts');
+    expect(strat).toMatch(/accountStatus\(/);
+    expect(strat).toMatch(/!status\.active/);
+    expect(strat).toMatch(/PASSWORD_CHANGE_REQUIRED/);
+  });
+
+  it('suspends a whole subtree, not just one login', () => {
+    expect(read('auth/account-status.ts')).toMatch(/bool_and\("isActive"\)/);
+  });
+
+  it('never prints the bootstrap password and forces it to be changed', () => {
+    const main = read('main.ts');
+    const boot = main.slice(
+      main.indexOf('async function ensureDefaultAdmin'),
+      main.indexOf('function validateEnv'),
+    );
+    expect(boot).not.toMatch(/\$\{password\}/);
+    expect(boot).toMatch(/mustChangePassword: true/);
+  });
+
+  /**
+   * The capacity query named "Nas", but the model maps to the FreeRADIUS table
+   * `nas` — so it threw, failed open, and the router cap never applied.
+   */
+  it('checks plan capacity against the real tables, without the sandbox', () => {
+    const cap = read('licence/licence-capacity.service.ts');
+    expect(cap).not.toMatch(/FROM "\$\{table\}"/);
+    expect(cap).not.toMatch(/FROM "Nas"/);
+    expect(cap).toMatch(/FROM nas n/);
+    expect(cap).toMatch(/isDemo" = true/);
+    const counts = read('licence/licence-counts.service.ts');
+    expect(counts).toMatch(/NON_DEMO_SUBSCRIBER/);
+    expect(counts).toMatch(/NON_DEMO_OWNED/);
+  });
+
+  /**
+   * On by default, the sandbox put 10,000 invented subscribers and a published
+   * login into every customer's production database.
+   */
+  it('keeps the demo sandbox opt-in', () => {
+    const demo = read('demo/demo.service.ts');
+    expect(demo).toMatch(/DEMO_PUBLIC === '1'/);
+    expect(demo).not.toMatch(/DEMO_PUBLIC !== '0'/);
+    expect(read('demo/demo-repair.service.ts')).not.toMatch(
+      /DEMO_PUBLIC === '0'/,
+    );
   });
 });

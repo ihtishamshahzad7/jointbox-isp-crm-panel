@@ -91,17 +91,90 @@ export class OutagesService {
     private classifier: OutageClassifierService,
   ) {}
 
+  // ── Tenancy ──────────────────────────────────────────────────
+  //
+  // Neither PowerOutage nor PowerSchedule has an owner column; both belong to
+  // an AREA, and areas are per-tenant (Area.ownerId). `actor` is optional on
+  // these methods so the cron path keeps working unscoped; every controller
+  // route passes req.user. A null filter means "everything" — the platform
+  // owner, or an internal call.
+
+  /**
+   * Which outages an account may see and act on.
+   *
+   * An area it owns (what the live status board lists, and where its Notify
+   * button comes from), an area where it has customers (what the outage table
+   * always showed), or an outage it raised itself. Fail-closed: an account
+   * with none of those sees nothing.
+   */
+  private async outageWhere(actor?: Actor): Promise<any | null> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return null;
+    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+    const mine = ids.length ? ids : [0];
+    return {
+      OR: [
+        { area: { is: this.areaReach(mine) } },
+        { createdBy: { in: mine } },
+      ],
+    };
+  }
+
+  /** Areas owned by, or serving customers of, these accounts. */
+  private areaReach(userIds: number[]): any {
+    return {
+      OR: [
+        { ownerId: { in: userIds } },
+        { subscribers: { some: { userId: { in: userIds } } } },
+      ],
+    };
+  }
+
+  /** By-id guard for every per-outage route. Not found, never forbidden. */
+  private async assertOutage(actor: Actor, id: number): Promise<void> {
+    const scope = await this.outageWhere(actor);
+    if (!scope) return;
+    const hit = await this.prisma.powerOutage.findFirst({
+      where: { AND: [{ id }, scope] },
+      select: { id: true },
+    });
+    if (!hit) throw new NotFoundException('Outage not found');
+  }
+
+  /** A schedule is managed by whoever owns its area. */
+  private async assertAreaOwned(actor: Actor, areaId: number): Promise<void> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return;
+    const area = await this.prisma.area.findUnique({ where: { id: Number(areaId) }, select: { ownerId: true } });
+    await this.scope.assertOwnerInScope(actor, area?.ownerId, 'Area');
+  }
+
+  private async assertScheduleOwned(actor: Actor, id: number): Promise<void> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return;
+    const row = await this.prisma.powerSchedule.findUnique({
+      where: { id },
+      select: { area: { select: { ownerId: true } } },
+    });
+    if (!row) throw new NotFoundException('Schedule not found');
+    await this.scope.assertOwnerInScope(actor, row.area?.ownerId, 'Schedule');
+  }
+
   // ── Schedules ────────────────────────────────────────────────
-  async listSchedules(areaId?: number) {
+  async listSchedules(areaId?: number, actor?: Actor) {
+    const where: any = areaId ? { areaId: Number(areaId) } : {};
+    // Same areas as the Areas list (ownedWhere): the timetables of areas this
+    // account runs. The platform owner keeps the unfiltered view.
+    if (actor && !this.scope.isPlatformOwner(actor)) {
+      where.area = { is: await this.scope.ownedWhere(actor) };
+    }
     return this.prisma.powerSchedule.findMany({
-      where: areaId ? { areaId: Number(areaId) } : {},
+      where,
       include: { area: { select: { id: true, name: true, city: true } } },
       orderBy: [{ areaId: 'asc' }, { startTime: 'asc' }],
     });
   }
 
-  async createSchedule(data: any) {
+  async createSchedule(data: any, actor?: Actor) {
     if (!data.areaId) throw new BadRequestException('An area is required.');
+    await this.assertAreaOwned(actor, Number(data.areaId));
     if (!this.isTime(data.startTime) || !this.isTime(data.endTime)) {
       throw new BadRequestException('Times must be in HH:MM format, e.g. 18:00.');
     }
@@ -117,7 +190,8 @@ export class OutagesService {
     });
   }
 
-  async updateSchedule(id: number, data: any) {
+  async updateSchedule(id: number, data: any, actor?: Actor) {
+    await this.assertScheduleOwned(actor, id);
     return this.prisma.powerSchedule.update({
       where: { id },
       data: {
@@ -130,7 +204,8 @@ export class OutagesService {
     });
   }
 
-  async removeSchedule(id: number) {
+  async removeSchedule(id: number, actor?: Actor) {
+    await this.assertScheduleOwned(actor, id);
     await this.prisma.powerSchedule.delete({ where: { id } }).catch(() => null);
     return { deleted: true, id };
   }
@@ -432,19 +507,14 @@ export class OutagesService {
     const where: any = {};
 
     // SECURITY: `actor` was accepted and ignored, exposing outages in areas
-    // the caller does not serve. Restricted to areas where they actually have
-    // customers — which is also the only set that is useful to them.
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      const areas = await this.prisma.subscriber.findMany({
-        where: { userId: { in: ids }, areaId: { not: null } },
-        select: { areaId: true },
-        distinct: ['areaId'],
-      });
-      const areaIds = areas.map((a) => a.areaId!).filter(Boolean);
-      // No areas means no outages are theirs to see — fail closed.
-      where.areaId = { in: areaIds.length ? areaIds : [0] };
-    }
+    // the caller does not serve. Restricted to the caller's own areas (see
+    // outageWhere) — and fail-closed when it has none.
+    //
+    // Kept as an AND so the ?areaId filter below narrows the scope rather than
+    // replacing it: it used to overwrite `where.areaId`, so any account could
+    // read another company's outages by passing that company's area id.
+    const scope = await this.outageWhere(actor);
+    if (scope) where.AND = [scope];
 
     if (query.active === 'true') where.endedAt = null;
     if (query.areaId) where.areaId = Number(query.areaId);
@@ -504,7 +574,8 @@ export class OutagesService {
   }
 
   /** The stored verdict for one outage. */
-  async getAttribution(id: number) {
+  async getAttribution(id: number, actor?: Actor) {
+    await this.assertOutage(actor, id);
     const o = await this.prisma.powerOutage.findUnique({ where: { id } });
     if (!o) throw new NotFoundException('Outage not found');
     return this.toAttribution(o);
@@ -518,7 +589,8 @@ export class OutagesService {
    * hour later outranks that. Clearing it is an explicit act — confirm a
    * different cause.
    */
-  async attribute(id: number) {
+  async attribute(id: number, actor?: Actor) {
+    await this.assertOutage(actor, id);
     const o = await this.prisma.powerOutage.findUnique({ where: { id } });
     if (!o) throw new NotFoundException('Outage not found');
     if (Number(o.causeConfidence ?? 0) >= 1) return this.toAttribution(o);
@@ -543,8 +615,9 @@ export class OutagesService {
   }
 
   /** An operator states the cause. Overrides the classifier; see above. */
-  async confirmAttribution(id: number, cause?: string) {
+  async confirmAttribution(id: number, cause?: string, actor?: Actor) {
     const ALLOWED = ['POWER_RELATED', 'FIBER_CUT', 'EQUIPMENT_FAILURE', 'UPSTREAM_ISP', 'UNKNOWN'];
+    await this.assertOutage(actor, id);
     const o = await this.prisma.powerOutage.findUnique({ where: { id } });
     if (!o) throw new NotFoundException('Outage not found');
 
@@ -626,10 +699,12 @@ export class OutagesService {
    * difference between "we delivered 94%" and "we delivered 99.2%, WAPDA cost
    * you the rest".
    */
-  async uptimeReport(days = 30) {
+  async uptimeReport(days = 30, actor?: Actor) {
     const since = new Date(Date.now() - days * 86400_000);
+    // A company's uptime is computed over its own areas' outages only.
+    const scope = await this.outageWhere(actor);
     const outages = await this.prisma.powerOutage.findMany({
-      where: { startedAt: { gte: since } },
+      where: scope ? { AND: [{ startedAt: { gte: since } }, scope] } : { startedAt: { gte: since } },
       include: { area: { select: { name: true } } },
     });
 
@@ -669,14 +744,16 @@ export class OutagesService {
   }
 
   // ── Actions ──────────────────────────────────────────────────
-  async classify(id: number, type: string, notes?: string) {
+  async classify(id: number, type: string, notes?: string, actor?: Actor) {
+    await this.assertOutage(actor, id);
     return this.prisma.powerOutage.update({
       where: { id },
       data: { type: type as any, notes: notes ?? undefined },
     });
   }
 
-  async close(id: number) {
+  async close(id: number, actor?: Actor) {
+    await this.assertOutage(actor, id);
     return this.prisma.powerOutage.update({
       where: { id },
       data: { endedAt: new Date() },
@@ -684,6 +761,16 @@ export class OutagesService {
   }
 
   async createManual(data: any, actor?: Actor) {
+    // An outage marks its area as down — on the public status page too — so
+    // a tenant may only raise one for an area it owns or serves.
+    if (data.areaId && actor && !this.scope.isPlatformOwner(actor)) {
+      const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+      const area = await this.prisma.area.findFirst({
+        where: { AND: [{ id: Number(data.areaId) }, this.areaReach(ids.length ? ids : [0])] },
+        select: { id: true },
+      });
+      if (!area) throw new NotFoundException('Area not found');
+    }
     return this.prisma.powerOutage.create({
       data: {
         areaId: data.areaId ? Number(data.areaId) : null,
@@ -702,15 +789,24 @@ export class OutagesService {
    * returns" removes most of the inbound calls an outage would otherwise
    * generate — and stops customers believing the ISP is at fault.
    */
-  async notifyArea(id: number, message?: string) {
+  async notifyArea(id: number, message?: string, actor?: Actor) {
+    await this.assertOutage(actor, id);
     const outage = await this.prisma.powerOutage.findUnique({
       where: { id },
       include: { area: { select: { id: true, name: true } } },
     });
     if (!outage?.areaId) throw new NotFoundException('Outage or area not found');
 
+    // Only the caller's OWN customers in that area are messaged. An area can
+    // hold another account's subscribers too, and texting them in our name is
+    // both a privacy breach and spending someone else's SMS credit.
+    const own = actor && !this.scope.isPlatformOwner(actor)
+      ? await this.scope.subscriberWhere(actor)
+      : null;
     const subs = await this.prisma.subscriber.findMany({
-      where: { areaId: outage.areaId, status: 'ACTIVE' },
+      where: own
+        ? { AND: [{ areaId: outage.areaId, status: 'ACTIVE' }, own] }
+        : { areaId: outage.areaId, status: 'ACTIVE' },
       select: { id: true, fullName: true, phone: true },
     });
 

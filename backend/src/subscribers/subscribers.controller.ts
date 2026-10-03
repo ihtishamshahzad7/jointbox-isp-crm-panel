@@ -10,6 +10,7 @@ import { IntegrityService } from './integrity.service';
 import { PANEL_COLUMNS, CONNECTION_TYPE, PROFILE_STATUS, DISCOUNT_TYPE } from './panel-format';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
+import { ScopeService } from '../common/scope.service';
 import {
   ForbiddenException, NotFoundException,
   BadRequestException, InternalServerErrorException,
@@ -24,6 +25,7 @@ export class SubscribersController {
     private readonly exporter: ExportService,
     private readonly lifecycle: LifecycleService,
     private readonly integrity: IntegrityService,
+    private readonly scope: ScopeService,
   ) {}
 
   private assertIsp(req: any) {
@@ -130,9 +132,12 @@ export class SubscribersController {
     return this.exporter.runPanelFormat(body || {}, req.user);
   }
 
-  /** The canonical column list, for building a template or validating a file. */
+  /**
+   * The canonical column list, for building a template or validating a file.
+   * Tenant-free: a constant format description, no data.
+   */
   @Get('format/columns')
-  formatColumns() {
+  formatColumns(@Req() _req: any) {
     return {
       columns: PANEL_COLUMNS,
       count: PANEL_COLUMNS.length,
@@ -174,14 +179,18 @@ export class SubscribersController {
    * speed and session limits. Use after changing any of those.
    */
   @Post(':id/sync-profile')
-  syncProfile(@Param('id') id: string) {
+  async syncProfile(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.subscribersService.syncToRadius(+id);
   }
 
   // Rebuild package / NAS / install-date links for every subscriber that lost
   // them. Fills NULLs only — safe to run any time. Also runs on backend start.
+  // Installation-wide maintenance (walks every company's subscribers), so
+  // platform owner only.
   @Post('repair-links')
-  repairLinks() {
+  repairLinks(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.subscribersService.repairMissingLinks();
   }
 
@@ -352,7 +361,8 @@ export class SubscribersController {
   }
 
   @Get(':id/profile-bundle')
-  profileBundle(@Param('id') id: string) {
+  async profileBundle(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.subscribersService.getProfileBundle(+id);
   }
 
@@ -377,8 +387,12 @@ export class SubscribersController {
 
   // ========== RADIUS PROFILE ROUTES (must come before @Get(':id')) ==========
 
+  // Every :username route below checks the username belongs to one of the
+  // caller's subscribers first. A username with no subscriber row (an orphan
+  // in radcheck/radacct) is reachable by the platform owner only.
   @Get('radius-session/:username')
-  async getRadiusSession(@Param('username') username: string) {
+  async getRadiusSession(@Param('username') username: string, @Req() req: any) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.getRadiusSession(username);
   }
 
@@ -398,39 +412,49 @@ export class SubscribersController {
   @Get('live-traffic/:username')
   async getLiveTraffic(
     @Param('username') username: string,
+    @Req() req: any,
     @Query('seconds') seconds?: string,
   ) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.getLiveTraffic(username, Number(seconds) || 300);
   }
 
   @Get('bandwidth-history/:username')
   async getBandwidthHistory(
     @Param('username') username: string,
+    @Req() req: any,
     @Query('minutes') minutes?: string,
   ) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.getBandwidthHistory(username, Number(minutes) || 60);
   }
 
   /** Daily up/down usage (GB) for the historical bandwidth graph. */
   @Get('usage-daily/:username')
-  async getDailyUsage(@Param('username') username: string, @Query('days') days?: string) {
+  async getDailyUsage(@Param('username') username: string, @Req() req: any, @Query('days') days?: string) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.getDailyUsage(username, Number(days) || 14);
   }
 
   @Get('radius-auth-log/:username')
-  async getRadiusAuthLog(@Param('username') username: string) {
+  async getRadiusAuthLog(@Param('username') username: string, @Req() req: any) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.getRadiusAuthLog(username);
   }
 
   @Get('radius-checks/:username')
-  async getRadiusChecks(@Param('username') username: string) {
+  async getRadiusChecks(@Param('username') username: string, @Req() req: any) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.getRadiusChecks(username);
   }
 
   // ========== REST PARAMETER ROUTES ==========
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Req() req: any) {
+  async findOne(@Param('id') id: string, @Req() req: any) {
+    // Not-found (not forbidden) outside the caller's account, so ids cannot
+    // be enumerated across companies. findOne() keeps its own check too.
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.subscribersService.findOne(+id, req.user);
   }
 
@@ -492,26 +516,30 @@ export class SubscribersController {
 
   // Check if a specific user exists in RADIUS
   @Get('radius-status/:username')
-  async checkRadiusStatus(@Param('username') username: string) {
+  async checkRadiusStatus(@Param('username') username: string, @Req() req: any) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.checkRadiusStatus(username);
   }
 
-  // Test RADIUS database connection
+  // Test RADIUS database connection — server internals, platform owner only.
   @Get('test-radius-connection')
-  async testRadiusConnection() {
+  async testRadiusConnection(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
     return this.subscribersService.testRadiusConnection();
   }
 
   // Find subscriber by username (not ID)
   @Get('username/:username')
-  async findByUsername(@Param('username') username: string) {
+  async findByUsername(@Param('username') username: string, @Req() req: any) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     return this.subscribersService.findByUsername(username);
   }
 
   // Manually sync a specific subscriber to RADIUS by ID (full profile)
   @Post(':id/sync-to-radius')
-  async syncOneToRadius(@Param('id') id: string) {
-    const subscriber = await this.subscribersService.findOne(+id);
+  async syncOneToRadius(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
+    const subscriber = await this.subscribersService.findOne(+id, req.user);
     if (!subscriber) {
       throw new NotFoundException('Subscriber not found');
     }
@@ -541,17 +569,21 @@ export class SubscribersController {
   }
 
   // Remove a subscriber from RADIUS only (doesn't delete from CRM)
+  // An orphan username (no subscriber row) can only be removed by the
+  // platform owner — assertSubscriberUsername enforces that.
   @Delete('radius/:username')
-  async removeFromRadius(@Param('username') username: string) {
+  async removeFromRadius(@Param('username') username: string, @Req() req: any) {
+    await this.scope.assertSubscriberUsername(req.user, username);
     await this.subscribersService.radiusSync.removeSubscriberFromRadius(username);
     return { message: `Subscriber ${username} removed from RADIUS` };
   }
 
   // Get all subscribers that are missing from RADIUS
   @Get('missing-from-radius')
-  async getMissingFromRadius() {
-    // findAll() without pagination params always returns the full array
-    const allSubscribers = (await this.subscribersService.findAll()) as Array<any>;
+  async getMissingFromRadius(@Req() req: any) {
+    // findAll() without pagination params always returns the full array.
+    // Scoped by the caller (subscriberWhere): only their own subscribers.
+    const allSubscribers = (await this.subscribersService.findAll(undefined, req.user)) as Array<any>;
 
     const missing: Array<{
       id: number;
@@ -583,8 +615,9 @@ export class SubscribersController {
 
   // Fix: Re-sync a subscriber with correct password format (full profile)
   @Post(':id/fix-radius-password')
-  async fixRadiusPassword(@Param('id') id: string) {
-    const subscriber = await this.subscribersService.findOne(+id);
+  async fixRadiusPassword(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
+    const subscriber = await this.subscribersService.findOne(+id, req.user);
     if (!subscriber) {
       throw new NotFoundException('Subscriber not found');
     }

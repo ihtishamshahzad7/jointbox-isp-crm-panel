@@ -18,6 +18,16 @@ export default function MonitorDetail() {
   const [range, setRange] = React.useState<(typeof RANGES)[number]>("1h");
   const [hist, setHist] = React.useState<{ points: Point[]; stats: Stats } | null>(null);
   const [err, setErr] = React.useState("");
+  // On-demand probes make THIS server send traffic to a host you name, so the
+  // backend allows them for the platform owner only. Not offering a panel
+  // that answers 403 to everyone else.
+  const [isOwner, setIsOwner] = React.useState(false);
+  React.useEffect(() => {
+    fetch(`${API}/profile`, { headers: H })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setIsOwner(d?.user?.role === "SUPER_ADMIN"))
+      .catch(() => setIsOwner(false));
+  }, []);
 
   const loadTarget = React.useCallback(async () => {
     const r = await fetch(`${API}/monitoring/targets/${id}`, { headers: H });
@@ -79,7 +89,7 @@ export default function MonitorDetail() {
       </div>
 
       {/* Diagnostics */}
-      <Diagnostics host={target.host} />
+      {isOwner && <Diagnostics host={target.host} />}
     </div>
   );
 }

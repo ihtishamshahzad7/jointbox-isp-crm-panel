@@ -42,9 +42,15 @@ export class LinkAggregatorService {
 
   constructor(private prisma: PrismaService) {}
 
-  /** Most-recent events for the live sidebar (newest first). */
-  getFeed(limit = 50): FeedItem[] {
-    return this.feed.slice(-limit).reverse();
+  /**
+   * Most-recent events for the live sidebar (newest first). With `nasIds`,
+   * only events from those routers — filtered BEFORE the limit, so a tenant
+   * still gets its own last N events rather than its share of everyone's.
+   */
+  getFeed(limit = 50, nasIds?: number[] | null): FeedItem[] {
+    if (!nasIds) return this.feed.slice(-limit).reverse();
+    const allowed = new Set(nasIds);
+    return this.feed.filter((f) => allowed.has(f.nasId)).slice(-limit).reverse();
   }
 
   private push(item: Omit<FeedItem, 'id' | 'ts'>) {

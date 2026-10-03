@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Put, Delete,
-  Body, Param, Query, UseGuards, Req,
+  Body, Param, Query, UseGuards, Req, NotFoundException,
 } from '@nestjs/common';
 import { ApiKeyGuard, RequireScope } from './api-key.guard';
 import { SubscribersService } from '../subscribers/subscribers.service';
@@ -12,6 +12,7 @@ import { CoaService } from '../network/coa.service';
 import { ThrottleService, ThrottleRule } from '../network/throttle.service';
 import { FiberService } from '../fiber/fiber.service';
 import { PackagesService } from '../packages/packages.service';
+import { ScopeService } from '../common/scope.service';
 
 /**
  * Public API v1 — key-authenticated REST endpoints for external integrations.
@@ -33,7 +34,35 @@ export class PublicApiController {
     private readonly throttle: ThrottleService,
     private readonly fiber: FiberService,
     private readonly pkgService: PackagesService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /**
+   * TENANCY FOR API KEYS.
+   *
+   * ApiKeyGuard makes the key's OWNER the actor (role 'API'), so the subtree
+   * helpers scope a key exactly like its owner's own session. Every route
+   * below that takes an id now checks it — before this, a key held by one
+   * company could disconnect, throttle, invoice or look up any other
+   * company's customers by id, phone or username.
+   *
+   * Installation-wide operations (gateway reconciliation, the transaction
+   * ledger) need a key whose owner IS the platform owner — the 'API' role on
+   * the actor is not enough to tell, so the owner's real role is read.
+   */
+  /** findOne answers null (not a throw) for another company's invoice. */
+  private async assertInvoice(id: number, req: any): Promise<void> {
+    const inv = await this.invoices.findOne(id, req.user);
+    if (!inv) throw new NotFoundException('Invoice not found');
+  }
+
+  private async assertKeyOwnerIsPlatform(req: any): Promise<void> {
+    const owner = await this.prisma.user.findUnique({
+      where: { id: Number(req?.user?.id) },
+      select: { role: true },
+    });
+    this.scope.assertPlatformOwner({ role: owner?.role } as any);
+  }
 
   // ── Health & Ping ────────────────────────────────────────────
   @Get('ping')
@@ -48,11 +77,20 @@ export class PublicApiController {
   }
 
   @Get('health')
-  async health() {
+  async health(@Req() req: any) {
+    // The key owner's own numbers — these were installation-wide totals, so
+    // any company's key read every other company's customer count.
+    const owners = await this.scope.visibleUserIds(req.user);
     const [subs, online] = await Promise.all([
-      this.prisma.subscriber.count(),
-      this.prisma.$queryRaw<any[]>`SELECT COUNT(*)::int AS n FROM radacct WHERE acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
-        .catch(() => [{ n: 0 }]),
+      this.prisma.subscriber.count({ where: await this.scope.subscriberWhere(req.user) }),
+      (owners
+        ? this.prisma.$queryRaw<any[]>`SELECT COUNT(*)::int AS n FROM radacct a
+             JOIN "Subscriber" s ON s.username = a.username
+            WHERE a.acctstoptime IS NULL
+              AND COALESCE(a.acctupdatetime, a.acctstarttime) > NOW() - INTERVAL '15 minutes'
+              AND s."userId" = ANY(${owners}::int[])`
+        : this.prisma.$queryRaw<any[]>`SELECT COUNT(*)::int AS n FROM radacct WHERE acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'`
+      ).catch(() => [{ n: 0 }]),
     ]);
     return {
       status: 'ok',
@@ -117,38 +155,48 @@ export class PublicApiController {
   // ── Network Actions (CoA / Throttle) ─────────────────────────
   @Post('subscribers/:id/disconnect')
   @RequireScope('write')
-  disconnect(@Param('id') id: string) {
+  async disconnect(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.coa.disconnectSubscriber(+id);
   }
 
   @Post('subscribers/:id/bandwidth')
   @RequireScope('write')
-  changeBandwidth(
+  async changeBandwidth(
     @Param('id') id: string,
     @Body() body: { downloadSpeed: number; uploadSpeed: number },
+    @Req() req: any,
   ) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.coa.changeBandwidth(+id, body.downloadSpeed, body.uploadSpeed);
   }
 
   @Post('subscribers/:id/throttle')
   @RequireScope('write')
-  applyThrottle(
+  async applyThrottle(
     @Param('id') id: string,
     @Body() body: { downloadSpeed: number; uploadSpeed: number; reason: string; expiresInMinutes?: number },
+    @Req() req: any,
   ) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.throttle.applyThrottle(+id, body.downloadSpeed, body.uploadSpeed, body.reason, body.expiresInMinutes);
   }
 
   @Delete('subscribers/:id/throttle')
   @RequireScope('write')
-  removeThrottle(@Param('id') id: string) {
+  async removeThrottle(@Param('id') id: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +id);
     return this.throttle.removeThrottle(+id);
   }
 
   @Get('throttles')
   @RequireScope('read')
-  listThrottles(): ThrottleRule[] {
-    return this.throttle.getActiveThrottles();
+  async listThrottles(@Req() req: any): Promise<ThrottleRule[]> {
+    const all = this.throttle.getActiveThrottles();
+    const visible = await this.scope.visibleSubscriberIds(req.user);
+    if (visible === null) return all;
+    const set = new Set(visible);
+    return all.filter((r) => set.has(r.subscriberId));
   }
 
   // ── Invoices ─────────────────────────────────────────────────
@@ -160,38 +208,42 @@ export class PublicApiController {
 
   @Get('invoices/:id')
   @RequireScope('read')
-  getInvoice(@Param('id') id: string) {
-    return this.invoices.findOne(+id);
+  getInvoice(@Param('id') id: string, @Req() req: any) {
+    return this.invoices.findOne(+id, req.user);
   }
 
   @Get('invoices/subscriber/:subscriberId')
   @RequireScope('read')
-  getInvoicesBySubscriber(@Param('subscriberId') subscriberId: string) {
-    return this.invoices.findBySubscriber(+subscriberId);
+  async getInvoicesBySubscriber(@Param('subscriberId') subscriberId: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +subscriberId);
+    return this.invoices.findBySubscriber(+subscriberId, req.user);
   }
 
   @Post('invoices')
   @RequireScope('write')
-  createInvoice(@Body() body: any) {
-    return this.invoices.create(body);
+  async createInvoice(@Body() body: any, @Req() req: any) {
+    await this.scope.assertViaSubscriber(req.user, body?.subscriberId, 'Subscriber');
+    return this.invoices.create(body, req.user);
   }
 
   @Get('invoices/stats')
   @RequireScope('read')
-  invoiceStats() {
-    return this.invoices.getStats();
+  invoiceStats(@Req() req: any) {
+    return this.invoices.getStats(req.user);
   }
 
   @Get('invoices/:id/pdf')
   @RequireScope('read')
-  async invoicePdf(@Param('id') id: string) {
-    return this.invoices.getInvoicePdf(+id);
+  async invoicePdf(@Param('id') id: string, @Req() req: any) {
+    await this.assertInvoice(+id, req);
+    return this.invoices.getInvoicePdf(+id, req.user);
   }
 
   @Post('invoices/:id/payment')
   @RequireScope('write')
-  recordPayment(@Param('id') id: string, @Body() body: any) {
-    return this.invoices.recordPayment(+id, body);
+  async recordPayment(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    await this.assertInvoice(+id, req);
+    return this.invoices.recordPayment(+id, body, req.user);
   }
 
   // ── Payments / Gateway ───────────────────────────────────────
@@ -203,23 +255,26 @@ export class PublicApiController {
 
   @Post('gateways/initiate/:invoiceId/:gateway')
   @RequireScope('write')
-  initiatePayment(
+  async initiatePayment(
     @Param('invoiceId') invoiceId: string,
     @Param('gateway') gateway: string,
     @Req() req: any,
   ) {
+    await this.assertInvoice(+invoiceId, req);
     return this.gateway.initiate(+invoiceId, gateway);
   }
 
   @Get('gateways/transactions')
   @RequireScope('read')
-  gatewayTransactions(@Query() query: any) {
+  async gatewayTransactions(@Query() query: any, @Req() req: any) {
+    await this.assertKeyOwnerIsPlatform(req);
     return this.gateway.getTransactions(query);
   }
 
   @Get('gateways/reconcile')
   @RequireScope('write')
-  reconcile() {
+  async reconcile(@Req() req: any) {
+    await this.assertKeyOwnerIsPlatform(req);
     return this.gateway.reconcile();
   }
 
@@ -234,44 +289,46 @@ export class PublicApiController {
   // ── Fiber / OLT ──────────────────────────────────────────────
   @Get('fiber/summary')
   @RequireScope('read')
-  fiberSummary() {
-    return this.fiber.getFiberSummary();
+  fiberSummary(@Req() req: any) {
+    return this.fiber.getFiberSummary(req.user);
   }
 
   @Get('fiber/olts')
   @RequireScope('read')
-  listOlts() {
-    return this.fiber.listOlts();
+  listOlts(@Req() req: any) {
+    return this.fiber.listOlts(req.user);
   }
 
   @Get('fiber/olts/:id')
   @RequireScope('read')
-  getOlt(@Param('id') id: string) {
-    return this.fiber.getOlt(+id);
+  getOlt(@Param('id') id: string, @Req() req: any) {
+    return this.fiber.getOlt(+id, req.user);
   }
 
   @Get('fiber/onus')
   @RequireScope('read')
-  listOnus(@Query() query: any) {
+  listOnus(@Query() query: any, @Req() req: any) {
     return this.fiber.listOnus({
       ...(query.oltId ? { oltId: +query.oltId } : {}),
       ...(query.unassigned ? { unassigned: true } : {}),
       page: query.page ? +query.page : undefined,
       limit: query.limit ? +query.limit : undefined,
-    });
+    }, req.user);
   }
 
   @Get('fiber/subscribers/:subscriberId')
   @RequireScope('read')
-  getSubscriberFiber(@Param('subscriberId') subscriberId: string) {
+  async getSubscriberFiber(@Param('subscriberId') subscriberId: string, @Req() req: any) {
+    await this.scope.assertSubscriberVisible(req.user, +subscriberId);
     return this.fiber.getSubscriberFiber(+subscriberId);
   }
 
   // ── NSLookup (NAS, Areas, Users) ─────────────────────────────
   @Get('nas')
   @RequireScope('read')
-  nas() {
+  async nas(@Req() req: any) {
     return this.prisma.nas.findMany({
+      where: await this.scope.nasWhere(req.user),
       select: { id: true, nasname: true, nasIp: true, type: true, isActive: true },
       orderBy: { nasname: 'asc' },
     });
@@ -279,8 +336,9 @@ export class PublicApiController {
 
   @Get('areas')
   @RequireScope('read')
-  areas() {
+  async areas(@Req() req: any) {
     return this.prisma.area.findMany({
+      where: await this.scope.ownedWhere(req.user),
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     });
@@ -299,7 +357,7 @@ export class PublicApiController {
   @RequireScope('read')
   async lookupByPhone(@Param('phone') phone: string, @Req() req: any) {
     const sub = await this.prisma.subscriber.findFirst({
-      where: { phone },
+      where: { AND: [{ phone }, await this.scope.subscriberWhere(req.user)] },
       include: { package: true, serviceSettings: true },
     });
     if (!sub) return { found: false };
@@ -320,8 +378,8 @@ export class PublicApiController {
   @Get('lookup/username/:username')
   @RequireScope('read')
   async lookupByUsername(@Param('username') username: string, @Req() req: any) {
-    const sub = await this.prisma.subscriber.findUnique({
-      where: { username },
+    const sub = await this.prisma.subscriber.findFirst({
+      where: { AND: [{ username }, await this.scope.subscriberWhere(req.user)] },
       include: { package: true, serviceSettings: true },
     });
     if (!sub) return { found: false };
