@@ -30,16 +30,14 @@ export class GroupsController {
     return this.groups.listGroups(query, req.user);
   }
 
-  // Tenant-free: the installation's active group names/colours for filter
-  // dropdowns — the same list GET /groups already returns to every caller.
+  // The caller's company's active groups, for filter dropdowns.
   @Get('options')
-  options(@Req() _req: any) {
-    return this.groups.listOptions();
+  options(@Req() req: any) {
+    return this.groups.listOptions(req.user);
   }
 
-  // Readable by anyone the permission guard admits, but members / NAS /
-  // packages are cut down to what the caller can already see. Every write
-  // below is platform-owner only: groups are one set for the installation.
+  // A company's own groups; members / NAS / packages cut down to what the
+  // caller can already see. Writes: the company's administrator only.
   @Get(':id')
   get(@Param('id') id: string, @Req() req: any) {
     return this.groups.getGroup(+id, req.user);

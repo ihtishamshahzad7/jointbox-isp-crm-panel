@@ -79,37 +79,97 @@ export class AccountingService {
   }
 
   // ── Accounting-period lock (close-the-books) ─────────────────
-  /** Current lock state — the date through which the books are closed. */
-  async getPeriodLock() {
-    const lock = await this.prisma.accountingLock.findUnique({ where: { id: 1 } });
-    return { lockedThrough: lock?.lockedThrough ?? null, updatedAt: lock?.updatedAt ?? null };
+  //
+  // Two locks: each COMPANY closes its own books (company_period_lock), and
+  // the platform owner can close the whole installation (AccountingLock id 1).
+  // A posting is refused when its date falls inside either one that applies.
+
+  /**
+   * Lock state for the caller. A company sees (and edits) its own date; the
+   * installation-wide date is shown alongside, read-only. The platform owner
+   * (or an internal call) gets the installation lock.
+   */
+  async getPeriodLock(actor?: Actor) {
+    const global = await this.prisma.accountingLock.findUnique({ where: { id: 1 } });
+    if (!actor || this.scope.isPlatformOwner(actor)) {
+      return { lockedThrough: global?.lockedThrough ?? null, updatedAt: global?.updatedAt ?? null, scope: 'PLATFORM' };
+    }
+    const company = await this.scope.companyRootId(this.scope.actorId(actor));
+    const own = company != null
+      ? await this.prisma.companyPeriodLock.findUnique({ where: { companyId: company } })
+      : null;
+    return {
+      lockedThrough: own?.lockedThrough ?? null,
+      updatedAt: own?.updatedAt ?? null,
+      platformLockedThrough: global?.lockedThrough ?? null,
+      scope: 'COMPANY',
+    };
   }
 
-  /** Move the close-through date. ISP-only (enforced in the controller). */
-  async setPeriodLock(lockedThrough: string | null, actorId?: number) {
+  /**
+   * Move the close-through date. The platform owner moves the installation
+   * lock; a company's administrator moves that company's lock (a franchise or
+   * dealer cannot — configOwnerForCreate refuses them).
+   */
+  async setPeriodLock(lockedThrough: string | null, actorOrId?: Actor | number) {
     const value = lockedThrough ? new Date(lockedThrough) : null;
-    const lock = await this.prisma.accountingLock.upsert({
-      where: { id: 1 },
-      update: { lockedThrough: value, updatedById: actorId ?? null },
-      create: { id: 1, lockedThrough: value, updatedById: actorId ?? null },
-    });
+    if (value && Number.isNaN(value.getTime())) throw new BadRequestException('Not a valid date.');
+    const actor: Actor | undefined = typeof actorOrId === 'object' ? actorOrId : undefined;
+    const actorId = typeof actorOrId === 'number' ? actorOrId : actor ? this.scope.actorId(actor) : undefined;
+    const company = actor ? await this.scope.configOwnerForCreate(actor) : null;
+
+    let saved: Date | null;
+    if (company == null) {
+      const lock = await this.prisma.accountingLock.upsert({
+        where: { id: 1 },
+        update: { lockedThrough: value, updatedById: actorId ?? null },
+        create: { id: 1, lockedThrough: value, updatedById: actorId ?? null },
+      });
+      saved = lock.lockedThrough;
+    } else {
+      const lock = await this.prisma.companyPeriodLock.upsert({
+        where: { companyId: company },
+        update: { lockedThrough: value, updatedById: actorId ?? null },
+        create: { companyId: company, lockedThrough: value, updatedById: actorId ?? null },
+      });
+      saved = lock.lockedThrough;
+    }
     await this.prisma.activityLog.create({
-      data: { userId: actorId ?? null, action: 'SET_PERIOD_LOCK', entity: 'AccountingLock', entityId: 1,
+      data: { userId: actorId ?? null, action: 'SET_PERIOD_LOCK',
+        entity: company == null ? 'AccountingLock' : 'CompanyPeriodLock', entityId: company ?? 1,
         details: value ? `Books closed through ${value.toISOString().slice(0, 10)}` : 'Period lock cleared' },
     }).catch(() => null);
-    return { lockedThrough: lock.lockedThrough };
+    return { lockedThrough: saved };
   }
 
-  /** Throw if `date` falls in a closed period. Call from any financial writer. */
-  async assertPeriodOpen(date?: Date | string | null) {
+  /**
+   * Throw if `date` falls in a closed period. Call from any financial writer,
+   * with whatever identifies the company the money belongs to — the
+   * subscriber it is for, or the account recording it.
+   */
+  async assertPeriodOpen(date?: Date | string | null, ctx?: { subscriberId?: number | null; userId?: number | null }) {
     const d = date ? new Date(date) : new Date();
+    const closed = (through: Date | null | undefined, who: string) => {
+      if (through && d.getTime() <= new Date(through).getTime()) {
+        throw new BadRequestException(
+          `The accounting period through ${new Date(through).toLocaleDateString()} is closed${who}. ` +
+          `You cannot record or backdate a financial entry into it — use a current date or ask your administrator to reopen the period.`,
+        );
+      }
+    };
     const lock = await this.prisma.accountingLock.findUnique({ where: { id: 1 } });
-    if (lock?.lockedThrough && d.getTime() <= new Date(lock.lockedThrough).getTime()) {
-      throw new BadRequestException(
-        `The accounting period through ${new Date(lock.lockedThrough).toLocaleDateString()} is closed. ` +
-        `You cannot record or backdate a financial entry into it — use a current date or ask the ISP to reopen the period.`,
-      );
+    closed(lock?.lockedThrough, ' for this installation');
+
+    let owner: number | null = ctx?.userId != null ? Number(ctx.userId) : null;
+    if (ctx?.subscriberId != null) {
+      const s = await this.prisma.subscriber.findUnique({ where: { id: Number(ctx.subscriberId) }, select: { userId: true } });
+      if (s?.userId != null) owner = s.userId;
     }
+    if (owner == null || Number.isNaN(owner)) return;
+    const company = await this.scope.companyRootId(owner);
+    if (company == null) return;
+    const own = await this.prisma.companyPeriodLock.findUnique({ where: { companyId: company } });
+    closed(own?.lockedThrough, '');
   }
 
   /** Cursor-paginated ledger view with filters. */
@@ -416,7 +476,7 @@ export class AccountingService {
     if (!amount || amount <= 0) throw new BadRequestException('Expense amount must be > 0');
     if (!data.category) throw new BadRequestException('Category is required');
     // No backdating an expense into a closed period.
-    await this.assertPeriodOpen(data.expenseDate);
+    await this.assertPeriodOpen(data.expenseDate, { userId: actor?.sub ?? null });
     const userId = actor?.sub;
 
     // Approval gate: a staff-raised expense above the threshold is held PENDING
@@ -474,7 +534,7 @@ export class AccountingService {
     if (!e) throw new NotFoundException('Expense not found');
     if ((e as any).status !== 'PENDING') throw new BadRequestException(`Expense is already ${(e as any).status?.toLowerCase?.() ?? 'processed'}`);
     // Approval posts to the ledger — refuse if the expense's period has closed since it was raised.
-    await this.assertPeriodOpen(e.expenseDate);
+    await this.assertPeriodOpen(e.expenseDate, { userId: (e as any).createdBy ?? actorId ?? null });
     await this.prisma.expense.update({ where: { id }, data: { status: 'APPROVED', approvedById: actorId ?? null, approvedAt: new Date() } as any });
     await this.postExpenseEntries(e, actorId);
     return { approved: true };
@@ -493,7 +553,9 @@ export class AccountingService {
     const expense = await this.prisma.expense.findUnique({ where: { id } });
     if (!expense) throw new NotFoundException('Expense not found');
     // Deleting an approved expense posts a reversal — refuse if its period is closed.
-    if (((expense as any).status ?? 'APPROVED') === 'APPROVED') await this.assertPeriodOpen(expense.expenseDate);
+    if (((expense as any).status ?? 'APPROVED') === 'APPROVED') {
+      await this.assertPeriodOpen(expense.expenseDate, { userId: (expense as any).createdBy ?? userId ?? null });
+    }
     const wasPosted = ((expense as any).status ?? 'APPROVED') === 'APPROVED';
     await this.prisma.expense.delete({ where: { id } });
     // Only reverse if it actually posted. A PENDING or REJECTED expense never
@@ -698,7 +760,7 @@ export class AccountingService {
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status === 'CANCELLED') throw new BadRequestException('Invoice is already cancelled');
     // Can't reverse an invoice whose accounting period is closed.
-    await this.assertPeriodOpen(invoice.invoiceDate);
+    await this.assertPeriodOpen(invoice.invoiceDate, { subscriberId: invoice.subscriberId });
     const activePayments = invoice.payments.filter((p) => !p.refundedAt);
     if (activePayments.length > 0) {
       throw new BadRequestException('Invoice has payments — refund them before reversing the invoice');
@@ -725,7 +787,7 @@ export class AccountingService {
     if (payment.refundedAt) throw new BadRequestException('Payment is already fully refunded');
 
     // Can't refund into a closed accounting period (books already locked).
-    await this.assertPeriodOpen(payment.paymentDate);
+    await this.assertPeriodOpen(payment.paymentDate, { subscriberId: payment.subscriberId });
 
     // Partial-refund support: default to the full remaining amount. A caller
     // may refund any slice up to what's left un-refunded on this payment.

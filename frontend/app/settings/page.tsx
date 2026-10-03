@@ -188,7 +188,7 @@ export default function SettingsPage() {
         { label: "RADIUS Service", value: "🟢 Running" },
       ]
     }] : []),
-    {
+    ...(isPlatformOwner ? [] : [{
       title: "Payment Gateways",
       icon: "💳",
       fields: gateways.length > 0
@@ -197,7 +197,7 @@ export default function SettingsPage() {
             value: g.enabled ? "🟢 Configured" : "🔴 Not Configured",
           }))
         : [{ label: "No gateways loaded", value: "—" }],
-    },
+    }]),
     ...(!isPlatformOwner ? [] : [{
       title: "Database Backups",
       icon: "💾",
@@ -238,8 +238,14 @@ export default function SettingsPage() {
           },
         ]
       : []),
-    { label: "View System Logs", icon: "📋", color: t.accent, bg: "var(--surface)", action: () => router.push("/logs") },
-    { label: "Generate Report", icon: "📈", color: t.purple, bg: "#3b0764", action: () => router.push("/reports") },
+    // Logs and reports are a company's business; the platform reads the
+    // server's own logs in the console.
+    ...(isPlatformOwner
+      ? [{ label: "Server Logs", icon: "📋", color: t.accent, bg: "var(--surface)", action: () => router.push("/console") }]
+      : [
+          { label: "View System Logs", icon: "📋", color: t.accent, bg: "var(--surface)", action: () => router.push("/logs") },
+          { label: "Generate Report", icon: "📈", color: t.purple, bg: "#3b0764", action: () => router.push("/reports") },
+        ]),
   ];
 
   return (

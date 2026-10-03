@@ -1,5 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { PlatformBoundaryInterceptor } from './common/platform-boundary.interceptor';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TraceMiddleware } from './common/trace.middleware';
@@ -105,7 +107,11 @@ import { GroupsModule } from './groups/groups.module';
     GroupsModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // The platform account (SUPER_ADMIN) manages companies, never a business.
+    { provide: APP_INTERCEPTOR, useClass: PlatformBoundaryInterceptor },
+  ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

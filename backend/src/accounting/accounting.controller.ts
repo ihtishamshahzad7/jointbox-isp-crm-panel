@@ -32,34 +32,26 @@ export class AccountingController {
 
   /**
    * Accounting-period lock — the date through which the books are closed.
-   * An installation singleton (see PUT below); reading the date is harmless.
+   * A company reads its own date (plus the installation-wide one, read-only);
+   * the platform owner reads the installation-wide date.
    */
   @Get('period-lock')
   getPeriodLock(@Request() req: any) {
-    return this.accounting.getPeriodLock();
+    return this.accounting.getPeriodLock(req.user);
   }
 
   /**
-   * Close/reopen the books through a date — PLATFORM OWNER ONLY.
+   * Close/reopen the books through a date.
    *
-   * This used to admit ADMIN, which was right when one company owned the
-   * installation. AccountingLock is a singleton — `upsert({ where: { id: 1 } })`
-   * — so with several ISP companies on one panel, one of them closing its
-   * books froze posting for ALL of them, silently, with no indication to the
-   * others of who did it or why their entries had started failing.
-   *
-   * Per-company period locks are the right feature and a different one: the
-   * table needs an owner column and every posting path needs to resolve the
-   * lock for the entry's own company. Until that exists this stays with the
-   * operator who can see the whole installation, because a shared lock quietly
-   * operated by one tenant is worse than one nobody can reach.
+   * Each company closes ITS OWN books — the lock is per company
+   * (company_period_lock), so one company closing a month no longer freezes
+   * posting for every other company on the server. Only the company's
+   * administrator (or its staff) may move it; a franchise or dealer cannot.
+   * The platform owner moves the installation-wide lock instead.
    */
   @Put('period-lock')
   setPeriodLock(@Body() body: { lockedThrough: string | null }, @Request() req: any) {
-    if (req?.user?.role !== 'SUPER_ADMIN') {
-      throw new ForbiddenException('Accounting periods are managed by the platform owner.');
-    }
-    return this.accounting.setPeriodLock(body?.lockedThrough ?? null, req.user?.sub);
+    return this.accounting.setPeriodLock(body?.lockedThrough ?? null, req.user);
   }
 
   // ── Cashflow ──────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -304,6 +305,11 @@ export class AuthService {
     const target = await this.prisma.user.findUnique({ where: { id: targetUserId } });
     if (!target) throw new UnauthorizedException('Target user not found');
     if (target.id === actor?.sub) throw new UnauthorizedException('Already on this account');
+    // The platform account opens a COMPANY (to support it); people inside the
+    // company are reached from there, never straight from the platform.
+    if (actor?.role === 'SUPER_ADMIN' && target.role !== 'ADMIN') {
+      throw new ForbiddenException('Sign in as the company first, then switch to its staff or resellers from inside it.');
+    }
 
     // The real operator is the ORIGINAL root (preserved across nested switches).
     const rootBy = actor?.imp?.by ?? actor?.sub;

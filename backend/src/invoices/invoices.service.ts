@@ -433,7 +433,7 @@ export class InvoicesService {
 
     // Same period-lock guard as the direct payment path — no backdating a
     // payment into a closed month through the invoice screen either.
-    await this.accounting.assertPeriodOpen(data.paymentDate);
+    await this.accounting.assertPeriodOpen(data.paymentDate, { subscriberId: invoice.subscriberId });
 
     // Duplicate guard: reject a payment matching a very recent one on this
     // invoice (same amount + method) unless the caller confirms with force.

@@ -17,12 +17,12 @@ import API from "../components/api";
  * the columns are the ones those decisions turn on — subscribers, routers, the
  * shape of the downline — and not the account detail that belongs on a profile.
  *
- * ── WHAT IT DELIBERATELY DOES NOT DO ─────────────────────────────────────
- * It does not open a company's data. The platform owner can reach anything
- * through the normal screens, but there is no "view as" here, because a button
- * that drops you inside a client's business is one click away from being
- * pressed by accident on the wrong row, and nothing on this page tells you
- * which row that was afterwards.
+ * ── HOW THE PLATFORM HELPS A CLIENT ──────────────────────────────────────
+ * The platform account sees no company's subscribers, routers or billing —
+ * the backend refuses those routes to it. To help a client, "Sign in" opens
+ * the panel AS that company (audited, one day at most, "Return" in the
+ * header comes back). The confirmation names the company, so the wrong row
+ * is not opened by accident.
  *
  * Suspending is the exception, and it is the one action that belongs here:
  * it is a commercial decision about a client, not an operation inside their
@@ -75,6 +75,7 @@ export default function Companies() {
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState<number | null>(null);
   const [adding, setAdding] = React.useState(false);
+  const [editing, setEditing] = React.useState<Company | null>(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -113,6 +114,23 @@ export default function Companies() {
     }
   }
 
+  async function signIn(c: Company) {
+    if (!window.confirm(
+      `Sign in as ${c.name}?\n\nYou will work inside their panel as them — every action is logged against you. ` +
+        "Use Return in the header to come back to the platform.",
+    )) return;
+    setBusy(c.id);
+    try {
+      const d = await api(`/auth/impersonate/${c.id}`, { method: "POST" });
+      if (!d?.token) throw new Error("Could not open this company.");
+      localStorage.setItem("token", d.token);
+      window.location.assign("/dashboard");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  }
+
   if (rows === null) {
     return <p style={{ fontSize: 13, color: "var(--muted)" }}>Loading companies…</p>;
   }
@@ -137,12 +155,22 @@ export default function Companies() {
       {error && <div style={ERR}>{error}</div>}
 
       {adding && <NewCompany onDone={() => { setAdding(false); void load(); }} onError={setError} />}
+      {editing && (
+        <EditCompany
+          key={editing.id}
+          company={editing}
+          onDone={() => { setEditing(null); void load(); }}
+          onCancel={() => setEditing(null)}
+          onError={setError}
+        />
+      )}
 
       {rows.length === 0 && !error && (
         <div style={EMPTY}>
           No ISP companies yet. Create one and it becomes an independent tenant:
           its own franchises, dealers and retailers, invisible to every other
-          company on this panel.
+          company on this panel. Your own ISP business runs inside a company
+          as well — create it here, then use Sign in to work in it.
         </div>
       )}
 
@@ -175,10 +203,16 @@ export default function Companies() {
                   <td style={NUM}>{c.dealers}</td>
                   <td style={NUM}>{c.retailers}</td>
                   <td style={NUM}>{new Date(c.createdAt).toLocaleDateString()}</td>
-                  <td style={TD}>
-                    <button onClick={() => toggle(c)} disabled={busy === c.id} style={GHOST}>
-                      {busy === c.id ? "…" : c.isActive ? "Suspend" : "Reactivate"}
-                    </button>
+                  <td style={{ ...TD, whiteSpace: "nowrap" }}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => signIn(c)} disabled={busy === c.id} style={GHOST} title="Open this company's panel to help them">
+                        Sign in
+                      </button>
+                      <button onClick={() => setEditing(c)} disabled={busy === c.id} style={GHOST}>Edit</button>
+                      <button onClick={() => toggle(c)} disabled={busy === c.id} style={GHOST}>
+                        {busy === c.id ? "…" : c.isActive ? "Suspend" : "Reactivate"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -229,6 +263,53 @@ function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: stri
       <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, marginTop: 12, opacity: !ready || busy ? 0.55 : 1 }}>
         {busy ? "Creating…" : "Create company"}
       </button>
+    </form>
+  );
+}
+
+/** Company details and the owner's password — never its role or place in the tree. */
+function EditCompany({ company, onDone, onCancel, onError }: {
+  company: Company; onDone: () => void; onCancel: () => void; onError: (m: string) => void;
+}) {
+  const [f, setF] = React.useState({
+    name: company.name || "", email: company.email || "", phone: company.phone || "", city: company.city || "", password: "",
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+  const ready = f.name.trim() && f.email.trim() && (!f.password || f.password.length >= 8);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ready || busy) return;
+    setBusy(true);
+    try {
+      const body: Record<string, string> = { name: f.name.trim(), email: f.email.trim(), phone: f.phone, city: f.city };
+      if (f.password) body.password = f.password;
+      await api(`/users/${company.id}`, { method: "PUT", body: JSON.stringify(body) });
+      onDone();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} style={CARD}>
+      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 10 }}>Edit {company.name}</div>
+      <div style={GRID}>
+        <F label="Company name" v={f.name} on={set("name")} />
+        <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" />
+        <F label="Phone" v={f.phone} on={set("phone")} />
+        <F label="City" v={f.city} on={set("city")} />
+        <F label="New password" v={f.password} on={set("password")} type="password" hint="Leave empty to keep the current one" />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" onClick={onCancel} style={GHOST}>Cancel</button>
+      </div>
     </form>
   );
 }

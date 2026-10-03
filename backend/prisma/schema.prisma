@@ -2272,7 +2272,10 @@ model FailedActivation {
 
 model Isp {
   id       Int     @id @default(autoincrement())
-  name     String  @unique
+  /// The company (top account) this ISP brand and its branches belong to.
+  /// NULL = from before ISPs were per company.
+  ownerId  Int?
+  name     String
   logoUrl  String?
   isActive Boolean @default(true)
 
@@ -2284,6 +2287,9 @@ model Isp {
   createdAt DateTime @default(now())
 
   branches Branch[] @relation("IspBranches")
+
+  @@unique([ownerId, name])
+  @@index([ownerId])
 }
 
 model Branch {
@@ -2553,6 +2559,18 @@ model AccountingLock {
   updatedAt     DateTime  @updatedAt
 }
 
+/// A company's own close-the-books date. Postings dated on or before it are
+/// refused for that company only. (AccountingLock above is the installation-
+/// wide lock the platform owner sets.)
+model CompanyPeriodLock {
+  companyId     Int       @id
+  lockedThrough DateTime?
+  updatedById   Int?
+  updatedAt     DateTime  @updatedAt
+
+  @@map("company_period_lock")
+}
+
 /// Async job queue. Long-running or bulk work (mass activation, RADIUS sync,
 /// bulk notifications, backups) is enqueued here and processed in the
 /// background by a poller, so the HTTP request returns immediately and the
@@ -2645,7 +2663,10 @@ model RecordNote {
 /// specific dealer.
 model AccessGroup {
   id          Int      @id @default(autoincrement())
-  name        String   @unique @db.VarChar(100)
+  /// The company that owns this group (its top account). NULL = from before
+  /// groups were per company: readable, not editable by a company.
+  ownerId     Int?
+  name        String   @db.VarChar(100)
   description String?  @db.VarChar(500)
   color       String?  @db.VarChar(20) // hex tag for the UI
   /// When true, membership in a parent account cascades down to its downline.
@@ -2661,7 +2682,9 @@ model AccessGroup {
   pkgResources  AccessGroupPackage[]
   poolResources AccessGroupIpPool[]
 
+  @@unique([ownerId, name])
   @@index([isActive])
+  @@index([ownerId])
   @@map("access_group")
 }
 

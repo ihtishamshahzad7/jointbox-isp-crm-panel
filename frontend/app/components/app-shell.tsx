@@ -17,6 +17,7 @@ import { BRAND } from '../../lib/brand';
 import { LANGS, useI18n } from '../../lib/i18n';
 import { LicenceProvider, LicenceBanner } from './licence';
 import { ensureMediaToken, hasFreshMediaToken, clearMediaToken } from './image-upload';
+import { PLATFORM_HOME, isPlatformPath } from './platform';
 
 const API = API_BASE;
 
@@ -104,7 +105,37 @@ const menuGroups = [
   ]},
 ];
 // Flat list kept for title lookup / active-menu detection.
-const menuItems = menuGroups.flatMap((g) => g.items);
+// The platform account's whole menu: its companies, the defaults every
+// company starts from, and the server. No business screen appears here — the
+// backend refuses them to this account anyway (platform-boundary).
+const platformMenuGroups = [
+  { label: 'Platform', items: [
+    { id: 'companies', label: 'Companies', href: '/companies', Icon: navIcons.Users },
+    { id: 'licence', label: 'Licence', href: '/licence', Icon: navIcons.Settings },
+  ]},
+  { label: 'Company Defaults', items: [
+    { id: 'p-templates', label: 'Message Templates', href: '/communication', Icon: navIcons.Support },
+    { id: 'p-taxes', label: 'Taxes & Fees', href: '/packages/taxes', Icon: navIcons.Payments },
+    { id: 'p-policies', label: 'RADIUS Policies', href: '/packages/policies', Icon: navIcons.NAS },
+    { id: 'p-allocations', label: 'Allocations', href: '/packages/allocations', Icon: navIcons.Pool },
+  ]},
+  { label: 'Server', items: [
+    { id: 'p-settings', label: 'Settings & Backups', href: '/settings', Icon: navIcons.Settings },
+    { id: 'p-security', label: 'Roles & Security', href: '/security', Icon: navIcons.Users },
+    { id: 'jobs', label: 'Background Jobs', href: '/jobs', Icon: navIcons.Reports },
+    { id: 'console', label: 'Server Console', href: '/console', Icon: navIcons.NAS },
+    { id: 'radius-admin', label: 'FreeRADIUS & Database', href: '/radius-admin', Icon: navIcons.NAS },
+    { id: 'docs', label: 'Documentation', href: '/docs', Icon: navIcons.Support },
+  ]},
+];
+const PLATFORM_ROUTE_TO_MENU: Array<[string, string]> = [
+  ['/companies', 'companies'], ['/licence', 'licence'], ['/communication', 'p-templates'],
+  ['/packages/taxes', 'p-taxes'], ['/packages/policies', 'p-policies'], ['/packages/allocations', 'p-allocations'],
+  ['/settings', 'p-settings'], ['/security', 'p-security'], ['/jobs', 'jobs'], ['/console', 'console'],
+  ['/radius-admin', 'radius-admin'], ['/docs', 'docs'],
+];
+// Flat list kept for title lookup (business menu first, then the platform's).
+const menuItems = [...menuGroups, ...platformMenuGroups].flatMap((g) => g.items);
 
 
 function getInitials(name = ''): string {
@@ -196,9 +227,9 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
 /** Most rows the Act-as dropdown will ever render at once. */
 const SWITCH_LIMIT = 50;
 
-function getActiveMenu(pathname: string): string {
-  const hit = ROUTE_TO_MENU.find(([prefix]) => pathname.startsWith(prefix));
-  return hit ? hit[1] : 'dashboard';
+function getActiveMenu(pathname: string, platform = false): string {
+  const hit = (platform ? PLATFORM_ROUTE_TO_MENU : ROUTE_TO_MENU).find(([prefix]) => pathname.startsWith(prefix));
+  return hit ? hit[1] : platform ? 'companies' : 'dashboard';
 }
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -329,6 +360,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [search, setSearch] = useState('');
   const [imp, setImp] = useState<any>(null); // { by, byName, byRole } when acting as someone
   const [myRole, setMyRole] = useState<string | null>(null);
+  // Children render once the role is known, so the platform account never
+  // mounts (and fires requests from) a business page before being redirected.
+  const [roleReady, setRoleReady] = useState(false);
+  const roleRefreshStarted = useRef(false);
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [switchQuery, setSwitchQuery] = useState('');
   const [switchView, setSwitchView] = useState<'list' | 'tree'>('tree');
@@ -339,7 +374,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
 
-  const activeMenu = useMemo(() => getActiveMenu(pathname || '/dashboard'), [pathname]);
+  const activeMenu = useMemo(
+    () => getActiveMenu(pathname || '/dashboard', myRole === 'SUPER_ADMIN'),
+    [pathname, myRole],
+  );
+  // The platform account never lands on a business screen: anything outside
+  // its own pages goes to Companies (the backend would refuse it anyway).
+  const platformBlocked = myRole === 'SUPER_ADMIN' && !!pathname && !isPlatformPath(pathname);
+  useEffect(() => {
+    if (platformBlocked) router.replace(PLATFORM_HOME);
+  }, [platformBlocked, router]);
 
   /**
    * Filtered, capped account list for the Act-as menu.
@@ -419,6 +463,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   // Load the list of downstream users I can switch into + current imp state.
   useEffect(() => {
+    setMyRole(decodeToken()?.role ?? null);
+    setRoleReady(true);
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : '';
     if (!token) return;
     // Pull the operator's display currency once per session so every screen
@@ -429,7 +475,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setMyRole(payload?.role ?? null);
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     // Approval badge: how many refunds/expenses are waiting on the ISP owner.
-    if (payload?.role === 'SUPER_ADMIN' || payload?.role === 'ADMIN') {
+    // Approvals live inside a company; the platform account has none.
+    if (payload?.role === 'ADMIN') {
       const loadApprovals = () => fetch(`${API}/accounting/pending-approvals`, { headers })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (d) setPendingApprovals(d.total || 0); })
@@ -559,6 +606,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           // Belt and braces with the login redirect: a session that reaches the
           // shell while a forced change is pending is sent back to it.
           if (u?.mustChangePassword) { router.replace('/change-password'); return; }
+          // The role in the token is the one it was issued with. If the account
+          // has since changed (e.g. moved out of the platform account into its
+          // company), swap the token for a fresh one so the menu matches.
+          const tp = decodeToken();
+          if (u?.role && tp?.role && !tp.imp && tp.role !== u.role && !roleRefreshStarted.current) {
+            roleRefreshStarted.current = true;
+            fetch(`${API}/auth/refresh`, { method: 'POST', headers, body: JSON.stringify({ token }) })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((d) => {
+                if (!d?.token) return;
+                localStorage.setItem('token', d.token);
+                window.location.assign(u.role === 'SUPER_ADMIN' ? PLATFORM_HOME : '/dashboard');
+              })
+              .catch(() => {});
+          }
           setUser(u);
         })
         .catch(() => router.replace('/login'));
@@ -738,7 +800,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="nav-section">
-          {menuGroups.map((group) => {
+          {(myRole === 'SUPER_ADMIN' ? platformMenuGroups : menuGroups).map((group) => {
             // ISP-only items (Server Console) are hidden for everyone else.
             const items = group.items.filter((it: any) => !it.ispOnly || myRole === 'SUPER_ADMIN');
             if (items.length === 0) return null;
@@ -1220,7 +1282,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <StaticIpBanner />
             {/* Renders nothing on an ACTIVE licence, which is the normal case. */}
             <LicenceBanner />
-            <div key={mediaKey} style={{ display: 'contents' }}>{children}</div>
+            <div key={mediaKey} style={{ display: 'contents' }}>{roleReady && !platformBlocked ? children : null}</div>
           </div>
         </main>
 
@@ -1229,7 +1291,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Mobile bottom navigation. Hidden on desktop by CSS; "More" opens the
             same drawer the hamburger does. */}
-        <BottomNav onMore={() => setMobileOpen(true)} />
+        {myRole !== 'SUPER_ADMIN' && <BottomNav onMore={() => setMobileOpen(true)} />}
 
         {/* Footer removed. It said nothing that changes, and it cost a strip
             of vertical space on every screen — the version number belongs in

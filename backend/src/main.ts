@@ -19,6 +19,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { PrismaExceptionFilter } from './common/prisma-exception.filter';
+import { ensurePlatformAccount } from './common/platform-account';
 
 // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
 // BigInt. JSON.stringify throws on BigInt, so ANY endpoint returning them —
@@ -62,32 +63,16 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
     }
 
     /**
-     * AN INSTALLATION MUST HAVE A PLATFORM OWNER.
+     * AN INSTALLATION MUST HAVE A PLATFORM ACCOUNT THAT RUNS NO BUSINESS.
      *
-     * Installation-wide settings (role permissions, gateways, ISP/branch
-     * records, tunnels, backups, licence) are SUPER_ADMIN-only, because one row
-     * serves every company on the server. Older single-company installs often
-     * ran their owner account as ADMIN — after that restriction they would
-     * have nobody able to change those settings at all.
-     *
-     * So: if no active SUPER_ADMIN exists, promote the OLDEST top-level ADMIN
-     * (no parent — the account the installer created, never a company created
-     * under a platform owner). Logged, once, and a no-op from then on.
+     * The platform account (SUPER_ADMIN) manages companies, the licence and
+     * the server; it is refused every business route. Older installs ran
+     * their business from the top account — that account becomes its
+     * company's ADMIN (same login, same data) and a separate platform login is
+     * created above it. Idempotent: a no-op once the split exists.
+     * See common/platform-account.ts.
      */
-    const hasOwner = await prisma.user.count({
-      where: { role: 'SUPER_ADMIN' as any, isActive: true, isDemo: false },
-    });
-    if (hasOwner === 0) {
-      const root = await prisma.user.findFirst({
-        where: { role: 'ADMIN' as any, parentId: null, isActive: true, isDemo: false },
-        orderBy: { id: 'asc' },
-        select: { id: true, email: true },
-      });
-      if (root) {
-        await prisma.user.update({ where: { id: root.id }, data: { role: 'SUPER_ADMIN' as any } });
-        console.warn(`👑 No platform owner existed — ${root.email} (the original top-level admin) is now SUPER_ADMIN.`);
-      }
-    }
+    await ensurePlatformAccount(prisma, console);
 
     /**
      * EXISTING INSTALLS STILL ON THE PUBLISHED DEFAULT.

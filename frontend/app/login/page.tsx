@@ -7,6 +7,7 @@ import API_BASE from "../components/api";
 import { BRAND } from "../../lib/brand";
 import { LANGS, useI18n } from "../../lib/i18n";
 import { ensureMediaToken } from "../components/image-upload";
+import { isPlatformSession, PLATFORM_HOME } from "../components/platform";
 
 const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const SUPPORT = BRAND.supportEmail;
@@ -29,7 +30,7 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
-    if (localStorage.getItem("token")) router.push("/dashboard");
+    if (localStorage.getItem("token")) router.push(isPlatformSession() ? PLATFORM_HOME : "/dashboard");
   }, [router]);
 
   useEffect(() => {
@@ -54,8 +55,10 @@ export default function LoginPage() {
         // A first-boot admin (or anyone still on the published default) goes to
         // change their password before anything else — the API would answer
         // every other screen with 403 until they do.
-        const next = data.user?.mustChangePassword ? "/change-password" : "/dashboard";
-        setMessage(next === "/dashboard" ? "✅ Login successful! Redirecting..." : "🔐 Please choose a new password to continue.");
+        // The platform account opens on its companies, never a business dashboard.
+        const home = data.user?.role === "SUPER_ADMIN" ? PLATFORM_HOME : "/dashboard";
+        const next = data.user?.mustChangePassword ? "/change-password" : home;
+        setMessage(next === home ? "✅ Login successful! Redirecting..." : "🔐 Please choose a new password to continue.");
         setTimeout(()=>router.push(next),700);
       }
       else setMessage(`❌ Login failed: ${data.message || "Invalid email or password"}`);

@@ -26,11 +26,26 @@ export class OrganizationService {
 
   // ── ISPs ──────────────────────────────────────────────────────
   //
-  // Isp and Branch have no owner column: each row is installation-level, so a
-  // company creating, renaming or deleting one changes it for every company on
-  // the server. Writes are therefore platform-owner only. Reads are narrowed to
-  // the branches (and their ISPs) that accounts in the caller's own subtree are
-  // assigned to — which is all an ISP or reseller can be shown to belong to.
+  // Each COMPANY owns its ISP brands and their branches (Isp.ownerId = the
+  // company's top account). Its administrator creates, renames and deletes
+  // them; nobody else's are visible or changeable. Rows from before ownership
+  // (ownerId NULL) stay visible where the caller's accounts use them.
+
+  /** The caller's company administrator, on an ISP that company owns. */
+  private async assertIspWritable(actor: Actor, ispId: number) {
+    const row = await this.prisma.isp.findUnique({ where: { id: Number(ispId) }, select: { ownerId: true } });
+    await this.scope.assertConfigWritable(actor, row, 'ISP');
+  }
+
+  private async assertBranchWritable(actor: Actor, branchId: number) {
+    const b = await this.prisma.branch.findUnique({ where: { id: Number(branchId) }, select: { ispId: true } });
+    if (!b) throw new NotFoundException('Branch not found');
+    await this.assertIspWritable(actor, b.ispId);
+  }
+
+  private async companyOf(actor: Actor): Promise<number | null> {
+    return this.scope.companyRootId(this.scope.actorId(actor));
+  }
 
   /**
    * Branch ids referenced by users in the caller's subtree, or null meaning
@@ -66,25 +81,29 @@ export class OrganizationService {
     if (scoped === null) {
       return this.prisma.isp.findMany({ include: { _count: { select: { branches: true } } }, orderBy: { id: 'asc' } });
     }
-    if (!scoped.branchIds.length) return [];
+    const company = await this.companyOf(actor);
+    const ownWhere = company != null ? [{ ownerId: company }] : [];
+    if (!scoped.branchIds.length && !ownWhere.length) return [];
     return this.prisma.isp.findMany({
-      where: { branches: { some: { id: { in: scoped.branchIds } } } },
+      where: { OR: [...ownWhere, { branches: { some: { id: { in: scoped.branchIds } } } }] },
       // Count only the branches this caller can see, not the ISP's whole estate.
       include: { _count: { select: { branches: { where: { id: { in: scoped.branchIds } } } } } },
       orderBy: { id: 'asc' },
     });
   }
-  createIsp(actor: Actor, data: any) {
-    this.scope.assertPlatformOwner(actor);
+  async createIsp(actor: Actor, data: any) {
+    const ownerId = await this.scope.configOwnerForCreate(actor);
     if (!data.name?.trim()) throw new BadRequestException('Name is required');
-    return this.prisma.isp.create({ data: { name: data.name.trim(), logoUrl: data.logoUrl || null } });
+    const clash = await this.prisma.isp.findFirst({ where: { ownerId, name: data.name.trim() }, select: { id: true } });
+    if (clash) throw new BadRequestException(`An ISP named "${data.name.trim()}" already exists.`);
+    return this.prisma.isp.create({ data: { ownerId, name: data.name.trim(), logoUrl: data.logoUrl || null } });
   }
-  updateIsp(actor: Actor, id: number, data: any) {
-    this.scope.assertPlatformOwner(actor);
+  async updateIsp(actor: Actor, id: number, data: any) {
+    await this.assertIspWritable(actor, id);
     return this.prisma.isp.update({ where: { id }, data: { name: data.name, logoUrl: data.logoUrl, isActive: data.isActive } });
   }
   async deleteIsp(actor: Actor, id: number) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertIspWritable(actor, id);
     const branches = await this.prisma.branch.count({ where: { ispId: id } });
     if (branches > 0) throw new BadRequestException('Delete or move its branches first');
     return this.prisma.isp.delete({ where: { id } });
@@ -100,12 +119,14 @@ export class OrganizationService {
         orderBy: { id: 'asc' },
       });
     }
-    if (!scoped.branchIds.length) return [];
-    // A branch can be shared by several companies; its member counts must not
-    // reveal how many subscribers/accounts the OTHER companies keep there.
+    const company = await this.companyOf(actor);
+    const ownWhere = company != null ? [{ isp: { ownerId: company } }] : [];
+    if (!scoped.branchIds.length && !ownWhere.length) return [];
+    // A legacy branch can be shared by several companies; its member counts
+    // must not reveal how many subscribers/accounts the OTHER companies keep there.
     const subscriberWhere = await this.scope.subscriberWhere(actor);
     return this.prisma.branch.findMany({
-      where: { id: { in: scoped.branchIds }, ...(ispId ? { ispId } : {}) },
+      where: { OR: [...ownWhere, { id: { in: scoped.branchIds } }], ...(ispId ? { ispId } : {}) },
       include: {
         isp: { select: { name: true } },
         _count: {
@@ -118,22 +139,23 @@ export class OrganizationService {
       orderBy: { id: 'asc' },
     });
   }
-  createBranch(actor: Actor, data: any) {
-    this.scope.assertPlatformOwner(actor);
+  async createBranch(actor: Actor, data: any) {
     if (!data.name?.trim() || !data.ispId) throw new BadRequestException('Name and ispId are required');
+    await this.assertIspWritable(actor, Number(data.ispId));
     return this.prisma.branch.create({
       data: { name: data.name.trim(), ispId: Number(data.ispId), address: data.address || null },
     });
   }
-  updateBranch(actor: Actor, id: number, data: any) {
-    this.scope.assertPlatformOwner(actor);
+  async updateBranch(actor: Actor, id: number, data: any) {
+    await this.assertBranchWritable(actor, id);
+    if (data.ispId) await this.assertIspWritable(actor, Number(data.ispId));
     return this.prisma.branch.update({
       where: { id },
       data: { name: data.name, address: data.address, isActive: data.isActive, ispId: data.ispId ? Number(data.ispId) : undefined },
     });
   }
   async deleteBranch(actor: Actor, id: number) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertBranchWritable(actor, id);
     const subs = await this.prisma.subscriber.count({ where: { branchId: id } });
     if (subs > 0) throw new BadRequestException('Move its subscribers to another branch first');
     return this.prisma.branch.delete({ where: { id } });
@@ -142,13 +164,12 @@ export class OrganizationService {
   /**
    * Bulk-assign subscribers (or users) to a branch.
    *
-   * Platform owner only (branches are installation-level). The ids are ALSO
-   * intersected with the caller's own scope, so that if this gate is ever
-   * widened it still cannot move another company's customers or accounts.
-   * For the platform owner both lists are "all", so nothing is filtered.
+   * The company's administrator, on its own branch. The ids are ALSO
+   * intersected with the caller's own scope, so another company's customers
+   * or accounts can never be moved.
    */
   async assign(actor: Actor, branchId: number, body: { subscriberIds?: number[]; userIds?: number[] }) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertBranchWritable(actor, branchId);
     const branch = await this.prisma.branch.findUnique({ where: { id: branchId } });
     if (!branch) throw new NotFoundException('Branch not found');
     const results = { subscribers: 0, users: 0 };

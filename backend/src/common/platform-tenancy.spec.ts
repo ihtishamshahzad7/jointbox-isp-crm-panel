@@ -83,11 +83,13 @@ describe('platform owner vs ISP tenant', () => {
    * shared by every company on the panel. Letting a tenant write one does not
    * give them their own copy — it gives them everyone's.
    */
-  it('keeps installation-wide singletons to the platform owner', () => {
+  it('closes books per company, never one company for all', () => {
     const acct = read('accounting/accounting.controller.ts');
-    const periodLock = acct.slice(acct.indexOf("@Put('period-lock')"));
-    expect(periodLock).toMatch(/role !== 'SUPER_ADMIN'\)/);
-    expect(periodLock.slice(0, 400)).not.toMatch(/!== 'ADMIN'/);
+    const periodLock = acct.slice(acct.indexOf("@Put('period-lock')"), acct.indexOf("@Put('period-lock')") + 300);
+    expect(periodLock).toMatch(/setPeriodLock\([^)]*req\.user\)/);
+    const svc = read('accounting/accounting.service.ts');
+    expect(svc).toMatch(/companyPeriodLock\.upsert/);
+    expect(svc).toMatch(/configOwnerForCreate\(actor\)/); // franchises/dealers refused
 
     const notif = read('notifications/notifications.controller.ts');
     expect(notif).not.toMatch(/role !== 'SUPER_ADMIN' && role !== 'ADMIN'/);

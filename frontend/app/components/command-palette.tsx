@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Portal from "../components/portal";
 import API_BASE from "../components/api";
+import { isPlatformPath, isPlatformSession } from "./platform";
 
 /**
  * Global quick-launcher (Ctrl/⌘+K). Type to find and jump to ANY feature or
@@ -60,7 +61,7 @@ const DESTS: Dest[] = [
   { label: "Users", href: "/users", group: "System", keys: "user staff reseller dealer retailer auditor role add" },
   { label: "Organization / hierarchy", href: "/organization", group: "System", keys: "organization reseller wallet topup hierarchy tree" },
   { label: "Security", href: "/security", group: "System", keys: "security roles permissions 2fa api keys" },
-  { label: "Licence", href: "/licence", group: "System", keys: "licence license activation subscription expiry renew key" },
+  { label: "Licence", href: "/licence", group: "System", keys: "licence license activation subscription expiry renew key", ispOnly: true },
   { label: "Settings", href: "/settings", group: "System", keys: "settings currency sms email gateway configure" },
   { label: "Background Jobs", href: "/jobs", group: "System", keys: "job queue reconcile integrity progress", ispOnly: true },
   { label: "Server Console", href: "/console", group: "System", keys: "console terminal logs server root", ispOnly: true },
@@ -79,13 +80,10 @@ export default function CommandPalette() {
 
   useEffect(() => setMounted(true), []);
 
-  const isOwner = (() => {
-    try {
-      const t = typeof window !== "undefined" ? localStorage.getItem("token") : "";
-      if (!t) return false;
-      return ["SUPER_ADMIN", "ADMIN"].includes(JSON.parse(atob(t.split(".")[1] || ""))?.role);
-    } catch { return false; }
-  })();
+  // Platform account: its own screens only. Server screens (ispOnly) are the
+  // platform's, not a company's.
+  const platform = isPlatformSession();
+  const isOwner = platform;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -123,7 +121,7 @@ export default function CommandPalette() {
         setAccounts(
           list.map((u: { id: number; name?: string; email?: string; role?: string; phone?: string }) => ({
             label: u.name || u.email || `#${u.id}`,
-            href: `/users/${u.id}`,
+            href: platform ? "/companies" : `/users/${u.id}`,
             group: ROLE_GROUP[u.role || ""] || "Account",
             // Searchable by email, phone and role too — an operator often has
             // a contact detail to hand rather than the exact spelling of a name.
@@ -136,11 +134,14 @@ export default function CommandPalette() {
   }, [open]);
 
   const results = useMemo(() => {
-    const pool = [...DESTS.filter((d) => !d.ispOnly || isOwner), ...accounts];
+    const routes = platform
+      ? DESTS.filter((d) => d.href === "#assistant" || isPlatformPath(d.href))
+      : DESTS.filter((d) => !d.ispOnly || isOwner);
+    const pool = [...routes, ...accounts];
     const s = q.trim().toLowerCase();
     // With no query, show routes only — listing every account up front would
     // bury the navigation the palette exists for.
-    if (!s) return pool.filter((d) => !d.href.startsWith("/users/"));
+    if (!s) return pool.filter((d) => !accounts.includes(d));
     const terms = s.split(/\s+/);
     return pool
       .map((d) => {

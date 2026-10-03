@@ -29,7 +29,8 @@ const MEDIA_TOKEN_TTL_S = 12 * 3600;
  * These used to be served by a static mount with no authentication at all:
  * anyone holding (or guessing) a URL got a national-ID scan. They are now
  * served only to signed-in staff, and a file recorded in `uploaded_file` only
- * to staff of the COMPANY that uploaded it (the platform owner sees all).
+ * to staff of the COMPANY that uploaded it. The platform account sees only
+ * its own uploads — company files are opened by signing in as the company.
  *
  * <img src> cannot send an Authorization header, so the panel appends a MEDIA
  * token (`?mt=`): a short-lived token whose only valid use is this route. The
@@ -132,11 +133,14 @@ export class UploadsController {
       where: { filename: name },
       select: { ownerId: true },
     });
-    if (row) {
-      const me = await this.who(sub);
-      if (me.role !== 'SUPER_ADMIN' && (row.ownerId == null || row.ownerId !== me.company)) {
-        throw new NotFoundException('File not found');
-      }
+    const me = await this.who(sub);
+    if (me.role === 'SUPER_ADMIN') {
+      // The platform account sees no company's customers: only files it
+      // uploaded itself (recorded, no company). CNIC scans and photos belong
+      // to the company — reach them by signing in as the company.
+      if (!row || row.ownerId != null) throw new NotFoundException('File not found');
+    } else if (row && (row.ownerId == null || row.ownerId !== me.company)) {
+      throw new NotFoundException('File not found');
     }
 
     const path = join(UPLOAD_DIR, name);

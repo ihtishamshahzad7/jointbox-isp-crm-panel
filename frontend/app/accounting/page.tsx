@@ -64,7 +64,7 @@ export default function AccountingPage() {
   const [msg, setMsg] = useState("");
 
   // accounting-period lock (close the books)
-  const [lock, setLock] = useState<{ lockedThrough: string | null } | null>(null);
+  const [lock, setLock] = useState<{ lockedThrough: string | null; platformLockedThrough?: string | null } | null>(null);
   const [lockDraft, setLockDraft] = useState("");
 
   // refund approval policy + queue
@@ -179,7 +179,7 @@ export default function AccountingPage() {
         const r = await fetch(`${API}/accounting/period-lock`, { method: "PUT", headers, body: JSON.stringify({ lockedThrough: value }) });
         const data = await r.json();
         if (!r.ok) { setMsg(data?.message || "Failed to update period lock"); return; }
-        setLock(data);
+        setLock((l) => ({ ...(l || {}), lockedThrough: data?.lockedThrough ?? null }));
         setLockDraft(data?.lockedThrough ? String(data.lockedThrough).slice(0, 10) : "");
         setMsg(value ? `Books closed through ${new Date(value).toLocaleDateString()}` : "Period lock cleared");
       } catch { setMsg("Failed to update period lock"); }
@@ -457,6 +457,7 @@ export default function AccountingPage() {
                 {lock?.lockedThrough
                   ? `Locked through ${new Date(lock.lockedThrough).toLocaleDateString()} — payments can't be backdated into it`
                   : "Open — no period is locked"}
+                {lock?.platformLockedThrough && ` · Server-wide lock through ${new Date(lock.platformLockedThrough).toLocaleDateString()}`}
               </div>
             </div>
           </div>

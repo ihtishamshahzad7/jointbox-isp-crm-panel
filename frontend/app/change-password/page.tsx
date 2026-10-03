@@ -3,6 +3,7 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
+import { isPlatformSession, PLATFORM_HOME } from "../components/platform";
 
 /**
  * CHANGE PASSWORD — and the forced first-login version of it.
@@ -56,7 +57,7 @@ export default function ChangePassword() {
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body?.message || "The password could not be changed.");
       if (body?.token) localStorage.setItem("token", body.token);
-      router.replace("/dashboard");
+      router.replace(isPlatformSession() ? PLATFORM_HOME : "/dashboard");
     } catch (err: any) {
       setError(String(err?.message || err));
     } finally {

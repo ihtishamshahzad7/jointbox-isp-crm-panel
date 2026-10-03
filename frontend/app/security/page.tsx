@@ -280,7 +280,7 @@ export default function SecurityPage() {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {TABS.map((name) => (
+        {TABS.filter((name) => !(isOwner && name === "API Keys")).map((name) => (
           <button key={name} onClick={() => setTab(name)}
             style={{ ...btn(tab === name ? T.accent : T.card), border: `1px solid ${tab === name ? T.accent : T.border}`, color: tab === name ? "#fff" : T.sub }}>
             {name}

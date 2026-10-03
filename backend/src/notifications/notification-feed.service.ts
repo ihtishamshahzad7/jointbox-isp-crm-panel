@@ -78,7 +78,11 @@ export class NotificationFeedService {
      * return nothing and the feed silently empty for every reseller. rootId()
      * also handles the SALES role, whose activity belongs to its parent.
      */
-    if (!this.scope.isAdmin(actor?.role)) {
+    // The platform account's bell shows its own actions (companies created,
+    // suspended, opened) — never what happens inside a company.
+    if (actor?.role === 'SUPER_ADMIN') {
+      where.userId = this.scope.actorId(actor);
+    } else if (!this.scope.isAdmin(actor?.role)) {
       const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
       // Fail CLOSED: an unresolvable actor sees nothing rather than everything.
       where.userId = { in: ids.length ? ids : [-1] };

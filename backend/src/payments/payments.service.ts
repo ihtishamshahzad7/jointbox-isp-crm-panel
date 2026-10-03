@@ -244,7 +244,9 @@ export class PaymentsService {
     if (actor) await this.assertPaymentTarget(actor, data);
 
     // Refuse a payment dated into a closed accounting period (no backdating).
-    await this.accounting.assertPeriodOpen(data.paymentDate);
+    await this.accounting.assertPeriodOpen(data.paymentDate, {
+      subscriberId: data.subscriberId != null ? Number(data.subscriberId) : null,
+    });
 
     // Duplicate guard. A double-click, a network retry, or two staff entering
     // the same cash all post the money twice. Reject a payment that matches a

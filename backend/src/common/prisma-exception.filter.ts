@@ -20,25 +20,38 @@ export class PrismaExceptionFilter implements ExceptionFilter {
     const req: any = host.switchToHttp().getRequest();
     const { status, message } = PrismaExceptionFilter.describe(e);
     // Code and model only — never e.message (it can carry query values).
-    const where = `${req?.method ?? ''} ${String(req?.route?.path ?? req?.path ?? '')}`.trim();
-    const what = e instanceof Prisma.PrismaClientKnownRequestError
-      ? `${e.code}${e.meta?.modelName ? ` on ${e.meta.modelName}` : ''}`
-      : 'invalid query arguments';
+    const where =
+      `${req?.method ?? ''} ${String(req?.route?.path ?? req?.path ?? '')}`.trim();
+    const what =
+      e instanceof Prisma.PrismaClientKnownRequestError
+        ? `${e.code}${e.meta?.modelName ? ` on ${e.meta.modelName}` : ''}`
+        : 'invalid query arguments';
     this.logger.warn(`${where}: ${what} → ${status}`);
     if (res?.headersSent) return;
-    res.status(status).json({ statusCode: status, message, error: PrismaExceptionFilter.label(status) });
+    res
+      .status(status)
+      .json({
+        statusCode: status,
+        message,
+        error: PrismaExceptionFilter.label(status),
+      });
   }
 
   static describe(e: any): { status: number; message: string } {
     if (e instanceof Prisma.PrismaClientValidationError) {
-      return { status: 400, message: 'Some of the values sent are not valid for this form.' };
+      return {
+        status: 400,
+        message: 'Some of the values sent are not valid for this form.',
+      };
     }
     const meta: any = e?.meta ?? {};
     switch (e?.code) {
       case 'P2002': {
         const raw = Array.isArray(meta.target) ? meta.target : [];
         // ownerId is how a record is scoped to its company, not something a user typed.
-        const fields = raw.map(String).filter((f: string) => f !== 'ownerId' && f !== 'id');
+        const fields = raw
+          .map(String)
+          .filter((f: string) => f !== 'ownerId' && f !== 'id');
         return {
           status: 409,
           message: fields.length
@@ -49,12 +62,17 @@ export class PrismaExceptionFilter implements ExceptionFilter {
       case 'P2025':
       case 'P2001':
       case 'P2018':
-        return { status: 404, message: 'Not found. It may have just been deleted — reload the page.' };
+        return {
+          status: 404,
+          message:
+            'Not found. It may have just been deleted — reload the page.',
+        };
       case 'P2003':
       case 'P2014':
         return {
           status: 409,
-          message: 'This is linked to other records. Remove or reassign those first (or pick an item that exists).',
+          message:
+            'This is linked to other records. Remove or reassign those first (or pick an item that exists).',
         };
       case 'P2000':
         return { status: 400, message: 'One of the values is too long.' };
@@ -67,15 +85,31 @@ export class PrismaExceptionFilter implements ExceptionFilter {
       case 'P2019':
       case 'P2020':
       case 'P2023':
-        return { status: 400, message: 'Some of the values sent are missing or not valid.' };
+        return {
+          status: 400,
+          message: 'Some of the values sent are missing or not valid.',
+        };
       case 'P2034':
-        return { status: 409, message: 'Someone else changed this at the same moment. Try again.' };
+        return {
+          status: 409,
+          message: 'Someone else changed this at the same moment. Try again.',
+        };
       default:
-        return { status: 500, message: 'Database error. Try again; if it keeps happening, contact support.' };
+        return {
+          status: 500,
+          message:
+            'Database error. Try again; if it keeps happening, contact support.',
+        };
     }
   }
 
   private static label(status: number) {
-    return status === 400 ? 'Bad Request' : status === 404 ? 'Not Found' : status === 409 ? 'Conflict' : 'Internal Server Error';
+    return status === 400
+      ? 'Bad Request'
+      : status === 404
+        ? 'Not Found'
+        : status === 409
+          ? 'Conflict'
+          : 'Internal Server Error';
   }
 }

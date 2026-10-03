@@ -68,8 +68,12 @@ export default function CommunicationPage() {
     if (!token) { router.push("/login"); return; }
     get("/communication/status").then(setStatus).catch(silent("loadCommStatus"));
     get("/communication/alerts/my-channels").then((d) => setMyChannels(Array.isArray(d) ? d : [])).catch(silent("loadMyChannels"));
-    get("/areas").then((d) => setAreas(Array.isArray(d) ? d : [])).catch(silent("loadAreas"));
-    get("/packages").then((d) => setPackages(Array.isArray(d) ? d : [])).catch(silent("loadPackages"));
+    // Sending to customers is company business; the platform account only
+    // keeps the default templates and the server's own alert channels.
+    if (!isOwner) {
+      get("/areas").then((d) => setAreas(Array.isArray(d) ? d : [])).catch(silent("loadAreas"));
+      get("/packages").then((d) => setPackages(Array.isArray(d) ? d : [])).catch(silent("loadPackages"));
+    }
   }, []);
 
   const loadLog = useCallback(async (reset = true) => {
@@ -165,7 +169,7 @@ export default function CommunicationPage() {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {TABS.map((name) => (
+        {TABS.filter((name) => !isOwner || name === "Templates" || name === "Alerts").map((name) => (
           <button key={name} onClick={() => setTab(name)}
             style={{ ...btn(tab === name ? T.accent : T.card), border: `1px solid ${tab === name ? T.accent : T.border}`, color: tab === name ? "#fff" : T.sub }}>
             {name}

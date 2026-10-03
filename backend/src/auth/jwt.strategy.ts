@@ -75,7 +75,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return {
       sub: payload.sub,     // ← This matches req.user.sub in controller
       email: payload.email,
-      role: payload.role,
+      // The role the account has NOW, not the one baked into the token when it
+      // was issued: a company moved out of the platform account (or any role
+      // change) takes effect on the next request instead of at token expiry.
+      role: status.role || payload.role,
       name: payload.name,
       imp: payload.imp,     // present when this is an "act as" session
       isDemo: payload.isDemo === true,

@@ -38,9 +38,11 @@ export class GroupsService {
 
   async listGroups(query: any, actor: any) {
     const q = (query?.q || '').trim().toLowerCase();
+    const own = actor ? await this.scope.configReadWhere(actor) : {};
     const rows = await this.prisma.accessGroup.findMany({
       where: {
         AND: [
+          own,
           q ? { OR: [
             { name: { contains: q, mode: 'insensitive' } },
             { description: { contains: q, mode: 'insensitive' } },
@@ -66,9 +68,10 @@ export class GroupsService {
     }));
   }
 
-  async listOptions() {
+  async listOptions(actor?: any) {
+    const own = actor ? await this.scope.configReadWhere(actor) : {};
     return this.prisma.accessGroup.findMany({
-      where: { isActive: true },
+      where: { AND: [{ isActive: true }, own] },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, color: true, propagate: true },
     });
@@ -78,16 +81,12 @@ export class GroupsService {
   // TENANCY
   // ────────────────────────────────────────────────────────────────────
   //
-  // Groups have no owner column: one set of groups serves the whole
-  // installation, and a group's members can be accounts of ANY company. So:
-  //   • changing what a group holds or who is in it is an installation-wide
-  //     privilege change — platform owner only;
-  //   • reading a group is allowed, but its members / NAS / packages are cut
-  //     down to the ones the caller can already see. Without that, any company
-  //     could list every other company's accounts (names, emails) and routers
-  //     just by walking group ids.
-  // Each filter is null for the platform owner (and for an internal call with
-  // no actor), which keeps their view exactly as it was.
+  // Each COMPANY owns its groups (ownerId = the company's top account). Its
+  // administrator creates and edits them; members must be its own accounts,
+  // and only its own routers / packages can be bound. Rows from before
+  // ownership (ownerId NULL) stay readable but cannot be changed by a company.
+  // Reads are cut down to what the caller can already see, so walking group
+  // ids never lists another company's accounts or routers.
 
   private async memberFilter(actor?: any): Promise<any | null> {
     if (!actor || this.scope.isPlatformOwner(actor)) return null;
@@ -108,6 +107,10 @@ export class GroupsService {
     const [member, nas, pkg] = await Promise.all([
       this.memberFilter(actor), this.nasFilter(actor), this.packageFilter(actor),
     ]);
+    if (actor) {
+      const row = await this.prisma.accessGroup.findUnique({ where: { id }, select: { ownerId: true } });
+      await this.scope.assertConfigReadable(actor, row, `Group ${id}`);
+    }
     const group = await this.prisma.accessGroup.findUnique({
       where: { id },
       include: {
@@ -131,16 +134,21 @@ export class GroupsService {
     return group;
   }
 
+  /** The caller's company administrator, on a group that company owns. */
+  private async assertGroupWritable(actor: any, id: number) {
+    if (!actor) return;
+    const row = await this.prisma.accessGroup.findUnique({ where: { id }, select: { ownerId: true } });
+    await this.scope.assertConfigWritable(actor, row, `Group ${id}`);
+  }
+
   async createGroup(body: any, actor: any) {
-    // Access groups are ONE set for the whole installation and membership
-    // grants routers and packages, so only the platform owner edits them —
-    // a company ADMIN could otherwise add itself to another company's group.
-    this.scope.assertPlatformOwner(actor);
+    const ownerId = actor ? await this.scope.configOwnerForCreate(actor) : null;
     if (!body?.name) throw new BadRequestException('name is required');
-    const exists = await this.prisma.accessGroup.findUnique({ where: { name: body.name } });
+    const exists = await this.prisma.accessGroup.findFirst({ where: { ownerId, name: body.name } });
     if (exists) throw new BadRequestException(`Group "${body.name}" already exists`);
     return this.prisma.accessGroup.create({
       data: {
+        ownerId,
         name: body.name,
         description: body.description ?? null,
         color: body.color ?? null,
@@ -151,10 +159,7 @@ export class GroupsService {
   }
 
   async updateGroup(id: number, body: any, actor: any) {
-    // Access groups are ONE set for the whole installation and membership
-    // grants routers and packages, so only the platform owner edits them —
-    // a company ADMIN could otherwise add itself to another company's group.
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, id);
     const existing = await this.prisma.accessGroup.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Group ${id} not found`);
     return this.prisma.accessGroup.update({
@@ -170,10 +175,7 @@ export class GroupsService {
   }
 
   async removeGroup(id: number, actor: any) {
-    // Access groups are ONE set for the whole installation and membership
-    // grants routers and packages, so only the platform owner edits them —
-    // a company ADMIN could otherwise add itself to another company's group.
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, id);
     const existing = await this.prisma.accessGroup.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Group ${id} not found`);
     // Cascade: members, nas bindings, package bindings all clear automatically.
@@ -196,10 +198,9 @@ export class GroupsService {
 
   async addMember(groupId: number, body: any, actor: any) {
     if (!body?.userId) throw new BadRequestException('userId is required');
-    // Access groups are ONE set for the whole installation and membership
-    // grants routers and packages, so only the platform owner edits them —
-    // a company ADMIN could otherwise add itself to another company's group.
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
+    // Members are the company's own accounts — never another company's.
+    if (actor) await this.scope.assertUser(actor, +body.userId);
     return this.prisma.accessGroupMember.upsert({
       where: { groupId_userId: { groupId, userId: +body.userId } },
       update: { propagate: body.propagate ?? false },
@@ -208,7 +209,7 @@ export class GroupsService {
   }
 
   async updateMember(groupId: number, userId: number, body: any, actor: any) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
     return this.prisma.accessGroupMember.update({
       where: { groupId_userId: { groupId, userId } },
       data: { propagate: body.propagate ?? false },
@@ -216,7 +217,7 @@ export class GroupsService {
   }
 
   async removeMember(groupId: number, userId: number, actor: any) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
     await this.prisma.accessGroupMember.delete({
       where: { groupId_userId: { groupId, userId } },
     });
@@ -236,8 +237,9 @@ export class GroupsService {
   }
 
   async bindNas(groupId: number, body: any, actor: any) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
     if (!body?.nasId) throw new BadRequestException('nasId is required');
+    if (actor) await this.scope.assertNas(actor, +body.nasId);
     return this.prisma.accessGroupNas.upsert({
       where: { groupId_nasId: { groupId, nasId: +body.nasId } },
       update: {},
@@ -246,7 +248,7 @@ export class GroupsService {
   }
 
   async unbindNas(groupId: number, nasId: number, actor: any) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
     await this.prisma.accessGroupNas.delete({
       where: { groupId_nasId: { groupId, nasId } },
     });
@@ -262,8 +264,9 @@ export class GroupsService {
   }
 
   async bindPackage(groupId: number, body: any, actor: any) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
     if (!body?.packageId) throw new BadRequestException('packageId is required');
+    if (actor) await this.scope.assertPackage(actor, +body.packageId);
     return this.prisma.accessGroupPackage.upsert({
       where: { groupId_packageId: { groupId, packageId: +body.packageId } },
       update: {},
@@ -272,7 +275,7 @@ export class GroupsService {
   }
 
   async unbindPackage(groupId: number, packageId: number, actor: any) {
-    this.scope.assertPlatformOwner(actor);
+    await this.assertGroupWritable(actor, groupId);
     await this.prisma.accessGroupPackage.delete({
       where: { groupId_packageId: { groupId, packageId } },
     });

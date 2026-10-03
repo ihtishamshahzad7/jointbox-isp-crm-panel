@@ -237,11 +237,25 @@ export class UsersService {
     };
   }
 
+  /**
+   * The platform account manages COMPANY accounts and nothing beneath them —
+   * not a company's franchises, dealers or staff. Anything else answers
+   * "not found", exactly like an id outside a reseller's tree.
+   */
+  private async assertPlatformTarget(actor: Actor | undefined, id: number) {
+    if (actor?.role !== 'SUPER_ADMIN' || this.scope.actorId(actor) === id) return;
+    const u = await this.prisma.user.findUnique({ where: { id }, select: { role: true } });
+    if (!u || u.role !== 'ADMIN') throw new NotFoundException(`User with ID ${id} not found`);
+  }
+
   async findAll(actor?: Actor) {
     // A reseller sees only its DOWNLINE — its own descendants, excluding itself
-    // (so you don't see your own account, and never a sibling). ISP/admin see all.
+    // (so you don't see your own account, and never a sibling). The platform
+    // account sees the COMPANIES only, never the people inside them.
     let where: any = {};
-    if (actor && !this.scope.isAdmin(actor.role)) {
+    if (actor?.role === 'SUPER_ADMIN') {
+      where = { role: 'ADMIN', isDemo: false };
+    } else if (actor && !this.scope.isAdmin(actor.role)) {
       const rootId = await this.scope.rootId(actor); // staff → their owner's subtree
       const ids = (await this.scope.descendantIds(rootId)).filter((id) => id !== rootId);
       where = { id: { in: ids.length ? ids : [-1] } }; // [-1] => empty list when no downline yet
@@ -455,6 +469,7 @@ export class UsersService {
   }
 
   async findOne(id: number, actor?: Actor) {
+    await this.assertPlatformTarget(actor, id);
     if (actor) await this.scope.assertUser(actor, id);
     const user = await this.prisma.user.findUnique({
       where: { id },
@@ -792,17 +807,16 @@ export class UsersService {
    * server console, the database, the panel updates. An ADMIN runs a business
    * on this panel; a SUPER_ADMIN runs the panel.
    *
-   * ── WHY SUPER_ADMIN KEEPS 'RESELLER' AS A SECOND OPTION ──────────────────
-   * Every installation that predates this change has franchises hanging
-   * directly off the SUPER_ADMIN, because that was the only shape available.
-   * Dropping RESELLER here would not move those accounts — it would just stop
-   * the operator adding a sibling to them, and make the ladder lie about a
-   * tree that already exists. So the top rung accepts either, and only the top
-   * rung does: ADMIN creating another ADMIN would put a second company inside
-   * the first one's subtree, which is precisely the isolation this is for.
+   * ── THE PLATFORM HOLDS COMPANIES ONLY ────────────────────────────────────
+   * Franchises, dealers, staff and auditors that once hung directly off the
+   * platform account are moved into a company at boot (platform-account.ts:
+   * the business-running account becomes that company's ADMIN and a separate
+   * platform login is created above it). So the top rung admits ADMIN alone,
+   * and ADMIN creating another ADMIN is refused: a second company inside the
+   * first one's subtree would break the isolation this ladder exists for.
    */
   private static readonly NEXT_ROLE: Record<string, string | string[] | null> = {
-    SUPER_ADMIN:  ['ADMIN', 'RESELLER'], // Platform creates an ISP (or, legacy, a Franchise)
+    SUPER_ADMIN:  ['ADMIN'],             // Platform creates ISP companies — nothing else
     ADMIN:        'RESELLER',            // ISP creates a Franchise
     RESELLER:     'SUB_RESELLER',        // Franchise creates a Dealer
     SUB_RESELLER: 'RETAILER',            // Dealer creates a Retailer
@@ -835,8 +849,15 @@ export class UsersService {
 
     // AUDITOR is a read-only books account. Only the ISP owner may mint one,
     // placed anywhere in their tree — it sees that subtree but writes nothing.
+    // The platform account holds companies only: no staff, no auditors, no
+    // franchises of its own — those belong inside a company.
+    if (parentRole === 'SUPER_ADMIN' && desiredRole !== 'ADMIN') {
+      throw new BadRequestException(
+        'The platform account holds ISP companies only. Create staff, auditors and franchises inside a company.',
+      );
+    }
     if (desiredRole === 'AUDITOR') {
-      if (parentRole !== 'SUPER_ADMIN' && parentRole !== 'ADMIN') {
+      if (parentRole !== 'ADMIN') {
         throw new BadRequestException('Only the ISP owner can create an auditor (read-only) account.');
       }
       return;
@@ -896,7 +917,9 @@ export class UsersService {
     // in their tree automatically. If a parent is given explicitly, admins may put
     // it anywhere; a reseller may only place it inside its own subtree.
     if (actor) {
-      if (!data.parentId) data.parentId = this.scope.actorId(actor);
+      // The platform account creates companies, always directly under itself.
+      if (actor.role === 'SUPER_ADMIN') data.parentId = this.scope.actorId(actor);
+      else if (!data.parentId) data.parentId = this.scope.actorId(actor);
       else if (!this.scope.isAdmin(actor.role)) await this.scope.assertUser(actor, data.parentId);
     }
 
@@ -984,9 +1007,20 @@ export class UsersService {
     },
     actor?: Actor,
   ) {
+    await this.assertPlatformTarget(actor, id);
     if (actor) await this.scope.assertUser(actor, id);
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
+
+    // A company stays a company, directly under the platform: the platform
+    // account edits its details and password, never its place or its role.
+    if (actor?.role === 'SUPER_ADMIN' && this.scope.actorId(actor) !== id) {
+      if (data.role !== undefined && data.role !== user.role) {
+        throw new BadRequestException('A company account stays a company account.');
+      }
+      delete (data as any).parentId;
+      delete (data as any).role;
+    }
 
     if (data.email && data.email !== user.email) {
       const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
@@ -1113,7 +1147,13 @@ export class UsersService {
     rootUserId: number,
     opts: { dryRun?: boolean; confirm?: string } = {},
   ) {
-    if (!this.scope.isAdmin(actor?.role)) {
+    // The platform owner purges whole COMPANIES; a company's administrator
+    // purges accounts inside its own company. Nobody else.
+    if (actor?.role === 'SUPER_ADMIN') {
+      await this.assertPlatformTarget(actor, rootUserId);
+    } else if (actor?.role === 'ADMIN') {
+      await this.scope.assertUser(actor, rootUserId);
+    } else {
       throw new ForbiddenException(
         'Only the ISP account can purge data. Your parent account can remove yours.',
       );
@@ -1210,6 +1250,7 @@ export class UsersService {
   }
 
   async delete(id: number, actor?: Actor) {
+    await this.assertPlatformTarget(actor, id);
     if (actor) await this.scope.assertUser(actor, id);
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
@@ -1271,6 +1312,7 @@ export class UsersService {
   }
 
   async toggleStatus(id: number, actor?: Actor) {
+    await this.assertPlatformTarget(actor, id);
     if (actor) await this.scope.assertUser(actor, id);
     // Suspension is now enforced on every request, so suspending yourself
     // would lock you out mid-click with nobody above you to undo it.
