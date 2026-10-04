@@ -46,7 +46,8 @@ export class SetupService {
    * rows greyed out.
    */
   async status(actor: Actor) {
-    const isIsp = this.scope.isAdmin(actor?.role);
+    // The ISP company's own account builds the catalogue and the network.
+    const isIsp = this.scope.isOwner(actor?.role);
     const meId = await this.scope.rootId(actor);
     const me = await this.prisma.user.findUnique({
       where: { id: meId },
@@ -72,10 +73,16 @@ export class SetupService {
 
   // ── ISP: build the catalogue, the network, and the first franchise ──
   private async ispSteps(actor: Actor, meId: number): Promise<SetupStep[]> {
+    // The company's OWN catalogue and network — never another company's.
+    const [pkgWhere, poolWhere, nasWhere] = await Promise.all([
+      this.scope.packageWhere(actor),
+      this.scope.poolWhere(actor as any),
+      this.scope.nasWhere(actor),
+    ]);
     const [packages, pools, nasList, children] = await Promise.all([
-      this.prisma.package.count(),
-      this.prisma.ipPool.count(),
-      this.prisma.nas.findMany({ select: { id: true, nasname: true, isActive: true } }),
+      this.prisma.package.count({ where: pkgWhere }),
+      this.prisma.ipPool.count({ where: poolWhere }),
+      this.prisma.nas.findMany({ where: nasWhere, select: { id: true, nasname: true, isActive: true } }),
       this.prisma.user.findMany({
         where: { parentId: meId },
         select: { id: true, name: true, balance: true, canSetPackagePrice: true },

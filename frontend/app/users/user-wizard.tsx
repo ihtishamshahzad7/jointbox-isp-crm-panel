@@ -155,7 +155,7 @@ export function UserWizard({
           validate: () => {
             if (!form.email.trim()) return "An email is required — it is how they sign in.";
             if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) return "That does not look like a valid email address.";
-            if (!form.password || form.password.length < 8) return "Password must be at least 8 characters.";
+            if (!form.password || form.password.length < 8 || !/[a-zA-Z]/.test(form.password) || !/[0-9]/.test(form.password)) return "Password must be at least 8 characters, with letters and numbers.";
             return null;
           },
           summary: () => [
@@ -167,7 +167,7 @@ export function UserWizard({
               <Field label="Email" required hint="Used as the login. Must be unique.">
                 <input value={form.email} onChange={set("email")} />
               </Field>
-              <Field label="Password" required hint="At least 8 characters. They can change it later.">
+              <Field label="Password" required hint="At least 8 characters, with letters and numbers. They can change it later.">
                 <input type="text" value={form.password} onChange={set("password")} />
               </Field>
             </>

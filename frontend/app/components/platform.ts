@@ -26,6 +26,14 @@ export const PLATFORM_PATHS = [
 
 export const PLATFORM_HOME = "/companies";
 
+/** Screens only the platform account has; a company is sent to its dashboard. */
+export const PLATFORM_ONLY_PATHS = ["/companies", "/licence", "/console", "/radius-admin"];
+
+export function isPlatformOnlyPath(path: string): boolean {
+  const p = (path || "").split("?")[0];
+  return PLATFORM_ONLY_PATHS.some((x) => p === x || p.startsWith(`${x}/`));
+}
+
 export function tokenPayload(): Record<string, any> | null {
   try {
     if (typeof window === "undefined") return null;

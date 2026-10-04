@@ -17,7 +17,7 @@ import { BRAND } from '../../lib/brand';
 import { LANGS, useI18n } from '../../lib/i18n';
 import { LicenceProvider, LicenceBanner } from './licence';
 import { ensureMediaToken, hasFreshMediaToken, clearMediaToken } from './image-upload';
-import { PLATFORM_HOME, isPlatformPath } from './platform';
+import { PLATFORM_HOME, isPlatformPath, isPlatformOnlyPath } from './platform';
 
 const API = API_BASE;
 
@@ -380,10 +380,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   );
   // The platform account never lands on a business screen: anything outside
   // its own pages goes to Companies (the backend would refuse it anyway).
-  const platformBlocked = myRole === 'SUPER_ADMIN' && !!pathname && !isPlatformPath(pathname);
+  const platformBlocked =
+    (myRole === 'SUPER_ADMIN' && !!pathname && !isPlatformPath(pathname)) ||
+    // …and a company account never lands on a platform-only screen.
+    (!!myRole && myRole !== 'SUPER_ADMIN' && !!pathname && isPlatformOnlyPath(pathname));
   useEffect(() => {
-    if (platformBlocked) router.replace(PLATFORM_HOME);
-  }, [platformBlocked, router]);
+    if (platformBlocked) router.replace(myRole === 'SUPER_ADMIN' ? PLATFORM_HOME : '/dashboard');
+  }, [platformBlocked, router, myRole]);
 
   /**
    * Filtered, capped account list for the Act-as menu.
@@ -598,10 +601,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const loadProfile = () =>
       fetch(`${API}/auth/profile`, { headers })
         .then((res) => {
-          if (!res.ok) throw new Error('Profile fetch failed');
+          // Only a rejected session signs the operator out. A busy server (429),
+          // a restart (502) or a dropped connection must not — this check runs
+          // every 45 seconds and on every focus.
+          if (res.status === 401 || res.status === 403) throw new Error('signed-out');
+          if (!res.ok) return null;
           return res.json();
         })
         .then((data) => {
+          if (!data) return;
           const u = data?.user ?? data;
           // Belt and braces with the login redirect: a session that reaches the
           // shell while a forced change is pending is sent back to it.
@@ -623,7 +631,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           }
           setUser(u);
         })
-        .catch(() => router.replace('/login'));
+        .catch((e) => { if (String(e?.message) === 'signed-out') router.replace('/login'); });
     loadProfile();
 
     // The My Profile page fires this after saving a new picture, so the header
@@ -1009,7 +1017,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 goes through. A reseller discovering they are empty only when
                 a customer is standing in front of them is a wasted visit, so
                 it lives permanently in the chrome rather than behind a page. */}
-            {user?.balance !== undefined && (
+            {/* Owners (the platform, an ISP company) are where money starts — no wallet to show. */}
+            {user?.balance !== undefined && myRole !== 'SUPER_ADMIN' && myRole !== 'ADMIN' && (
               <div
                 className={`nv-wallet ${
                   user.balance <= 0 ? 'empty' : user.balance < 1000 ? 'low' : ''
@@ -1279,7 +1288,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <main id="main" tabIndex={-1} className="app-shell-page-content">
           <div className="app-shell-page-inner">
             {/* Renders nothing unless there are static IP charges to chase. */}
-            <StaticIpBanner />
+            {roleReady && myRole !== 'SUPER_ADMIN' && <StaticIpBanner />}
             {/* Renders nothing on an ACTIVE licence, which is the normal case. */}
             <LicenceBanner />
             <div key={mediaKey} style={{ display: 'contents' }}>{roleReady && !platformBlocked ? children : null}</div>

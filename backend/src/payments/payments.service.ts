@@ -1,4 +1,4 @@
-import { Logger, Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Logger, Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
@@ -225,6 +225,45 @@ export class PaymentsService {
   }
 
   /**
+   * Money in must be a positive amount, against an invoice that can still take
+   * it, for that invoice's own customer. Found on a running panel: a -500 or 0
+   * "payment" was accepted (un-paying an invoice and posting negative cash —
+   * that is what a refund is for), a payment for one customer could settle
+   * another customer's invoice, and a paid invoice kept taking money until its
+   * due amount went negative.
+   */
+  private async assertPayable(data: any): Promise<{ currency: string | null } | null> {
+    const amount = Number(data?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Enter an amount greater than zero. To give money back, refund the payment instead.');
+    }
+    // Every payment settles an invoice (Payment.invoiceId is required); money
+    // with no invoice behind it is a balance top-up.
+    if (data?.invoiceId == null || data.invoiceId === '') {
+      throw new BadRequestException("Pick the invoice this payment is for. To keep money on the customer's account, top up their balance instead.");
+    }
+    const inv = await this.prisma.invoice.findUnique({
+      where: { id: Number(data.invoiceId) },
+      select: { subscriberId: true, status: true, dueAmount: true, total: true, paidAmount: true, currency: true, invoiceNo: true },
+    });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    if (data.subscriberId != null && inv.subscriberId != null && Number(data.subscriberId) !== inv.subscriberId) {
+      throw new BadRequestException(`Invoice ${inv.invoiceNo} belongs to a different customer. Pick that customer, or leave the invoice empty.`);
+    }
+    if (inv.status === 'CANCELLED') throw new BadRequestException(`Invoice ${inv.invoiceNo} is cancelled and cannot take a payment.`);
+    const due = Math.max(Number(inv.total) - Number(inv.paidAmount || 0), 0);
+    if (inv.status === 'PAID' || due <= 0) {
+      throw new BadRequestException(`Invoice ${inv.invoiceNo} is already paid. Add the money to the customer's balance instead (Accounting → Balances → Top up).`);
+    }
+    if (amount > due + 0.5) {
+      throw new BadRequestException(
+        `Invoice ${inv.invoiceNo} has ${Math.round(due)} due. Record ${Math.round(due)} against it and add the rest to the customer's balance (Accounting → Balances → Top up).`,
+      );
+    }
+    return { currency: inv.currency ?? null };
+  }
+
+  /**
    * WHO RECEIVED THE MONEY is the signed-in caller — or, when the caller is
    * recording cash a colleague collected, an account inside the caller's own
    * tree. It used to be whatever the request body said, so collections could
@@ -242,6 +281,7 @@ export class PaymentsService {
 
   async create(data: any, actor?: Actor) {
     if (actor) await this.assertPaymentTarget(actor, data);
+    await this.assertPayable(data);
 
     // Refuse a payment dated into a closed accounting period (no backdating).
     await this.accounting.assertPeriodOpen(data.paymentDate, {

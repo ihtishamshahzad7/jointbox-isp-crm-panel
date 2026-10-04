@@ -42,16 +42,23 @@ function treeQuery(strings: TemplateStringsArray, ...vals: any[]) {
   return [];
 }
 
-function make(card: { createdBy: number | null }) {
+function make(card: { createdBy: number | null; amount?: number }) {
   const voucher = { id: 3, code: 'ABCD-EFGH-JKLM', pin: '123456', status: 'UNUSED', expireDate: null, ...card };
   const prisma: any = {
     $queryRaw: jest.fn(async (s: any, ...v: any[]) => treeQuery(s, ...v)),
-    user: { findUnique: jest.fn() },
-    subscriber: {
-      findUnique: jest.fn(async ({ where }: any) =>
-        SUB_OWNER[where.id] ? { id: where.id, userId: SUB_OWNER[where.id] } : null,
+    user: {
+      findUnique: jest.fn(),
+      findMany: jest.fn(async ({ where }: any) =>
+        (where?.id?.in ?? []).map((id: number) => ({ id, role: id === 1 ? 'SUPER_ADMIN' : 'ADMIN' })),
       ),
     },
+    subscriber: {
+      findUnique: jest.fn(async ({ where }: any) =>
+        SUB_OWNER[where.id] ? { id: where.id, userId: SUB_OWNER[where.id], balance: 0 } : null,
+      ),
+      update: jest.fn(async () => ({ balance: 500 })),
+    },
+    balanceTransaction: { create: jest.fn(async () => ({})) },
     voucher: {
       findUnique: jest.fn().mockResolvedValue(voucher),
       findMany: jest.fn().mockResolvedValue([]),
@@ -59,7 +66,9 @@ function make(card: { createdBy: number | null }) {
       update: jest.fn().mockResolvedValue({}),
     },
   };
-  return { prisma, svc: new VouchersService(prisma, new ScopeService(prisma), {} as any) };
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+  const accounting = { post: jest.fn(async () => undefined) };
+  return { prisma, accounting, svc: new VouchersService(prisma, new ScopeService(prisma), {} as any, accounting as any) };
 }
 
 describe('vouchers tenancy — redeem', () => {
@@ -106,10 +115,20 @@ describe('vouchers tenancy — redeem', () => {
     expect(prisma.voucher.updateMany).toHaveBeenCalled();
   });
 
-  it('the customer-portal path (no actor) is unchanged', async () => {
-    const { svc, prisma } = make({ createdBy: 10 });
-    await expect(svc.redeemVoucher('ABCD-EFGH-JKLM', '123456', 200)).resolves.toBeTruthy();
-    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  it("the customer portal redeems the customer's own company's cards only", async () => {
+    // customer 200 belongs to company 20
+    await expect(make({ createdBy: 10 }).svc.redeemVoucher('ABCD-EFGH-JKLM', '123456', 200)).rejects.toEqual(
+      new NotFoundException('Voucher not found'),
+    );
+    await expect(make({ createdBy: 21 }).svc.redeemVoucher('ABCD-EFGH-JKLM', '123456', 200)).resolves.toBeTruthy();
+  });
+
+  it("the card's value lands in the wallet and is booked", async () => {
+    const { svc, prisma, accounting } = make({ createdBy: 20, amount: 500 } as any);
+    await svc.redeemVoucher('ABCD-EFGH-JKLM', '123456', 200);
+    expect(prisma.subscriber.update).toHaveBeenCalledWith(expect.objectContaining({ data: { balance: { increment: 500 } } }));
+    expect(prisma.balanceTransaction.create).toHaveBeenCalled();
+    expect(accounting.post).toHaveBeenCalled();
   });
 
   it('(iii) the voucher list passes a subtree-scoped where', async () => {

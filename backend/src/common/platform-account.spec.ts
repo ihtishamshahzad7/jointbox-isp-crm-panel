@@ -86,6 +86,19 @@ describe('platform account at boot', () => {
     expect(p.package.rows[0].ownerId).toBe(1);
   });
 
+  it('a company left with the installer\'s default name takes its ISP\'s name', async () => {
+    const p = db([{ id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN', name: 'Super Admin' }], {
+      subscriber: [{ id: 50, userId: 1 }],
+      isp: [{ id: 4, name: 'FastNet Broadband', ownerId: null }],
+    });
+    await ensurePlatformAccount(p, quiet);
+    expect(p.user.rows.find((u: any) => u.id === 1).name).toBe('FastNet Broadband');
+
+    const q = db([{ id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN', name: 'Ali Khan' }], { subscriber: [{ id: 50, userId: 1 }] });
+    await ensurePlatformAccount(q, quiet);
+    expect(q.user.rows.find((u: any) => u.id === 1).name).toBe('Ali Khan');
+  });
+
   it('runs once: a second boot changes nothing', async () => {
     const p = db([{ id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN' }], { subscriber: [{ id: 50, userId: 1 }] });
     await ensurePlatformAccount(p, quiet);

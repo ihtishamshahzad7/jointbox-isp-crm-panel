@@ -126,7 +126,7 @@ export class AuthController {
       String(body?.currentPassword ?? ''),
       String(body?.newPassword ?? ''),
     );
-    if (old) this.tokenBlacklistService.add(old);
+    if (old && old !== result.token) this.tokenBlacklistService.add(old);
     return { message: result.message, token: result.token };
   }
 

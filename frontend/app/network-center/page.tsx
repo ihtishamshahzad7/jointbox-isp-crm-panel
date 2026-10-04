@@ -10,12 +10,20 @@ import StaticIps from "../static-ips/page";
 import Prefixes from "../prefixes/page";
 import Outages from "../outages/page";
 import Fiber from "../fiber/page";
+import React from "react";
+import { tokenPayload } from "../components/platform";
 
 /**
  * Frontend-only network workspace. Existing screens and data contracts stay
  * untouched; this page adds a faster visual command layer around them.
  */
 export default function NetworkCenter() {
+  // The prefix register is the ISP company's own address plan.
+  const [isOwner, setIsOwner] = React.useState(false);
+  React.useEffect(() => {
+    const r = tokenPayload()?.role;
+    setIsOwner(r === "ADMIN" || r === "SUPER_ADMIN");
+  }, []);
   return (
     <div className="jb-network-workspace">
       <section className="jb-network-hero" aria-labelledby="network-title">
@@ -46,7 +54,7 @@ export default function NetworkCenter() {
           { id: "fiber", label: "FTTH / Fiber", hint: "OLTs, PON ports, ONUs and fiber topology.", render: () => <Fiber /> },
           { id: "pools", label: "IP Pools", hint: "Address ranges handed out to customers automatically.", render: () => <IpPools /> },
           { id: "static", label: "Static IPs", hint: "Fixed addresses sold as a monthly add-on.", render: () => <StaticIps /> },
-          { id: "prefixes", label: "Prefix Register", hint: "Routed blocks, VLANs and transit links for corporate clients.", render: () => <Prefixes /> },
+          ...(isOwner ? [{ id: "prefixes", label: "Prefix Register", hint: "Routed blocks, VLANs and transit links for corporate clients.", render: () => <Prefixes /> }] : []),
           { id: "outages", label: "Outages & Power", hint: "Load-shedding, power cuts and network faults.", render: () => <Outages /> },
         ]}
       />

@@ -64,9 +64,9 @@ export class PrefixAllocationService {
 
   // ── Pools ────────────────────────────────────────────────────────────────
   async listPools(actor?: Actor) {
-    this.assertAdmin(actor);
+    const company = await this.companyOf(actor);
     const pools = await this.prisma.prefixPool.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...(company != null ? { ownerId: company } : {}) },
       orderBy: [{ kind: 'asc' }, { name: 'asc' }],
     });
     // Utilisation is computed, never stored — a cached count is exactly the
@@ -89,7 +89,7 @@ export class PrefixAllocationService {
   }
 
   async createPool(body: any, actor?: Actor) {
-    this.assertAdmin(actor);
+    const company = await this.companyOf(actor);
     const cidr = String(body?.cidr || '').trim();
     this.parseCidr(cidr); // validates
     const kind = String(body?.kind || 'PUBLIC').toUpperCase();
@@ -98,6 +98,7 @@ export class PrefixAllocationService {
     if (defaultSize < 8 || defaultSize > 32) throw new BadRequestException('Default size must be between /8 and /32.');
     return this.prisma.prefixPool.create({
       data: {
+        ownerId: company,
         name: String(body?.name || cidr).slice(0, 120),
         cidr, kind, defaultSize,
         description: body?.description ? String(body.description).slice(0, 300) : null,
@@ -114,9 +115,25 @@ export class PrefixAllocationService {
    * downstream by design.
    */
   private assertAdmin(actor?: Actor) {
-    if (actor && !this.scope.isAdmin(actor.role)) {
+    if (actor && !this.scope.isOwner(actor.role)) {
       throw new ForbiddenException('Only ISP-level accounts can view or manage routed address space.');
     }
+  }
+
+  /**
+   * Each COMPANY keeps its own register (pools and allocations carry ownerId
+   * = the company's account). null = no narrowing (platform / internal).
+   */
+  private async companyOf(actor?: Actor): Promise<number | null> {
+    this.assertAdmin(actor);
+    if (!actor || this.scope.isAdmin(actor.role)) return null;
+    return this.scope.configOwnerForCreate(actor);
+  }
+
+  private async assertPoolInCompany(poolId: number, company: number | null) {
+    if (company == null) return;
+    const pool = await this.prisma.prefixPool.findUnique({ where: { id: poolId }, select: { ownerId: true } });
+    if (!pool || pool.ownerId !== company) throw new NotFoundException(`Pool ${poolId} not found`);
   }
 
   // ── The allocator ────────────────────────────────────────────────────────
@@ -132,7 +149,7 @@ export class PrefixAllocationService {
    * while the historical row survives for the abuse-report case.
    */
   async nextFree(poolId: number, sizeRaw?: number, actor?: Actor) {
-    this.assertAdmin(actor);
+    await this.assertPoolInCompany(poolId, await this.companyOf(actor));
     const pool = await this.prisma.prefixPool.findUnique({ where: { id: poolId } });
     if (!pool) throw new NotFoundException(`Pool ${poolId} not found`);
     const size = Number(sizeRaw) || pool.defaultSize;
@@ -186,13 +203,15 @@ export class PrefixAllocationService {
    * up holding address space nobody can account for.
    */
   async provision(body: any, actor?: Actor) {
-    this.assertAdmin(actor);
+    const company = await this.companyOf(actor);
     const clientName = String(body?.clientName || '').trim();
     if (!clientName) throw new BadRequestException('Client name is required.');
 
     const publicPoolId = Number(body?.poolId);
     const transitPoolId = Number(body?.transitPoolId);
     if (!publicPoolId) throw new BadRequestException('Choose the public pool to allocate from.');
+    await this.assertPoolInCompany(publicPoolId, company);
+    if (transitPoolId) await this.assertPoolInCompany(transitPoolId, company);
 
     const size = Number(body?.size) || undefined;
     const block = body?.allocatedCidr
@@ -201,13 +220,13 @@ export class PrefixAllocationService {
 
     // Explicit CIDRs are still checked for collision — an operator typing a
     // block by hand is exactly when a clash happens.
-    await this.assertFree(block.cidr, 'allocated prefix');
+    await this.assertFree(block.cidr, 'allocated prefix', company);
 
     let transitCidr: string | null = body?.transitCidr ? String(body.transitCidr).trim() : null;
     if (!transitCidr && transitPoolId) {
       transitCidr = (await this.nextFree(transitPoolId, 30)).cidr;
     }
-    if (transitCidr) await this.assertFree(transitCidr, 'transit link');
+    if (transitCidr) await this.assertFree(transitCidr, 'transit link', company);
 
     const t = transitCidr ? this.parseCidr(transitCidr) : null;
     const ourIp = body?.ourIp ? String(body.ourIp) : t ? this.intToIp(t.first + 1) : null;
@@ -219,7 +238,7 @@ export class PrefixAllocationService {
         throw new BadRequestException('VLAN id must be between 1 and 4094.');
       }
       const clash = await this.prisma.prefixAllocation.findFirst({
-        where: { vlanId, status: 'ACTIVE' }, select: { clientName: true },
+        where: { vlanId, status: 'ACTIVE', ...(company != null ? { ownerId: company } : {}) }, select: { clientName: true },
       });
       if (clash) throw new BadRequestException(`VLAN ${vlanId} is already used by ${clash.clientName}.`);
     }
@@ -230,6 +249,7 @@ export class PrefixAllocationService {
 
     const row = await this.prisma.prefixAllocation.create({
       data: {
+        ownerId: company,
         clientName,
         poolId: publicPoolId,
         subscriberId: body?.subscriberId ? Number(body.subscriberId) : null,
@@ -255,10 +275,12 @@ export class PrefixAllocationService {
     return { allocation: row, config: this.renderConfig(row), summary: this.renderSummary(row) };
   }
 
-  private async assertFree(cidr: string, label: string) {
+  private async assertFree(cidr: string, label: string, company: number | null = null) {
     const want = this.parseCidr(cidr);
+    // A company's own register: another company's space is neither checked
+    // against nor named in the error.
     const live = await this.prisma.prefixAllocation.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...(company != null ? { ownerId: company } : {}) },
       select: { id: true, clientName: true, allocatedCidr: true, transitCidr: true },
     });
     for (const a of live) {
@@ -281,8 +303,8 @@ export class PrefixAllocationService {
 
   // ── Register ─────────────────────────────────────────────────────────────
   async list(query: any = {}, actor?: Actor) {
-    this.assertAdmin(actor);
-    const where: any = {};
+    const company = await this.companyOf(actor);
+    const where: any = company != null ? { ownerId: company } : {};
     if (query.status && query.status !== 'ALL') where.status = String(query.status).toUpperCase();
     else where.status = { not: 'RELEASED' };
     if (query.q) {
@@ -302,22 +324,22 @@ export class PrefixAllocationService {
   }
 
   async getOne(id: number, actor?: Actor) {
-    this.assertAdmin(actor);
+    const company = await this.companyOf(actor);
     const row = await this.prisma.prefixAllocation.findUnique({
       where: { id }, include: { pool: true },
     });
-    if (!row) throw new NotFoundException(`Allocation ${id} not found`);
+    if (!row || (company != null && row.ownerId !== company)) throw new NotFoundException(`Allocation ${id} not found`);
     return { allocation: row, config: this.renderConfig(row), summary: this.renderSummary(row) };
   }
 
   /** Return the space to the pool, keeping the history. */
   async release(id: number, reason: string, actor?: Actor) {
-    this.assertAdmin(actor);
+    const company = await this.companyOf(actor);
     if (!String(reason || '').trim()) {
       throw new BadRequestException('A reason is required — this returns public address space to the pool.');
     }
     const row = await this.prisma.prefixAllocation.findUnique({ where: { id } });
-    if (!row) throw new NotFoundException(`Allocation ${id} not found`);
+    if (!row || (company != null && row.ownerId !== company)) throw new NotFoundException(`Allocation ${id} not found`);
     if (row.status === 'RELEASED') return row;
     const updated = await this.prisma.prefixAllocation.update({
       where: { id },

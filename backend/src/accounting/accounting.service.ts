@@ -178,10 +178,23 @@ export class AccountingService {
     // The ledger is the ISP's own books — every debit and credit across the
     // whole business. A reseller has no place in it at all, so rather than
     // filtering it down to a misleading subset, it is refused outright.
-    if (actor && !this.scope.isAdmin(actor.role)) {
+    // The company's own account (and its read-only auditor) reads the
+    // company's books — only the company's.
+    if (actor && !this.scope.isOwner(actor.role) && actor.role !== 'AUDITOR') {
       throw new ForbiddenException(
         'The general ledger is the ISP\'s accounts. Your own earnings are under Reseller Pricing.',
       );
+    }
+    const tenant = await this.tenantScope(actor);
+    if (tenant) {
+      const subs = await this.prisma.subscriber.findMany({
+        where: { userId: { in: tenant.ids } },
+        select: { id: true },
+      });
+      where.OR = [
+        { createdBy: { in: tenant.ids } },
+        ...(subs.length ? [{ subscriberId: { in: subs.map((x) => x.id) } }] : []),
+      ];
     }
     if (query?.account) where.account = query.account;
     if (query?.refType) where.refType = query.refType;
@@ -481,7 +494,7 @@ export class AccountingService {
 
     // Approval gate: a staff-raised expense above the threshold is held PENDING
     // and posts nothing until the ISP owner approves it. Owners always bypass.
-    const { expenseApprovalThreshold } = await this.getFinanceSettings();
+    const { expenseApprovalThreshold } = await this.getFinanceSettings(actor as any);
     const needsApproval =
       expenseApprovalThreshold > 0 && amount > expenseApprovalThreshold && !this.isOwner(actor?.role);
 
@@ -802,10 +815,24 @@ export class AccountingService {
     }
     const fullyRefunded = round2(alreadyRefunded + refundAmt) >= round2(payment.amount) - 0.005;
 
+    /**
+     * A refund TO WALLET needs a wallet to credit. If the subscriber has since
+     * been deleted there is no wallet left, so refuse rather than silently
+     * posting the refund nowhere — the operator has to hand this one back as
+     * cash instead. Checked BEFORE anything is written: refusing after the
+     * payment was already marked refunded left it half-done.
+     */
+    if (toBalance && payment.subscriberId == null) {
+      throw new BadRequestException(
+        'This payment is no longer attached to a subscriber, so it cannot be refunded to their wallet. Refund it as cash instead.',
+      );
+    }
+
+    // An advance payment (no invoice) has no invoice to re-open.
     const invoice = payment.invoice;
-    const newPaid = Math.max(round2(invoice.paidAmount - refundAmt), 0);
-    const newDue = round2(invoice.total - newPaid);
-    const newStatus = newPaid <= 0 ? 'UNPAID' : newPaid < invoice.total ? 'PARTIAL' : 'PAID';
+    const newPaid = invoice ? Math.max(round2(invoice.paidAmount - refundAmt), 0) : 0;
+    const newDue = invoice ? round2(invoice.total - newPaid) : 0;
+    const newStatus = invoice ? (newPaid <= 0 ? 'UNPAID' : newPaid < invoice.total ? 'PARTIAL' : 'PAID') : null;
 
     await this.prisma.$transaction([
       this.prisma.payment.update({
@@ -817,24 +844,15 @@ export class AccountingService {
           ...(fullyRefunded ? { refundedAt: new Date() } : {}),
         } as any,
       }),
-      this.prisma.invoice.update({
-        where: { id: invoice.id },
-        data: { paidAmount: newPaid, dueAmount: newDue, status: newStatus, paidDate: newStatus === 'PAID' ? invoice.paidDate : null },
-      }),
+      ...(invoice && newStatus
+        ? [this.prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { paidAmount: newPaid, dueAmount: newDue, status: newStatus, paidDate: newStatus === 'PAID' ? invoice.paidDate : null },
+          })]
+        : []),
     ]);
 
-    if (toBalance) {
-      /**
-       * A refund TO WALLET needs a wallet to credit. If the subscriber has
-       * since been deleted there is no wallet left, so refuse rather than
-       * silently posting the refund nowhere — the operator has to hand this
-       * one back as cash instead.
-       */
-      if (payment.subscriberId == null) {
-        throw new BadRequestException(
-          'This payment is no longer attached to a subscriber, so it cannot be refunded to their wallet. Refund it as cash instead.',
-        );
-      }
+    if (toBalance && payment.subscriberId != null) {
       // credit the wallet instead of handing back cash
       const sub = await this.prisma.subscriber.findUnique({ where: { id: payment.subscriberId } });
       await this.prisma.$transaction([
@@ -897,26 +915,45 @@ export class AccountingService {
     return role === 'SUPER_ADMIN' || role === 'ADMIN';
   }
 
-  /** Current finance policy (creates the singleton on first read). */
-  async getFinanceSettings() {
+  /**
+   * Finance policy for the caller's company: its own thresholds, else the
+   * installation default (the FinanceSettings singleton). It used to be one
+   * row for everybody, so one company switching approvals off (or on) did it
+   * for every other company on the server.
+   */
+  async getFinanceSettings(actor?: Actor) {
     const s = await this.prisma.financeSettings.findUnique({ where: { id: 1 } });
+    const company = actor && !this.scope.isPlatformOwner(actor)
+      ? await this.scope.companyRootId(this.scope.actorId(actor))
+      : null;
+    const own = company != null
+      ? await this.prisma.companyFinanceSettings.findUnique({ where: { companyId: company } })
+      : null;
+    const src: any = own ?? s;
     return {
-      refundApprovalThreshold: s?.refundApprovalThreshold ?? 0,
-      expenseApprovalThreshold: (s as any)?.expenseApprovalThreshold ?? 0,
-      updatedAt: s?.updatedAt ?? null,
+      refundApprovalThreshold: src?.refundApprovalThreshold ?? 0,
+      expenseApprovalThreshold: src?.expenseApprovalThreshold ?? 0,
+      updatedAt: src?.updatedAt ?? null,
     };
   }
 
-  /** Set the finance approval thresholds. ISP owner only (enforced in controller). */
-  async setFinanceSettings(body: { refundApprovalThreshold?: number; expenseApprovalThreshold?: number }, actorId?: number) {
-    const cur = await this.getFinanceSettings();
+  /**
+   * Set the approval thresholds: a company's administrator sets its company's,
+   * the platform sets the default (owner-only check in the controller).
+   */
+  async setFinanceSettings(body: { refundApprovalThreshold?: number; expenseApprovalThreshold?: number }, actorOrId?: Actor | number) {
+    const actor: Actor | undefined = typeof actorOrId === 'object' ? actorOrId : undefined;
+    const actorId = typeof actorOrId === 'number' ? actorOrId : actor ? this.scope.actorId(actor) : undefined;
+    const cur = await this.getFinanceSettings(actor);
     const refund = Math.max(0, Number(body.refundApprovalThreshold ?? cur.refundApprovalThreshold) || 0);
     const expense = Math.max(0, Number(body.expenseApprovalThreshold ?? cur.expenseApprovalThreshold) || 0);
-    await this.prisma.financeSettings.upsert({
-      where: { id: 1 },
-      update: { refundApprovalThreshold: refund, expenseApprovalThreshold: expense, updatedById: actorId ?? null } as any,
-      create: { id: 1, refundApprovalThreshold: refund, expenseApprovalThreshold: expense, updatedById: actorId ?? null } as any,
-    });
+    const company = actor ? await this.scope.configOwnerForCreate(actor) : null;
+    const data = { refundApprovalThreshold: refund, expenseApprovalThreshold: expense, updatedById: actorId ?? null };
+    if (company == null) {
+      await this.prisma.financeSettings.upsert({ where: { id: 1 }, update: data as any, create: { id: 1, ...data } as any });
+    } else {
+      await this.prisma.companyFinanceSettings.upsert({ where: { companyId: company }, update: data, create: { companyId: company, ...data } });
+    }
     return { refundApprovalThreshold: refund, expenseApprovalThreshold: expense };
   }
 
@@ -940,7 +977,7 @@ export class AccountingService {
     const remaining = round2(payment.amount - already);
     const refundAmt = body.amount == null ? remaining : round2(body.amount);
 
-    const { refundApprovalThreshold } = await this.getFinanceSettings();
+    const { refundApprovalThreshold } = await this.getFinanceSettings(actor as any);
     const needsApproval =
       refundApprovalThreshold > 0 && refundAmt > refundApprovalThreshold && !this.isOwner(actor?.role);
 

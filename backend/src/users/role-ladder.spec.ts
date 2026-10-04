@@ -110,7 +110,7 @@ describe('UsersService — role ladder', () => {
     it('refuses a sub-account beneath a STAFF account', async () => {
       const { svc } = makeService({ parent: { id: 2, role: 'SALES' } });
       // Old code: NEXT_ROLE['SALES'] === undefined → validation silently passed.
-      await expect(svc.update(3, { role: 'ADMIN' }, ADMIN)).rejects.toThrow(/cannot have sub-accounts/);
+      await expect(svc.update(3, { role: 'RESELLER' }, ADMIN)).rejects.toThrow(/cannot have sub-accounts/);
     });
 
     it('refuses a sub-account beneath an AUDITOR account', async () => {

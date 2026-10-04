@@ -150,6 +150,23 @@ export class ScopeService {
   }
 
   /**
+   * OWNER POWERS — not visibility.
+   *
+   * isAdmin() is the platform account: it sees across every company and is
+   * used to skip scope filters. That must stay SUPER_ADMIN alone.
+   *
+   * isOwner() answers a different question: "is this the owner of the
+   * business?" — the ISP company's own account (ADMIN), or the platform. The
+   * owner may top up its franchises, set their prices, add routers, read its
+   * own ledger, delete its own customers… always INSIDE its own scope, which
+   * every caller still enforces. Since the platform account no longer runs a
+   * business, gating these on isAdmin() left them usable by nobody.
+   */
+  isOwner(role?: string): boolean {
+    return role === 'ADMIN' || this.isAdmin(role);
+  }
+
+  /**
    * Every account ABOVE this one, self included: [self, parent, …, ISP].
    *
    * Network resources (NAS, packages) flow DOWNWARD, so to decide what a
@@ -702,9 +719,13 @@ export class ScopeService {
   // owner edits, and a company's own rows (ownerId = its top-most account),
   // which only that company sees and only its top level edits.
 
-  /** Rows the caller may read: platform defaults plus its own company's. */
+  /**
+   * Rows the caller may read: platform defaults plus its own company's.
+   * The platform account reads (and edits) the defaults only — a company's
+   * own templates, taxes and fees are that company's business.
+   */
   async configReadWhere(actor: Actor): Promise<any> {
-    if (this.isPlatformOwner(actor)) return {};
+    if (this.isPlatformOwner(actor)) return { ownerId: null };
     const company = await this.companyRootId(this.actorId(actor));
     return company == null ? { ownerId: null } : { OR: [{ ownerId: null }, { ownerId: company }] };
   }
@@ -727,7 +748,10 @@ export class ScopeService {
   /** May this caller change (or delete) this row? Same rule as creating. */
   async assertConfigWritable(actor: Actor, row: { ownerId: number | null } | null, what = 'Setting'): Promise<void> {
     if (!row) throw new NotFoundException(`${what} not found`);
-    if (this.isPlatformOwner(actor)) return;
+    if (this.isPlatformOwner(actor)) {
+      if (row.ownerId != null) throw new NotFoundException(`${what} not found`);
+      return;
+    }
     const company = await this.companyRootId(this.actorId(actor));
     if (row.ownerId == null) {
       throw new ForbiddenException(
@@ -741,7 +765,8 @@ export class ScopeService {
   /** Readable by this caller? (platform default, or its company's own.) */
   async assertConfigReadable(actor: Actor, row: { ownerId: number | null } | null, what = 'Setting'): Promise<void> {
     if (!row) throw new NotFoundException(`${what} not found`);
-    if (this.isPlatformOwner(actor) || row.ownerId == null) return;
+    if (row.ownerId == null) return;
+    if (this.isPlatformOwner(actor)) throw new NotFoundException(`${what} not found`);
     const company = await this.companyRootId(this.actorId(actor));
     if (company == null || row.ownerId !== company) throw new NotFoundException(`${what} not found`);
   }

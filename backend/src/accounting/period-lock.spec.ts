@@ -66,3 +66,19 @@ describe('period lock is per company', () => {
     await expect(svc.assertPeriodOpen('2026-08-15', { subscriberId: 600 })).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe('finance approval thresholds are per company', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'accounting.service.ts'), 'utf8');
+  it('reads and writes the company row, the singleton is only the default', () => {
+    expect(src).toMatch(/companyFinanceSettings\.findUnique\(\{ where: \{ companyId: company \} \}\)/);
+    expect(src).toMatch(/companyFinanceSettings\.upsert\(/);
+    expect(src).toMatch(/getFinanceSettings\(actor as any\);\s*const needsApproval =\s*refundApprovalThreshold/);
+    expect(src).toMatch(/getFinanceSettings\(actor as any\);\s*const needsApproval =\s*expenseApprovalThreshold/);
+  });
+  it('a wallet refund with no customer is refused before anything is written', () => {
+    const i = src.indexOf('cannot be refunded to their wallet');
+    const tx = src.indexOf('refundedAmount: round2(alreadyRefunded + refundAmt)');
+    expect(i).toBeGreaterThan(0);
+    expect(i).toBeLessThan(tx);
+  });
+});

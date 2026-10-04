@@ -138,16 +138,16 @@ export class AccountingController {
     }
   }
 
-  /** Installation singleton (approval thresholds) — reading it is harmless. */
+  /** The caller's company approval thresholds (or the installation default). */
   @Get('finance-settings')
   getFinanceSettings(@Request() req: any) {
-    return this.accounting.getFinanceSettings();
+    return this.accounting.getFinanceSettings(req.user);
   }
 
   @Put('finance-settings')
   setFinanceSettings(@Body() body: { refundApprovalThreshold?: number; expenseApprovalThreshold?: number }, @Request() req: any) {
     this.assertOwner(req);
-    return this.accounting.setFinanceSettings(body || {}, req.user?.sub);
+    return this.accounting.setFinanceSettings(body || {}, req.user);
   }
 
   @Get('pending-approvals')

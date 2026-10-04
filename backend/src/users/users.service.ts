@@ -815,6 +815,20 @@ export class UsersService {
    * and ADMIN creating another ADMIN is refused: a second company inside the
    * first one's subtree would break the isolation this ladder exists for.
    */
+  /** What the account edit form may change. */
+  private static readonly EDITABLE = new Set([
+    'name', 'email', 'password', 'role', 'phone', 'address', 'parentId', 'isActive',
+    'photoUrl', 'cnicFrontUrl', 'cnicBackUrl', 'smsEnabled', 'emailEnabled',
+    'country', 'province', 'city', 'identity', 'zipCode', 'dateOfBirth', 'about',
+    'additionalPhones', 'additionalEmails', 'autoRenew', 'billingType',
+    'accountingLimit', 'nasGroup', 'areaGroup', 'branchId', 'commissionPercent',
+  ]);
+  /** Set by the account above; an account cannot change these on itself. */
+  private static readonly SELF_LOCKED = [
+    'role', 'parentId', 'isActive', 'accountingLimit', 'billingType',
+    'nasGroup', 'areaGroup', 'branchId', 'commissionPercent',
+  ];
+
   private static readonly NEXT_ROLE: Record<string, string | string[] | null> = {
     SUPER_ADMIN:  ['ADMIN'],             // Platform creates ISP companies — nothing else
     ADMIN:        'RESELLER',            // ISP creates a Franchise
@@ -960,7 +974,7 @@ export class UsersService {
         city:         data.city     || null,
         // Only the ISP/admin (the source) may seed a starting balance. A reseller
         // creates children at 0 and must fund them via a prepaid wallet top-up.
-        balance:   this.scope.isAdmin(actor?.role) ? (data.balance || 0) : 0,
+        balance:   this.scope.isOwner(actor?.role) ? (data.balance || 0) : 0,
       },
       select: {
         id: true, name: true, email: true, role: true,
@@ -1012,6 +1026,84 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
 
+    /**
+     * ONLY THE FIELDS THIS FORM EDITS. The body was spread straight into the
+     * update, so any column could be written: an account set its own credit
+     * limit (an overdraft on its parent), granted itself top-up rights, or
+     * flipped flags like isDemo. Credit limit, permissions and the wallet have
+     * their own audited routes.
+     */
+    const currentPassword = (data as any)?.currentPassword;
+    for (const k of Object.keys(data || {})) {
+      if (!UsersService.EDITABLE.has(k)) delete (data as any)[k];
+    }
+
+    // Your own password needs your current one — a borrowed session must not
+    // be enough to lock the owner out. (Settings uses /auth/change-password.)
+    if (actor && this.scope.actorId(actor) === id && data.password) {
+      const ok = typeof currentPassword === 'string' && currentPassword.length > 0
+        && (await bcrypt.compare(currentPassword, (user as any).password || ''));
+      if (!ok) throw new BadRequestException('Enter your current password to set a new one.');
+    }
+
+    /**
+     * NOBODY RE-RANKS OR RE-HOMES THEMSELVES. A retailer sent
+     * { parentId: <platform>, role: 'ADMIN' } for its own id and became a
+     * company of its own; it could equally have planted itself in another
+     * company's tree. Place, role, status, limits and commission are set by
+     * the account above. (A form that sends them back unchanged is fine.)
+     */
+    if (actor && this.scope.actorId(actor) === id) {
+      for (const k of UsersService.SELF_LOCKED) {
+        const v = (data as any)[k];
+        if (v === undefined) continue;
+        const norm = (x: any) => (k === 'billingType' ? String(x || 'PREPAID') : String(x ?? ''));
+        if (norm(v) !== norm((user as any)[k])) {
+          throw new ForbiddenException(
+            'You cannot change your own role, place, status, limits or commission. The account above you sets those.',
+          );
+        }
+        delete (data as any)[k];
+      }
+    }
+
+    // ADMIN and SUPER_ADMIN are never reached by editing: a company is created
+    // from the platform's Companies screen.
+    if (actor?.role !== 'SUPER_ADMIN' && data.role !== undefined && data.role !== user.role && (data.role === 'ADMIN' || data.role === 'SUPER_ADMIN')) {
+      throw new BadRequestException("A company account is created from the platform's Companies screen, not by changing a role.");
+    }
+
+    // Moving an account: the new parent must be inside the caller's own tree —
+    // a franchise moved its dealer under another company's account.
+    if (data.parentId !== undefined && Number(data.parentId || 0) !== Number(user.parentId || 0)) {
+      if (!data.parentId) throw new BadRequestException('An account must sit under a parent account.');
+      data.parentId = Number(data.parentId);
+      if (actor) await this.scope.assertUser(actor, data.parentId);
+    } else if (data.parentId !== undefined) {
+      delete (data as any).parentId;
+    }
+
+    if (data.commissionPercent !== undefined) {
+      const pct = Number(data.commissionPercent);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new BadRequestException('Commission must be 0–100');
+      data.commissionPercent = pct;
+    }
+    if (data.accountingLimit !== undefined && data.accountingLimit !== null) {
+      const lim = Number(data.accountingLimit);
+      if (!Number.isFinite(lim) || lim < 0) throw new BadRequestException('Accounting limit must be zero or more.');
+      data.accountingLimit = lim;
+    }
+    if (data.branchId !== undefined && data.branchId !== null && actor && actor.role !== 'SUPER_ADMIN') {
+      const branch = await this.prisma.branch.findUnique({
+        where: { id: Number(data.branchId) },
+        select: { isp: { select: { ownerId: true } } },
+      });
+      const mine = await this.scope.companyRootId(this.scope.actorId(actor));
+      const theirs = branch?.isp?.ownerId != null ? await this.scope.companyRootId(branch.isp.ownerId) : null;
+      if (!branch || mine == null || theirs !== mine) throw new NotFoundException('Branch not found');
+      data.branchId = Number(data.branchId);
+    }
+
     // A company stays a company, directly under the platform: the platform
     // account edits its details and password, never its place or its role.
     if (actor?.role === 'SUPER_ADMIN' && this.scope.actorId(actor) !== id) {
@@ -1056,6 +1148,13 @@ export class UsersService {
      * after this call (a request may move it and re-role it at once), using
      * the same rule create() uses.
      */
+    // An account moved under a new parent must fit the ladder there too.
+    if (data.parentId !== undefined && (data.role === undefined || data.role === user.role)) {
+      const parent = await this.prisma.user.findUnique({ where: { id: data.parentId }, select: { role: true } });
+      if (!parent) throw new NotFoundException(`Parent user with ID ${data.parentId} not found`);
+      this.assertRoleAllowedUnder(user.role, parent.role);
+    }
+
     if (data.role !== undefined && data.role !== user.role) {
       const effectiveParentId =
         data.parentId !== undefined ? data.parentId : user.parentId;

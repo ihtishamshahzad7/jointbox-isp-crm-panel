@@ -56,9 +56,12 @@ export default function StatusPage() {
 
   const load = useCallback(async () => {
     try {
+      // Several ISPs can share one server: the link names whose areas to show.
+      const c = new URLSearchParams(window.location.search).get("c");
+      const q = c && /^\d+$/.test(c) ? `company=${c}` : "";
       const [s, h] = await Promise.all([
-        fetch(`${API_BASE}/public/status`),
-        fetch(`${API_BASE}/public/status/history?days=7`),
+        fetch(`${API_BASE}/public/status${q ? `?${q}` : ""}`),
+        fetch(`${API_BASE}/public/status/history?days=7${q ? `&${q}` : ""}`),
       ]);
       if (!s.ok) { setErr(true); return; }
       const d = await s.json();

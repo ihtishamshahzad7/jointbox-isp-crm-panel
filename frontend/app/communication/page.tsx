@@ -380,7 +380,7 @@ export default function CommunicationPage() {
               <tbody>
                 {templates.map((tpl, i) => (
                   <tr key={tpl.id} style={{ background: i % 2 ? "transparent" : T.row }}>
-                    <td style={td}>
+                    <td style={{ ...td, minWidth: 150 }}>
                       {tpl.name}
                       {tpl.scope === "PLATFORM" && (
                         <span title="Platform default — used until your company creates its own template for this channel and event"
@@ -390,7 +390,7 @@ export default function CommunicationPage() {
                       )}
                     </td>
                     <td style={td}>{tpl.channel}</td>
-                    <td style={{ ...td, fontSize: 12, color: T.sub }}>{tpl.event}</td>
+                    <td style={{ ...td, fontSize: 12, color: T.sub, whiteSpace: "nowrap" }}>{tpl.event}</td>
                     <td style={{ ...td, color: T.sub, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tpl.body}>{tpl.body}</td>
                     <td style={td}>
                       <span onClick={() => (tpl.scope !== "PLATFORM" || isOwner) && toggleTemplate(tpl)} style={{ cursor: tpl.scope !== "PLATFORM" || isOwner ? "pointer" : "default", fontSize: 11, padding: "2px 8px", borderRadius: 20, background: tpl.isActive ? "#22c55e22" : "var(--muted)22", color: tpl.isActive ? T.green : T.muted }}>

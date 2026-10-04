@@ -37,9 +37,9 @@ export class BillingService {
     private proration: ProrationService,
     private currency: CurrencyService,
   ) {
-    this.queue.registerProcessor('billing-auto-invoice', (d) => this.runAutoInvoice(d?.dryRun === true));
-    this.queue.registerProcessor('billing-auto-renewal', (d) => this.runAutoRenewal(d?.dryRun === true));
-    this.queue.registerProcessor('billing-suspension', (d) => this.runSuspension(d?.dryRun === true));
+    this.queue.registerProcessor('billing-auto-invoice', (d) => this.runAutoInvoice(d?.dryRun === true, d?.companyId ?? null));
+    this.queue.registerProcessor('billing-auto-renewal', (d) => this.runAutoRenewal(d?.dryRun === true, d?.companyId ?? null));
+    this.queue.registerProcessor('billing-suspension', (d) => this.runSuspension(d?.dryRun === true, d?.companyId ?? null));
   }
 
   private get enabled() {
@@ -82,25 +82,50 @@ export class BillingService {
   }
 
   // ── Manual/queued triggers ────────────────────────────────────
-  async trigger(type: 'auto-invoice' | 'auto-renewal' | 'suspension', dryRun: boolean) {
-    const jobId = await this.queue.add(`billing-${type}`, { dryRun });
+  /**
+   * Start a job now. `companyId` limits it to one company's customers (a
+   * company running its own billing); null = the whole installation.
+   */
+  async trigger(type: 'auto-invoice' | 'auto-renewal' | 'suspension', dryRun: boolean, companyId: number | null = null) {
+    const jobId = await this.queue.add(`billing-${type}`, { dryRun, companyId });
     return { jobId, dryRun };
   }
 
-  async getRuns() {
-    return this.prisma.billingRun.findMany({ orderBy: { id: 'desc' }, take: 100 });
+  /** Run history — a company sees its own runs only. */
+  async getRuns(companyId: number | null = null) {
+    return this.prisma.billingRun.findMany({
+      where: companyId != null ? { companyId } : {},
+      orderBy: { id: 'desc' },
+      take: 100,
+    });
+  }
+
+  /** Accounts of one company (its whole tree), or null for every company. */
+  private async ownersOf(companyId: number | null): Promise<any> {
+    if (companyId == null) return {};
+    const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
+      WITH RECURSIVE t AS (
+        SELECT id FROM "User" WHERE id = ${companyId}
+        UNION ALL
+        SELECT u.id FROM "User" u JOIN t ON u."parentId" = t.id
+      )
+      SELECT id FROM t`;
+    const ids = rows.map((r) => Number(r.id));
+    return { userId: { in: ids.length ? ids : [-1] } };
   }
 
   // ─────────────────────────────────────────────────────────────
   // JOB 1: AUTO-INVOICE
   // ─────────────────────────────────────────────────────────────
-  async runAutoInvoice(dryRun = false) {
-    const run = await this.prisma.billingRun.create({ data: { type: 'AUTO_INVOICE', dryRun } });
+  async runAutoInvoice(dryRun = false, companyId: number | null = null) {
+    const run = await this.prisma.billingRun.create({ data: { type: 'AUTO_INVOICE', dryRun, companyId } });
+    const owners = await this.ownersOf(companyId);
     const horizon = new Date();
     horizon.setDate(horizon.getDate() + this.leadDays);
 
     const candidates = await this.prisma.subscriber.findMany({
       where: {
+        ...owners,
         status: 'ACTIVE',
         packageId: { not: null },
         serviceSettings: { is: { expiryDate: { not: null, lte: horizon } } },
@@ -159,12 +184,14 @@ export class BillingService {
   // ─────────────────────────────────────────────────────────────
   // JOB 2: AUTO-RENEWAL from wallet balance
   // ─────────────────────────────────────────────────────────────
-  async runAutoRenewal(dryRun = false) {
-    const run = await this.prisma.billingRun.create({ data: { type: 'AUTO_RENEWAL', dryRun } });
+  async runAutoRenewal(dryRun = false, companyId: number | null = null) {
+    const run = await this.prisma.billingRun.create({ data: { type: 'AUTO_RENEWAL', dryRun, companyId } });
+    const owners = await this.ownersOf(companyId);
     const now = new Date();
 
     const candidates = await this.prisma.subscriber.findMany({
       where: {
+        ...owners,
         status: { in: ['ACTIVE', 'EXPIRED', 'SUSPENDED'] },
         packageId: { not: null },
         balance: { gt: 0 },
@@ -338,13 +365,15 @@ export class BillingService {
   // ─────────────────────────────────────────────────────────────
   // JOB 3: SUSPEND EXPIRED
   // ─────────────────────────────────────────────────────────────
-  async runSuspension(dryRun = false) {
-    const run = await this.prisma.billingRun.create({ data: { type: 'SUSPENSION', dryRun } });
+  async runSuspension(dryRun = false, companyId: number | null = null) {
+    const run = await this.prisma.billingRun.create({ data: { type: 'SUSPENSION', dryRun, companyId } });
+    const owners = await this.ownersOf(companyId);
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - this.graceDays);
 
     const candidates = await this.prisma.subscriber.findMany({
       where: {
+        ...owners,
         status: 'ACTIVE',
         serviceSettings: { is: { expiryDate: { not: null, lt: cutoff } } },
       },

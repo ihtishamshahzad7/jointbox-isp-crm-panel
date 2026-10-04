@@ -84,6 +84,22 @@ export async function platformEmailFor(
   return `superadmin+${Date.now()}-${from.id}@${domain}`;
 }
 
+/**
+ * The company keeps its login, but not a name like "Super Admin": the
+ * installer's default account name would otherwise show up as a company
+ * called "Super Admin" on the platform's Companies screen and in the
+ * company's own header. Its ISP's name is used when one exists.
+ */
+const GENERIC_NAME = /^(super\s*admin|admin(istrator)?|owner|platform\s*owner|root)$/i;
+async function nameCompany(prisma: any, company: Acct): Promise<void> {
+  if (company.name && !GENERIC_NAME.test(company.name.trim())) return;
+  const isp = await prisma.isp
+    .findFirst({ where: { OR: [{ ownerId: company.id }, { ownerId: null }] }, orderBy: { id: 'asc' }, select: { name: true } })
+    .catch(() => null);
+  const name = isp?.name?.trim() || 'My ISP';
+  await prisma.user.update({ where: { id: company.id }, data: { name } });
+}
+
 async function createPlatformAccount(prisma: any, from: Acct) {
   const email = await platformEmailFor(prisma, from);
   return prisma.user.create({
@@ -212,6 +228,7 @@ async function splitInside(
       data: { parentId: p.id },
     });
     await claimOrphans(prisma, root.id);
+    await nameCompany(prisma, root);
     log.warn(
       `👑 Platform account created: ${p.email} — sign in with the same password as ${root.email} ` +
         `(you will be asked to change it). ${root.email} keeps running its company.`,
@@ -238,6 +255,7 @@ async function splitInside(
       data: { role: 'ADMIN', parentId: p.id },
     });
     await claimOrphans(prisma, sa.id);
+    await nameCompany(prisma, sa);
     log.warn(
       `👑 ${sa.email} was running a business from the platform account, so it is now that company's ADMIN ` +
         `(same login, same data). Platform account: ${p.email} — same password, change it at first sign-in.`,

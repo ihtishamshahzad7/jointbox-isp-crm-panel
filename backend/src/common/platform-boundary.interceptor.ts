@@ -68,6 +68,8 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['GET', 'communication/status'],
   ['*', 'communication/alerts/*'],
   ['*', 'accounting/period-lock'],
+  // the nightly billing jobs, run now for the whole installation
+  ['POST', 'billing/run/:type'],
   ['PUT', 'organization/isps/:id/currency'],
 
   // ── defaults every company starts from (companies add their own) ──

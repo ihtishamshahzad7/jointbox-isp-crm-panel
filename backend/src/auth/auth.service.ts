@@ -7,6 +7,7 @@ import {
 import { invalidateAccountStatus, PUBLISHED_DEFAULT_PASSWORD } from './account-status';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'crypto';
 import { LogsService } from '../logs/logs.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
@@ -185,6 +186,9 @@ export class AuthService {
       role: user.role,
       name: user.name,
       isDemo: (user as any).isDemo === true,
+      // Two sign-ins in the same second must not share one token string —
+      // signing out (blacklisting) one would sign out the other.
+      jti: randomUUID(),
     };
 
     const token = this.jwtService.sign(payload, {
@@ -436,6 +440,10 @@ export class AuthService {
         role: user.role,
         name: user.name,
         isDemo: (user as any).isDemo === true,
+        // Unique per issue: signed in the same second as the old token, an
+        // identical payload produced the IDENTICAL string — and blacklisting
+        // the old token then revoked the new one too.
+        jti: randomUUID(),
       },
       { expiresIn: '7d' },
     );

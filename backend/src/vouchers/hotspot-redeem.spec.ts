@@ -59,7 +59,7 @@ describe('VouchersService — hotspot card redemption', () => {
         ? jest.fn().mockRejectedValue(new Error('radius down'))
         : jest.fn().mockResolvedValue(undefined),
     };
-    return { prisma, radius, svc: new VouchersService(prisma, scope, radius) };
+    return { prisma, radius, svc: new VouchersService(prisma, scope, radius, { post: jest.fn(async () => undefined) } as any) };
   }
 
   const card = (over: any = {}) => ({

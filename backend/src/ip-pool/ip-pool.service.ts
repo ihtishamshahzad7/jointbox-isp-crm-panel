@@ -339,7 +339,43 @@ export class IpPoolService {
       options.include.accessGroups = { select: { groupId: true } };
     }
 
-    return this.prisma.ipPool.findMany(options);
+    const rows: any[] = await this.prisma.ipPool.findMany(options);
+    /**
+     * A pool shared down the tree must not reveal who else holds it, which
+     * other plans use it, or how many customers other accounts keep on them.
+     */
+    if (actor && !this.scope.isPlatformOwner(actor as any) && rows.length) {
+      const me = await this.scope.rootId(actor as any);
+      const [mine, upline, pkgWhere] = await Promise.all([
+        this.scope.descendantIds(me),
+        this.scope.ancestorIds(me),
+        this.scope.packageWhere(actor as any),
+      ]);
+      const allowed = new Set<number>([...mine, ...upline]);
+      const pkgIds = [...new Set(rows.flatMap((r) => (r.packages || []).map((p: any) => p.id)))];
+      const [visiblePkgs, counts] = await Promise.all([
+        pkgIds.length
+          ? this.prisma.package.findMany({ where: { AND: [{ id: { in: pkgIds } }, pkgWhere] }, select: { id: true } })
+          : Promise.resolve([] as Array<{ id: number }>),
+        pkgIds.length
+          ? this.prisma.subscriber.groupBy({
+              by: ['packageId'],
+              where: { packageId: { in: pkgIds }, userId: { in: mine.length ? mine : [-1] } },
+              _count: { _all: true },
+            })
+          : Promise.resolve([] as any[]),
+      ]);
+      const seen = new Set(visiblePkgs.map((p) => p.id));
+      const byPkg = new Map((counts as any[]).map((c) => [c.packageId, c._count._all]));
+      for (const r of rows) {
+        r.assignments = (r.assignments || []).filter((a: any) => allowed.has(Number(a.userId)));
+        r.packages = (r.packages || [])
+          .filter((p: any) => seen.has(p.id))
+          .map((p: any) => ({ ...p, _count: { subscribers: byPkg.get(p.id) ?? 0 } }));
+        r._count = { ...(r._count || {}), packages: r.packages.length };
+      }
+    }
+    return rows;
   }
 
   // ─────────────────────────────────────────────────────────────

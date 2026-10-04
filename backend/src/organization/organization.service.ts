@@ -400,6 +400,7 @@ export class OrganizationService {
    */
   async walletWithdrawScoped(actor: Actor, targetUserId: number, amount: number, notes?: string) {
     if (!amount || amount <= 0) throw new BadRequestException('Amount must be > 0');
+    if (!Number.isFinite(amount) || amount > 1e10) throw new BadRequestException('That amount is too large for one transfer.');
     const actorId = this.scope.actorId(actor);
     if (targetUserId === actorId) throw new BadRequestException('Cannot withdraw from your own wallet');
     await this.scope.assertUser(actor, targetUserId);
@@ -419,13 +420,15 @@ export class OrganizationService {
         `You can only withdraw from accounts directly below you. ${target.name} is funded by their own parent.`,
       );
     }
-    if (!this.scope.isAdmin(actor?.role) && !actorUser?.canTopupDownline) {
+    if (!this.scope.isOwner(actor?.role) && !actorUser?.canTopupDownline) {
       throw new ForbiddenException(
         'You do not have permission to move balance. Ask the ISP to enable it for your account.',
       );
     }
 
-    const isSource = this.scope.isAdmin(actor?.role) || !actorUser?.parentId;
+    // The company's own account is where its money starts (it sits under the
+    // platform, so "no parent" alone no longer identifies it).
+    const isSource = this.scope.isOwner(actor?.role) || !actorUser?.parentId;
 
     return this.prisma.$transaction(async (tx) => {
       // Conditional update: the balance check and the debit are one statement,
@@ -511,7 +514,7 @@ export class OrganizationService {
       throw new ForbiddenException('You cannot change your own permissions. Ask your parent account.');
     }
     const actorUser = await this.prisma.user.findUnique({ where: { id: actorId } });
-    if (!this.scope.isAdmin(actor?.role) && !actorUser?.canTopupDownline) {
+    if (!this.scope.isOwner(actor?.role) && !actorUser?.canTopupDownline) {
       throw new ForbiddenException('Only the ISP (or a delegate) can grant balance-adding permission.');
     }
     await this.scope.assertUser(actor, targetUserId); // must be in your subtree
@@ -609,7 +612,7 @@ export class OrganizationService {
       where: { id: actorId },
       select: { canSetPackagePrice: true },
     });
-    if (!this.scope.isAdmin(actor?.role) && !actorUser?.canSetPackagePrice) {
+    if (!this.scope.isOwner(actor?.role) && !actorUser?.canSetPackagePrice) {
       throw new ForbiddenException('You do not hold this permission, so you cannot grant it.');
     }
     await this.scope.assertUser(actor, targetUserId); // must be your downline
@@ -646,7 +649,7 @@ export class OrganizationService {
       where: { id: actorId },
       select: { canAddNas: true },
     });
-    if (!this.scope.isAdmin(actor?.role) && !actorUser?.canAddNas) {
+    if (!this.scope.isOwner(actor?.role) && !actorUser?.canAddNas) {
       throw new ForbiddenException(
         'You cannot add routers yourself, so you cannot grant that right to anyone else.',
       );
@@ -674,9 +677,24 @@ export class OrganizationService {
    * accounts inside their subtree.
    */
   async setCreditLimit(actor: Actor, targetUserId: number, limit: number) {
-    const value = Math.max(0, Number(limit) || 0);
+    const value = Number(limit);
+    if (!Number.isFinite(value) || value < 0) throw new BadRequestException('Credit limit must be zero or more.');
     if (!this.scope.isAdmin(actor?.role)) {
       await this.scope.assertUser(actor, targetUserId); // must be in my subtree
+      /**
+       * A credit limit is an overdraft the PARENT extends — an account could
+       * set its own and spend money its parent never gave it. The company sets
+       * any account's; anyone else only their direct children's.
+       */
+      if (targetUserId === this.scope.actorId(actor)) {
+        throw new ForbiddenException('You cannot set your own credit limit. The account above you sets it.');
+      }
+      if (!this.scope.isOwner(actor?.role)) {
+        const t = await this.prisma.user.findUnique({ where: { id: targetUserId }, select: { parentId: true } });
+        if (t?.parentId !== this.scope.actorId(actor)) {
+          throw new ForbiddenException('You can only set the credit limit of accounts directly below you.');
+        }
+      }
     }
     const before = await this.prisma.user.findUnique({ where: { id: targetUserId }, select: { name: true, creditLimit: true } });
     const updated = await this.prisma.user.update({
@@ -693,6 +711,7 @@ export class OrganizationService {
 
   async walletTopupScoped(actor: Actor, targetUserId: number, amount: number, notes?: string) {
     if (!amount || amount <= 0) throw new BadRequestException('Amount must be > 0');
+    if (!Number.isFinite(amount) || amount > 1e10) throw new BadRequestException('That amount is too large for one transfer.');
     // Permission: the target must be inside the actor's subtree (and not the actor itself).
     const actorId = this.scope.actorId(actor);
     if (targetUserId === actorId) throw new BadRequestException('Cannot top up your own wallet');
@@ -703,7 +722,9 @@ export class OrganizationService {
 
     const actorUser = await this.prisma.user.findUnique({ where: { id: actorId } });
 
-    const isAdminActor = this.scope.isAdmin(actor?.role);
+    // The business owner (the company's account, or the platform) may top up
+    // anyone in its tree; assertUser above keeps it inside that tree.
+    const isAdminActor = this.scope.isOwner(actor?.role);
 
     /**
      * Who actually PAYS for the top-up = the target's DIRECT PARENT. Money
@@ -739,7 +760,7 @@ export class OrganizationService {
     // is debited and must have the balance.
     const funderId = isAdminActor ? target.parentId : actorId;
     const funder = funderId ? await this.prisma.user.findUnique({ where: { id: funderId } }) : null;
-    const funderIsSource = !funder || this.scope.isAdmin(funder.role) || funder.parentId == null;
+    const funderIsSource = !funder || this.scope.isOwner(funder.role) || funder.parentId == null;
 
     // Shared reference links the receiver credit and funder debit so the whole
     // top-up can be reversed atomically later if it was a mistake.

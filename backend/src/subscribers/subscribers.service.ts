@@ -1378,6 +1378,38 @@ export class SubscribersService implements OnModuleInit {
    * hardware someone else owns and pays for, and makes the session appear in
    * that franchise's live list with no explanation.
    */
+  /**
+   * EVERY ID A WRITE REFERS TO MUST BE THE CALLER'S OWN.
+   *
+   * A create or edit that names an owner, salesperson, package, area or router
+   * must stay inside the caller's company. Without this, one ISP could create a
+   * customer on another ISP's package, or plant one under another ISP's dealer
+   * — which then showed up in that company's lists and books.
+   * (The platform account never reaches here: it runs no business.)
+   */
+  async assertRefsInScope(actor: Actor | undefined, data: any) {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const num = (v: any) => (v === undefined || v === null || v === '' ? null : parseInt(v));
+    const owner = num(data?.userId);
+    if (owner) await this.scope.assertUser(actor, owner);
+    const sp = num(data?.salespersonId);
+    if (sp) await this.scope.assertUser(actor, sp);
+    const pkg = num(data?.packageId);
+    if (pkg) await this.scope.assertPackage(actor, pkg);
+    const nas = num(data?.nasId);
+    if (nas) await this.assertNasAllowed(actor, nas);
+    const area = num(data?.areaId);
+    if (area) {
+      // An area may be the caller's or an upline's — but always the same company.
+      const a = await this.prisma.area.findUnique({ where: { id: area }, select: { ownerId: true } });
+      const [mine, theirs] = await Promise.all([
+        this.scope.companyRootId(this.scope.actorId(actor)),
+        a?.ownerId != null ? this.scope.companyRootId(a.ownerId) : Promise.resolve(null),
+      ]);
+      if (!a || mine == null || theirs !== mine) throw new NotFoundException(`Area ${area} not found`);
+    }
+  }
+
   private async assertNasAllowed(actor: Actor | undefined, nasId: number) {
     if (!actor || !nasId || this.scope.isAdmin(actor.role)) return;
     const allowed = await this.prisma.nas.findFirst({
@@ -1460,6 +1492,9 @@ export class SubscribersService implements OnModuleInit {
     newOwnerId: number,
     opts: { actor?: Actor; reason?: string } = {},
   ) {
+    if (opts.actor && !this.scope.isAdmin(opts.actor.role)) {
+      await this.scope.assertSubscriber(opts.actor, subscriberId);
+    }
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
       select: { id: true, username: true, fullName: true, userId: true, status: true },
@@ -1572,7 +1607,7 @@ export class SubscribersService implements OnModuleInit {
      */
     await this.licenceCapacity.assertCanAddSubscriber();
 
-    if (data.nasId) await this.assertNasAllowed(actor, parseInt(data.nasId));
+    await this.assertRefsInScope(actor, data);
     /**
      * WHO OWNS THIS CUSTOMER — and therefore WHOSE WALLET PAYS.
      *
@@ -1676,7 +1711,7 @@ export class SubscribersService implements OnModuleInit {
 
       // Prepaid guard: a reseller (non-admin) must have wallet ≥ cost − creditLimit.
       // ISP/admin never blocked. The credit limit is the permitted overdraft.
-      if (actor && !this.scope.isAdmin(actor.role) && costPrice > 0) {
+      if (actor && !this.scope.isOwner(actor.role) && costPrice > 0) {
         const owner = await this.prisma.user.findUnique({ where: { id: ownerId }, select: { balance: true, creditLimit: true } });
         const threshold = costPrice - (owner?.creditLimit ?? 0);
         if ((owner?.balance ?? 0) < threshold) {
@@ -2048,6 +2083,7 @@ if (!unpaid && data.username && data.password) {
    */
   async packageChangeQuote(id: number, newPackageId: number, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, id);
+    if (actor && !this.scope.isAdmin(actor.role) && newPackageId) await this.scope.assertPackage(actor, Number(newPackageId));
     const sub = await this.prisma.subscriber.findUnique({
       where: { id },
       select: { id: true, packageId: true, userId: true, costPrice: true, sellPrice: true,
@@ -2102,9 +2138,10 @@ if (!unpaid && data.username && data.password) {
       // Delegated permission checks for the specific actions.
       if (data.password) await this.security.assertCan(actor, 'subscribers.changePassword');
       if (data.packageId !== undefined) await this.security.assertCan(actor, 'subscribers.changePackage');
-      // Same check as create — moving an existing subscriber onto someone
-      // else's router is the same problem as creating them there.
-      if (data.nasId) await this.assertNasAllowed(actor, parseInt(data.nasId));
+      // Same checks as create — moving an existing subscriber onto someone
+      // else's router, package or area is the same problem as creating them
+      // there. (userId is handled below: an edit never transfers ownership.)
+      await this.assertRefsInScope(actor, { ...data, userId: undefined });
     }
     console.log('========================================');
     console.log('🔍 UPDATE SUBSCRIBER - ID:', id);
@@ -2114,7 +2151,7 @@ if (!unpaid && data.username && data.password) {
     console.log('========================================');
 
     const old = await this.prisma.subscriber.findUnique({ where: { id } });
-    if (!old) throw new Error('Subscriber not found');
+    if (!old) throw new NotFoundException('Subscriber not found');
 
     /**
      * ADOPTION ON EDIT — allowed ONLY when the subscriber currently has no owner.
@@ -2291,7 +2328,8 @@ if (!unpaid && data.username && data.password) {
           : (ownRow?.retailPrice ?? newBase);
 
         if (net !== 0) {
-          const isAdmin = this.scope.isAdmin(actor?.role);
+          // The business owner may push a plan change through on credit.
+          const isAdmin = this.scope.isOwner(actor?.role);
           const ref = `SUB#${id}:PKGCHANGE:${Date.now()}`;
           await this.prisma.$transaction(async (tx) => {
             if (net < 0) {
@@ -2436,7 +2474,7 @@ if (!unpaid && data.username && data.password) {
      * Everything else they do is reversible or visible; this is not.
      * Deactivating is still theirs to do, and stops the service just as fast.
      */
-    if (actor && !this.scope.isAdmin(actor.role)) {
+    if (actor && !this.scope.isOwner(actor.role)) {
       const meId = await this.scope.rootId(actor);
       if (subscriber.userId === meId) {
         throw new ForbiddenException(
@@ -3175,6 +3213,30 @@ if (!unpaid && data.username && data.password) {
     const errors: Array<{ id: number; error: string }> = [];
     const unique = [...new Set((ids || []).map(Number).filter(Boolean))];
 
+    /**
+     * Same rules as editing one customer. The bulk form could point customers
+     * at another company's package, router or salesperson; set expiry, usage
+     * and discounts (a free extension for any dealer); flip customers to
+     * ACTIVE without an activation; and it un-blocked every blocked customer
+     * whenever the status field was left empty.
+     */
+    if (actor) {
+      await this.assertRefsInScope(actor, {
+        packageId: payload.packageId || undefined,
+        nasId: payload.nasId || undefined,
+        salespersonId: payload.salespersonId || undefined,
+      });
+      if (!this.scope.isOwner(actor.role)) {
+        const billed = ['packageId', 'expirationDate', 'totalVolumeGb', 'usedVolumeGb', 'totalSessionMin', 'discount', 'discountAmountType']
+          .filter((k) => payload[k] !== undefined && payload[k] !== null && payload[k] !== '');
+        if (billed.length) {
+          throw new ForbiddenException(
+            'Package, expiry, data and discounts change through Activate/Renew or Change package, not bulk edit.',
+          );
+        }
+      }
+    }
+
     for (const id of unique) {
       try {
         if (actor && !(await this.scope.canAccessSubscriber(actor, id))) {
@@ -3184,10 +3246,15 @@ if (!unpaid && data.username && data.password) {
         const subscriber = await this.findOne(id);
         if (!subscriber) throw new Error('Subscriber not found');
 
+        // A bulk edit may downgrade status but never make anyone ACTIVE —
+        // activation is what charges the wallet and sets the expiry.
+        const wanted = payload.profileStatus ? this.normalizeStatus(payload.profileStatus) : undefined;
+        const nextStatus = wanted === 'ACTIVE' && (subscriber as any).status !== 'ACTIVE' ? undefined : wanted;
+
         await this.prisma.subscriber.update({
           where: { id },
           data: {
-            status: payload.profileStatus ? this.normalizeStatus(payload.profileStatus) : undefined,
+            status: nextStatus,
             connectionType: payload.connectionType ? this.normalizeConnectionType(payload.connectionType) : undefined,
             nasId: payload.nasId ? Number(payload.nasId) : undefined,
             salespersonId: payload.salespersonId ? Number(payload.salespersonId) : undefined,
@@ -3222,7 +3289,7 @@ if (!unpaid && data.username && data.password) {
           fiberColor:     payload.fiberColor,
           quotaResetDate: undefined,
           macAddress: payload.autoMacLock === true || payload.autoMacLock === 'true' ? 'LOCKED' : undefined,
-          isBlocked: payload.profileStatus === 'SUSPENDED',
+          isBlocked: payload.profileStatus ? payload.profileStatus === 'SUSPENDED' : undefined,
         };
 
         if (existing) {
@@ -3372,7 +3439,7 @@ if (!unpaid && data.username && data.password) {
     }
 
     const pkg = await this.prisma.package.findUnique({ where: { id: packageId } });
-    if (!pkg) throw new Error('Package not found');
+    if (!pkg) throw new BadRequestException('Package not found. Pick a package for this activation.');
 
     // Duration comes from RenewalService so every path — full period, partial
     // days, an exact date, or whatever the balance buys — is priced and dated
@@ -3769,10 +3836,20 @@ if (!unpaid && data.username && data.password) {
      * through untouched) so a package/area/NAS given by name is matched to its
      * real record, the subscriber activates, and the expiry is stamped.
      */
+    // Names resolve against the caller's OWN catalogue — two companies may
+    // both have a "Home 10M"; a row must never land on the other one's.
+    const own = actor && !this.scope.isAdmin(actor.role);
+    const [pkgWhere, nasWhere, ownerIds] = own
+      ? await Promise.all([
+          this.scope.packageWhere(actor!),
+          this.scope.nasWhere(actor!),
+          this.scope.descendantIds(await this.scope.rootId(actor!)),
+        ])
+      : [{}, {}, null];
     const [pkgs, areas, nases] = await Promise.all([
-      this.prisma.package.findMany({ select: { id: true, name: true } }),
-      this.prisma.area.findMany({ select: { id: true, name: true } }),
-      this.prisma.nas.findMany({ select: { id: true, shortname: true, nasname: true, nasIp: true } }),
+      this.prisma.package.findMany({ where: pkgWhere, select: { id: true, name: true } }),
+      this.prisma.area.findMany({ where: ownerIds ? { ownerId: { in: ownerIds } } : {}, select: { id: true, name: true } }),
+      this.prisma.nas.findMany({ where: nasWhere, select: { id: true, shortname: true, nasname: true, nasIp: true } }),
     ]);
     const norm = (v: any) => String(v ?? '').trim().toLowerCase();
     const pkgByName = new Map(pkgs.map((p) => [norm(p.name), p.id]));
@@ -3911,9 +3988,14 @@ if (!unpaid && data.username && data.password) {
     // otherwise mean 1,200 lookups, and the error is far clearer stated once.
     const pkgIds = [...new Set(prepared.map((p) => Number(p.r.package_id)).filter(Boolean))];
     const nasIds = [...new Set(prepared.map((p) => Number(p.r.nas_id)).filter(Boolean))];
+    // Only the caller's own packages and routers count as existing here.
+    const scoped = actor && !this.scope.isAdmin(actor.role);
+    const [pkgScope, nasScope] = scoped
+      ? await Promise.all([this.scope.packageWhere(actor!), this.scope.nasWhere(actor!)])
+      : [{}, {}];
     const [pkgs, nases] = await Promise.all([
-      pkgIds.length ? this.prisma.package.findMany({ where: { id: { in: pkgIds } }, select: { id: true } }) : [],
-      nasIds.length ? this.prisma.nas.findMany({ where: { id: { in: nasIds } }, select: { id: true } }) : [],
+      pkgIds.length ? this.prisma.package.findMany({ where: { AND: [{ id: { in: pkgIds } }, pkgScope] }, select: { id: true } }) : [],
+      nasIds.length ? this.prisma.nas.findMany({ where: { AND: [{ id: { in: nasIds } }, nasScope] }, select: { id: true } }) : [],
     ]);
     const havePkg = new Set(pkgs.map((p) => p.id));
     const haveNas = new Set(nases.map((n) => n.id));
@@ -3933,10 +4015,22 @@ if (!unpaid && data.username && data.password) {
       });
     }
 
-    const existing = await this.prisma.subscriber.findMany({
+    const allExisting = await this.prisma.subscriber.findMany({
       where: { username: { in: prepared.map((p) => p.username) } },
       select: { id: true, username: true },
     });
+    // A username held by ANOTHER company is not ours to overwrite (usernames
+    // are unique on the server, because RADIUS is). Refuse those rows without
+    // saying whose they are.
+    const visible = scoped ? new Set((await this.scope.visibleSubscriberIds(actor!)) ?? []) : null;
+    const existing = visible ? allExisting.filter((e) => visible.has(e.id)) : allExisting;
+    const taken = allExisting.length - existing.length;
+    if (taken > 0) {
+      problems.push({
+        row: 0, fatal: true,
+        issue: `${taken} username(s) are already in use on this server. Rename those rows and try again.`,
+      });
+    }
     const existingByName = new Map(existing.map((e) => [e.username, e]));
     if (existing.length && !payload.updateExisting) {
       problems.push({
@@ -4022,6 +4116,7 @@ if (!unpaid && data.username && data.password) {
           settings.isStaticIp = true;
         }
 
+        await this.assertRefsInScope(actor, data);
         const found = existingByName.get(username);
         if (found) {
           await this.prisma.subscriber.update({ where: { id: found.id }, data });

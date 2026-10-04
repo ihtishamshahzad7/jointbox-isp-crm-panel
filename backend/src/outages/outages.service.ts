@@ -418,9 +418,31 @@ export class OutagesService {
    * `since` is coarsened to the minute — the exact second an outage opened
    * reveals the polling cadence and is of no use to a customer.
    */
-  async publicStatus() {
+  /**
+   * Whose areas a public page shows. Several ISPs can run on one server, and
+   * the open page listed every company's areas and outages together — a
+   * competitor's coverage map on anyone's status link. Each company shares its
+   * own link (/status?c=<company>); with a single company on the server the
+   * link works without it. With several and none named, the page shows nothing.
+   */
+  private async publicCompanyOwners(company?: number): Promise<number[] | null> {
+    let id = Number(company) || 0;
+    if (id) {
+      const u = await this.prisma.user.findFirst({ where: { id, role: 'ADMIN', isDemo: false }, select: { id: true } });
+      if (!u) return null;
+    } else {
+      const companies = await this.prisma.user.findMany({ where: { role: 'ADMIN', isDemo: false }, select: { id: true }, take: 2 });
+      if (companies.length !== 1) return null;
+      id = companies[0].id;
+    }
+    return this.scope.descendantIds(id);
+  }
+
+  async publicStatus(company?: number) {
+    const owners = await this.publicCompanyOwners(company);
+    if (!owners?.length) return { areas: [], checkedAt: new Date() };
     const areas = await this.prisma.area.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ownerId: { in: owners } },
       select: { id: true, name: true, city: true },
       orderBy: { name: 'asc' },
     });
@@ -476,10 +498,12 @@ export class OutagesService {
    * Recent resolved incidents, for the public page's history strip.
    * Same rule as above: area, cause, and when — nothing else.
    */
-  async publicHistory(days = 7) {
-    const since = new Date(Date.now() - Math.min(Math.max(days, 1), 30) * 86400_000);
+  async publicHistory(days = 7, company?: number) {
+    const owners = await this.publicCompanyOwners(company);
+    if (!owners?.length) return [];
+    const since = new Date(Date.now() - Math.min(Math.max(Number(days) || 7, 1), 30) * 86400_000);
     const rows = await this.prisma.powerOutage.findMany({
-      where: { startedAt: { gte: since }, endedAt: { not: null } },
+      where: { startedAt: { gte: since }, endedAt: { not: null }, area: { ownerId: { in: owners } } },
       select: {
         startedAt: true, endedAt: true, cause: true, causeConfidence: true,
         area: { select: { name: true } },

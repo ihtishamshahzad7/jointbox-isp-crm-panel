@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { RadiusSyncService } from '../nas/radius-sync.service';
+import { AccountingService } from '../accounting/accounting.service';
 
 @Injectable()
 export class VouchersService {
@@ -20,6 +21,8 @@ export class VouchersService {
     // Hotspot redemption pushes credentials straight to FreeRADIUS — the
     // customer has no account, so the card itself becomes the login.
     private radius: RadiusSyncService,
+    // A redeemed prepaid card credits the customer's wallet and is booked.
+    private accounting: AccountingService,
   ) {}
 
   /**
@@ -313,10 +316,19 @@ export class VouchersService {
       .sort((a, b) => b.unusedValue - a.unusedValue);
 
     // Cards printed but not yet handed out — the ISP's own shelf.
-    const isAdmin = !actor || this.scope.isAdmin(actor.role);
+    // The platform sees every shelf; a company's own account sees the cards
+    // its company printed and has not handed out.
+    const isAdmin = !actor || this.scope.isOwner(actor.role);
+    const shelfOwners = actor && !this.scope.isAdmin(actor.role)
+      ? await this.scope.descendantIds(await this.scope.rootId(actor))
+      : null;
     const unassigned = isAdmin
       ? await this.prisma.voucher.aggregate({
-          where: { assignedToUserId: null, status: 'UNUSED' },
+          where: {
+            assignedToUserId: null,
+            status: 'UNUSED',
+            ...(shelfOwners ? { createdBy: { in: shelfOwners.length ? shelfOwners : [-1] } } : {}),
+          },
           _count: { _all: true },
           _sum: { amount: true },
         })
@@ -368,7 +380,18 @@ export class VouchersService {
     }
 
     if (actor) await this.assertVoucherInCompany(actor, voucher);
-    
+    else {
+      // The customer portal: a card works only for a customer of the company
+      // that printed it (checked before the PIN, so PINs cannot be tested on
+      // another company's cards).
+      const owner = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { userId: true } });
+      const [mine, theirs] = await Promise.all([
+        owner?.userId != null ? this.scope.companyRootId(owner.userId) : Promise.resolve(null),
+        voucher.createdBy != null ? this.scope.companyRootId(voucher.createdBy) : Promise.resolve(null),
+      ]);
+      if (mine == null || theirs == null || mine !== theirs) throw new NotFoundException('Voucher not found');
+    }
+
     if (voucher.pin !== pin) {
       throw new BadRequestException('Invalid PIN');
     }
@@ -398,21 +421,50 @@ export class VouchersService {
     // row that is STILL UNUSED (and not expired) flips to USED. Whoever loses
     // the race updates zero rows and is told the voucher is already redeemed —
     // preventing one code being spent twice.
-    const claim = await this.prisma.voucher.updateMany({
-      where: {
-        id: voucher.id,
-        status: 'UNUSED',
-        OR: [{ expireDate: null }, { expireDate: { gt: new Date() } }],
-      },
-      data: {
-        status: 'USED',
-        usedBy: subscriberId,
-        usedAt: new Date(),
-        activatedAt: new Date(),
-      },
+    /**
+     * The card's value goes into the customer's wallet, in the same
+     * transaction as the claim. Redeeming used to mark the card USED and
+     * credit nothing — the portal then said "Recharged. New balance: …" with
+     * the old balance, and the customer's money was gone.
+     */
+    const value = Math.max(0, Number(voucher.amount) || 0);
+    const byId = actor ? this.scope.actorId(actor) : null;
+    await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.voucher.updateMany({
+        where: {
+          id: voucher.id,
+          status: 'UNUSED',
+          OR: [{ expireDate: null }, { expireDate: { gt: new Date() } }],
+        },
+        data: {
+          status: 'USED',
+          usedBy: subscriberId,
+          usedAt: new Date(),
+          activatedAt: new Date(),
+        },
+      });
+      if (claim.count === 0) {
+        throw new ConflictException('Voucher was just redeemed or expired — it is no longer available.');
+      }
+      if (value > 0) {
+        const after = await tx.subscriber.update({
+          where: { id: subscriberId },
+          data: { balance: { increment: value } },
+          select: { balance: true },
+        });
+        await tx.balanceTransaction.create({
+          data: {
+            subscriberId, type: 'TOPUP', amount: value, balanceAfter: after.balance,
+            reference: `VOUCHER#${voucher.id}`, notes: 'Prepaid card redeemed', createdBy: byId,
+          },
+        });
+      }
     });
-    if (claim.count === 0) {
-      throw new ConflictException('Voucher was just redeemed or expired — it is no longer available.');
+    if (value > 0) {
+      await this.accounting.post([
+        { account: 'CASH', debit: value, refType: 'BALANCE', subscriberId, description: `Prepaid card #${voucher.id}`, createdBy: byId ?? undefined },
+        { account: 'SUBSCRIBER_BALANCE', credit: value, refType: 'BALANCE', subscriberId, description: `Prepaid card #${voucher.id}`, createdBy: byId ?? undefined },
+      ]).catch((e: any) => this.logger.error(`Voucher #${voucher.id}: wallet credited but ledger posting failed (${e?.message || e})`));
     }
 
     return this.prisma.voucher.findUnique({ where: { id: voucher.id } });

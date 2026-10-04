@@ -4,11 +4,12 @@ import { HotspotController } from './hotspot.controller';
 import { VouchersService } from './vouchers.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { NasModule } from '../nas/nas.module';
+import { AccountingModule } from '../accounting/accounting.module';
 
 @Module({
   // NasModule provides RadiusSyncService: a hotspot card is redeemed by an
   // anonymous customer, so the card itself has to become a RADIUS credential.
-  imports: [PrismaModule, NasModule],
+  imports: [PrismaModule, NasModule, AccountingModule],
   controllers: [VouchersController, HotspotController],
   providers: [VouchersService],
   exports: [VouchersService],

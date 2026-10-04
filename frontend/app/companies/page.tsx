@@ -256,7 +256,7 @@ function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: stri
       <div style={GRID}>
         <F label="Company name" v={f.name} on={set("name")} />
         <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" />
-        <F label="Password" v={f.password} on={set("password")} type="password" hint="At least 8 characters" />
+        <F label="Password" v={f.password} on={set("password")} type="password" hint="At least 8 characters, with letters and numbers" />
         <F label="Phone" v={f.phone} on={set("phone")} />
         <F label="City" v={f.city} on={set("city")} />
       </div>
@@ -351,8 +351,10 @@ const PRIMARY: React.CSSProperties = {
   border: "1px solid transparent", background: "linear-gradient(135deg,#6C3CE1,#E9408B)", color: "#fff",
   borderRadius: 9, padding: "8px 16px", fontSize: 12.5, fontWeight: 800, cursor: "pointer",
 };
+// No "#fff" anywhere in a button's inline style: a global rule forces white
+// text on any button whose style mentions it, which made these invisible.
 const GHOST: React.CSSProperties = {
-  border: "1px solid var(--border,#E2E8F0)", background: "var(--surface,#fff)", color: "var(--text)",
+  border: "1px solid var(--border,#E2E8F0)", background: "var(--surface)", color: "var(--text)",
   borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer",
 };
 const ERR: React.CSSProperties = {

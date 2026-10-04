@@ -1,8 +1,9 @@
 import {
   Controller, Get, Post, Put, Patch, Delete,
-  Body, Param, Query, UseGuards, Req,
+  Body, Param, Query, UseGuards, Req, UseInterceptors,
 } from '@nestjs/common';
 import { SubscribersService } from './subscribers.service';
+import { OverviewRefreshInterceptor } from './overview-refresh.interceptor';
 import { RenewalService } from './renewal.service';
 import { ExportService } from './export.service';
 import { LifecycleService } from './lifecycle.service';
@@ -17,6 +18,7 @@ import {
 } from '@nestjs/common';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseInterceptors(OverviewRefreshInterceptor)
 @Controller('subscribers')
 export class SubscribersController {
   constructor(
@@ -307,7 +309,16 @@ export class SubscribersController {
   }
 
   @Post('activate-renewal')
-  activateRenewal(@Body() body: any, @Req() req: any) {
+  async activateRenewal(@Body() body: any, @Req() req: any) {
+    // The customer and the package must both be the caller's own. Without
+    // this, any account could activate — and so CLAIM — another company's
+    // customer by id, on any package.
+    if (req.user) {
+      await this.scope.assertSubscriber(req.user, Number(body?.subscriberId));
+      if (body?.packageId && !this.scope.isAdmin(req.user.role)) {
+        await this.scope.assertPackage(req.user, Number(body.packageId));
+      }
+    }
     return this.subscribersService.activateRenewal({ ...body, actorId: req.user?.sub });
   }
 

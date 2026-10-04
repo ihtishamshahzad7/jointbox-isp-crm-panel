@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -155,12 +155,12 @@ export class FupService {
   async extendQuota(subscriberId: number, addGb: number, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, subscriberId);
     const gb = Number(addGb);
-    if (!Number.isFinite(gb) || gb <= 0) throw new Error('Enter a positive number of GB to add.');
+    if (!Number.isFinite(gb) || gb <= 0) throw new BadRequestException('Enter a positive number of GB to add.');
 
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId }, include: { serviceSettings: true },
     });
-    if (!sub) throw new Error('Subscriber not found.');
+    if (!sub) throw new NotFoundException('Subscriber not found.');
 
     const current = (sub.serviceSettings as any)?.bonusQuotaGb ?? 0;
     await this.prisma.serviceSettings.upsert({

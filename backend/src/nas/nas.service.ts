@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit, BadGatewayException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService } from '../common/scope.service';
 import { NasType } from '@prisma/client';
@@ -115,9 +115,32 @@ export class NasService implements OnModuleInit {
       options.include.accessGroups = { select: { groupId: true } };
     }
 
+    const rows: any[] = await this.prisma.nas.findMany(options);
+
+    /**
+     * A router shared down the tree must not reveal who ELSE it is shared
+     * with, or how many customers other accounts keep on it. Shares are cut
+     * to the caller's own tree and upline; the customer count to its own.
+     */
+    if (actor && !this.scope.isPlatformOwner(actor) && rows.length) {
+      const me = await this.scope.rootId(actor);
+      const [mine, upline] = await Promise.all([this.scope.descendantIds(me), this.scope.ancestorIds(me)]);
+      const allowed = new Set<number>([...mine, ...upline]);
+      const counts = await this.prisma.subscriber.groupBy({
+        by: ['nasId'],
+        where: { nasId: { in: rows.map((r) => r.id) }, userId: { in: mine.length ? mine : [-1] } },
+        _count: { _all: true },
+      });
+      const byNas = new Map(counts.map((c: any) => [c.nasId, c._count._all]));
+      for (const r of rows) {
+        r.assignments = (r.assignments || []).filter((a: any) => allowed.has(Number(a.userId)));
+        r._count = { ...(r._count || {}), subscribers: byNas.get(r.id) ?? 0 };
+      }
+    }
+
     // Credentials never leave the server — the list returns masks plus a
     // has<Field> flag so the UI can show "configured" and a Change button.
-    return sanitizeNasList(await this.prisma.nas.findMany(options));
+    return sanitizeNasList(rows);
   }
 
   /**
@@ -126,7 +149,7 @@ export class NasService implements OnModuleInit {
    * be assigned down from the ISP or parent.
    */
   private async assertMayAddNas(actor?: any) {
-    if (!actor || this.scope.isAdmin(actor.role)) return; // ISP always may
+    if (!actor || this.scope.isOwner(actor.role)) return; // the ISP company's own account always may
     const me = await this.prisma.user.findUnique({
       where: { id: this.scope.actorId(actor) },
       select: { canAddNas: true },
@@ -290,11 +313,21 @@ export class NasService implements OnModuleInit {
    */
   async findOne(id: number, actor?: any) {
     const w = await this.scope.nasWhere(actor);
+    // A shared router carries other accounts' customers too (the ISP's, a
+    // sibling franchise's). Opening it shows only the caller's own — and
+    // never their PPPoE passwords.
+    const subWhere = actor ? await this.scope.subscriberWhere(actor) : {};
     const nas = await this.prisma.nas.findFirst({
       where: Object.keys(w).length ? { AND: [w, { id }] } : { id },
       include: {
-        subscribers: true,
-        _count: { select: { subscribers: true } },
+        subscribers: {
+          where: subWhere,
+          select: {
+            id: true, username: true, fullName: true, phone: true, status: true,
+            packageId: true, userId: true, areaId: true, createdAt: true,
+          },
+        },
+        _count: { select: { subscribers: { where: subWhere } } },
       },
     });
     // Deliberately the same message whether it is missing or simply not
@@ -771,7 +804,7 @@ export class NasService implements OnModuleInit {
   async checkReachability(id: number) {
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
-    if (!nas.nasIp) throw new Error('NAS IP address not configured');
+    if (!nas.nasIp) throw new BadRequestException('This router has no IP address set. Edit it and enter its IP first.');
 
     const apiPort     = nas.apiPort     ?? 8728;
     const incomingPort = (nas as any).incomingPort ?? 3799;
@@ -851,17 +884,25 @@ export class NasService implements OnModuleInit {
   async syncDetails(id: number) {
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
-    if (!nas.nasIp) throw new Error('NAS IP address not configured');
+    if (!nas.nasIp) throw new BadRequestException('This router has no IP address set. Edit it and enter its IP first.');
     if (!nas.apiUsername || !nas.apiPassword) {
-      throw new Error('API credentials not configured for this NAS');
+      throw new BadRequestException('Add the router\'s API username and password (Edit router → API) to read its details.');
     }
     const apiPort = nas.apiPort ?? 8728;
     this.logger.log(`Syncing details for ${nas.nasname} (${nas.nasIp})`);
-    return this.mikrotikSync.syncDetails(
-      nas.nasIp, apiPort,
-      nas.apiUsername,   // string — checked above
-      nas.apiPassword,
-    );
+    try {
+      return await this.mikrotikSync.syncDetails(
+        nas.nasIp, apiPort,
+        nas.apiUsername,   // string — checked above
+        nas.apiPassword,
+      );
+    } catch (e: any) {
+      // An unreachable or refusing router is not a server fault — say which
+      // router and why, instead of a bare 500.
+      throw new BadGatewayException(
+        `Could not read ${nas.shortname || nas.nasIp} on port ${apiPort}: ${String(e?.message || e).slice(0, 160)}`,
+      );
+    }
   }
 
   async quickCheck(id: number) {

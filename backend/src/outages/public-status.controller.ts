@@ -27,13 +27,13 @@ export class PublicStatusController {
 
   /** Current status per service area — the page's main content. */
   @Get()
-  status() {
-    return this.outages.publicStatus();
+  status(@Query('company') company?: string) {
+    return this.outages.publicStatus(company ? +company : undefined);
   }
 
   /** Recently resolved incidents, so the page shows a track record. */
   @Get('history')
-  history(@Query('days') days?: string) {
-    return this.outages.publicHistory(days ? +days : 7);
+  history(@Query('days') days?: string, @Query('company') company?: string) {
+    return this.outages.publicHistory(days ? +days : 7, company ? +company : undefined);
   }
 }

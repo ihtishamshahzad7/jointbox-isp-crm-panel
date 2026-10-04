@@ -102,7 +102,9 @@ export class ResellerPricingService {
         where: { id: meId },
         select: { canSetPackagePrice: true },
       });
-      if (!me?.canSetPackagePrice) {
+      // The company's own account always may (it is the one that enables it
+      // for everyone else); the rest of this block still scopes it.
+      if (!me?.canSetPackagePrice && !this.scope.isOwner(actor?.role)) {
         throw new ForbiddenException(
           'Price-setting is switched off for this account. The ISP can enable it under ' +
           'Administration → Organization → Resellers → "can set price".',
@@ -430,7 +432,14 @@ export class ResellerPricingService {
     return basePrice; // only the ISP, or a fully-unpriced chain, reaches base
   }
 
-  /** Parent chain from a user up to the root: [self, parent, …, root]. */
+  /**
+   * Parent chain from a user up to its COMPANY's root: [self, parent, …, root].
+   *
+   * Stops below the platform account. Companies now sit under it, and walking
+   * past the company made the company pay the platform for every activation
+   * of its own customers (and every franchise chain end one tier too high).
+   * The platform runs no business: the company's own account is the top.
+   */
   private async chainUp(userId: number): Promise<{ id: number; role: string }[]> {
     const rows = await this.prisma.$queryRaw<{ id: number; role: string }[]>`
       WITH RECURSIVE up AS (
@@ -438,6 +447,7 @@ export class ResellerPricingService {
         UNION ALL
         SELECT u.id, u."parentId", u.role, up.depth + 1
         FROM "User" u INNER JOIN up ON u.id = up."parentId"
+        WHERE u.role <> 'SUPER_ADMIN'
       )
       SELECT id, role FROM up ORDER BY depth ASC;`;
     return rows.map((r) => ({ id: Number(r.id), role: r.role }));
@@ -449,8 +459,10 @@ export class ResellerPricingService {
    * Returns 0 for a top-of-tree user (they are the source, not a buyer).
    */
   async activationCost(userId: number, packageId: number, basePrice: number): Promise<number> {
-    const me = await this.prisma.user.findUnique({ where: { id: userId }, select: { parentId: true } });
-    if (!me?.parentId) return 0; // top of the tree buys from no one
+    const me = await this.prisma.user.findUnique({ where: { id: userId }, select: { parentId: true, role: true } });
+    // The top of a company (its own account, now parented to the platform)
+    // buys from no one.
+    if (!me?.parentId || me.role === 'ADMIN' || me.role === 'SUPER_ADMIN') return 0;
     // A user's price row IS their buy price — the price their parent assigned
     // the package to them at.
     return this.priceFor(userId, packageId, basePrice);
@@ -1333,7 +1345,7 @@ export class ResellerPricingService {
       package: { id: sub.packageId, name: sub.package?.name, basePrice: sub.package?.price },
       owner: {
         id: sub.user.id, name: sub.user.name, role: sub.user.role,
-        balance, creditLimit, isTopOfTree: sub.user.parentId == null,
+        balance, creditLimit, isTopOfTree: sub.user.parentId == null || sub.user.role === 'ADMIN',
       },
       ispOwned: q.ispOwned,
       chainLength: q.chainLength,

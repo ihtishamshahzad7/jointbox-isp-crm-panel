@@ -40,6 +40,32 @@ export class RenewalService {
   ) {}
 
   /**
+   * What an account pays its upline for a package — the same ladder the wallet
+   * cascade debits: its own price row, else the nearest upline's, up to the
+   * company's own account (never the platform), else the package price.
+   */
+  private async buyPrice(userId: number, packageId: number, basePrice: number): Promise<number> {
+    const chain = await this.prisma.$queryRaw<{ id: number }[]>`
+      WITH RECURSIVE up AS (
+        SELECT id, "parentId", 0 AS depth FROM "User" WHERE id = ${userId}
+        UNION ALL
+        SELECT u.id, u."parentId", up.depth + 1
+        FROM "User" u INNER JOIN up ON u.id = up."parentId"
+        WHERE u.role <> 'SUPER_ADMIN'
+      )
+      SELECT id FROM up ORDER BY depth ASC;`;
+    const ids = (chain || []).map((r) => Number(r.id));
+    if (!ids.length) return basePrice;
+    const rows = await this.prisma.resellerPackagePrice.findMany({
+      where: { packageId, userId: { in: ids } },
+      select: { userId: true, price: true },
+    });
+    const byUser = new Map(rows.map((r) => [r.userId, r.price]));
+    for (const id of ids) if (byUser.get(id) != null) return Number(byUser.get(id));
+    return basePrice;
+  }
+
+  /**
    * Price for one day of a package.
    *
    * Deliberately divided by the package's own duration rather than a flat 30.
@@ -77,6 +103,10 @@ export class RenewalService {
     fromActivation?: boolean;
   }, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, subscriberId);
+    // Quoting another company's package would read back its price.
+    if (actor && opts.packageId && !this.scope.isAdmin((actor as any).role)) {
+      await this.scope.assertPackage(actor, Number(opts.packageId));
+    }
 
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
@@ -214,13 +244,10 @@ export class RenewalService {
      */
     let ownerCost = 0;
     if (effectiveOwnerId) {
-      const me = await this.prisma.user.findUnique({ where: { id: effectiveOwnerId }, select: { parentId: true } });
-      if (me?.parentId) {
-        const buy = await this.prisma.resellerPackagePrice.findUnique({
-          where: { userId_packageId: { userId: effectiveOwnerId, packageId: pkg.id } },
-          select: { price: true },
-        });
-        ownerCost = buy?.price != null ? Number(buy.price) : Number(base);
+      const me = await this.prisma.user.findUnique({ where: { id: effectiveOwnerId }, select: { parentId: true, role: true } });
+      // The company's own account (now parented to the platform) buys from no one.
+      if (me?.parentId && me.role !== 'ADMIN' && me.role !== 'SUPER_ADMIN') {
+        ownerCost = await this.buyPrice(effectiveOwnerId, pkg.id, Number(pkg.price ?? 0));
       }
     }
     const costForPeriod = Math.round(ownerCost);

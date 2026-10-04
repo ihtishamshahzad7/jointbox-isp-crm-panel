@@ -102,6 +102,16 @@ export class LogsController {
     });
   }
 
+  /** Router Console: the live log of one router (scoped in the service). */
+  @Get('router')
+  routerLog(
+    @Query('nasId') nasId: string,
+    @Query('limit') limit: string,
+    @Req() req: any,
+  ) {
+    return this.logs.getRouterLogsForNas(req.user, Number(nasId), limit ? +limit : 120);
+  }
+
   @Get('router/subscriber/:id')
   routerLogs(
     @Param('id') id: string,

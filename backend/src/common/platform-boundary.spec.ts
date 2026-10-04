@@ -34,6 +34,7 @@ describe('platform boundary: what the platform account can reach', () => {
       'POST subscribers/repair-links', 'GET subscribers/test-radius-connection',
       'GET nas/debug/radius-sync', 'GET nas/diagnostics/accounting',
       'POST nas/tunnels/reconcile', 'POST nas/tunnels/refresh',
+      'POST billing/run/:type', // the nightly jobs, run now — no customer is shown
     ]);
     const BUSINESS_PREFIX = /^(subscribers|nas|invoices|payments|vouchers|reports|telemetry|tickets\/(?!sla)|fiber|monitoring\/(?!diagnostics)|insights|segments|inventory|field-jobs|static-ips|ip-pools|prefixes|areas|outages|boost|billing|compliance|groups|notes|topology|analytics)/;
     const leaks = allowed

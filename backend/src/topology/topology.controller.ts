@@ -79,7 +79,7 @@ export class TopologyController {
    */
   @Post('detect')
   detect(@Req() req: any) {
-    if (req?.user?.role !== 'SUPER_ADMIN') {
+    if (req?.user?.role !== 'SUPER_ADMIN' && req?.user?.role !== 'ADMIN') {
       throw new ForbiddenException('Only the ISP owner can trigger topology detection.');
     }
     return this.topology.learnFromSessions().then(() => ({ started: true }));

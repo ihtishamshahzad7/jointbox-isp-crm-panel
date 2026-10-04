@@ -611,10 +611,25 @@ export class FiberService {
     const sub = await this.prisma.subscriber.findUnique({ where: { id: subscriberId } });
     if (!sub) throw new NotFoundException('Subscriber not found');
 
+    /**
+     * Only the fibre/installation fields. The body went straight into the
+     * service-settings row, so this screen could also set expiryDate,
+     * duration, quota or a static IP — a dealer extended a customer to 2035
+     * without paying.
+     */
+    const FIELDS = ['boxNumber', 'boxAddress', 'switchBoard', 'switchPort', 'electricSocket',
+      'cableType', 'uplinkPort', 'fiberCode', 'fiberColor', 'onuNote'] as const;
+    const clean: Record<string, string | null> = {};
+    for (const k of FIELDS) {
+      const v = (data as any)?.[k];
+      if (v === undefined) continue;
+      clean[k] = v == null || v === '' ? null : String(v).slice(0, 500);
+    }
+
     const ss = await this.prisma.serviceSettings.upsert({
       where: { subscriberId },
-      create: { subscriberId, ...data },
-      update: data,
+      create: { subscriberId, ...clean },
+      update: clean,
     });
     return ss;
   }

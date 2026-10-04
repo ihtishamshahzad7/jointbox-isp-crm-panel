@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildCursorPage, parseCursor } from '../common/pagination';
 import { AccountingService } from '../accounting/accounting.service';
@@ -317,6 +317,15 @@ export class InvoicesService {
     // subscriber in the body must be the caller's. No subscriber = an
     // installation-level invoice, which only the platform owner may raise.
     if (actor) await this.scope.assertViaSubscriber(actor, data?.subscriberId, 'Subscriber');
+    const num = (v: any) => (v == null || v === '' ? 0 : Number(v));
+    const amount = num(data?.amount), tax = num(data?.tax), discount = num(data?.discount);
+    if (![amount, tax, discount].every((n) => Number.isFinite(n) && n >= 0)) {
+      throw new BadRequestException('Amount, tax and discount must be zero or more.');
+    }
+    if (discount > amount + tax) throw new BadRequestException('The discount cannot be more than the invoice amount.');
+    const dueDate = data?.dueDate ? new Date(data.dueDate) : new Date(Date.now() + 7 * 86_400_000);
+    if (isNaN(dueDate.getTime())) throw new BadRequestException('Pick a valid due date.');
+    data = { ...data, amount, tax, discount };
     const invoiceNo = await this.generateInvoiceNo();
     const total     = data.amount + (data.tax || 0) - (data.discount || 0);
 
@@ -331,7 +340,7 @@ export class InvoicesService {
         total,
         paidAmount:   0,
         dueAmount:    total,
-        dueDate:      new Date(data.dueDate),
+        dueDate:      dueDate,
         notes:        data.notes,
         status:       'UNPAID',
         items: {
@@ -431,6 +440,27 @@ export class InvoicesService {
     // gateway callback calls this with no actor and is unaffected.
     if (actor) await this.scope.assertViaSubscriber(actor, invoice.subscriberId, 'Invoice');
 
+    // Money in is positive (a refund gives money back), and staff cannot pay a
+    // cancelled or settled invoice or put more on it than is due — that is a
+    // balance top-up. A gateway callback (no actor) has already taken the
+    // customer's money, so it is recorded whatever the invoice says.
+    const amount = Number(data?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Enter an amount greater than zero. To give money back, refund the payment instead.');
+    }
+    if (actor) {
+      const due = Math.max(Number(invoice.total) - Number(invoice.paidAmount || 0), 0);
+      if (invoice.status === 'CANCELLED') throw new BadRequestException(`Invoice ${invoice.invoiceNo} is cancelled and cannot take a payment.`);
+      if (invoice.status === 'PAID' || due <= 0) {
+        throw new BadRequestException(`Invoice ${invoice.invoiceNo} is already paid. Add the money to the customer's balance instead (Accounting → Balances → Top up).`);
+      }
+      if (amount > due + 0.5) {
+        throw new BadRequestException(
+          `Invoice ${invoice.invoiceNo} has ${Math.round(due)} due. Record ${Math.round(due)} against it and add the rest to the customer's balance (Accounting → Balances → Top up).`,
+        );
+      }
+    }
+
     // Same period-lock guard as the direct payment path — no backdating a
     // payment into a closed month through the invoice screen either.
     await this.accounting.assertPeriodOpen(data.paymentDate, { subscriberId: invoice.subscriberId });
@@ -455,7 +485,7 @@ export class InvoicesService {
     }
 
     const newPaidAmount = invoice.paidAmount + data.amount;
-    const newDueAmount  = invoice.total - newPaidAmount;
+    const newDueAmount  = Math.max(invoice.total - newPaidAmount, 0);
 
     let status: 'UNPAID' | 'PARTIAL' | 'PAID' | 'OVERDUE' = 'PARTIAL';
     if (newPaidAmount >= invoice.total) status = 'PAID';

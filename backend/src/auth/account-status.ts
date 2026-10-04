@@ -62,6 +62,9 @@ export async function accountStatus(
         SELECT id, "parentId", "isActive" FROM "User" WHERE id = ${userId}
         UNION ALL
         SELECT p.id, p."parentId", p."isActive" FROM "User" p JOIN up ON p.id = up."parentId"
+        -- the platform account is above every company but owns none of them:
+        -- its own status never locks a company out
+        WHERE p.role <> 'SUPER_ADMIN'
       )
       SELECT bool_and("isActive") AS ok FROM up`;
     chainActive = rows[0]?.ok !== false;

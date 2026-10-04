@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
 import { OrganizationService } from './organization.service';
 import { ResellerPricingService } from './reseller-pricing.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -112,10 +112,10 @@ export class OrganizationController {
     @Request() req: any,
   ) {
     await this.scope.assertSubscriber(req.user, +subscriberId);
-    const isAdmin = this.scope.isAdmin(req.user?.role);
+    const isOwner = this.scope.isOwner(req.user?.role);
     return this.pricing.settleActivation(+subscriberId, {
-      // Only an ISP may deliberately allow an overdraft.
-      enforce: isAdmin ? body?.enforce !== false : true,
+      // Only the business owner may deliberately allow an overdraft.
+      enforce: isOwner ? body?.enforce !== false : true,
       byUserId: req.user?.sub,
       event: body?.event,
     });
@@ -157,10 +157,17 @@ export class OrganizationController {
     @Body() body: { subscriberIds: number[]; reason?: string },
     @Request() req: any,
   ) {
-    if (!this.scope.isAdmin(req.user?.role)) {
+    if (!this.scope.isOwner(req.user?.role)) {
       throw new ForbiddenException('Only ISP-level accounts can back-charge activations.');
     }
-    return this.pricing.backchargeUnbilled(body?.subscriberIds || [], {
+    // A company back-charges its own customers only.
+    let ids = (body?.subscriberIds || []).map(Number);
+    const visible = await this.scope.visibleSubscriberIds(req.user);
+    if (visible) {
+      const ok = new Set(visible);
+      ids = ids.filter((id: number) => ok.has(id));
+    }
+    return this.pricing.backchargeUnbilled(ids, {
       actorId: req.user?.sub,
       reason: body?.reason,
     });
@@ -347,7 +354,11 @@ export class OrganizationController {
   ) {
     // TOPUP = prepaid transfer from the logged-in giver's wallet (scope-enforced).
     // WITHDRAWAL = pull balance back out of a downline account.
-    if ((body.type || 'TOPUP') === 'TOPUP') {
+    const type = body?.type || 'TOPUP';
+    if (type !== 'TOPUP' && type !== 'WITHDRAWAL') {
+      throw new BadRequestException('type must be TOPUP or WITHDRAWAL');
+    }
+    if (type === 'TOPUP') {
       return this.org.walletTopupScoped(req.user, +id, Number(body.amount), body.notes);
     }
     // WITHDRAWAL was calling the unscoped walletAdjust(), which let any account

@@ -162,7 +162,7 @@ export class ExportService {
     // their tree to a spreadsheet is a different act: it is the whole point of
     // an insider walking off with the customer base. Silently dropping the
     // column keeps the export working rather than failing the whole request.
-    if (columns.includes('password') && actor && !this.scope.isAdmin(actor.role)) {
+    if (columns.includes('password') && actor && !this.scope.isOwner(actor.role)) {
       columns = columns.filter((c) => c !== 'password');
       this.logger.warn(
         `Password column stripped from export by ${this.scope.actorId(actor)} — ISP owner only.`,
@@ -289,7 +289,7 @@ export class ExportService {
     // Passwords are part of this format — it is a migration file, and a
     // connection without its password is useless on the far side. Same
     // restriction as the flexible export: ISP owner only.
-    const mayExportSecrets = !actor || this.scope.isAdmin(actor.role);
+    const mayExportSecrets = !actor || this.scope.isOwner(actor.role);
 
     const rows = subs.map((s) => {
       const ss: any = s.serviceSettings ?? {};

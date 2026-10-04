@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { SecretsService } from '../common/secrets.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -222,7 +222,7 @@ export class AlertsService {
   /** Save a managed alert secret from the panel (value is encrypted at rest). */
   async setSecret(key: string, value: string, byUserId?: number) {
     if (!AlertsService.KEYS.some((k) => k.key === key)) {
-      throw new Error(`"${key}" is not a managed alert setting.`);
+      throw new BadRequestException(`"${key}" is not a managed alert setting.`);
     }
     return this.secrets.set(key, value, byUserId);
   }

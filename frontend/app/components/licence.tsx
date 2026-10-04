@@ -2,6 +2,7 @@
 
 import React from "react";
 import API from "./api";
+import { isPlatformSession } from "./platform";
 
 /**
  * THE PANEL'S HALF OF LICENSING.
@@ -111,6 +112,12 @@ export function LicenceProvider({ children }: { children: React.ReactNode }) {
   const refresh = React.useCallback(async (force = false) => {
     const t = token();
     if (!t) return;
+    // The licence belongs to the platform account; a company's panel learns
+    // about an unlicensed server from the 402 interceptor below instead.
+    if (!isPlatformSession()) {
+      setReachable(false);
+      return;
+    }
     try {
       const r = await fetch(`${API}/licence/${force ? "refresh" : "status"}`, {
         headers: { Authorization: `Bearer ${t}` },

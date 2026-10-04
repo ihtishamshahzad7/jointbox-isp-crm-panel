@@ -48,11 +48,11 @@ describe('company-owned configuration rules', () => {
     expect(await s.companyRootId(1)).toBeNull();
   });
 
-  it('reads: platform defaults plus the own company; the platform owner reads all', async () => {
+  it('reads: platform defaults plus the own company; the platform account reads the defaults only', async () => {
     const s = scope();
     expect(await s.configReadWhere(A_SUBDEALER)).toEqual({ OR: [{ ownerId: null }, { ownerId: 10 }] });
     expect(await s.configReadWhere(B)).toEqual({ OR: [{ ownerId: null }, { ownerId: 20 }] });
-    expect(await s.configReadWhere(OWNER)).toEqual({});
+    expect(await s.configReadWhere(OWNER)).toEqual({ ownerId: null });
   });
 
   it('creating: the company admin and its staff create for the company; dealers may not', async () => {
@@ -70,7 +70,9 @@ describe('company-owned configuration rules', () => {
     await expect(s.assertConfigWritable(A, { ownerId: null })).rejects.toBeInstanceOf(ForbiddenException);
     await expect(s.assertConfigWritable(B, { ownerId: 10 })).rejects.toBeInstanceOf(NotFoundException);
     await expect(s.assertConfigWritable(A_DEALER, { ownerId: 10 })).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(s.assertConfigWritable(OWNER, { ownerId: 10 })).resolves.toBeUndefined();
+    await expect(s.assertConfigWritable(OWNER, { ownerId: null })).resolves.toBeUndefined();
+    // a company's own row is that company's business, not the platform's
+    await expect(s.assertConfigWritable(OWNER, { ownerId: 10 })).rejects.toBeInstanceOf(NotFoundException);
     await expect(s.assertConfigWritable(OWNER, null)).rejects.toBeInstanceOf(NotFoundException);
   });
 

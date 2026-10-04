@@ -37,12 +37,12 @@ export class ServiceSettingsController {
   @Post('subscriber/:subscriberId')
   async create(@Param('subscriberId') subscriberId: string, @Body() body: any, @Req() req: any) {
     await this.assertOwns(req.user, +subscriberId);
-    return this.serviceSettingsService.create(+subscriberId, body);
+    return this.serviceSettingsService.create(+subscriberId, body, req.user);
   }
 
   @Post('subscriber/:subscriberId/upsert')
   async upsert(@Param('subscriberId') subscriberId: string, @Body() body: any, @Req() req: any) {
     await this.assertOwns(req.user, +subscriberId);
-    return this.serviceSettingsService.upsert(+subscriberId, body);
+    return this.serviceSettingsService.upsert(+subscriberId, body, req.user);
   }
 }

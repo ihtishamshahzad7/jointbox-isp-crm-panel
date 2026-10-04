@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { allocateIpv6, ipv6AutoConfig } from '../nas/ipv6-alloc';
 import { SubscribersService } from '../subscribers/subscribers.service';
@@ -76,109 +76,84 @@ export class ServiceSettingsService {
     };
   }
 
-  async create(subscriberId: number, data: any) {
+  /**
+   * Only the fields the caller actually sent. The subscriber screen saves one
+   * toggle at a time ({ allowMultipleSessions }), and every missing field was
+   * written as null/0/false — so flipping "multiple sessions" wiped the
+   * customer's expiry date, duration, VLAN and static-IP flag (and the toggle
+   * itself was never saved).
+   */
+  private toData(data: any): Record<string, any> {
+    const d = data || {};
+    const out: Record<string, any> = {};
+    const has = (k: string) => d[k] !== undefined;
+    const num = (v: any, int = false) => (v === null || v === '' ? null : int ? parseInt(v) : parseFloat(v));
+    const date = (v: any) => (v ? new Date(v) : null);
+    const bool = (v: any) => v === true || v === 'true';
+    const str = (v: any) => (v === null || v === '' ? null : String(v));
+    for (const k of ['ipAddress', 'macAddress', 'ipv6Prefix', 'ipv6DelegatedPrefix', 'ontSerial', 'ontModel',
+      'uploadSpeed', 'downloadSpeed', 'pptpUsername', 'pptpPassword', 'notes', 'technicalNotes', 'quota']) {
+      if (has(k)) out[k] = str(d[k]);
+    }
+    if (has('ipType')) out.ipType = d.ipType || 'DYNAMIC';
+    if (has('discountType')) out.discountType = d.discountType || 'NONE';
+    for (const k of ['quotaUsed', 'discountValue']) if (has(k)) out[k] = num(d[k]) ?? 0;
+    for (const k of ['customPrice', 'signalLevel', 'rxPower', 'txPower']) if (has(k)) out[k] = num(d[k]);
+    for (const k of ['duration', 'vlanId']) if (has(k)) out[k] = num(d[k], true);
+    for (const k of ['quotaResetDate', 'expiryDate']) if (has(k)) out[k] = date(d[k]);
+    for (const k of ['isStaticIp', 'hasBackup', 'isBlocked', 'autoRenew', 'allowMultipleSessions']) {
+      if (has(k)) out[k] = bool(d[k]);
+    }
+    for (const [k, v] of Object.entries(out)) {
+      if (typeof v === 'number' && !Number.isFinite(v)) throw new BadRequestException(`${k} is not a valid number.`);
+      if (v instanceof Date && isNaN(v.getTime())) throw new BadRequestException(`${k} is not a valid date.`);
+    }
+    return out;
+  }
+
+  /**
+   * Expiry, term, price, discount, usage and addressing are what the customer
+   * PAYS for. Activation / renewal / the static-IP register set them with the
+   * wallet charge; editing them here skipped it (a dealer set expiry to 2035).
+   * Only the company's own account may hand-correct them.
+   */
+  private static readonly BILLED = ['expiryDate', 'duration', 'customPrice', 'discountType', 'discountValue',
+    'quotaUsed', 'quotaResetDate', 'quota', 'ipAddress', 'ipType', 'isStaticIp'];
+
+  private assertMayEdit(actor: { role?: string } | undefined, data: Record<string, any>) {
+    if (!actor || actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN') return;
+    const hit = ServiceSettingsService.BILLED.filter((k) => data[k] !== undefined);
+    if (hit.length) {
+      throw new ForbiddenException(
+        `Only your company account can change ${hit.join(', ')} here. Use Activate/Renew, or the Static IP screen.`,
+      );
+    }
+  }
+
+  async create(subscriberId: number, data: any, actor?: { role?: string }) {
+    const fields = this.toData(data);
+    this.assertMayEdit(actor, fields);
     const created = await this.prisma.serviceSettings.create({
-      data: {
-        subscriberId,
-        ipAddress:      data.ipAddress,
-        ipType:         data.ipType         || 'DYNAMIC',
-        macAddress:     data.macAddress,
-        ipv6Prefix:          data.ipv6Prefix || null,
-        ipv6DelegatedPrefix: data.ipv6DelegatedPrefix || null,
-        quota:          data.quota,
-        quotaUsed:      data.quotaUsed      ? parseFloat(data.quotaUsed)  : 0,
-        quotaResetDate: data.quotaResetDate ? new Date(data.quotaResetDate) : null,
-        expiryDate:     data.expiryDate     ? new Date(data.expiryDate)   : null,
-        duration:       data.duration       ? parseInt(data.duration)     : null,
-        discountType:   data.discountType   || 'NONE',
-        discountValue:  parseFloat(data.discountValue)  || 0,
-        customPrice:    data.customPrice    ? parseFloat(data.customPrice) : null,
-        ontSerial:      data.ontSerial,
-        ontModel:       data.ontModel,
-        signalLevel:    data.signalLevel    ? parseFloat(data.signalLevel) : null,
-        rxPower:        data.rxPower        ? parseFloat(data.rxPower)    : null,
-        txPower:        data.txPower        ? parseFloat(data.txPower)    : null,
-        uploadSpeed:    data.uploadSpeed,
-        downloadSpeed:  data.downloadSpeed,
-        vlanId:         data.vlanId         ? parseInt(data.vlanId)       : null,
-        pptpUsername:   data.pptpUsername,
-        pptpPassword:   data.pptpPassword,
-        notes:          data.notes,
-        technicalNotes: data.technicalNotes,
-        isStaticIp:     data.isStaticIp  === 'true' || data.isStaticIp  === true,
-        hasBackup:      data.hasBackup   === 'true' || data.hasBackup   === true,
-        isBlocked:      data.isBlocked   === 'true' || data.isBlocked   === true,
-        /**
-         * Auto-renewal opt-in. Tri-state on purpose, unlike the booleans
-         * above: those coerce a missing value to `false`, which here would
-         * silently switch auto-renewal OFF for a subscriber every time any
-         * unrelated field was saved from a form that does not include it.
-         * `undefined` leaves the column alone; only an explicit value changes
-         * it.
-         */
-        autoRenew:
-          data.autoRenew === undefined
-            ? undefined
-            : data.autoRenew === 'true' || data.autoRenew === true,
-      },
+      data: { subscriberId, ...fields } as any,
     });
     await this.syncAfterWrite(subscriberId);
     return created;
   }
 
-  async update(subscriberId: number, data: any) {
+  async update(subscriberId: number, data: any, actor?: { role?: string }) {
+    const fields = this.toData(data);
+    this.assertMayEdit(actor, fields);
     const updated = await this.prisma.serviceSettings.update({
       where: { subscriberId },
-      data: {
-        ipAddress:      data.ipAddress,
-        ipType:         data.ipType,
-        macAddress:     data.macAddress,
-        ipv6Prefix:          data.ipv6Prefix ?? undefined,
-        ipv6DelegatedPrefix: data.ipv6DelegatedPrefix ?? undefined,
-        quota:          data.quota,
-        quotaUsed:      data.quotaUsed      ? parseFloat(data.quotaUsed)  : 0,
-        quotaResetDate: data.quotaResetDate ? new Date(data.quotaResetDate) : null,
-        expiryDate:     data.expiryDate     ? new Date(data.expiryDate)   : null,
-        duration:       data.duration       ? parseInt(data.duration)     : null,
-        discountType:   data.discountType,
-        discountValue:  parseFloat(data.discountValue)  || 0,
-        customPrice:    data.customPrice    ? parseFloat(data.customPrice) : null,
-        ontSerial:      data.ontSerial,
-        ontModel:       data.ontModel,
-        signalLevel:    data.signalLevel    ? parseFloat(data.signalLevel) : null,
-        rxPower:        data.rxPower        ? parseFloat(data.rxPower)    : null,
-        txPower:        data.txPower        ? parseFloat(data.txPower)    : null,
-        uploadSpeed:    data.uploadSpeed,
-        downloadSpeed:  data.downloadSpeed,
-        vlanId:         data.vlanId         ? parseInt(data.vlanId)       : null,
-        pptpUsername:   data.pptpUsername,
-        pptpPassword:   data.pptpPassword,
-        notes:          data.notes,
-        technicalNotes: data.technicalNotes,
-        isStaticIp:     data.isStaticIp  === 'true' || data.isStaticIp  === true,
-        hasBackup:      data.hasBackup   === 'true' || data.hasBackup   === true,
-        isBlocked:      data.isBlocked   === 'true' || data.isBlocked   === true,
-        /**
-         * Auto-renewal opt-in. Tri-state on purpose, unlike the booleans
-         * above: those coerce a missing value to `false`, which here would
-         * silently switch auto-renewal OFF for a subscriber every time any
-         * unrelated field was saved from a form that does not include it.
-         * `undefined` leaves the column alone; only an explicit value changes
-         * it.
-         */
-        autoRenew:
-          data.autoRenew === undefined
-            ? undefined
-            : data.autoRenew === 'true' || data.autoRenew === true,
-      },
+      data: fields,
     });
     await this.syncAfterWrite(subscriberId);
     return updated;
   }
 
-  async upsert(subscriberId: number, data: any) {
+  async upsert(subscriberId: number, data: any, actor?: { role?: string }) {
     const existing = await this.findBySubscriber(subscriberId);
-    if (existing) return this.update(subscriberId, data);
-    return this.create(subscriberId, data);
+    if (existing) return this.update(subscriberId, data, actor);
+    return this.create(subscriberId, data, actor);
   }
 }

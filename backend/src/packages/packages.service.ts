@@ -1769,12 +1769,18 @@ export class PackagesService {
 
     // 'existing' rewrites live subscriber profiles — a mutating action on
     // running service. Administrator only.
-    if (actor && !this.scope.isAdmin(actor.role)) {
+    if (actor && !this.scope.isOwner(actor.role)) {
       throw new ForbiddenException('Only administrators can apply a package change to existing subscribers.');
+    }
+    // A company re-applies its OWN package to its OWN customers only.
+    let own: number[] | null = null;
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      await this.assertOwnsPackage(actor, pkg as any);
+      own = await this.scope.descendantIds(await this.scope.rootId(actor));
     }
 
     const subs = await this.prisma.subscriber.findMany({
-      where: { packageId: id, status: 'ACTIVE' },
+      where: { packageId: id, status: 'ACTIVE', ...(own ? { userId: { in: own.length ? own : [-1] } } : {}) },
       select: {
         id: true, username: true, password: true, authMethod: true,
         serviceSettings: true,

@@ -20,6 +20,27 @@ async function runGitCommand(command: string, cwd = process.cwd()) {
   });
 }
 
+/**
+ * A git failure as the panel may show it. git prints the remote URL in its
+ * errors, and a deploy remote often carries a token in it
+ * (https://user:TOKEN@host/...), so credentials are masked and output is cut.
+ * A server that was not installed from git gets a plain explanation.
+ */
+export function gitFailure(action: 'check' | 'pull', error: any): Error {
+  const raw = String(error?.stderr || error?.message || error || '');
+  if (/not a git repository/i.test(raw)) {
+    return new ServiceUnavailableException(
+      'This server was not installed from git, so in-panel updates are unavailable. Update it the way it was installed.',
+    );
+  }
+  const safe = raw
+    .replace(/(\w+:\/\/)[^\s/@]+@/g, '$1***@')
+    .replace(/\b(gh[pousr]_[A-Za-z0-9]{10,}|glpat-[A-Za-z0-9_-]{10,})\b/g, '***')
+    .split('\n').filter((l) => l.trim()).slice(-3).join(' ')
+    .slice(0, 300);
+  return new InternalServerErrorException(`Update ${action} failed: ${safe}`);
+}
+
 const CHECKLIST_STATUS = ['yes', 'partial', 'no', 'unassessed'] as const;
 type ChecklistStatus = (typeof CHECKLIST_STATUS)[number];
 
@@ -527,9 +548,7 @@ export class AppController {
         },
       };
     } catch (error: any) {
-      throw new InternalServerErrorException(
-        `Update check failed: ${error?.message || String(error)}`,
-      );
+      throw gitFailure('check', error);
     }
   }
 
@@ -582,7 +601,7 @@ export class AppController {
         await runGitCommand(`git fetch origin ${gitBranch}`, repoRoot);
       } catch (e: any) {
         fetchFailed = true;
-        this.logger?.warn?.(`update: git fetch failed (${e?.message || e}) — running the update script anyway.`);
+        this.logger?.warn?.(`update: git fetch failed (${gitFailure('pull', e).message}) — running the update script anyway.`);
       }
 
       const localHash = (await runGitCommand('git rev-parse HEAD', repoRoot)).stdout.trim();
@@ -614,9 +633,7 @@ export class AppController {
         logFile,
       };
     } catch (error: any) {
-      throw new InternalServerErrorException(
-        `Update pull failed: ${error?.message || String(error)}`,
-      );
+      throw gitFailure('pull', error);
     }
   }
 

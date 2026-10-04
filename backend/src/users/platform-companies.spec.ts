@@ -33,6 +33,7 @@ function make() {
   };
   const scope: any = {
     isAdmin: (r: string) => r === 'SUPER_ADMIN',
+    isOwner: (r: string) => r === 'SUPER_ADMIN' || r === 'ADMIN',
     actorId: (a: any) => Number(a?.sub),
     assertUser: jest.fn(async () => undefined),
   };

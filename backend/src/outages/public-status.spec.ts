@@ -19,8 +19,13 @@ import { OutagesService } from './outages.service';
  * to support as fact.
  */
 describe('OutagesService — public status', () => {
-  function makeService(opts: { areas?: any[]; open?: any[]; history?: any[] } = {}) {
+  function makeService(opts: { areas?: any[]; open?: any[]; history?: any[]; companies?: number[] } = {}) {
+    const companies = opts.companies ?? [10];
     const prisma: any = {
+      user: {
+        findMany: jest.fn(async () => companies.map((id) => ({ id }))),
+        findFirst: jest.fn(async ({ where }: any) => (companies.includes(where.id) ? { id: where.id } : null)),
+      },
       area: { findMany: jest.fn().mockResolvedValue(opts.areas ?? []) },
       powerOutage: {
         findMany: jest.fn().mockImplementation(({ where }: any) =>
@@ -29,9 +34,34 @@ describe('OutagesService — public status', () => {
         ),
       },
     };
-    const svc = new OutagesService(prisma, {} as any, {} as any, {} as any, {} as any);
+    const scope: any = { descendantIds: jest.fn(async (id: number) => [id, id + 1]) };
+    const svc = new OutagesService(prisma, scope, {} as any, {} as any, {} as any);
     return { prisma, svc };
   }
+
+  // ── Several ISPs on one server ───────────────────────────────────────────
+  describe('one company per status link', () => {
+    it("shows only the named company's areas and history", async () => {
+      const { svc, prisma } = makeService({ areas: AREAS, companies: [10, 20] });
+      await svc.publicStatus(20);
+      expect(prisma.area.findMany.mock.calls[0][0].where).toMatchObject({ ownerId: { in: [20, 21] } });
+      await svc.publicHistory(7, 20);
+      const hist = prisma.powerOutage.findMany.mock.calls.at(-1)[0].where;
+      expect(hist.area).toEqual({ ownerId: { in: [20, 21] } });
+    });
+
+    it('with several companies and none named, shows nothing', async () => {
+      const { svc, prisma } = makeService({ areas: AREAS, companies: [10, 20] });
+      expect((await svc.publicStatus()).areas).toEqual([]);
+      expect(await svc.publicHistory(7)).toEqual([]);
+      expect(prisma.area.findMany).not.toHaveBeenCalled();
+    });
+
+    it('an id that is not a company shows nothing', async () => {
+      const { svc } = makeService({ areas: AREAS, companies: [10] });
+      expect((await svc.publicStatus(11)).areas).toEqual([]);
+    });
+  });
 
   const AREAS = [
     { id: 1, name: 'Jinnah Town', city: 'Quetta' },
@@ -85,7 +115,7 @@ describe('OutagesService — public status', () => {
     it('only lists active areas', async () => {
       const { svc, prisma } = makeService({ areas: AREAS });
       await svc.publicStatus();
-      expect(prisma.area.findMany.mock.calls[0][0].where).toEqual({ isActive: true });
+      expect(prisma.area.findMany.mock.calls[0][0].where).toMatchObject({ isActive: true });
     });
   });
 

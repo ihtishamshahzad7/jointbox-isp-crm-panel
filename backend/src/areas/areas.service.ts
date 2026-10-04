@@ -83,7 +83,7 @@ export class AreasService {
   async toggleArea(id: number, actor?: Actor) {
     await this.assertOwnsArea(id, actor);
     const area = await this.prisma.area.findUnique({ where: { id } });
-    if (!area) throw new Error('Area not found');
+    if (!area) throw new NotFoundException('Area not found');
 
     return this.prisma.area.update({
       where: { id },

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import API_BASE from "../components/api";
+import { tokenPayload } from "../components/platform";
 
 const API =
   API_BASE;
@@ -136,6 +137,8 @@ export default function OutagesPage() {
           </div>
         ))}
       </div>
+
+      <StatusLink card={card} muted={T.muted} />
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
@@ -412,6 +415,31 @@ export default function OutagesPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The company's own public status link. Several ISPs can share one server, so
+ * the page shows one company's areas — the link carries which.
+ */
+function StatusLink({ card, muted }: { card: React.CSSProperties; muted: string }) {
+  const [url, setUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const p = tokenPayload();
+    if (p?.role === "ADMIN" && p?.sub) setUrl(`${window.location.origin}/status?c=${p.sub}`);
+  }, []);
+  if (!url) return null;
+  return (
+    <div style={{ ...card, marginBottom: 16, padding: "10px 14px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12.5 }}>
+      <span style={{ color: muted }}>Customer status page:</span>
+      <a href={url} target="_blank" rel="noreferrer" style={{ wordBreak: "break-all" }}>{url}</a>
+      <button
+        type="button"
+        onClick={() => { navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); }}
+        style={{ border: "1px solid currentColor", background: "transparent", color: "inherit", borderRadius: 8, padding: "3px 10px", fontSize: 11.5, cursor: "pointer" }}
+      >{copied ? "Copied" : "Copy"}</button>
     </div>
   );
 }

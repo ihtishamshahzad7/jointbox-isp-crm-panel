@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import { tokenPayload } from "../components/platform";
 
 const API = API_BASE;
 
@@ -31,9 +32,16 @@ const fmt = (n: number) =>
   new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 const fdate = (d: string | Date) => new Date(d).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
+function canSeeLedger(): boolean {
+  const r = tokenPayload()?.role;
+  return r === "ADMIN" || r === "SUPER_ADMIN" || r === "AUDITOR";
+}
+
 export default function AccountingPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("Ledger");
+  // The ledger and billing automation are the company's books: its own
+  // account and its auditor. A franchise or dealer starts on Cashflow.
+  const [tab, setTab] = useState<Tab>(() => (canSeeLedger() ? "Ledger" : "Cashflow"));
   const [summary, setSummary] = useState<any[]>([]);
 
   // ledger
@@ -618,7 +626,7 @@ export default function AccountingPage() {
 
       {/* tabs */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {TABS.map((name) => (
+        {TABS.filter((name) => canSeeLedger() || (name !== "Ledger" && name !== "Automation")).map((name) => (
           <button
             key={name}
             onClick={() => setTab(name)}

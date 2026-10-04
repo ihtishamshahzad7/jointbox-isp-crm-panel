@@ -159,7 +159,10 @@ async function bootstrap() {
    * exactly the deployment this is.
    */
   const RL_WINDOW = 60_000;
-  const RL_MAX = Number(process.env.RATE_LIMIT_PER_MIN || 600);
+  // 1,500/min per client IP: one panel page fires ~20 calls, and an office of
+  // staff behind one NAT address shares this bucket. 600 throttled a single
+  // operator clicking through screens quickly.
+  const RL_MAX = Number(process.env.RATE_LIMIT_PER_MIN || 1500);
   const RL_MAX_AUTH = Number(process.env.RATE_LIMIT_AUTH_PER_MIN || 20);
   const hits = new Map<string, { n: number; until: number }>();
   setInterval(() => {                       // keep the map from growing forever
@@ -172,7 +175,15 @@ async function bootstrap() {
     // Health checks must never be throttled — that would make a monitor look
     // like an outage.
     if (path.startsWith('/health')) return next();
-    const sensitive = /^\/(auth|demo)\b/.test(path);
+    // One long-lived event stream per open tab; reconnects are not abuse.
+    if (path.startsWith('/events')) return next();
+    // The tight bucket is for CREDENTIAL attempts only. It used to match every
+    // /auth/* and /demo/* path, so the profile check every screen makes
+    // (GET /auth/profile) hit the 20/min login limit, failed, and signed the
+    // operator out for browsing quickly.
+    const sensitive =
+      req.method === 'POST' &&
+      /^\/(auth\/(login|refresh|verify|change-password)|demo\/create|portal\/(login|register)|public\/hotspot)\b/.test(path);
     const key = `${sensitive ? 'a' : 'g'}:${req.ip}`;
     const limit = sensitive ? RL_MAX_AUTH : RL_MAX;
     const now = Date.now();

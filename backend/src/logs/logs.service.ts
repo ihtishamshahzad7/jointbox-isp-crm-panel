@@ -226,6 +226,52 @@ export class LogsService {
 
   // ── Router logs from the subscriber's NAS ─────────────────────────
 
+  /**
+   * The live log of one router (Router Console). The company that owns the
+   * router sees every line; an account the router was only SHARED with sees
+   * the lines about its own customers — never another account's usernames.
+   */
+  async getRouterLogsForNas(actor: Actor, nasId: number, limit = 120) {
+    await this.scope.assertNas(actor, nasId);
+    const nas = await this.prisma.nas.findUnique({
+      where: { id: nasId },
+      select: { id: true, nasname: true, nasIp: true, apiPort: true, apiUsername: true, apiPassword: true, ownerId: true },
+    });
+    if (!nas?.nasIp || !nas.apiUsername || !nas.apiPassword) {
+      return { lines: [], note: 'Add the router\'s API username and password to read its log.' };
+    }
+    let raw: any[] = [];
+    try {
+      raw = await this.mikrotik.getRouterLogs(nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, Math.min(limit, 500));
+    } catch (e: any) {
+      return { lines: [], error: `Could not read the router log: ${String(e?.message || e).slice(0, 160)}` };
+    }
+
+    let allowed: ((msg: string) => boolean) | null = null;
+    if (!this.scope.isAdmin(actor?.role)) {
+      const mine = await this.scope.descendantIds(await this.scope.rootId(actor));
+      const ownsRouter = this.scope.isOwner(actor?.role) && nas.ownerId != null && mine.includes(nas.ownerId);
+      if (!ownsRouter) {
+        const subs = await this.prisma.subscriber.findMany({
+          where: { AND: [{ nasId }, await this.scope.subscriberWhere(actor)] },
+          select: { username: true },
+        });
+        const names = new Set(subs.map((x) => String(x.username || '').toLowerCase()).filter(Boolean));
+        allowed = (msg: string) => RouterLogScope.tokens(msg).some((t) => names.has(t));
+      }
+    }
+    const lines = raw
+      .filter((l: any) => !allowed || allowed(String(l?.message || '')))
+      .map((l: any, i: number) => ({
+        id: `${nas.id}-${i}-${l.time}`,
+        loggedAt: l.time,
+        nas: { nasname: nas.nasname, nasIp: nas.nasIp },
+        message: l.message,
+        topics: l.topics,
+      }));
+    return { lines };
+  }
+
   async getRouterLogsForSubscriber(
     actor: Actor,
     subscriberId: number,
@@ -263,13 +309,19 @@ export class LogsService {
       limit,
     );
 
-    const lines = rawLines.map((line: any, index: number) => ({
-      id: `${subscriber.nas?.id || 'nas'}-${index}-${line.time}`,
-      loggedAt: line.time,
-      nas: { nasname: subscriber.nas?.nasname || '', nasIp: subscriber.nas?.nasIp || '' },
-      message: line.message,
-      topics: line.topics,
-    }));
+    // A router log holds EVERY customer on that router — the ISP's and other
+    // franchises' too. This view is about one subscriber, so only lines that
+    // name them are returned.
+    const uname = String(subscriber.username || '').toLowerCase();
+    const lines = rawLines
+      .filter((line: any) => !!uname && RouterLogScope.mentions(line?.message, uname))
+      .map((line: any, index: number) => ({
+        id: `${subscriber.nas?.id || 'nas'}-${index}-${line.time}`,
+        loggedAt: line.time,
+        nas: { nasname: subscriber.nas?.nasname || '', nasIp: subscriber.nas?.nasIp || '' },
+        message: line.message,
+        topics: line.topics,
+      }));
 
     const errorPatterns = [
       /authentication failed/i,
@@ -866,5 +918,18 @@ export class LogsService {
       activeSessions: Number(activeSessions),
       hourly,
     };
+  }
+}
+
+/** Matching router-log lines to usernames without a LIKE scan. */
+export class RouterLogScope {
+  /** Words in a log line, lower-cased: "<pppoe-ali01>: authenticated" → [pppoe, ali01, authenticated]. */
+  static tokens(message: string): string[] {
+    return String(message || '').toLowerCase().split(/[^a-z0-9._@-]+/).filter(Boolean)
+      .flatMap((t) => (t.startsWith('pppoe-') ? [t, t.slice(6)] : [t]));
+  }
+
+  static mentions(message: string, username: string): boolean {
+    return RouterLogScope.tokens(message).includes(String(username || '').toLowerCase());
   }
 }

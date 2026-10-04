@@ -24,6 +24,8 @@ describe('SubscribersService bulk-scope (Priority 2)', () => {
     const queue: any = { add: jest.fn().mockResolvedValue('radius-sync-all:1') };
     const scope: any = {
       canAccessSubscriber: jest.fn().mockResolvedValue(true),
+      isAdmin: (r: string) => r === 'SUPER_ADMIN',
+      isOwner: (r: string) => r === 'SUPER_ADMIN' || r === 'ADMIN',
       subscriberWhere: jest.fn().mockResolvedValue({ userId: { in: [7, 9] } }),
       ...overrides.scope,
     };

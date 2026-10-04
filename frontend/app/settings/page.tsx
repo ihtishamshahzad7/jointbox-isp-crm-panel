@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import { isPlatformSession } from "../components/platform";
 
 const API = API_BASE;
 
@@ -64,15 +65,18 @@ export default function SettingsPage() {
       .then(data => setUser(data.user))
       .catch(() => router.push("/login"));
 
-    fetch(`${API}/gateway/available`, { headers })
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setGateways(data);
-        else if (data?.data) setGateways(data.data);
-      })
-      .catch(() => {});
-
-    fetchBackupStatus();
+    // Payment gateways are a company's; backups are the platform's.
+    if (isPlatformSession()) {
+      fetchBackupStatus();
+    } else {
+      fetch(`${API}/gateway/available`, { headers })
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) setGateways(data);
+          else if (data?.data) setGateways(data.data);
+        })
+        .catch(() => {});
+    }
 
     const tick = () => {
       const now = new Date();
@@ -400,15 +404,19 @@ export default function SettingsPage() {
                 if (!pwCurrent) { toast_("Current password is required", "err"); return; }
                 if (!pwNew) { toast_("New password is required", "err"); return; }
                 if (pwNew !== pwConfirm) { toast_("Passwords do not match", "err"); return; }
-                if (pwNew.length < 6) { toast_("Password must be at least 6 characters", "err"); return; }
+                if (pwNew.length < 8 || !/[a-zA-Z]/.test(pwNew) || !/[0-9]/.test(pwNew)) { toast_("Password must be at least 8 characters, with letters and numbers", "err"); return; }
                 setPwSaving(true);
                 try {
-                  const r = await fetch(`${API}/users/${user.id}`, {
-                    method: "PUT",
+                  // The verified route: checks the current password and hands
+                  // back a fresh session (the old one is signed out).
+                  const r = await fetch(`${API}/auth/change-password`, {
+                    method: "POST",
                     headers,
-                    body: JSON.stringify({ password: pwNew }),
+                    body: JSON.stringify({ currentPassword: pwCurrent, newPassword: pwNew }),
                   });
-                  if (!r.ok) { const e = await r.json().catch(() => null); toast_(e?.message || "Failed to update password", "err"); setPwSaving(false); return; }
+                  const body = await r.json().catch(() => null);
+                  if (!r.ok) { toast_(body?.message || "Failed to update password", "err"); setPwSaving(false); return; }
+                  if (body?.token) localStorage.setItem("token", body.token);
                   toast_("Password updated successfully");
                   setShowPassword(false); setPwCurrent(""); setPwNew(""); setPwConfirm("");
                 } catch (_) { toast_("Network error", "err"); }
