@@ -7,7 +7,8 @@ import { MikrotikSyncService } from './mikrotik-sync.service';
 import { RadiusSyncService } from './radius-sync.service';
 import { SecretsService } from '../common/secrets.service';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
-import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credentials';
+import { sanitizeNas, sanitizeNasList, encField, decField, isMask } from './nas-credentials';
+import { looksEncrypted } from '../common/crypto-box';
 
 @Injectable()
 export class NasService implements OnModuleInit {
@@ -34,9 +35,33 @@ export class NasService implements OnModuleInit {
   async onModuleInit() {
     try {
       await this.normalizeNasRecords();
+      await this.migrateAndSyncRadiusSecrets();
     } catch (err: any) {
-      this.logger.warn(`NAS normalization skipped: ${err?.message || err}`);
+      this.logger.warn(`NAS normalization/RADIUS secret migration skipped: ${err?.message || err}`);
     }
+  }
+
+  /** Encrypt legacy app-table secrets and mirror plaintext only to protected RADIUS storage. */
+  private async migrateAndSyncRadiusSecrets() {
+    const rows = await this.prisma.nas.findMany({
+      select: { id: true, nasIp: true, nasname: true, shortname: true, secret: true, description: true },
+    });
+    let migrated = 0;
+    for (const row of rows) {
+      if (!row.secret) continue;
+      const plain = decField(this.secrets, row.secret);
+      await this.radiusSync.syncNasClient(
+        row.nasIp || row.nasname,
+        row.shortname || row.nasname,
+        plain,
+        row.description,
+      );
+      if (!looksEncrypted(row.secret)) {
+        await this.prisma.nas.update({ where: { id: row.id }, data: { secret: encField(this.secrets, plain) } });
+        migrated++;
+      }
+    }
+    if (rows.length) this.logger.log(`RADIUS NAS secret convergence complete: ${migrated} legacy secret(s) encrypted, ${rows.length} client(s) synchronized`);
   }
 
   async normalizeNasRecords() {
@@ -498,12 +523,7 @@ export class NasService implements OnModuleInit {
       },
     });
 
-    // The row above IS the FreeRADIUS client — there is nothing extra to insert.
-    // (Previously this also called addNasToRadius(), which INSERTed a second row
-    // into the same `nas` table and made every NAS appear twice.) FreeRADIUS
-    // only loads clients at startup, so just ask it to reload.
-    try {
-      await this.radiusSync.reloadFreeradius();
+    await this.radiusSync.syncNasClient(data.nasIp, data.shortname ?? data.nasName, data.secret, data.description);
       this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
     } catch (error: any) {
       this.logger.warn(`NAS saved, but FreeRADIUS reload failed: ${error.message}`);
@@ -577,11 +597,13 @@ export class NasService implements OnModuleInit {
     const secretChanged = data.secret !== undefined && !isMask(data.secret);
     const nameChanged   = data.nasName && data.nasName !== existingNas.shortname;
 
-    // The updated row IS the FreeRADIUS client, so no delete/re-insert is needed
-    // (that pair is what produced duplicate NAS entries). FreeRADIUS caches its
-    // client list at startup, so a reload is required for changes to take effect
-    // — especially a changed IP or shared secret.
     if (ipChanged || secretChanged || nameChanged) {
+      await this.radiusSync.syncNasClient(
+        data.nasIp?.trim() || existingNas.nasIp || existingNas.nasname,
+        updateData.shortname ?? existingNas.shortname ?? existingNas.nasname,
+        data.secret !== undefined && !isMask(data.secret) ? data.secret : decField(this.secrets, existingNas.secret),
+        updateData.description ?? existingNas.description,
+      );
       try {
         await this.radiusSync.reloadFreeradius();
         this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
