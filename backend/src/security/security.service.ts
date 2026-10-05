@@ -488,6 +488,35 @@ export class SecurityService {
   }
 
   /**
+   * Ensure every non-platform role has an explicit reviewed permission set.
+   *
+   * This is intentionally a one-time bootstrap, not an ongoing overwrite:
+   * once ANY RolePermission row exists, administrators own the matrix and
+   * this method does nothing. Empty state must never mean "allow everything".
+   *
+   * ADMIN gets the explicit platform-wide "*" grant; all delegated roles use
+   * the same presets exposed in the Security UI. SUPER_ADMIN bypasses the
+   * matrix in PermissionsGuard and therefore needs no row.
+   */
+  async ensureDefaultRolePermissions(): Promise<boolean> {
+    const count = await this.prisma.rolePermission.count();
+    if (count > 0) return false;
+
+    const rows: Array<{ role: string; permission: string }> = [
+      { role: 'ADMIN', permission: '*' },
+      ...Object.entries(PERMISSION_PRESETS).flatMap(([role, permissions]) =>
+        permissions.map((permission) => ({ role, permission })),
+      ),
+    ];
+
+    await this.prisma.rolePermission.createMany({ data: rows });
+    for (const role of ['ADMIN', ...Object.keys(PERMISSION_PRESETS)]) {
+      await this.cache.del(`rbac:${role}`);
+    }
+    return true;
+  }
+
+  /**
    * Replace a role's permission set atomically. Empty list = unrestricted.
    *
    * RolePermission is keyed by role alone — one set per role for the WHOLE
