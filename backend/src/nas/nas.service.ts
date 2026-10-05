@@ -604,6 +604,7 @@ export class NasService implements OnModuleInit {
         updateData.shortname ?? existingNas.shortname ?? existingNas.nasname,
         data.secret !== undefined && !isMask(data.secret) ? data.secret : decField(this.secrets, existingNas.secret),
         updateData.description ?? existingNas.description,
+        data.nasIp && data.nasIp.trim() !== existingNas.nasIp ? existingNas.nasIp : null,
       );
       this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
     }
