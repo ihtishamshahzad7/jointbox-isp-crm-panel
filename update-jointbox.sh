@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# The whole script sits inside { … } so bash reads all of it before running
+# any of it: `git reset --hard` below can replace this very file mid-run.
+{
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRANCH="main"
 LOCK_FILE="/tmp/jointbox-isp-update.lock"
@@ -66,7 +70,7 @@ write_status "running" "Code synced; installing dependencies and building"
 
 if [[ -f backend/package-lock.json ]]; then
   log "Installing backend dependencies with npm ci..."
-  (cd backend && npm ci --omit=dev=false)
+  (cd backend && npm ci --include=dev)
 else
   log "Installing backend dependencies with npm install..."
   (cd backend && npm install)
@@ -88,7 +92,7 @@ log "Building backend..."
 
 if [[ -f frontend/package-lock.json ]]; then
   log "Installing frontend dependencies with npm ci..."
-  (cd frontend && npm ci --omit=dev=false)
+  (cd frontend && npm ci --include=dev)
 else
   log "Installing frontend dependencies with npm install..."
   (cd frontend && npm install)
@@ -126,27 +130,44 @@ fi
 
 sleep 3
 
-log "Checking backend health..."
+# On a failed check, show WHY instead of only a line number.
+show_logs(){
+  local app="$1"
+  log "Last log lines from ${app}:"
+  pm2 logs "$app" --lines 60 --nostream 2>&1 | tail -n 80 || true
+}
+
+# Start-up runs the platform-account check, RADIUS/NAS sync and cache checks
+# before the port opens, which can take well over half a minute on a busy
+# server. Wait up to 2 minutes before calling it a failure.
+log "Checking backend health (up to 2 minutes)..."
 BACKEND_OK=0
-for _ in {1..12}; do
+for i in {1..60}; do
   if curl -fsS --max-time 5 http://127.0.0.1:3001/health >/dev/null 2>&1 || curl -fsS --max-time 5 http://127.0.0.1:3001/api/health >/dev/null 2>&1; then
     BACKEND_OK=1
+    log "Backend is answering (after ~$((i * 2))s)."
     break
   fi
   sleep 2
 done
-[[ "$BACKEND_OK" == "1" ]] || fail "$LINENO"
+if [[ "$BACKEND_OK" != "1" ]]; then
+  show_logs jointbox-backend
+  fail "$LINENO"
+fi
 
-log "Checking frontend health..."
+log "Checking frontend health (up to 1 minute)..."
 FRONTEND_OK=0
-for _ in {1..12}; do
+for _ in {1..30}; do
   if curl -fsS --max-time 5 http://127.0.0.1:3000/ >/dev/null 2>&1; then
     FRONTEND_OK=1
     break
   fi
   sleep 2
 done
-[[ "$FRONTEND_OK" == "1" ]] || fail "$LINENO"
+if [[ "$FRONTEND_OK" != "1" ]]; then
+  show_logs jointbox-frontend
+  fail "$LINENO"
+fi
 
 write_status "success" "Deployment completed successfully"
 
@@ -159,3 +180,5 @@ log "Branch : ${BRANCH}"
 log "Time   : ${DEPLOY_TIME}"
 log "Status : SUCCESS"
 log "============================================================"
+exit 0
+}
