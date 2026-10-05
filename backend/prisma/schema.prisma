@@ -421,7 +421,11 @@ model Nas {
   shortname   String? @db.VarChar(32)
   type        String? @db.VarChar(30)
   ports       Int?
-  secret      String? @db.VarChar(60)
+  /// Legacy plaintext RADIUS secret. New writes leave this NULL.
+  /// Existing rows are migrated into radius_secret_enc at backend startup.
+  secret          String?  @db.VarChar(60)
+  /// AES-256-GCM encrypted RADIUS shared secret. FreeRADIUS never reads this field.
+  radiusSecretEnc String?  @map("radius_secret_enc") @db.VarChar(500)
   server      String? @db.VarChar(64)
   community   String? @db.VarChar(50)
   description String? @db.VarChar(200)
