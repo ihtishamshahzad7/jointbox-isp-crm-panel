@@ -421,7 +421,8 @@ model Nas {
   shortname   String? @db.VarChar(32)
   type        String? @db.VarChar(30)
   ports       Int?
-  /// Encrypted at rest. FreeRADIUS reads the synchronized protected client store, not this column.\n  secret      String? @db.VarChar(512)
+  /// Encrypted at rest. FreeRADIUS reads the synchronized protected client store, not this column.
+  secret      String? @db.VarChar(512)
   server      String? @db.VarChar(64)
   community   String? @db.VarChar(50)
   description String? @db.VarChar(200)
