@@ -565,8 +565,7 @@ export class NasService implements OnModuleInit {
     if (data.nasName !== undefined)     updateData.shortname    = data.nasName;
     if (data.shortname !== undefined)   updateData.shortname    = data.shortname;
     // Masked values are the form echoing back what we sent it — never save them
-    // over the real credential. (RADIUS `secret` stays plaintext at rest because
-    // FreeRADIUS reads this table directly; it is masked in responses only.)
+    // over the real credential. The app stores the RADIUS secret encrypted.
     if (data.secret !== undefined && !isMask(data.secret)) updateData.secret = data.secret;
     if (data.apiPort !== undefined)     updateData.apiPort      = data.apiPort;
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
