@@ -70,7 +70,7 @@ jobs:
           # `prisma db push --accept-data-loss` after a failed migration is how
           # a migration that REFUSED to run because it would destroy data gets
           # followed by a command explicitly permitted to destroy it.
-          if git ls-files '*.sh' '*.js' '*.json' | xargs grep -n -- '--accept-data-loss' 2>/dev/null | grep -Ev '^[[:space:]]*#'; then
+          if git ls-files '*.sh' '*.js' '*.json' | xargs grep -n -- '--accept-data-loss' 2>/dev/null | grep -Ev '(^|:)[[:space:]]*#'; then
             echo "::error::--accept-data-loss found in a tracked file"
             exit 1
           fi
