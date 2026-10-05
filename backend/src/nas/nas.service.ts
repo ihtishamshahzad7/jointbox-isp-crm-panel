@@ -52,6 +52,12 @@ export class NasService implements OnModuleInit {
         ...row,
         secret: decField(this.secrets, row.secret),
       }));
+    for (let i = 0; i < rows.length; i++) {
+      if (!rows[i].secret) continue;
+      if (looksEncrypted(rows[i].secret) && radiusRows[i].secret === rows[i].secret) {
+        throw new Error(`Cannot decrypt NAS RADIUS secret for NAS ${rows[i].id}; check SECRETS_KEY/JWT_SECRET before deployment.`);
+      }
+    }
     // One RADIUS restart for the whole convergence pass, not one restart per NAS.
     await this.radiusSync.syncAllNasClients(radiusRows);
     let migrated = 0;
