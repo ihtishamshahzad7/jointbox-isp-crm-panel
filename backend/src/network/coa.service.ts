@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { SecretsService } from '../common/secrets.service';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,6 +34,7 @@ export class CoaService {
   constructor(
     private prisma: PrismaService,
     private mikrotik: MikrotikSyncService,
+    private secrets: SecretsService,
   ) {}
 
   /**
@@ -58,7 +60,7 @@ export class CoaService {
       where: { id: subscriberId },
       select: {
         id: true, username: true, nasId: true,
-        nas: { select: { nasIp: true, nasIdentifier: true, secret: true, incomingPort: true, apiPort: true, apiUsername: true, apiPassword: true } },
+        nas: { select: { nasIp: true, nasIdentifier: true, radiusSecretEnc: true, incomingPort: true, apiPort: true, apiUsername: true, apiPassword: true } },
       },
     });
     if (!sub?.username) return null;
@@ -95,7 +97,7 @@ export class CoaService {
     if (!session) return { success: false, message: 'No active session to disconnect' };
 
     // 1) Standard RADIUS Disconnect-Request — vendor-agnostic.
-    const secret = sub.nas.secret;
+    const secret = sub.nas.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null;
     if (secret) {
       const res = await sendCoa({
         host: sub.nas.nasIp,
@@ -387,11 +389,11 @@ export class CoaService {
 
     // Push it live via CoA if we have a session + secret.
     let live = false;
-    if (session && sub.nas?.nasIp && sub.nas.secret) {
+    if (session && sub.nas?.nasIp && sub.nas.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null) {
       const res = await sendCoa({
         host: sub.nas.nasIp,
         port: coaPort(sub.nas.incomingPort),
-        secret: sub.nas.secret,
+        secret: sub.nas.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null,
         code: RadiusCode.CoaRequest,
         attributes: [...sessionAttributes(session), mikrotikRateLimit(rate)],
       });
