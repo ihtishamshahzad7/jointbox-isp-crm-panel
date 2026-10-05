@@ -193,6 +193,25 @@ export class LogsController {
     });
   }
 
+  // ── Failed logins: refused connection attempts, grouped, with the likely reason ──
+  @Get('failed-logins')
+  failedLogins(
+    @Query('sinceHours') sinceHours: string,
+    @Query('search') search: string,
+    @Query('nasIp') nasIp: string,
+    @Query('limit') limit: string,
+    @Query('offset') offset: string,
+    @Req() req: any,
+  ) {
+    return this.disconnects.failedLogins(req.user, {
+      sinceHours: sinceHours ? +sinceHours : undefined,
+      search: search || undefined,
+      nasIp: nasIp || undefined,
+      limit: limit ? +limit : undefined,
+      offset: offset ? +offset : undefined,
+    });
+  }
+
   // ── Failed Activations ────────────────────────────────────────
   @Get('failed-activations')
   failedActivations(

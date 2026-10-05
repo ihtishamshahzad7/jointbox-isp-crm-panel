@@ -154,6 +154,9 @@ describe('Disconnect log — how each session ended', () => {
       subscriber: { findMany: jest.fn(async () => []) },
       systemLog: { findMany: jest.fn(async () => logs) },
       user: { findMany: jest.fn(async () => users) },
+      radPostAuth: { findMany: jest.fn(async () => []) },
+      routerLog: { findMany: jest.fn(async () => []) },
+      activityLog: { findMany: jest.fn(async () => []) },
     };
     const scope: any = {
       isAdmin: () => false,
@@ -208,8 +211,9 @@ describe('Disconnect log — how each session ended', () => {
     const w = JSON.stringify(where[0]);
     expect(w).toContain('"subscriber":{"is":{"userId":{"in":[7]}}}');
     expect(w).toContain('"callingstationid":{"contains":"aa:bb:cc","mode":"insensitive"}');
+    const before = where.length;
     await svc.report({ id: 7, role: 'ADMIN' } as any, { search: '100.64.0.2' });
-    expect(JSON.stringify(where[where.length - 1])).toContain('"framedipaddress":"100.64.0.2"');
+    expect(JSON.stringify(where[before])).toContain('"framedipaddress":"100.64.0.2"');
   });
 });
 
@@ -228,5 +232,44 @@ describe('RADIUS session log username filter', () => {
     const out = await svc.getRadiusSessions({ id: 7, role: 'ADMIN' } as any, { username: 'theirs' });
     expect(out.items).toEqual([]);
     expect(prisma.radAcct.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('Disconnect log helpers', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { detectMassDrops, likelyReject, vlanOf, describeAction } = require('../logs/disconnects.service');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { macInfo, normaliseMac } = require('./mac-vendor');
+
+  it('finds a mass drop on one router and ignores scattered single drops', () => {
+    const t = Date.UTC(2026, 9, 4, 14, 32, 0);
+    const rows = [
+      ...['a', 'b', 'c', 'd'].map((u, i) => ({ nasipaddress: '10.0.0.1', acctstoptime: new Date(t + i * 10_000), username: u, acctterminatecause: 'NAS-Reboot' })),
+      { nasipaddress: '10.0.0.1', acctstoptime: new Date(t + 3600_000), username: 'e', acctterminatecause: 'User-Request' },
+      { nasipaddress: '10.0.0.2', acctstoptime: new Date(t), username: 'f', acctterminatecause: 'Lost-Carrier' },
+    ];
+    const out = detectMassDrops(rows);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ nasIp: '10.0.0.1', customers: 4, topKey: 'NAS-Reboot' });
+  });
+
+  it('explains a refused login from the account state', () => {
+    const now = Date.now();
+    expect(likelyReject({ status: 'SUSPENDED' }, null, now).key).toBe('suspended');
+    expect(likelyReject({ status: 'ACTIVE', expiryDate: new Date(now - 1000) }, null, now).key).toBe('expired');
+    expect(likelyReject({ status: 'ACTIVE', macLocked: 'AA:AA:AA:AA:AA:AA' }, 'BB:BB:BB:BB:BB:BB', now).key).toBe('mac-locked');
+    expect(likelyReject({ status: 'ACTIVE' }, null, now).key).toBe('unknown');
+  });
+
+  it('reads VLANs, MAC makers and panel actions', () => {
+    expect(vlanOf('ether1-vlan34')).toBe('34');
+    expect(vlanOf('ether2.300')).toBe('300');
+    expect(vlanOf('ether1')).toBeNull();
+    expect(normaliseMac('4c-5e-0c-11-22-33')).toBe('4C:5E:0C:11:22:33');
+    expect(macInfo('4C:5E:0C:11:22:33').maker).toBe('MikroTik');
+    expect(macInfo('DA:A1:19:00:00:01').privateMac).toBe(true);
+    expect(macInfo('00:11:22:33:44:55').maker).toBeNull();
+    expect(describeAction('SUBSCRIBERS.SUSPEND', null)).toBe('Suspended');
+    expect(describeAction('UPDATE', '{"packageId":3}')).toBe('Package changed');
   });
 });

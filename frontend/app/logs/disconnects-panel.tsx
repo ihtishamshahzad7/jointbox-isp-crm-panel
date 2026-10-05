@@ -45,7 +45,34 @@ type RecordRow = {
   terminateMeaning: string; terminateAction: string; terminateHow?: string;
   terminateCategory: CauseCategory; terminateSeverity: CauseSeverity;
   how?: How;
+  device?: { maker: string | null; privateMac: boolean } | null;
+  macChanged?: { previous: string; previousMaker: string | null; at: string | null } | null;
+  flapping?: { lastHour: number; last24h: number; flagged: boolean } | null;
+  massDrop?: { customers: number; from: string; to: string } | null;
+  account?: { status: string; package: string | null; area: string | null; expiryDate: string | null; expiredAtDrop: boolean; fupAtDrop: boolean; macLocked: string | null } | null;
+  retries?: { failed: number; firstAt: string; lastAt: string; likely: Likely } | null;
+  routerLog?: { at: string; message: string; severity: string }[];
+  before?: { at: string; what: string; by: string | null }[];
+  onu?: { rxDbm: number | null; status: string | null; at: string | null; weak: boolean } | null;
+  openTickets?: number;
+  vlan?: string | null;
+  speed?: { downMbps: number | null; upMbps: number | null };
+  ipv6?: string | null;
 };
+type Likely = { key: string; label: string; detail: string };
+type FailedItem = {
+  username: string; subscriberId: number | null; fullName: string | null; mac: string | null;
+  device: { maker: string | null; privateMac: boolean } | null;
+  nasIp: string | null; nasName: string | null; nasPortId: string | null; service: string | null;
+  firstAt: string; lastAt: string; attempts: number; likely: Likely;
+  accountStatus: string | null; expiryDate: string | null; gotInAt: string | null;
+};
+type Failed = {
+  totals: { attempts: number; bursts: number; customers: number; capped: boolean };
+  reasons: { key: string; label: string; count: number }[];
+  items: FailedItem[]; total: number;
+};
+type MassDropEv = { nasIp: string; nasName: string | null; from: string; to: string; customers: number; topCause: { key: string; label: string } | null };
 type Report = {
   window: { sinceHours: number; from: string; to: string; unit: "hour" | "day" };
   totals: { ended: number; openNow: number; customers: number; avgSessionSec: number | null; abnormal: number; abnormalShare: number; topCause: Top | null };
@@ -56,6 +83,7 @@ type Report = {
   customers: { username: string; subscriberId: number | null; fullName: string | null; count: number; abnormal: number; lastAt: string | null; lastKey: string; top: Top[] }[];
   records: RecordRow[];
   recordsTotal: number;
+  massDrops?: MassDropEv[];
 };
 
 const WINDOWS: Array<[number, string]> = [[24, "24 hours"], [168, "7 days"], [720, "30 days"], [2160, "90 days"]];
@@ -132,6 +160,10 @@ export default function DisconnectsPanel() {
   const [err, setErr] = useState("");
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [allReasons, setAllReasons] = useState(false);
+  const [view, setView] = useState<"disconnects" | "failed">("disconnects");
+  const [failed, setFailed] = useState<Failed | null>(null);
+  const [failedOffset, setFailedOffset] = useState(0);
+  const [failedErr, setFailedErr] = useState("");
   const [routerOptions, setRouterOptions] = useState<Record<string, string | null>>({});
   const reqId = useRef(0);
   const logRef = useRef<HTMLElement | null>(null);
@@ -195,6 +227,24 @@ export default function DisconnectsPanel() {
   }, [hours, cause, category, nasIp, username, find, offset]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Failed logins — same window, router and search box as the log.
+  const loadFailed = useCallback(async () => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+    if (!token) return;
+    const q = new URLSearchParams({ sinceHours: String(hours), limit: String(PAGE), offset: String(failedOffset) });
+    if (nasIp) q.set("nasIp", nasIp);
+    const term = username || find;
+    if (term) q.set("search", term);
+    try {
+      const r = await fetch(`${API}/logs/failed-logins?${q}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) { const b = await r.json().catch(() => null); setFailedErr(b?.message || `Could not load failed logins (HTTP ${r.status}).`); return; }
+      setFailed(await r.json());
+      setFailedErr("");
+    } catch { setFailedErr("Could not reach the server. Check your connection and try again."); }
+  }, [hours, nasIp, username, find, failedOffset]);
+
+  useEffect(() => { void loadFailed(); }, [loadFailed]);
 
   const byKey = useMemo(() => new Map((data?.causes || []).map((c) => [c.key, c])), [data]);
   const badgeFor = (key: string, label?: string) => {
@@ -333,13 +383,53 @@ export default function DisconnectsPanel() {
         </section>
       )}
 
+      {/* ── Mass drops: many customers on one NAS within a minute ── */}
+      {!!data?.massDrops?.length && (
+        <section className={s.massBox} aria-label="Mass drops">
+          <div className={s.massHead}>
+            <span className={s.massIcon} aria-hidden>!</span>
+            <div>
+              <h3>{data.massDrops.length === 1 ? "Mass drop detected" : `${data.massDrops.length} mass drops detected`}</h3>
+              <p>Several customers on the same NAS went down within a minute of each other — an outage, not single faults.</p>
+            </div>
+          </div>
+          <ul className={s.massList}>
+            {data.massDrops.map((m) => (
+              <li key={`${m.nasIp}-${m.from}`}>
+                <button type="button" className={s.massItem} onClick={() => { setNasIp(m.nasIp); setOffset(0); setView("disconnects"); toLog(); }}
+                  title="Show only this NAS in the log">
+                  <b>{m.nasName || m.nasIp}</b>
+                  <span className={s.faint}>{m.nasName ? m.nasIp : ""}</span>
+                  <span>{full(m.from)}{m.to !== m.from ? ` – ${clock(m.to)}` : ""}</span>
+                  <span className={s.massCount}>{m.customers} customers</span>
+                  {m.topCause && <span className={s.faint}>mostly {m.topCause.label}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* ── THE LOG ── */}
       <section className={s.panel} ref={logRef} aria-label="Disconnect log">
         <div className={s.panelHead}>
-          <h3>{sel ? `Ended by ${sel.label}` : selCat ? `Ended — ${selCat.label}` : find || username ? `Disconnects matching “${username || find}”` : "Latest disconnects"}</h3>
-          <span>{data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…"}</span>
+          <div className={s.viewSwitch} role="tablist" aria-label="Log view">
+            <button type="button" role="tab" aria-selected={view === "disconnects"} onClick={() => setView("disconnects")}>
+              Disconnects <b>{nf(data?.recordsTotal)}</b>
+            </button>
+            <button type="button" role="tab" aria-selected={view === "failed"} onClick={() => setView("failed")}>
+              Failed logins <b>{nf(failed?.totals.attempts)}</b>
+            </button>
+          </div>
+          <span>
+            {view === "failed"
+              ? (failed ? `${nf(failed.totals.attempts)} refused attempt${failed.totals.attempts === 1 ? "" : "s"} by ${nf(failed.totals.customers)} customer${failed.totals.customers === 1 ? "" : "s"}` : "…")
+              : (sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}
+          </span>
         </div>
-        {!data ? (
+        {view === "failed" ? (
+          <FailedLogins data={failed} err={failedErr} offset={failedOffset} setOffset={(n) => { setFailedOffset(n); toLog(); }} />
+        ) : !data ? (
           <div className={s.empty}>Loading the disconnect log…</div>
         ) : !data.records.length ? (
           <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
@@ -496,6 +586,91 @@ export default function DisconnectsPanel() {
   );
 }
 
+const FLAG_TONE: Record<"critical" | "warn" | "info", string> = { critical: "#dc2626", warn: "#d97706", info: "#2563eb" };
+
+/** The short warnings shown on a log entry — the things support checks next. */
+function flagsOf(r: RecordRow): { key: string; text: string; title: string; tone: "critical" | "warn" | "info" }[] {
+  const out: { key: string; text: string; title: string; tone: "critical" | "warn" | "info" }[] = [];
+  if (r.massDrop) out.push({ key: "mass", tone: "critical", text: `Mass drop · ${r.massDrop.customers} customers`, title: "Several customers on this NAS went down within a minute — an outage, not this customer." });
+  if (r.retries) out.push({ key: "retry", tone: "warn", text: `${r.retries.failed} reconnect${r.retries.failed === 1 ? "" : "s"} refused · ${r.retries.likely.label}`, title: r.retries.likely.detail });
+  if (r.account?.status === "SUSPENDED") out.push({ key: "susp", tone: "warn", text: "Account suspended", title: "The account is suspended in the panel." });
+  else if (r.account?.status === "INACTIVE") out.push({ key: "dis", tone: "warn", text: "Account disabled", title: "The account is disabled in the panel." });
+  if (r.account?.expiredAtDrop) out.push({ key: "exp", tone: "warn", text: `Expired${r.account.expiryDate ? ` ${new Date(r.account.expiryDate).toLocaleDateString([], { day: "numeric", month: "short" })}` : ""}`, title: "The package had expired when this happened." });
+  if (r.account?.fupAtDrop) out.push({ key: "fup", tone: "warn", text: "Data limit reached", title: "The fair-usage limit was active." });
+  if (r.flapping?.flagged) out.push({ key: "flap", tone: "warn", text: `Flapping · ${r.flapping.lastHour} in 1h · ${r.flapping.last24h} in 24h`, title: "This customer keeps dropping — check their line, ONU or router." });
+  if (r.macChanged) out.push({ key: "mac", tone: "info", text: `New MAC — was ${r.macChanged.previous}`, title: "A different device than the session before: a new router, or a shared login." });
+  if (r.onu?.weak) out.push({ key: "onu", tone: "warn", text: `Weak ONU signal ${r.onu.rxDbm} dBm`, title: "Optical power at or below −27 dBm — dirty connector, tight bend or a bad splice." });
+  if (r.onu?.status && /LOS|DYING/i.test(r.onu.status)) out.push({ key: "onus", tone: "critical", text: r.onu.status.toUpperCase().includes("DYING") ? "ONU lost power" : "ONU lost signal (LOS)", title: "Last status reported by the OLT." });
+  if (r.openTickets) out.push({ key: "tix", tone: "info", text: `${r.openTickets} open ticket${r.openTickets === 1 ? "" : "s"}`, title: "Open support tickets for this customer." });
+  return out;
+}
+
+/** Refused logins, grouped into bursts, with the likely reason. */
+function FailedLogins({ data, err, offset, setOffset }: { data: Failed | null; err: string; offset: number; setOffset: (n: number) => void }) {
+  if (err) return <div className={s.error} role="alert">{err}</div>;
+  if (!data) return <div className={s.empty}>Loading failed logins…</div>;
+  if (!data.items.length) return <div className={s.empty}>No refused logins in this window.</div>;
+  return (
+    <>
+      {data.reasons.length > 0 && (
+        <div className={s.tagRow} style={{ marginBottom: 10 }}>
+          {data.reasons.map((x) => (
+            <span key={x.key} className={s.flag} style={{ ["--flag" as any]: x.key === "unknown" ? FLAG_TONE.info : FLAG_TONE.warn }}>{x.label} · {x.count}</span>
+          ))}
+        </div>
+      )}
+      <ol className={s.events}>
+        {data.items.map((f) => {
+          const name = f.fullName || f.username;
+          const device = f.device ? (f.device.privateMac ? "Private MAC (phone / laptop)" : f.device.maker) : null;
+          return (
+            <li key={`${f.username}-${f.firstAt}-${f.mac}`} className={s.ev} style={{ ["--sev" as any]: f.gotInAt ? FLAG_TONE.info : FLAG_TONE.warn }}>
+              <div className={s.evMain} style={{ cursor: "default" }}>
+                <span className={s.evTime}>
+                  <b>{clock(f.lastAt)}</b>
+                  <span>{ago(f.lastAt)}</span>
+                </span>
+                <span className={s.evBody}>
+                  <span className={s.evTop}>
+                    <span className={s.avatar} aria-hidden>{initials(name)}</span>
+                    <span className={s.evWho}>
+                      <span className={s.evName}>{f.subscriberId ? <Link href={`/subscribers/${f.subscriberId}`}>{name}</Link> : name}</span>
+                      {f.fullName && <span className={s.evUser}>{f.username}</span>}
+                    </span>
+                    <span className={s.evCause}>
+                      <span className={s.flag} style={{ ["--flag" as any]: f.likely.key === "unknown" ? FLAG_TONE.info : FLAG_TONE.warn }}>{f.likely.label}</span>
+                    </span>
+                  </span>
+                  <span className={s.evHow}>
+                    <span className={s.howTag} style={catVar("customer")}>Login refused</span>
+                    <span className={s.howText}>
+                      {f.attempts} attempt{f.attempts === 1 ? "" : "s"}{f.attempts > 1 ? ` between ${clock(f.firstAt)} and ${clock(f.lastAt)}` : ""} — {f.likely.detail}
+                    </span>
+                  </span>
+                  <span className={s.evFacts}>
+                    <span className={s.fact}><span className={s.factK}>NAS</span><span className={s.factV}>{f.nasName || f.nasIp || "—"}{f.nasName && <span className={s.faint}> {f.nasIp}</span>}{f.nasPortId && <span className={s.faint}> · {f.nasPortId}</span>}</span></span>
+                    <span className={s.fact}><span className={s.factK}>MAC</span><span className={`${s.factV} ${s.ip}`}>{f.mac || "—"}</span>{device && <span className={s.faint}> {device}</span>}</span>
+                    {f.accountStatus && <span className={s.fact}><span className={s.factK}>Account</span><span className={s.factV}>{f.accountStatus.toLowerCase()}{f.expiryDate ? ` · expires ${new Date(f.expiryDate).toLocaleDateString()}` : ""}</span></span>}
+                    <span className={s.fact}><span className={s.factK}>After</span><span className={s.factV}>{f.gotInAt ? `got in at ${clock(f.gotInAt)}` : "not connected since"}</span></span>
+                  </span>
+                </span>
+                <span />
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      <div className={s.pager}>
+        <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.total))} of {nf(data.total)} bursts{data.totals.capped ? " (newest 5,000 attempts)" : ""}</span>
+        <div>
+          <button type="button" className={s.linkBtn} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>← Newer</button>
+          <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.total} onClick={() => setOffset(offset + PAGE)}>Older →</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /** One disconnect: who, when, how, which NAS, MAC and IP — and every detail on click. */
 function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle: () => void }) {
   const how: How = r.how || { by: "unknown", title: r.terminateHow || r.terminateMeaning, detail: null, actor: null, method: null, source: "cause", steps: [] };
@@ -503,6 +678,10 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
   const sev = SEVERITY_META[r.terminateSeverity] || SEVERITY_META.info;
   const name = r.fullName || r.username || "Unknown customer";
   const port = [r.nasPortId, r.nasPortType].filter(Boolean).join(" · ");
+  const flags = flagsOf(r);
+  const device = r.device ? (r.device.privateMac ? "Private MAC (phone / laptop)" : r.device.maker) : null;
+  const speed = r.speed && (r.speed.downMbps != null || r.speed.upMbps != null)
+    ? `↓ ${r.speed.downMbps ?? "—"} · ↑ ${r.speed.upMbps ?? "—"} Mbps` : null;
   return (
     <li className={`${s.ev}${open ? " " + s.evOpen : ""}`} style={{ ["--sev" as any]: sev.color }}>
       <button type="button" className={s.evMain} aria-expanded={open} onClick={onToggle}>
@@ -532,11 +711,20 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
           </span>
           <span className={s.evFacts}>
             <span className={s.fact}><span className={s.factK}>NAS</span><span className={s.factV}>{r.nasName || r.nasIp}{r.nasName && <span className={s.faint}> {r.nasIp}</span>}{port && <span className={s.faint}> · {port}</span>}</span></span>
-            <span className={s.fact}><span className={s.factK}>MAC</span><span className={`${s.factV} ${s.ip}`}>{r.mac || "—"}</span></span>
+            <span className={s.fact}><span className={s.factK}>MAC</span><span className={`${s.factV} ${s.ip}`}>{r.mac || "—"}</span>{device && <span className={s.faint}> {device}</span>}</span>
             <span className={s.fact}><span className={s.factK}>IP</span><span className={`${s.factV} ${s.ip}`}>{r.framedIp || "—"}</span></span>
             <span className={s.fact}><span className={s.factK}>Online for</span><span className={s.factV}>{dur(r.durationSec)}</span></span>
             <span className={s.fact}><span className={s.factK}>Data</span><span className={s.factV}>↓ {bytes(r.downloadBytes)} · ↑ {bytes(r.uploadBytes)}</span></span>
+            {r.vlan && <span className={s.fact}><span className={s.factK}>VLAN</span><span className={s.factV}>{r.vlan}</span></span>}
+            {r.account?.area && <span className={s.fact}><span className={s.factK}>Area</span><span className={s.factV}>{r.account.area}</span></span>}
           </span>
+          {flags.length > 0 && (
+            <span className={s.flagRow}>
+              {flags.map((f) => (
+                <span key={f.key} className={s.flag} style={{ ["--flag" as any]: FLAG_TONE[f.tone] }} title={f.title}>{f.text}</span>
+              ))}
+            </span>
+          )}
         </span>
         <span className={s.chev} aria-hidden>›</span>
       </button>
@@ -558,6 +746,17 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
             <Field k="Raw cause sent" v={r.rawCause || "(none)"} mono />
             <Field k="Disconnected by" v={how.actor ? `${how.actor.name}${how.actor.email ? ` (${how.actor.email})` : ""}` : hm.label} />
             {how.method && <Field k="Method" v={how.method} />}
+            {device && <Field k="Device maker (from MAC)" v={device} />}
+            {r.vlan && <Field k="VLAN" v={r.vlan} />}
+            {speed && <Field k="Average speed" v={speed} />}
+            {r.ipv6 && <Field k="IPv6" v={r.ipv6} mono />}
+            {r.account && <Field k="Package" v={r.account.package || "—"} />}
+            {r.account && <Field k="Area" v={r.account.area || "—"} />}
+            {r.account && <Field k="Account now" v={`${r.account.status.toLowerCase()}${r.account.expiryDate ? ` · expires ${new Date(r.account.expiryDate).toLocaleDateString()}` : ""}`} />}
+            {r.account?.macLocked && <Field k="Locked to MAC" v={r.account.macLocked} mono />}
+            {r.onu && <Field k="ONU signal" v={r.onu.rxDbm != null ? `${r.onu.rxDbm} dBm${r.onu.weak ? " (weak)" : ""}` : "not polled"} />}
+            {r.onu?.status && <Field k="ONU status" v={r.onu.status} />}
+            {!!r.openTickets && <Field k="Open tickets" v={String(r.openTickets)} />}
           </div>
           <div className={s.detailNote}>
             <div><strong>How:</strong> {how.title}{how.detail ? ` — ${how.detail}` : ""}</div>
@@ -565,6 +764,24 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
             <div><strong>Usually means:</strong> {r.terminateMeaning}</div>
             <div><strong>What to check:</strong> {r.terminateAction}</div>
             {how.steps.length > 0 && <div><strong>Panel steps:</strong> {how.steps.join(" → ")}</div>}
+            {r.massDrop && <div><strong>Mass drop:</strong> {r.massDrop.customers} of your customers on this NAS went down between {clock(r.massDrop.from)} and {clock(r.massDrop.to)} — look at the NAS or its uplink, not this customer.</div>}
+            {r.flapping && r.flapping.last24h > 1 && <div><strong>Drops:</strong> {r.flapping.lastHour} in the hour and {r.flapping.last24h} in the 24 hours up to this one.</div>}
+            {r.macChanged && <div><strong>MAC changed:</strong> the session before came from {r.macChanged.previous}{r.macChanged.previousMaker ? ` (${r.macChanged.previousMaker})` : ""}{r.mac ? `, this one from ${r.mac}` : ""} — a new router, or the login is being shared.</div>}
+            {r.retries && <div><strong>Tried to reconnect:</strong> {r.retries.failed} login{r.retries.failed === 1 ? "" : "s"} refused between {clock(r.retries.firstAt)} and {clock(r.retries.lastAt)}. Likely: {r.retries.likely.label} — {r.retries.likely.detail}</div>}
+            {r.account?.expiredAtDrop && <div><strong>Account:</strong> the package had expired{r.account.expiryDate ? ` on ${new Date(r.account.expiryDate).toLocaleString()}` : ""} when this happened.</div>}
+            {r.account?.fupAtDrop && <div><strong>Data limit:</strong> the fair-usage limit was active.</div>}
+            {!!r.before?.length && (
+              <div><strong>In the panel just before:</strong>{" "}
+                {r.before.map((b, i) => <span key={i}>{i ? " · " : ""}{clock(b.at)} {b.what}{b.by ? ` by ${b.by}` : ""}</span>)}
+              </div>
+            )}
+            {!!r.routerLog?.length && (
+              <div><strong>Router log:</strong>
+                <ul className={s.logLines}>
+                  {r.routerLog.map((l, i) => <li key={i}><span className={s.faint}>{clock(l.at)}</span> <code>{l.message}</code></li>)}
+                </ul>
+              </div>
+            )}
             {r.subscriberId && (
               <div><Link href={`/subscribers/${r.subscriberId}`}>Open {name}’s profile →</Link></div>
             )}

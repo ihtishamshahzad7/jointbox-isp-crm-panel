@@ -356,7 +356,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [switchList, setSwitchList] = useState<any[]>([]);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [langOpen, setLangOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [imp, setImp] = useState<any>(null); // { by, byName, byRole } when acting as someone
   const [myRole, setMyRole] = useState<string | null>(null);
@@ -764,12 +763,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const title = t(menuItems.find((item) => item.id === activeMenu)?.label || 'Dashboard');
 
-  const acctItem: React.CSSProperties = {
-    display: 'block', width: '100%', textAlign: 'left', background: 'transparent',
-    border: 'none', color: 'var(--text)', padding: '10px 12px', borderRadius: 10,
-    fontSize: 12.5, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-    transition: 'background .16s, transform .16s',
-  };
 
   return (
     <div className="db-root">
@@ -914,104 +907,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               cover finding things; the wide bar was redundant chrome. */}
 
           <div className="topbar-right">
-            {/* Language switcher — international deployments pick their UI
-                language here; choice persists and RTL (عربي / اردو) flips the
-                whole shell. */}
-            <div style={{ position: 'relative' }} className="nv-menu-wrap">
-              <button
-                type="button"
-                onClick={() => setLangOpen((o) => !o)}
-                className={`nv-actas lang-btn ${langOpen ? 'open' : ''}`}
-                title="Language"
-                aria-label="Change language"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
-                </svg>
-                <span>{LANGS.find((l) => l.code === lang)?.native ?? 'EN'}</span>
-                <svg className="chev" width="11" height="11" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
-
-              {langOpen && (
-                <>
-                  <div className="nv-menu-catch" onClick={() => setLangOpen(false)} />
-                  <div className="nv-menu" style={{ width: 190, padding: 6 }}>
-                    <div className="nv-menu-head">
-                      <b>Language</b>
-                      <span>Interface language</span>
-                    </div>
-                    <div className="nv-menu-list" style={{ maxHeight: 280 }}>
-                      {LANGS.map((l) => (
-                        <button
-                          key={l.code}
-                          type="button"
-                          className="nv-menu-item"
-                          onClick={() => { setLang(l.code); setLangOpen(false); }}
-                          style={{ justifyContent: 'space-between' }}
-                        >
-                          <span className="nv-menu-txt"><b>{l.native}</b><em>{l.label}</em></span>
-                          {lang === l.code && (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-            {latestNotice && (
-              <div style={{ position: 'relative', marginRight: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => setNoticeOpen((p) => !p)}
-                  title="Latest notification"
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 38, height: 38, borderRadius: '50%', border: '1px solid var(--border)',
-                    background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer', position: 'relative',
-                  }}
-                >
-                  <Icons.Bell />
-                  <span style={{
-                    position: 'absolute', top: 6, right: 6, width: 8, height: 8,
-                    borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 0 2px var(--surface)',
-                  }} />
-                </button>
-                {noticeOpen && (
-                  <div style={{
-                    position: 'absolute', right: 0, top: 46, width: 320, zIndex: 40,
-                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
-                    boxShadow: '0 20px 60px rgba(0,0,0,.18)', overflow: 'hidden',
-                  }}>
-                    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 700 }}>{t('Latest notification')}</div>
-                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(latestNotice.createdAt).toLocaleString(locale === 'en' ? 'en-US' : locale)}</div>
-                      </div>
-                      <button type="button" onClick={() => setNoticeOpen(false)} style={{ border: 'none', background: 'transparent', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: 14 }}>
-                        ×
-                      </button>
-                    </div>
-                    <div style={{ padding: '14px 16px' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{latestNotice.title || t('Untitled notice')}</div>
-                      <div style={{ fontSize: 13, color: 'var(--text)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{latestNotice.body || t('No details available.')}</div>
-                    </div>
-                    <div style={{ borderTop: '1px solid var(--border)', padding: '10px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                      <button type="button" onClick={() => { setNoticeOpen(false); router.push('/communication'); }} style={{ border: '1px solid var(--border)', borderRadius: 9, background: 'transparent', color: 'var(--text)', fontSize: 12, padding: '8px 12px', cursor: 'pointer' }}>
-                        {t('View all')}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
             {/* Wallet balance, always visible.
                 This is the number that decides whether the next activation
                 goes through. A reseller discovering they are empty only when
@@ -1042,23 +937,122 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             )}
 
-            {/* "Act as" lives in Administration now, not the global header —
-                switching accounts is an admin task, so it appears only on the
-                Users / Administration screens. */}
-            {switchList.length > 0 && (/^\/(users|admin-center|organization|hierarchy)/.test(pathname || '')) && (
-              <div className="nv-menu-wrap">
-                <button
-                  type="button"
-                  className={`nv-actas ${switchOpen ? 'open' : ''}`}
-                  onClick={() => setSwitchOpen((p) => !p)}
-                >
-                  <Icons.Users />
-                  <span>Act as</span>
-                  <svg className="chev" width="11" height="11" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
+            {/* The bell stays in the bar; everything else that used to crowd the
+                header (language, theme, clock, online status, Act as, updates,
+                the latest notice) lives in the account menu below. */}
+            <NotificationBell />
+
+            <div className="nv-menu-wrap" style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className={`acct-trigger ${accountOpen ? 'open' : ''}`}
+                onClick={() => { setAccountOpen((p) => !p); setSwitchOpen(false); setNoticeOpen(false); }}
+                aria-haspopup="menu"
+                aria-expanded={accountOpen}
+                title={user?.name || 'Account'}
+              >
+                <span className="acct-av">
+                  {user?.photoUrl
+                    ? <Avatar name={user?.name} photoUrl={user.photoUrl} size={30} />
+                    : getInitials(user?.name)}
+                  <span className="acct-dot" aria-hidden />
+                </span>
+                <span className="acct-meta">
+                  <b>{user?.name || t('Account')}</b>
+                  <em>{time}</em>
+                </span>
+                {(updateInfo?.behind || latestNotice) && <span className="acct-alert" aria-label={updateInfo?.behind ? 'Update available' : 'New notice'} />}
+                <svg className="chev" width="11" height="11" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+
+              {accountOpen && (
+                <>
+                  <div className="nv-menu-catch" onClick={() => setAccountOpen(false)} />
+                  <div className="nv-menu acct-menu" role="menu">
+                    <div className="acct-head">
+                      <span className="acct-av lg">
+                        {user?.photoUrl
+                          ? <Avatar name={user?.name} photoUrl={user.photoUrl} size={38} />
+                          : getInitials(user?.name)}
+                      </span>
+                      <span className="acct-id">
+                        <b>{user?.name || 'Loading…'}</b>
+                        <em>{[user?.role, user?.email].filter(Boolean).join(' · ')}</em>
+                        <span className="acct-live"><span className="acct-dot inline" aria-hidden />{t('Online')} · {time}</span>
+                      </span>
+                    </div>
+
+                    {switchList.length > 0 && (
+                      <button type="button" role="menuitem" className="acct-row"
+                        onClick={() => { setAccountOpen(false); setSwitchOpen(true); }}>
+                        <Icons.Users />
+                        <span>Act as another account</span>
+                        <em>{switchList.length}</em>
+                      </button>
+                    )}
+
+                    <div className="acct-row static">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
+                      </svg>
+                      <label htmlFor="acct-lang">Language</label>
+                      <select id="acct-lang" className="acct-select" value={lang} onChange={(e) => setLang(e.target.value as any)}>
+                        {LANGS.map((l) => <option key={l.code} value={l.code}>{l.native}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="acct-row static">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+                      </svg>
+                      <span>Theme</span>
+                      <ThemeToggle compact />
+                    </div>
+
+                    {latestNotice && (
+                      <button type="button" role="menuitem" className="acct-row"
+                        onClick={() => { setAccountOpen(false); setNoticeOpen(true); }}>
+                        <Icons.Bell />
+                        <span className="acct-clip">{latestNotice.title || t('Latest notification')}</span>
+                        <em className="new">new</em>
+                      </button>
+                    )}
+
+                    {user?.role === 'SUPER_ADMIN' && (
+                      <button type="button" role="menuitem" className="acct-row" disabled={updating}
+                        onClick={updating ? undefined : () => { void pullUpdate(); }}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <polyline points="23 4 23 10 17 10" /><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10" />
+                        </svg>
+                        <span>{checkingUpdate ? 'Checking for updates…' : updating ? 'Updating…' : updateInfo?.behind ? 'Install update' : 'Check for updates'}</span>
+                        {updateInfo?.behind && !updating && <em className="new">available</em>}
+                      </button>
+                    )}
+
+                    <div className="acct-sep" />
+                    <button type="button" role="menuitem" className="acct-row"
+                      onClick={() => { setAccountOpen(false); router.push('/my-profile'); }}>
+                      <Icons.Users /><span>{t('My Profile')}</span>
+                    </button>
+                    <button type="button" role="menuitem" className="acct-row"
+                      onClick={() => { setAccountOpen(false); router.push(myRole === 'SUPER_ADMIN' ? '/settings' : '/admin-center?tab=settings'); }}>
+                      <Icons.Settings /><span>{t('Settings')}</span>
+                    </button>
+                    <div className="acct-sep" />
+                    <button type="button" role="menuitem" className="acct-row danger"
+                      onClick={() => { setAccountOpen(false); handleLogout(); }}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+                      </svg>
+                      <span>{t('Log out')}</span>
+                    </button>
+                  </div>
+                </>
+              )}
 
                 {switchOpen && (
                   <>
@@ -1167,104 +1161,33 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     </div>
                   </>
                 )}
-              </div>
-            )}
-            {user?.role === 'SUPER_ADMIN' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 8 }}>
-                <button
-                  type="button"
-                  onClick={updating ? undefined : pullUpdate}
-                  title={updateInfo?.behind ? 'Update available' : updateInfo?.message || 'Check for updates'}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 100, height: 32, background: updateInfo?.behind ? '#f59e0b' : 'var(--surface)', color: updateInfo?.behind ? '#1a1206' : 'var(--text)', border: '1px solid var(--border)', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: updating ? 'not-allowed' : 'pointer' }}
-                  disabled={updating}
-                >
-                  {checkingUpdate ? 'Checking…' : updating ? 'Updating…' : updateInfo?.behind ? 'Update available' : 'Update'}
-                </button>
-                {updateInfo?.behind && !checkingUpdate && !updating && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#b45309' }}>Update available</span>
-                )}
-              </div>
-            )}
-            <div className="status-pill">
-              <span className="status-dot" />
-              {t('Online')}
-            </div>
-            <div className="topbar-clock">{time}</div>
 
-            {/* Account menu. Moved out of the sidebar footer — signing out and
-                switching accounts are things you do occasionally, so they
-                belong in the corner rather than taking permanent space in the
-                navigation. */}
-            {/* Notification bell — the actor's photo on every row. Placed left
-                of the account avatar, matching the template's header order. */}
-            {/* Theme control. Sits beside the bell rather than being buried in
-                Settings: it is a comfort setting people change with the light
-                in the room, not a preference they configure once. */}
-            <ThemeToggle compact />
-
-            <NotificationBell />
-
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                onClick={() => setAccountOpen((p) => !p)}
-                title={user?.name || 'Account'}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 34, height: 34, borderRadius: '50%', cursor: 'pointer',
-                  background: 'var(--g-primary)', color: '#fff',
-                  border: '2px solid var(--border)', fontSize: 12, fontWeight: 700,
-                  boxShadow: '0 4px 14px rgba(233,64,139,.3)',
-                }}
-              >
-                {user?.photoUrl
-                  ? <Avatar name={user?.name} photoUrl={user.photoUrl} size={30} />
-                  : getInitials(user?.name)}
-              </button>
-
-              {accountOpen && (
-                <>
-                  {/* Click-away layer so the menu closes like every other menu. */}
-                  <div className="nv-menu-catch" onClick={() => setAccountOpen(false)} />
-                  <div className="nv-menu" style={{ width: 250, padding: 6 }}>
-                    <div style={{
-                      padding: '11px 12px', borderRadius: 11, marginBottom: 4,
-                      background: 'linear-gradient(135deg, rgba(108,60,225,.16), rgba(233,64,139,.09))',
-                    }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{user?.name || 'Loading…'}</div>
-                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{user?.role || user?.email || ''}</div>
+                {noticeOpen && (
+                  <div style={{
+                    position: 'absolute', right: 0, top: 46, width: 320, zIndex: 40,
+                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
+                    boxShadow: '0 20px 60px rgba(0,0,0,.18)', overflow: 'hidden',
+                  }}>
+                    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>{t('Latest notification')}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(latestNotice.createdAt).toLocaleString(locale === 'en' ? 'en-US' : locale)}</div>
+                      </div>
+                      <button type="button" onClick={() => setNoticeOpen(false)} style={{ border: 'none', background: 'transparent', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: 14 }}>
+                        ×
+                      </button>
                     </div>
-
-                    <button
-                      onClick={() => { setAccountOpen(false); router.push('/my-profile'); }}
-                      style={acctItem}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface-2)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      {t('My Profile')}
-                    </button>
-                    <button
-                      onClick={() => { setAccountOpen(false); router.push('/admin-center?tab=settings'); }}
-                      style={acctItem}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface-2)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      {t('Settings')}
-                    </button>
-
-                    <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
-
-                    <button
-                      onClick={() => { setAccountOpen(false); handleLogout(); }}
-                      style={{ ...acctItem, color: '#ef4444', fontWeight: 600 }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,.1)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      {t('Log out')}
-                    </button>
+                    <div style={{ padding: '14px 16px' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{latestNotice.title || t('Untitled notice')}</div>
+                      <div style={{ fontSize: 13, color: 'var(--text)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{latestNotice.body || t('No details available.')}</div>
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '10px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                      <button type="button" onClick={() => { setNoticeOpen(false); router.push('/communication'); }} style={{ border: '1px solid var(--border)', borderRadius: 9, background: 'transparent', color: 'var(--text)', fontSize: 12, padding: '8px 12px', cursor: 'pointer' }}>
+                        {t('View all')}
+                      </button>
+                    </div>
                   </div>
-                </>
-              )}
+                )}
             </div>
           </div>
         </header>

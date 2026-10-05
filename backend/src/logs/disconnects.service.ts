@@ -5,6 +5,7 @@ import { ScopeService, Actor } from '../common/scope.service';
 import {
   TERMINATE_TABLE, TERMINATE_CATEGORIES, TerminateInfo, endedInfo, fieldsOf,
 } from '../common/radius-terminate';
+import { macInfo, normaliseMac } from '../common/mac-vendor';
 
 export interface DisconnectQuery {
   sinceHours?: number;
@@ -60,6 +61,9 @@ export class DisconnectsService {
     const and: any[] = [];
     if (scoped && Object.keys(scoped).length) and.push(scoped);
     if (q.nasIp && isIP(String(q.nasIp).trim())) and.push({ nasipaddress: String(q.nasIp).trim() });
+    // Scope + router only — what mass-drop detection looks across, so a search
+    // for one customer still shows that they went down with everyone else.
+    const baseAnd = [...and];
     if (q.username) and.push({ username: String(q.username).trim().slice(0, 64) });
     // One box for what an operator actually has in hand: a username, the
     // customer's MAC address (any separator) or the IP they were given.
@@ -184,7 +188,7 @@ export class DisconnectsService {
     for (let b = floorLocal(from.getTime()); b <= to.getTime(); b += step) bucketStarts.push(b);
     const trendRows = await this.prisma.radAcct.findMany({
       where: ended,
-      select: { acctstoptime: true, acctterminatecause: true },
+      select: { acctstoptime: true, acctterminatecause: true, nasipaddress: true, username: true },
       take: TREND_CAP,
       orderBy: { radacctid: 'desc' },
     });
@@ -221,13 +225,42 @@ export class DisconnectsService {
         orderBy: [{ acctstoptime: 'desc' }, { radacctid: 'desc' }],
         take: limit,
         skip: offset,
-        include: { subscriber: { select: { id: true, fullName: true } } },
+        include: {
+          subscriber: {
+            select: {
+              id: true, fullName: true, status: true, fupApplied: true, fupAppliedAt: true,
+              package: { select: { name: true } },
+              area: { select: { name: true } },
+              serviceSettings: { select: { expiryDate: true, macAddress: true } },
+              onu: { select: { rxPower: true, lastPolledAt: true, telemetry: { select: { rxPowerDbm: true, status: true, lastSeenAt: true } } } },
+              _count: { select: { tickets: { where: { status: { in: ['OPEN', 'IN_PROGRESS', 'ESCALATED'] as any } } } } },
+            },
+          },
+        },
       }),
       this.prisma.radAcct.count({ where: selectedWhere }),
     ]);
 
+    // Mass drops: many of the caller's customers on one router ending within
+    // a minute of each other — an outage, not a run of single faults.
+    const filtered2 = and.length !== baseAnd.length;
+    let massSource: Array<{ nasipaddress: string | null; acctstoptime: Date | null; username: string | null; acctterminatecause: string | null }> = trendRows as any;
+    if (filtered2 && rows.length) {
+      const stops = rows.map((r) => r.acctstoptime?.getTime()).filter((x): x is number => !!x);
+      massSource = await this.prisma.radAcct.findMany({
+        where: { AND: [...baseAnd, {
+          nasipaddress: { in: Array.from(new Set(rows.map((r) => String(r.nasipaddress)))) },
+          acctstoptime: { gte: new Date(Math.min(...stops) - 60_000), lte: new Date(Math.max(...stops) + 60_000) },
+        }] },
+        select: { nasipaddress: true, acctstoptime: true, username: true, acctterminatecause: true },
+        take: 50_000,
+      }) as any;
+    }
+    const massDrops = detectMassDrops(massSource);
+    const extras = await this.extras(actor, rows, massDrops);
+
     // Names: routers the caller can see, customers the caller owns.
-    const nasIps = Array.from(new Set([...routers.keys(), ...rows.map((r) => String(r.nasipaddress || ''))])).filter(Boolean);
+    const nasIps = Array.from(new Set([...routers.keys(), ...rows.map((r) => String(r.nasipaddress || '')), ...massDrops.map((m) => m.nasIp)])).filter(Boolean);
     const nasNames = await this.nasNames(actor, nasIps);
     const topUsers = Array.from(users.values()).sort((a, b) => b.count - a.count || b.abnormal - a.abnormal).slice(0, 15);
     const subByName = await this.subscriberNames(actor, topUsers.map((u) => u.username));
@@ -299,6 +332,10 @@ export class DisconnectsService {
         lastKey: u.lastKey,
         top: topKeys(u.keys),
       })),
+      massDrops: massDrops.slice(0, 8).map((m) => ({
+        nasIp: m.nasIp, nasName: nasNames.get(m.nasIp) || null, from: new Date(m.from), to: new Date(m.to),
+        customers: m.customers, topCause: m.topKey ? { key: m.topKey, label: endedInfo(m.topKey).label } : null,
+      })),
       records: rows.map((r) => ({
         id: String(r.radacctid),
         sessionId: r.acctsessionid,
@@ -321,11 +358,17 @@ export class DisconnectsService {
         rawCause: r.acctterminatecause,
         ...fieldsOf(endedInfo(r.acctterminatecause)),
         how: howBySession.get(String(r.radacctid)) || this.howFromCause(endedInfo(r.acctterminatecause)),
+        ...(extras.get(String(r.radacctid)) || {}),
       })),
       recordsTotal,
       offset,
       limit,
     };
+  }
+
+  /** Accounts whose names the viewer may see: their own tree, nothing above it. */
+  private async visibleTree(actor: Actor): Promise<Set<number>> {
+    return new Set(await this.scope.descendantIds(await this.scope.rootId(actor)));
   }
 
   /** HOW a session ended, from the cause alone (no panel action recorded). */
@@ -399,13 +442,11 @@ export class DisconnectsService {
     const actorIds = Array.from(new Set(events.map((e) => e.actorId).filter((x): x is number => !!x)));
     const visible = new Map<number, { name: string; email: string }>();
     if (actorIds.length) {
-      const tree = this.scope.isAdmin(actor?.role)
-        ? null
-        : new Set(await this.scope.descendantIds(await this.scope.rootId(actor)));
+      const tree = await this.visibleTree(actor);
       const users = await this.prisma.user.findMany({
         where: { id: { in: actorIds } }, select: { id: true, name: true, email: true },
       });
-      for (const u of users) if (!tree || tree.has(u.id)) visible.set(u.id, { name: u.name || u.email, email: u.email });
+      for (const u of users) if (tree.has(u.id)) visible.set(u.id, { name: u.name || u.email, email: u.email });
     }
 
     for (const r of rows) {
@@ -430,6 +471,284 @@ export class DisconnectsService {
       });
     }
     return out;
+  }
+
+  /**
+   * Everything support asks next about a disconnect, for one page of records:
+   * the device maker, a changed MAC, how often the customer has been dropping,
+   * whether others on the router went down at the same time, the account's
+   * state at that moment, what happened in the panel just before, failed
+   * reconnect attempts just after, the router's own log line, the ONU signal
+   * and open tickets. Every lookup is limited to these records' own customers.
+   */
+  private async extras(actor: Actor, rows: any[], mass: MassDrop[]): Promise<Map<string, any>> {
+    const out = new Map<string, any>();
+    if (!rows.length) return out;
+    const names = Array.from(new Set(rows.map((r) => r.username).filter(Boolean))) as string[];
+    const stops = rows.map((r) => r.acctstoptime?.getTime?.()).filter((x): x is number => !!x);
+    const starts = rows.map((r) => r.acctstarttime?.getTime?.()).filter((x): x is number => !!x);
+    if (!stops.length) return out;
+    const minStop = Math.min(...stops), maxStop = Math.max(...stops);
+    const minStart = starts.length ? Math.min(...starts) : minStop;
+    const subIds = Array.from(new Set(rows.map((r) => r.subscriber?.id).filter(Boolean))) as number[];
+    const safe = <T,>(p: Promise<T>, fallback: T) => p.catch((e: any) => { this.logger.warn(`Disconnect detail skipped: ${e?.message || e}`); return fallback; });
+
+    const [prior, recentStops, rejects, routerLines, activity] = await Promise.all([
+      // The session before each one — to spot a different MAC.
+      names.length ? safe(this.prisma.radAcct.findMany({
+        where: { username: { in: names }, acctstarttime: { gte: new Date(minStart - 30 * 86_400_000), lt: new Date(Math.max(...starts, minStop)) } },
+        select: { radacctid: true, username: true, acctstarttime: true, callingstationid: true },
+        orderBy: { acctstarttime: 'desc' },
+        take: 5000,
+      }), [] as any[]) : Promise.resolve([] as any[]),
+      // Every stop in the 24 hours before — how often they have been dropping.
+      names.length ? safe(this.prisma.radAcct.findMany({
+        where: { username: { in: names }, acctstoptime: { gte: new Date(minStop - 86_400_000), lte: new Date(maxStop) } },
+        select: { username: true, acctstoptime: true },
+        take: 20_000,
+      }), [] as any[]) : Promise.resolve([] as any[]),
+      // Logins refused in the 30 minutes after — they tried to come back.
+      names.length ? safe(this.prisma.radPostAuth.findMany({
+        where: { username: { in: names }, authdate: { gt: new Date(minStop), lte: new Date(maxStop + 30 * 60_000) }, reply: { contains: 'Reject', mode: 'insensitive' } },
+        select: { username: true, authdate: true, callingstationid: true },
+        orderBy: { authdate: 'asc' },
+        take: 5000,
+      }), [] as any[]) : Promise.resolve([] as any[]),
+      // The router's own log lines for this customer around the drop.
+      names.length ? safe(this.prisma.routerLog.findMany({
+        where: { username: { in: names }, loggedAt: { gte: new Date(minStop - 2 * 60_000), lte: new Date(maxStop + 2 * 60_000) } },
+        select: { username: true, loggedAt: true, message: true, severity: true },
+        orderBy: { loggedAt: 'asc' },
+        take: 2000,
+      }), [] as any[]) : Promise.resolve([] as any[]),
+      // What was done to the customer in the panel in the 15 minutes before.
+      subIds.length ? safe(this.prisma.activityLog.findMany({
+        where: {
+          entityId: { in: subIds },
+          entity: { in: ['subscribers', 'Session', 'service-settings', 'Subscriber', 'renewals'] },
+          createdAt: { gte: new Date(minStop - 15 * 60_000), lte: new Date(maxStop + 60_000) },
+          NOT: { action: { endsWith: '_FAILED' } },
+        },
+        select: { entityId: true, action: true, details: true, createdAt: true, userId: true },
+        orderBy: { createdAt: 'desc' },
+        take: 1000,
+      }), [] as any[]) : Promise.resolve([] as any[]),
+    ]);
+
+    // Operator names only inside the viewer's own tree.
+    const actorIds = Array.from(new Set(activity.map((a: any) => a.userId).filter(Boolean))) as number[];
+    const visible = new Map<number, string>();
+    if (actorIds.length) {
+      const tree = await this.visibleTree(actor);
+      const users = await safe(this.prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, email: true } }), [] as any[]);
+      for (const u of users) if (tree.has(u.id)) visible.set(u.id, u.name || u.email);
+    }
+
+    for (const r of rows) {
+      const stop: number | undefined = r.acctstoptime?.getTime?.();
+      if (!stop) continue;
+      const start: number | null = r.acctstarttime?.getTime?.() ?? null;
+      const sub = r.subscriber || null;
+      const mac = macInfo(r.callingstationid);
+
+      // Previous session's MAC.
+      const prev = prior.find((p: any) => p.username === r.username && p.radacctid !== r.radacctid && start != null && p.acctstarttime && p.acctstarttime.getTime() < start);
+      const prevMac = normaliseMac(prev?.callingstationid);
+      const macChanged = prevMac && mac && prevMac !== mac.mac ? { previous: prevMac, previousMaker: macInfo(prevMac)?.maker ?? null, at: prev.acctstarttime } : null;
+
+      // Drops in the hour and day up to this one (this one included).
+      const mine = recentStops.filter((x: any) => x.username === r.username && x.acctstoptime).map((x: any) => x.acctstoptime.getTime());
+      const lastHour = mine.filter((t: number) => t <= stop && t > stop - 3600_000).length;
+      const last24h = mine.filter((t: number) => t <= stop && t > stop - 86_400_000).length;
+
+      // Part of a mass drop on the same router?
+      const ip = String(r.nasipaddress || '');
+      const m = mass.find((x) => x.nasIp === ip && stop >= x.from - 1000 && stop <= x.to + 1000);
+
+      // Account state at the moment it dropped.
+      const exp: Date | null = sub?.serviceSettings?.expiryDate ?? null;
+      const account = sub ? {
+        status: sub.status,
+        package: sub.package?.name ?? null,
+        area: sub.area?.name ?? null,
+        expiryDate: exp,
+        expiredAtDrop: !!exp && exp.getTime() <= stop,
+        fupAtDrop: !!sub.fupApplied && (!sub.fupAppliedAt || sub.fupAppliedAt.getTime() <= stop),
+        macLocked: normaliseMac(sub.serviceSettings?.macAddress),
+      } : null;
+
+      // Reconnect attempts refused afterwards.
+      const tries = rejects.filter((x: any) => x.username === r.username && x.authdate.getTime() > stop && x.authdate.getTime() <= stop + 30 * 60_000);
+      const retries = tries.length ? {
+        failed: tries.length,
+        firstAt: tries[0].authdate,
+        lastAt: tries[tries.length - 1].authdate,
+        likely: likelyReject(account, normaliseMac(tries[tries.length - 1].callingstationid), tries[tries.length - 1].authdate.getTime()),
+      } : null;
+
+      // Router log lines within two minutes.
+      const lines = routerLines
+        .filter((x: any) => x.username === r.username && Math.abs(x.loggedAt.getTime() - stop) <= 2 * 60_000)
+        .slice(-3)
+        .map((x: any) => ({ at: x.loggedAt, message: String(x.message).slice(0, 240), severity: x.severity }));
+
+      // Panel actions just before.
+      const before = activity
+        .filter((a: any) => a.entityId === sub?.id && a.createdAt.getTime() <= stop + 60_000 && a.createdAt.getTime() >= stop - 15 * 60_000)
+        .slice(0, 3)
+        .map((a: any) => ({ at: a.createdAt, what: describeAction(a.action, a.details), by: a.userId ? (visible.get(a.userId) || 'Your provider') : null }));
+
+      // Fibre signal, when the customer has an ONU.
+      const tel = sub?.onu?.telemetry;
+      const rx: number | null = tel?.rxPowerDbm ?? sub?.onu?.rxPower ?? null;
+      const onu = sub?.onu ? {
+        rxDbm: rx,
+        status: tel?.status ?? null,
+        at: tel?.lastSeenAt ?? sub.onu.lastPolledAt ?? null,
+        weak: rx != null && rx <= -27,
+      } : null;
+
+      const dur = Number(r.acctsessiontime ?? (start != null ? Math.round((stop - start) / 1000) : 0)) || 0;
+      const mbps = (b: any) => (dur > 0 && b != null ? Math.round((Number(b) * 8 / dur / 1e6) * 100) / 100 : null);
+
+      out.set(String(r.radacctid), {
+        device: mac ? { maker: mac.maker, privateMac: mac.privateMac } : null,
+        macChanged,
+        flapping: { lastHour, last24h, flagged: lastHour >= 3 || last24h >= 6 },
+        massDrop: m ? { customers: m.customers, from: new Date(m.from), to: new Date(m.to) } : null,
+        account,
+        retries,
+        routerLog: lines,
+        before,
+        onu,
+        openTickets: Number(sub?._count?.tickets ?? 0),
+        vlan: vlanOf(r.nasportid),
+        speed: { downMbps: mbps(r.acctoutputoctets), upMbps: mbps(r.acctinputoctets) },
+        ipv6: r.framedipv6address || r.delegatedipv6prefix || r.framedipv6prefix || null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * FAILED LOGINS — refused connection attempts by the caller's own customers,
+   * grouped into bursts (same customer, MAC and router, no more than ten
+   * minutes apart) with the most likely reason. The password column is never
+   * read.
+   */
+  async failedLogins(actor: Actor, q: { sinceHours?: number; search?: string; nasIp?: string; limit?: number; offset?: number } = {}) {
+    const hours = Math.min(Math.max(Math.round(Number(q.sinceHours) || 168), 1), 24 * 90);
+    const from = new Date(Date.now() - hours * 3600_000);
+    const limit = Math.min(Math.max(Math.round(Number(q.limit) || 50), 1), 200);
+    const offset = Math.max(Math.round(Number(q.offset) || 0), 0);
+
+    const and: any[] = [{ authdate: { gte: from } }, { reply: { contains: 'Reject', mode: 'insensitive' } }];
+    if (this.scope.isAdmin(actor?.role)) {
+      const rad = await this.scope.radiusWhere(actor);
+      if (rad && Object.keys(rad).length) and.push(rad);
+    } else {
+      and.push({ subscriber: { is: await this.scope.subscriberWhere(actor) } });
+    }
+    if (q.nasIp && isIP(String(q.nasIp).trim())) and.push({ nasipaddress: String(q.nasIp).trim() });
+    const term = String(q.search ?? '').trim().slice(0, 64);
+    if (term) {
+      const ors: any[] = [{ username: { contains: term, mode: 'insensitive' } }, { callingstationid: { contains: term, mode: 'insensitive' } }];
+      const hex = term.replace(/[^0-9a-f]/gi, '');
+      if (hex.length >= 4) {
+        const colon = hex.match(/.{1,2}/g)!.join(':');
+        if (colon.toLowerCase() !== term.toLowerCase()) ors.push({ callingstationid: { contains: colon, mode: 'insensitive' } });
+      }
+      and.push({ OR: ors });
+    }
+
+    const raw = await this.prisma.radPostAuth.findMany({
+      where: { AND: and },
+      select: { username: true, authdate: true, callingstationid: true, nasipaddress: true, nasportid: true, calledstationid: true },
+      orderBy: { authdate: 'desc' },
+      take: 5000,
+    });
+
+    // Bursts, newest first.
+    type Burst = { username: string; mac: string | null; nasIp: string | null; nasPortId: string | null; service: string | null; firstAt: Date; lastAt: Date; attempts: number };
+    const bursts: Burst[] = [];
+    const open = new Map<string, Burst>();
+    for (const r of raw) {
+      const mac = normaliseMac(r.callingstationid) || r.callingstationid || null;
+      const key = `${r.username}|${mac}|${r.nasipaddress}`;
+      const b = open.get(key);
+      if (b && b.firstAt.getTime() - r.authdate.getTime() <= 10 * 60_000) {
+        b.firstAt = r.authdate; b.attempts++;
+      } else {
+        const nb: Burst = { username: r.username, mac, nasIp: r.nasipaddress, nasPortId: r.nasportid, service: r.calledstationid, firstAt: r.authdate, lastAt: r.authdate, attempts: 1 };
+        bursts.push(nb); open.set(key, nb);
+      }
+    }
+
+    const page = bursts.slice(offset, offset + limit);
+    const names = Array.from(new Set(page.map((b) => b.username)));
+    const subs = names.length ? await this.prisma.subscriber.findMany({
+      where: { username: { in: names } },
+      select: {
+        id: true, username: true, fullName: true, status: true, fupApplied: true, fupAppliedAt: true,
+        serviceSettings: { select: { expiryDate: true, macAddress: true } },
+      },
+    }) : [];
+    const subBy = new Map(subs.map((x) => [x.username, x]));
+    // Did they get in afterwards?
+    const accepts = names.length ? await this.prisma.radPostAuth.findMany({
+      where: { username: { in: names }, authdate: { gte: from }, reply: { contains: 'Accept', mode: 'insensitive' } },
+      select: { username: true, authdate: true },
+      orderBy: { authdate: 'asc' },
+      take: 5000,
+    }) : [];
+    const nasNames = await this.nasNames(actor, Array.from(new Set(page.map((b) => b.nasIp).filter(Boolean))) as string[]);
+
+    const reasonCount = new Map<string, number>();
+    const items = page.map((b) => {
+      const sub = subBy.get(b.username);
+      const exp = sub?.serviceSettings?.expiryDate ?? null;
+      const account = sub ? {
+        status: sub.status, expiryDate: exp, expiredAtDrop: !!exp && exp.getTime() <= b.lastAt.getTime(),
+        fupAtDrop: !!sub.fupApplied, macLocked: normaliseMac(sub.serviceSettings?.macAddress),
+      } : null;
+      const likely = likelyReject(account as any, normaliseMac(b.mac), b.lastAt.getTime());
+      reasonCount.set(likely.key, (reasonCount.get(likely.key) || 0) + 1);
+      const gotIn = accepts.find((a) => a.username === b.username && a.authdate.getTime() > b.lastAt.getTime());
+      const mi = macInfo(b.mac);
+      return {
+        username: b.username,
+        subscriberId: sub?.id ?? null,
+        fullName: sub?.fullName ?? null,
+        mac: b.mac,
+        device: mi ? { maker: mi.maker, privateMac: mi.privateMac } : null,
+        nasIp: b.nasIp,
+        nasName: b.nasIp ? nasNames.get(b.nasIp) || null : null,
+        nasPortId: b.nasPortId,
+        service: b.service,
+        firstAt: b.firstAt,
+        lastAt: b.lastAt,
+        attempts: b.attempts,
+        likely,
+        accountStatus: sub?.status ?? null,
+        expiryDate: exp,
+        gotInAt: gotIn?.authdate ?? null,
+      };
+    });
+
+    return {
+      window: { sinceHours: hours, from },
+      totals: {
+        attempts: raw.length,
+        bursts: bursts.length,
+        customers: new Set(raw.map((r) => r.username)).size,
+        capped: raw.length >= 5000,
+      },
+      reasons: Array.from(reasonCount.entries()).map(([key, count]) => ({ key, label: REJECT_LABEL[key] || key, count })),
+      items,
+      total: bursts.length,
+      offset,
+      limit,
+    };
   }
 
   private async nasNames(actor: Actor, ips: string[]): Promise<Map<string, string>> {
@@ -489,3 +808,98 @@ const WHY: Record<string, { by: DisconnectHow['by']; title: string; detail: stri
   'fup-restore':        { by: 'panel', title: 'Fair-usage reset — full speed restored', detail: 'The fair-usage limit was released and the session restarted at full speed.' },
   panel:                { by: 'panel', title: 'Disconnected by the panel', detail: null },
 };
+
+interface MassDrop { nasIp: string; from: number; to: number; customers: number; topKey: string | null }
+
+/**
+ * Clusters of stops on one router no more than 60 seconds apart, with enough
+ * distinct customers to be an outage: at least 3, or 2% of the customers seen
+ * on that router in the window (capped at 25), whichever is larger.
+ */
+export function detectMassDrops(rows: Array<{ nasipaddress: string | null; acctstoptime: Date | null; username: string | null; acctterminatecause: string | null }>): MassDrop[] {
+  const byNas = new Map<string, Array<{ t: number; u: string; c: string | null }>>();
+  const seen = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!r.acctstoptime || !r.nasipaddress) continue;
+    const ip = String(r.nasipaddress);
+    const list = byNas.get(ip) || [];
+    list.push({ t: r.acctstoptime.getTime(), u: r.username || '', c: r.acctterminatecause });
+    byNas.set(ip, list);
+    const set = seen.get(ip) || new Set<string>();
+    if (r.username) set.add(r.username);
+    seen.set(ip, set);
+  }
+  const out: MassDrop[] = [];
+  for (const [ip, list] of byNas) {
+    const threshold = Math.min(25, Math.max(3, Math.ceil((seen.get(ip)?.size || 0) * 0.02)));
+    list.sort((a, b) => a.t - b.t);
+    let i = 0;
+    while (i < list.length) {
+      let j = i;
+      while (j + 1 < list.length && list[j + 1].t - list[j].t <= 60_000) j++;
+      const cluster = list.slice(i, j + 1);
+      const users = new Set(cluster.map((x) => x.u).filter(Boolean));
+      if (users.size >= threshold) {
+        const causes = new Map<string, number>();
+        for (const x of cluster) {
+          const k = endedInfo(x.c).key;
+          causes.set(k, (causes.get(k) || 0) + 1);
+        }
+        const top = Array.from(causes.entries()).sort((a, b) => b[1] - a[1])[0];
+        out.push({ nasIp: ip, from: cluster[0].t, to: cluster[cluster.length - 1].t, customers: users.size, topKey: top ? top[0] : null });
+      }
+      i = j + 1;
+    }
+  }
+  return out.sort((a, b) => b.from - a.from);
+}
+
+const REJECT_LABEL: Record<string, string> = {
+  expired: 'Account expired',
+  suspended: 'Account suspended',
+  disabled: 'Account disabled',
+  'mac-locked': 'MAC address not allowed',
+  'fup-block': 'Data limit reached',
+  unknown: 'Wrong password or login refused',
+};
+
+/** The most likely reason a login was refused, from the account's own state. */
+export function likelyReject(
+  account: { status?: string; expiryDate?: Date | null; fupAtDrop?: boolean; macLocked?: string | null } | null,
+  mac: string | null,
+  at: number,
+): { key: string; label: string; detail: string } {
+  const pick = (key: string, detail: string) => ({ key, label: REJECT_LABEL[key], detail });
+  if (account?.status === 'SUSPENDED') return pick('suspended', 'The account is suspended in the panel.');
+  if (account?.status === 'INACTIVE') return pick('disabled', 'The account is disabled in the panel.');
+  if (account?.status === 'EXPIRED' || (account?.expiryDate && account.expiryDate.getTime() <= at)) {
+    return pick('expired', account?.expiryDate ? `The package expired on ${account.expiryDate.toISOString().slice(0, 10)}.` : 'The package has expired.');
+  }
+  if (account?.macLocked && mac && account.macLocked !== mac) return pick('mac-locked', `The account is locked to ${account.macLocked}, but the login came from ${mac}.`);
+  if (account?.fupAtDrop) return pick('fup-block', 'The fair-usage limit blocks this account until it resets.');
+  return pick('unknown', 'Most often a wrong password typed in the customer’s router.');
+}
+
+/** "ether1-vlan34", "vlan 120", "ether2.300" → the VLAN number. */
+export function vlanOf(port: string | null | undefined): string | null {
+  const p = String(port ?? '');
+  const m = p.match(/vlan[\s._-]?(\d{1,4})/i) || p.match(/\.(\d{1,4})$/);
+  return m ? m[1] : null;
+}
+
+/** A panel action in plain words, from the audit row. */
+export function describeAction(action: string, details: string | null): string {
+  const a = String(action || '').toUpperCase();
+  const d = String(details || '');
+  if (a.includes('DISCONNECT_ALL')) return 'All sessions cut';
+  if (a.includes('DISCONNECT')) return 'Disconnected';
+  if (a.includes('SUSPEND')) return 'Suspended';
+  if (a.includes('ACTIVATE') || a.includes('RENEW') || a.includes('EXTEND') || a.includes('RECHARGE')) return 'Renewed / activated';
+  if (a.includes('PACKAGE') || /packageId/.test(d)) return 'Package changed';
+  if (a.includes('MAC') || /macAddress/.test(d)) return 'MAC binding changed';
+  if (a.includes('PASSWORD') || /password/i.test(d)) return 'Password changed';
+  if (a.includes('TRANSFER')) return 'Moved to another account';
+  if (a.includes('DELETE')) return 'Deleted';
+  if (a === 'UPDATE' || a.endsWith('.UPDATE') || a.endsWith('.WRITE')) return 'Details updated';
+  return a.replace(/[._]/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+}

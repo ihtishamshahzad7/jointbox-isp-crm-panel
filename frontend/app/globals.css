@@ -6820,3 +6820,83 @@ html[data-theme="dark"] tbody tr:nth-child(even) { background: rgba(255, 255, 25
   html:not([data-theme]) .main h4 { color: var(--text); }
   html:not([data-theme]) tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
 }
+
+/* ── Account menu: one control instead of six in the header ─────────────
+   Language, theme, clock, online state, Act as, updates and the latest
+   notice used to sit side by side in the top bar. They live here now. */
+.acct-trigger {
+  display: inline-flex; align-items: center; gap: 9px;
+  height: 40px; padding: 0 10px 0 4px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  cursor: pointer; font: inherit; position: relative;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.acct-trigger:hover, .acct-trigger.open { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); box-shadow: 0 4px 14px rgba(15,23,42,.08); }
+.acct-trigger:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
+.acct-trigger .chev { color: var(--muted); transition: transform .2s ease; }
+.acct-trigger.open .chev { transform: rotate(180deg); }
+.acct-av {
+  position: relative; width: 32px; height: 32px; border-radius: 50%; flex: 0 0 auto;
+  display: grid; place-items: center; overflow: visible;
+  background: var(--g-primary, #6C3CE1); color: #fff; font-size: 12px; font-weight: 800;
+}
+.acct-av.lg { width: 42px; height: 42px; font-size: 14px; }
+.acct-av img { border-radius: 50%; }
+.acct-dot {
+  position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--online, #16a34a); box-shadow: 0 0 0 2px var(--surface);
+}
+.acct-dot.inline { position: static; display: inline-block; width: 7px; height: 7px; box-shadow: none; margin-right: 6px; vertical-align: middle; }
+.acct-meta { display: grid; line-height: 1.15; text-align: left; min-width: 0; }
+.acct-meta b { font-size: 12px; font-weight: 750; color: var(--text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-meta em { font-style: normal; font-size: 10.5px; color: var(--muted); font-family: var(--jb-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; }
+.acct-alert { position: absolute; top: 4px; left: 28px; width: 9px; height: 9px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 2px var(--surface); }
+.nv-menu.acct-menu { width: 300px; padding: 6px; }
+.acct-head {
+  display: flex; gap: 11px; align-items: center; padding: 10px 10px 12px; margin-bottom: 4px; border-radius: 12px;
+  background: linear-gradient(135deg, rgba(108,60,225,.14), rgba(233,64,139,.08));
+}
+.acct-id { display: grid; gap: 2px; min-width: 0; }
+.acct-id b { font-size: 13.5px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-id em { font-style: normal; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-live { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.acct-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px;
+  padding: 7px 10px; border: 0; border-radius: 10px; background: transparent;
+  color: var(--text); font: inherit; font-size: 12.5px; font-weight: 550; text-align: left; cursor: pointer;
+}
+.acct-row svg { flex: 0 0 auto; color: var(--muted); width: 15px; height: 15px; }
+.acct-row > span, .acct-row > label { flex: 1 1 auto; min-width: 0; }
+.acct-row:hover:not(.static):not(:disabled) { background: var(--surface-2); }
+.acct-row:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: -2px; }
+.acct-row:disabled { opacity: .6; cursor: default; }
+.acct-row.static { cursor: default; }
+.acct-row em { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted); padding: 1px 7px; border-radius: 999px; background: var(--surface-2); }
+.acct-row em.new { color: #92400e; background: rgba(245,158,11,.18); }
+.acct-row.danger, .acct-row.danger svg { color: #ef4444; }
+.acct-row.danger:hover { background: rgba(239,68,68,.1) !important; }
+.acct-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-select {
+  flex: 0 0 auto; height: 30px; max-width: 130px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; padding: 0 8px; cursor: pointer;
+}
+.acct-sep { height: 1px; background: var(--border); margin: 5px 4px; }
+@media (max-width: 760px) {
+  .acct-meta { display: none; }
+  .acct-trigger { padding: 0 8px 0 4px; }
+  /* On a phone the trigger can sit anywhere in a wrapped bar; pin the menu to the screen. */
+  .nv-menu.acct-menu { position: fixed; left: 12px; right: 12px; top: 72px; width: auto; max-height: calc(100vh - 96px); overflow-y: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acct-trigger, .acct-trigger .chev { transition: none; }
+}
+html .main .acct-menu span:not([class]), html .main .acct-menu label, html .main .acct-trigger span:not([class]) { color: inherit; }
+/* Menus are solid, not glass: page text showed through the dark-theme menus. */
+.nv-menu { background: var(--bg-elev, var(--surface)); }
+/* Dark theme: the top bar and its title were left on light-palette literals. */
+html[data-theme="dark"] .topbar { background: var(--bg-elev); box-shadow: 0 1px 0 var(--border); }
+html[data-theme="dark"] .topbar-title { color: var(--text); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .topbar { background: var(--bg-elev); box-shadow: 0 1px 0 var(--border); }
+  html:not([data-theme]) .topbar-title { color: var(--text); }
+}
