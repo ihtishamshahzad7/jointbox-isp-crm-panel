@@ -46,20 +46,23 @@ export class NasService implements OnModuleInit {
     const rows = await this.prisma.nas.findMany({
       select: { id: true, nasIp: true, nasname: true, shortname: true, secret: true, description: true },
     });
+    const radiusRows = rows
+      .filter((row) => !!row.secret)
+      .map((row) => ({
+        ...row,
+        secret: decField(this.secrets, row.secret),
+      }));
+    // One RADIUS restart for the whole convergence pass, not one restart per NAS.
+    await this.radiusSync.syncAllNasClients(radiusRows);
     let migrated = 0;
     for (const row of rows) {
-      if (!row.secret) continue;
+      if (!row.secret || looksEncrypted(row.secret)) continue;
       const plain = decField(this.secrets, row.secret);
-      await this.radiusSync.syncNasClient(
-        row.nasIp || row.nasname,
-        row.shortname || row.nasname,
-        plain,
-        row.description,
-      );
-      if (!looksEncrypted(row.secret)) {
-        await this.prisma.nas.update({ where: { id: row.id }, data: { secret: encField(this.secrets, plain) } });
-        migrated++;
-      }
+      await this.prisma.nas.update({
+        where: { id: row.id },
+        data: { secret: encField(this.secrets, plain) },
+      });
+      migrated++;
     }
     if (rows.length) this.logger.log(`RADIUS NAS secret convergence complete: ${migrated} legacy secret(s) encrypted, ${rows.length} client(s) synchronized`);
   }
