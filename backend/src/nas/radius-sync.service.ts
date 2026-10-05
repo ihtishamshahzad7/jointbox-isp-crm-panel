@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { allocateIpv6, ipv6AutoConfig } from './ipv6-alloc';
 import { PrismaService } from '../prisma/prisma.service';
 import { demoSessionExclusionSql } from '../common/scope.service';
+import { RadiusClientVaultService } from './radius-client-vault.service';
 
 /**
  * Resolved policy attributes from a package's linked RADIUS policies.
@@ -72,7 +73,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   private reconnecting = false;
   private stopped = false;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private radiusVault: RadiusClientVaultService) {}
 
   /**
    * Look up everything needed for a FULL profile sync — package (+ pool) and
@@ -809,120 +810,42 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   // ─────────────────────────────────────────────────────────────
   // NAS MANAGEMENT
   // ─────────────────────────────────────────────────────────────
-  async addNasToRadius(
-    nasIp: string,
-    nasName: string,
-    secret: string,
-  ): Promise<void> {
+  /** Legacy compatibility: the application NAS row is now the source of truth. */
+  async addNasToRadius(nasIp: string, nasName: string, _secret: string): Promise<void> {
     this.ensureConnected();
-    try {
-      const existing = await this.pgClient.query(
-        'SELECT id FROM nas WHERE nasname = $1',
-        [nasIp],
-      );
-
-      if (existing.rows.length > 0) {
-        await this.pgClient.query(
-          `UPDATE nas SET shortname=$1, secret=$2, description=$3, type='other'
-           WHERE nasname=$4`,
-          [nasName, secret, `Auto-synced from CRM: ${nasName}`, nasIp],
-        );
-        this.logger.log(`✅ NAS updated in FreeRADIUS: ${nasName} (${nasIp})`);
-      } else {
-        await this.pgClient.query(
-          `INSERT INTO nas (nasname, shortname, type, secret, description)
-           VALUES ($1, $2, 'other', $3, $4)`,
-          [nasIp, nasName, secret, `Auto-synced from CRM: ${nasName}`],
-        );
-        this.logger.log(`✅ NAS added to FreeRADIUS: ${nasName} (${nasIp})`);
-      }
-
-      await this.reloadFreeradius();
-    } catch (error: any) {
-      this.logger.error(
-        `❌ Failed to add/update NAS in RADIUS: ${error.message}`,
-      );
-      throw error;
-    }
+    const nas = await this.prisma.nas.findFirst({ where: { nasIp } });
+    if (!nas) throw new Error('NAS ' + nasIp + ' is not registered in the application database');
+    await this.prisma.nas.update({ where: { id: nas.id }, data: { shortname: nasName, nasname: nasIp } });
+    await this.reloadFreeradius();
   }
 
   async removeNasFromRadius(nasIp: string): Promise<void> {
-    this.ensureConnected();
-    try {
-      const result = await this.pgClient.query(
-        'DELETE FROM nas WHERE nasname = $1 RETURNING id',
-        [nasIp],
-      );
-      if (result.rows.length > 0) {
-        this.logger.log(`✅ NAS removed from FreeRADIUS: ${nasIp}`);
-        await this.reloadFreeradius();
-      } else {
-        this.logger.warn(`⚠️ NAS not found in FreeRADIUS: ${nasIp}`);
-      }
-    } catch (error: any) {
-      this.logger.error(
-        `❌ Failed to remove NAS from RADIUS: ${error.message}`,
-      );
-      throw error;
-    }
+    this.logger.log('RADIUS client removal requested for ' + nasIp + '; application NAS lifecycle remains authoritative');
   }
 
   async getAllNasFromRadius(): Promise<any[]> {
-    this.ensureConnected();
     try {
-      const result = await this.pgClient.query(
-        'SELECT id, nasname, shortname, secret, type, description FROM nas ORDER BY id',
-      );
-      return result.rows;
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to get NAS list: ${error.message}`);
-      return [];
-    }
+      const rows = await this.prisma.nas.findMany({ select: { id: true, nasIp: true, nasname: true, shortname: true, isActive: true, radiusSecretEnc: true }, orderBy: { id: 'asc' } });
+      return rows.map((row) => ({ id: row.id, nasname: row.nasname, shortname: row.shortname, isActive: row.isActive, secretConfigured: !!row.radiusSecretEnc }));
+    } catch (error: any) { this.logger.error('Failed to get NAS client list: ' + error.message); return []; }
   }
 
   async getNasByIp(nasIp: string): Promise<any> {
-    this.ensureConnected();
-    try {
-      const result = await this.pgClient.query(
-        'SELECT id, nasname, shortname, secret, type, description FROM nas WHERE nasname = $1',
-        [nasIp],
-      );
-      return result.rows[0] || null;
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to get NAS by IP: ${error.message}`);
-      return null;
-    }
+    const row = await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true, nasIp: true, nasname: true, shortname: true, isActive: true, radiusSecretEnc: true } });
+    return row ? { ...row, secretConfigured: !!row.radiusSecretEnc } : null;
   }
 
   async isNasRegistered(nasIp: string): Promise<boolean> {
-    try {
-      this.ensureConnected();
-      const result = await this.pgClient.query(
-        'SELECT id FROM nas WHERE nasname = $1',
-        [nasIp],
-      );
-      return result.rows.length > 0;
-    } catch {
-      return false;
-    }
+    try { return !!(await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true } })); } catch { return false; }
   }
 
-  async updateNasSecret(nasIp: string, newSecret: string): Promise<void> {
+  async updateNasSecret(nasIp: string, _newSecret: string): Promise<void> {
     this.ensureConnected();
-    try {
-      await this.pgClient.query(
-        'UPDATE nas SET secret = $1 WHERE nasname = $2',
-        [newSecret, nasIp],
-      );
-      this.logger.log(`✅ NAS secret updated for ${nasIp}`);
-      await this.reloadFreeradius();
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to update NAS secret: ${error.message}`);
-      throw error;
-    }
+    const nas = await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true } });
+    if (!nas) throw new Error('NAS ' + nasIp + ' is not registered');
+    throw new Error('Use NasService.update() to change the RADIUS secret so it is encrypted in the vault.');
   }
 
-  // ─────────────────────────────────────────────────────────────
   // RADIUS STATUS & MONITORING
   // ─────────────────────────────────────────────────────────────
   async isRadiusAlive(): Promise<{
@@ -1201,6 +1124,8 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
 
     // pm2 runs this backend as root, so plain systemctl works; fall back to sudo
     // for non-root setups (install.sh grants NOPASSWD for this exact command).
+    await this.radiusVault.syncClients();
+
     const cmds = [
       'systemctl restart freeradius 2>&1',
       'sudo -n systemctl restart freeradius 2>&1',
