@@ -80,7 +80,14 @@ log "Generating Prisma client..."
 (cd backend && npx prisma generate)
 
 log "Applying database migrations..."
-# A failed migration MUST fail the deployment. There is deliberately no
+# A failed migration MUST fail the deployment.
+# Provision the dedicated RADIUS DB role/client store before the backend starts.
+# This keeps NAS shared secrets out of the app-owned `nas` table as plaintext.
+if [[ -x backend/scripts/provision-radius-client-store.sh ]]; then
+  log "Provisioning protected FreeRADIUS NAS client store..."
+  bash backend/scripts/provision-radius-client-store.sh
+fi
+# There is deliberately no
 # schema-sync fallback here: bypassing the migration chain on a production
 # database can silently destroy data. If migrate deploy fails, the ERR trap
 # stops the update and leaves the previous build running (verification-phase
