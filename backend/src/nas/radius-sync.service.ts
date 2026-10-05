@@ -923,7 +923,13 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
 
   // ─────────────────────────────────────────────────────────────
   /** Mirror the app-owned NAS list into the protected FreeRADIUS client store. */
-  async syncNasClient(nasIp: string, nasName: string, secret: string, description?: string | null, previousNasIp?: string | null): Promise<void> {
+  async syncNasClient(
+    nasIp: string,
+    nasName: string,
+    secret: string,
+    description?: string | null,
+    previousNasIp?: string | null,
+  ): Promise<void> {
     this.ensureConnected();
     if (previousNasIp && previousNasIp !== nasIp) {
       await this.pgClient.query('DELETE FROM radius_nas_clients WHERE nasname = $1', [previousNasIp]);
@@ -936,7 +942,15 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     await this.reloadFreeradius();
   }
 
-  async syncAllNasClients(rows: Array<{ nasIp: string | null; shortname?: string | null; nasname: string; secret: string | null; description?: string | null }>): Promise<void> {
+  async syncAllNasClients(
+    rows: Array<{
+      nasIp: string | null;
+      shortname?: string | null;
+      nasname: string;
+      secret: string | null;
+      description?: string | null;
+    }>,
+  ): Promise<void> {
     this.ensureConnected();
     for (const row of rows) {
       if (!row.secret) continue;
