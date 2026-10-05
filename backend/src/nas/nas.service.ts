@@ -8,6 +8,7 @@ import { RadiusSyncService } from './radius-sync.service';
 import { SecretsService } from '../common/secrets.service';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credentials';
+import { RadiusClientVaultService } from './radius-client-vault.service';
 
 @Injectable()
 export class NasService implements OnModuleInit {
@@ -469,7 +470,8 @@ export class NasService implements OnModuleInit {
         // The human-friendly name lives in `shortname`.
         nasname:      data.nasIp,
         shortname:    data.shortname ?? data.nasName,
-        secret:       data.secret,
+        secret:       null,
+        radiusSecretEnc: this.secrets.encryptValue(data.secret),
         apiPort:      data.apiPort      ?? 8728,
         incomingPort: data.incomingPort ?? 3799,
         nasIdentifier: data.nasIdentifier?.trim() || null,
@@ -503,6 +505,7 @@ export class NasService implements OnModuleInit {
     // into the same `nas` table and made every NAS appear twice.) FreeRADIUS
     // only loads clients at startup, so just ask it to reload.
     try {
+      await this.radiusVault.syncClients();
       await this.radiusSync.reloadFreeradius();
       this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
     } catch (error: any) {
@@ -545,7 +548,10 @@ export class NasService implements OnModuleInit {
     // Masked values are the form echoing back what we sent it — never save them
     // over the real credential. (RADIUS `secret` stays plaintext at rest because
     // FreeRADIUS reads this table directly; it is masked in responses only.)
-    if (data.secret !== undefined && !isMask(data.secret)) updateData.secret = data.secret;
+    if (data.secret !== undefined && !isMask(data.secret)) {
+      updateData.radiusSecretEnc = this.secrets.encryptValue(data.secret);
+      updateData.secret = null;
+    }
     if (data.apiPort !== undefined)     updateData.apiPort      = data.apiPort;
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
     if (data.nasIdentifier !== undefined) updateData.nasIdentifier = (data.nasIdentifier || '').trim() || null;
@@ -574,7 +580,7 @@ export class NasService implements OnModuleInit {
     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
 
     const ipChanged     = data.nasIp   && data.nasIp   !== existingNas.nasIp;
-    const secretChanged = data.secret  && data.secret  !== existingNas.secret;
+    const secretChanged = data.secret !== undefined && !isMask(data.secret);
     const nameChanged   = data.nasName && data.nasName !== existingNas.nasname;
 
     // The updated row IS the FreeRADIUS client, so no delete/re-insert is needed
@@ -583,6 +589,7 @@ export class NasService implements OnModuleInit {
     // — especially a changed IP or shared secret.
     if (ipChanged || secretChanged || nameChanged) {
       try {
+        await this.radiusVault.syncClients();
         await this.radiusSync.reloadFreeradius();
         this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
       } catch (error: any) {
@@ -628,13 +635,7 @@ export class NasService implements OnModuleInit {
       const result = await this.prisma.$transaction(async (tx) => {
         // 1. Remove from RADIUS (try, but don't fail if it doesn't work)
         if (nas.nasIp) {
-          try {
-            await this.radiusSync.removeNasFromRadius(nas.nasIp);
-            this.logger.log(`✅ NAS "${nas.nasname}" removed from FreeRADIUS`);
-          } catch (error: any) {
-            this.logger.warn(`Failed to remove NAS from RADIUS: ${error.message}`);
-            // Continue with deletion even if RADIUS removal fails
-          }
+          this.logger.log(`📝 Removing NAS "${nas.nasname}" from the vault-managed client list`);
         }
 
         // 2. Delete all network logs associated with this NAS
@@ -687,6 +688,12 @@ export class NasService implements OnModuleInit {
         return deletedNas;
       });
 
+      try {
+        await this.radiusVault.syncClients();
+        await this.radiusSync.reloadFreeradius();
+      } catch (error: any) {
+        this.logger.warn(`NAS deleted, but FreeRADIUS vault reload failed: ${error.message}`);
+      }
       return result;
 
     } catch (error) {
@@ -719,7 +726,14 @@ export class NasService implements OnModuleInit {
     await this.assertNasOwner(id, actor);
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
-    return this.prisma.nas.update({ where: { id }, data: { isActive: !nas.isActive } });
+    const updated = await this.prisma.nas.update({ where: { id }, data: { isActive: !nas.isActive } });
+    try {
+      await this.radiusVault.syncClients();
+      await this.radiusSync.reloadFreeradius();
+    } catch (error: any) {
+      this.logger.warn(`NAS status changed, but FreeRADIUS vault reload failed: ${error.message}`);
+    }
+    return updated;
   }
 
   /**
@@ -1039,8 +1053,7 @@ export class NasService implements OnModuleInit {
         radiusCount: radiusNas.length,
         prismaCount: prismaNas.length,
         radiusNas,
-        prismaNas,
-      };
+        prismaNas: sanitizeNasList(prismaNas),      };
     } catch (error: any) {
       this.logger.error(`Debug failed: ${error.message}`);
       return { success: false, error: error.message };
