@@ -400,7 +400,7 @@ fi
 # Provision the protected FreeRADIUS client store after migrations have created
 # the NAS/RADIUS tables. The helper creates a dedicated DB role, copies existing
 # NAS clients, and changes FreeRADIUS to read only that protected store.
-if [ -x "$APP_DIR/backend/scripts/provision-radius-client-store.sh" ]; then
+if [ -f "$APP_DIR/backend/scripts/provision-radius-client-store.sh" ]; then
   step "Provision protected FreeRADIUS NAS client store"
   bash "$APP_DIR/backend/scripts/provision-radius-client-store.sh"
   ok "RADIUS client secrets isolated from the app-owned NAS table"
