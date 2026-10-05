@@ -69,7 +69,10 @@ export class NasService implements OnModuleInit {
       }));
     for (let i = 0; i < rows.length; i++) {
       if (!rows[i].secret) continue;
-      if (looksEncrypted(rows[i].secret) && radiusRows[i].secret === rows[i].secret) {
+      if (
+        looksEncrypted(rows[i].secret) &&
+        radiusRows[i].secret === rows[i].secret
+      ) {
         throw new Error(
           `Cannot decrypt NAS RADIUS secret for NAS ${rows[i].id}; check SECRETS_KEY/JWT_SECRET before deployment.`,
         );
@@ -561,7 +564,9 @@ export class NasService implements OnModuleInit {
       data.secret,
       data.description,
     );
-    this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
+    this.logger.log(
+      `✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`,
+    );
     return sanitizeNas(nas);
   }
 
@@ -598,7 +603,9 @@ export class NasService implements OnModuleInit {
     if (data.shortname !== undefined)   updateData.shortname    = data.shortname;
     // Masked values are the form echoing back what we sent it — never save them
     // over the real credential. The app stores the RADIUS secret encrypted.
-    if (data.secret !== undefined && !isMask(data.secret)) updateData.secret = encField(this.secrets, data.secret);
+    if (data.secret !== undefined && !isMask(data.secret)) {
+      updateData.secret = encField(this.secrets, data.secret);
+    }
     if (data.apiPort !== undefined)     updateData.apiPort      = data.apiPort;
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
     if (data.nasIdentifier !== undefined) updateData.nasIdentifier = (data.nasIdentifier || '').trim() || null;
@@ -642,7 +649,9 @@ export class NasService implements OnModuleInit {
           ? existingNas.nasIp
           : null,
       );
-      this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
+      this.logger.log(
+        `✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`,
+      );
     }
     return sanitizeNas(updatedNas);
   }
