@@ -7,7 +7,13 @@ import { MikrotikSyncService } from './mikrotik-sync.service';
 import { RadiusSyncService } from './radius-sync.service';
 import { SecretsService } from '../common/secrets.service';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
-import { sanitizeNas, sanitizeNasList, encField, decField, isMask } from './nas-credentials';
+import {
+  sanitizeNas,
+  sanitizeNasList,
+  encField,
+  decField,
+  isMask,
+} from './nas-credentials';
 import { looksEncrypted } from '../common/crypto-box';
 
 @Injectable()
@@ -37,14 +43,23 @@ export class NasService implements OnModuleInit {
       await this.normalizeNasRecords();
       await this.migrateAndSyncRadiusSecrets();
     } catch (err: any) {
-      this.logger.warn(`NAS normalization/RADIUS secret migration skipped: ${err?.message || err}`);
+      this.logger.warn(
+        `NAS normalization/RADIUS secret migration skipped: ${err?.message || err}`,
+      );
     }
   }
 
   /** Encrypt legacy app-table secrets and mirror plaintext only to protected RADIUS storage. */
   private async migrateAndSyncRadiusSecrets() {
     const rows = await this.prisma.nas.findMany({
-      select: { id: true, nasIp: true, nasname: true, shortname: true, secret: true, description: true },
+      select: {
+        id: true,
+        nasIp: true,
+        nasname: true,
+        shortname: true,
+        secret: true,
+        description: true,
+      },
     });
     const radiusRows = rows
       .filter((row) => !!row.secret)
@@ -55,7 +70,9 @@ export class NasService implements OnModuleInit {
     for (let i = 0; i < rows.length; i++) {
       if (!rows[i].secret) continue;
       if (looksEncrypted(rows[i].secret) && radiusRows[i].secret === rows[i].secret) {
-        throw new Error(`Cannot decrypt NAS RADIUS secret for NAS ${rows[i].id}; check SECRETS_KEY/JWT_SECRET before deployment.`);
+        throw new Error(
+          `Cannot decrypt NAS RADIUS secret for NAS ${rows[i].id}; check SECRETS_KEY/JWT_SECRET before deployment.`,
+        );
       }
     }
     // One RADIUS restart for the whole convergence pass, not one restart per NAS.
@@ -70,7 +87,11 @@ export class NasService implements OnModuleInit {
       });
       migrated++;
     }
-    if (rows.length) this.logger.log(`RADIUS NAS secret convergence complete: ${migrated} legacy secret(s) encrypted, ${rows.length} client(s) synchronized`);
+    if (rows.length) {
+      this.logger.log(
+        `RADIUS NAS secret convergence complete: ${migrated} legacy secret(s) encrypted, ${rows.length} client(s) synchronized`,
+      );
+    }
   }
 
   async normalizeNasRecords() {
@@ -534,7 +555,12 @@ export class NasService implements OnModuleInit {
 
     // The app stores ciphertext; this method receives the plaintext only for
     // the immediate protected-store synchronization.
-    await this.radiusSync.syncNasClient(data.nasIp, data.shortname ?? data.nasName, data.secret, data.description);
+    await this.radiusSync.syncNasClient(
+      data.nasIp,
+      data.shortname ?? data.nasName,
+      data.secret,
+      data.description,
+    );
     this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
     return sanitizeNas(nas);
   }
@@ -608,9 +634,13 @@ export class NasService implements OnModuleInit {
       await this.radiusSync.syncNasClient(
         data.nasIp?.trim() || existingNas.nasIp || existingNas.nasname,
         updateData.shortname ?? existingNas.shortname ?? existingNas.nasname,
-        data.secret !== undefined && !isMask(data.secret) ? data.secret : decField(this.secrets, existingNas.secret),
+        data.secret !== undefined && !isMask(data.secret)
+          ? data.secret
+          : decField(this.secrets, existingNas.secret),
         updateData.description ?? existingNas.description,
-        data.nasIp && data.nasIp.trim() !== existingNas.nasIp ? existingNas.nasIp : null,
+        data.nasIp && data.nasIp.trim() !== existingNas.nasIp
+          ? existingNas.nasIp
+          : null,
       );
       this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
     }
