@@ -64,8 +64,12 @@ const nextConfig: NextConfig = {
   // Re-enable output:"standalone" only after verifying static serving end-to-end.
   allowedDevOrigins: ["192.168.51.253"],
 
-  // Do not fail the PRODUCTION BUILD on type/lint errors.
-  typescript: { ignoreBuildErrors: true },
+  // Production builds must type-check the application. Hiding TypeScript
+  // failures here can ship a UI that compiles to JavaScript but is already
+  // inconsistent with the API/contracts it consumes.
+  // Keep this intentionally fail-closed; fix the actual type error instead of
+  // bypassing it with a build flag.
+  typescript: { ignoreBuildErrors: false },
 };
 
 export default nextConfig;
