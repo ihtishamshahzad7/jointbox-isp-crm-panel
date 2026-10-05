@@ -469,7 +469,7 @@ export class NasService implements OnModuleInit {
         // The human-friendly name lives in `shortname`.
         nasname:      data.nasIp,
         shortname:    data.shortname ?? data.nasName,
-        secret:       data.secret,
+        secret:       encField(this.secrets, data.secret)!,
         apiPort:      data.apiPort      ?? 8728,
         incomingPort: data.incomingPort ?? 3799,
         nasIdentifier: data.nasIdentifier?.trim() || null,
@@ -574,8 +574,8 @@ export class NasService implements OnModuleInit {
     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
 
     const ipChanged     = data.nasIp   && data.nasIp   !== existingNas.nasIp;
-    const secretChanged = data.secret  && data.secret  !== existingNas.secret;
-    const nameChanged   = data.nasName && data.nasName !== existingNas.nasname;
+    const secretChanged = data.secret !== undefined && !isMask(data.secret);
+    const nameChanged   = data.nasName && data.nasName !== existingNas.shortname;
 
     // The updated row IS the FreeRADIUS client, so no delete/re-insert is needed
     // (that pair is what produced duplicate NAS entries). FreeRADIUS caches its
