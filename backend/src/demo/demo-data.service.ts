@@ -33,7 +33,7 @@ export class DemoDataService {
       const type = n % 7 === 0 ? 'CISCO' : n % 5 === 0 ? 'HUAWEI' : 'MIKROTIK';
       const deviceType = n % 7 === 0 ? 'SWITCH' : n % 5 === 0 ? 'OLT_HUAWEI' : 'MIKROTIK';
       const ip = `10.255.${Math.floor(i / 250)}.${(i % 250) + 1}`;
-      return { nasname: ip, shortname: `${area[0]}-NAS-${String(n).padStart(3, '0')}`, type, ports: type === 'MIKROTIK' ? 48 : 24, secret: 'demo-secret-not-for-production', server: 'demo-radius', community: 'public', description: `Synthetic ${type} device for ${area[1]} (${area[0]})`, nasIp: ip, isActive: n % 37 !== 0, deviceType, apiEnabled: type === 'MIKROTIK', apiPollSec: 60, snmpEnabled: true, snmpPort: 161, snmpCommunity: 'public', snmpPollSec: 30, snmpTimeoutMs: 4000, snmpRetries: 1, syslogEnabled: true, syslogPort: 514, ownerId } as any;
+      return { nasname: ip, shortname: `${area[0]}-NAS-${String(n).padStart(3, '0')}`, type, ports: type === 'MIKROTIK' ? 48 : 24, secret: null, server: 'demo-radius', community: 'public', description: `Synthetic ${type} device for ${area[1]} (${area[0]})`, nasIp: ip, isActive: n % 37 !== 0, deviceType, apiEnabled: type === 'MIKROTIK', apiPollSec: 60, snmpEnabled: true, snmpPort: 161, snmpCommunity: 'public', snmpPollSec: 30, snmpTimeoutMs: 4000, snmpRetries: 1, syslogEnabled: true, syslogPort: 514, ownerId } as any;
     });
     await this.createBatches('nas', nasData);
     const nas = await this.prisma.nas.findMany({ where: { ownerId }, select: { id: true, nasIp: true }, orderBy: { id: 'asc' } });
