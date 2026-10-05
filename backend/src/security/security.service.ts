@@ -509,7 +509,9 @@ export class SecurityService {
       ),
     ];
 
-    await this.prisma.rolePermission.createMany({ data: rows });
+    // Multiple PM2 workers can boot at the same time. skipDuplicates makes the
+    // bootstrap idempotent even when they all observe the empty table together.
+    await this.prisma.rolePermission.createMany({ data: rows, skipDuplicates: true });
     for (const role of ['ADMIN', ...Object.keys(PERMISSION_PRESETS)]) {
       await this.cache.del(`rbac:${role}`);
     }
