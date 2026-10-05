@@ -20,6 +20,7 @@ import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { PrismaExceptionFilter } from './common/prisma-exception.filter';
 import { ensurePlatformAccount } from './common/platform-account';
+import { SecurityService } from './security/security.service';
 
 // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
 // BigInt. JSON.stringify throws on BigInt, so ANY endpoint returning them —
@@ -130,6 +131,15 @@ async function bootstrap() {
 
   // Create the default admin on a fresh database (first Ubuntu install / new VM).
   await ensureDefaultAdmin(app);
+
+  // RBAC is fail-closed. On a brand-new installation the matrix is empty,
+  // so seed the reviewed role presets before the first HTTP request is served.
+  // Existing/customized matrices are never overwritten.
+  const security = app.get(SecurityService);
+  const seededRolePermissions = await security.ensureDefaultRolePermissions();
+  if (seededRolePermissions) {
+    console.log('🔐 RBAC: seeded explicit default permissions for ADMIN/SALES/RESELLER/SUB_RESELLER/RETAILER.');
+  }
 
   // Keep the published demo login working (created once, password kept in step
   // with DEMO_PASSWORD). Never fatal: a demo problem must not stop the panel.
