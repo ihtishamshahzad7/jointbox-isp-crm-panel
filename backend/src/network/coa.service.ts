@@ -332,6 +332,18 @@ export class CoaService {
             WHERE acctsessionid = ${s.acctsessionid} AND acctstoptime IS NULL`.catch(() => null);
         }
       }
+      // Record WHICH sessions the sweep cut, so the Disconnect log can say
+      // "automatic duplicate-login sweep" instead of a bare Admin-Reset.
+      const cutIds = sessions.filter((s) => cutByCoa.has(s.acctsessionid)).map((s) => s.acctsessionid);
+      if (cutIds.length) {
+        await this.prisma.systemLog.create({
+          data: {
+            level: 'INFO', source: 'simultaneous-use',
+            message: `"${username}" was online from ${count} devices — ${cutIds.length} session(s) cut automatically.`,
+            metadata: JSON.stringify({ username, why: 'duplicate-sweep', cutSessionIds: cutIds, timestamp: new Date().toISOString() }),
+          },
+        }).catch(() => null);
+      }
     }
 
     if (dupes.length) {

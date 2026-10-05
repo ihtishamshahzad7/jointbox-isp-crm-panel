@@ -134,6 +134,85 @@ describe('Disconnect report tenancy', () => {
   });
 });
 
+describe('Disconnect log — how each session ended', () => {
+  const stop = new Date('2026-10-04T02:38:15Z');
+  const row = (over: any = {}) => ({
+    radacctid: BigInt(1), acctsessionid: 's1', username: 'sara', nasipaddress: '10.0.0.1',
+    acctstarttime: new Date(stop.getTime() - 3600_000), acctstoptime: stop, acctsessiontime: 3600,
+    acctterminatecause: 'Admin-Reset', callingstationid: 'AA:BB:CC:DD:EE:FF', framedipaddress: '100.64.0.2',
+    subscriber: { id: 9, fullName: 'Sara' }, ...over,
+  });
+  const mk = (logs: any[], users: any[] = []) => {
+    const where: any[] = [];
+    const prisma: any = {
+      radAcct: {
+        groupBy: jest.fn(async () => []),
+        findMany: jest.fn(async (a: any) => { where.push(a.where); return a.include ? [row()] : []; }),
+        count: jest.fn(async () => 1),
+      },
+      nas: { findMany: jest.fn(async () => []) },
+      subscriber: { findMany: jest.fn(async () => []) },
+      systemLog: { findMany: jest.fn(async () => logs) },
+      user: { findMany: jest.fn(async () => users) },
+    };
+    const scope: any = {
+      isAdmin: () => false,
+      radiusWhere: async () => ({}),
+      subscriberWhere: async () => ({ userId: { in: [7] } }),
+      nasWhere: async () => ({}),
+      rootId: async () => 7,
+      descendantIds: async () => [7, 8],
+    };
+    return { svc: new DisconnectsService(prisma, scope), where };
+  };
+
+  it('names the operator who pressed Disconnect, by session id', async () => {
+    const { svc } = mk(
+      [{ createdAt: stop, metadata: JSON.stringify({ actorId: 8, username: 'sara', acctSessionId: 's1', method: 'radius-coa', why: 'operator-kick', attempts: ['radius-coa: ACK'] }) }],
+      [{ id: 8, name: 'Staff One', email: 'staff@isp.pk' }],
+    );
+    const out = await svc.report({ id: 7, role: 'ADMIN' } as any, {});
+    const how = (out.records[0] as any).how;
+    expect(how.by).toBe('operator');
+    expect(how.actor).toEqual({ name: 'Staff One', email: 'staff@isp.pk' });
+    expect(how.method).toBe('RADIUS CoA');
+    expect(how.steps).toEqual(['radius-coa: ACK']);
+  });
+
+  it('hides the name of an operator outside the viewer’s tree', async () => {
+    const { svc } = mk(
+      [{ createdAt: stop, metadata: JSON.stringify({ actorId: 1, username: 'sara', acctSessionId: 's1', why: 'operator-kick' }) }],
+      [{ id: 1, name: 'Upstream Owner', email: 'owner@isp.pk' }],
+    );
+    const out = await svc.report({ id: 7, role: 'RESELLER' } as any, {});
+    expect((out.records[0] as any).how.actor).toEqual({ name: 'Your provider', email: null });
+  });
+
+  it('ignores another customer’s panel event that reuses the session id', async () => {
+    const { svc } = mk([{ createdAt: stop, metadata: JSON.stringify({ actorId: 8, username: 'someone-else', acctSessionId: 's1', why: 'operator-kick' }) }]);
+    const out = await svc.report({ id: 7, role: 'ADMIN' } as any, {});
+    expect((out.records[0] as any).how.source).toBe('cause');
+  });
+
+  it('falls back to the cause when the panel recorded nothing', async () => {
+    const { svc } = mk([]);
+    const out = await svc.report({ id: 7, role: 'ADMIN' } as any, {});
+    const how = (out.records[0] as any).how;
+    expect(how.source).toBe('cause');
+    expect(how.title).toMatch(/administrator/i);
+  });
+
+  it('searches username, MAC (any separator) and IP — inside the caller’s scope', async () => {
+    const { svc, where } = mk([]);
+    await svc.report({ id: 7, role: 'ADMIN' } as any, { search: 'aabbcc' });
+    const w = JSON.stringify(where[0]);
+    expect(w).toContain('"subscriber":{"is":{"userId":{"in":[7]}}}');
+    expect(w).toContain('"callingstationid":{"contains":"aa:bb:cc","mode":"insensitive"}');
+    await svc.report({ id: 7, role: 'ADMIN' } as any, { search: '100.64.0.2' });
+    expect(JSON.stringify(where[where.length - 1])).toContain('"framedipaddress":"100.64.0.2"');
+  });
+});
+
 describe('RADIUS session log username filter', () => {
   it('cannot widen the caller’s list to another company’s customer', async () => {
     const prisma: any = {

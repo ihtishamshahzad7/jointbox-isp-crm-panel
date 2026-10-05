@@ -717,7 +717,7 @@ export default function LogsPage() {
                               <CauseBadge compact cause={causeOf(s)} />
                               <SeverityTag severity={s.terminateSeverity} />
                             </span>
-                            <span style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.45 }}>{s.terminateMeaning || s.terminateDescription}</span>
+                            <span style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.45 }}>{s.terminateHow || s.terminateMeaning || s.terminateDescription}</span>
                           </span>}
                     </td>
                     <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>{s.framedIp || "—"}<div style={{ fontSize: 10, color: t.textMuted }}>{s.nasIp}</div></td>

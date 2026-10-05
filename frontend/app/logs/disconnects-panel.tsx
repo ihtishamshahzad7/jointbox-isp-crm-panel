@@ -1,13 +1,14 @@
 "use client";
 
 /**
- * DISCONNECT REASONS (Logs tab) — why customers' sessions ended.
+ * DISCONNECT LOG (Logs tab) — every session that ended, and why.
  *
- * Every RADIUS session closes with an Acct-Terminate-Cause (RFC 2866): one of
- * eighteen standard reasons, from "User Request" to "Host Request". This page
- * lays all eighteen out with how often each happened in the chosen window, and
- * for whichever cause or category is picked shows the related records — the
- * sessions, the customers who hit it most and the routers it happened on.
+ * Each entry answers the questions support asks first: WHO dropped (customer
+ * and username), WHEN (to the second), HOW (the customer's side, the line, the
+ * router, a timer, or a panel action and the operator who took it), WHICH NAS
+ * and port it was on, and the client's MAC and IP — with the RFC 2866
+ * Acct-Terminate-Cause behind it. Below the log: totals, the trend, routers,
+ * the customers who drop most, and all eighteen standard causes.
  *
  * Data: GET /logs/disconnects — scoped server-side to the caller's own
  * customers, the same as the subscriber list.
@@ -28,6 +29,12 @@ type Cause = {
 };
 type Category = { id: CauseCategory; label: string; about: string; count: number; share: number };
 type Top = { key: string; label: string; count: number };
+type HowBy = "customer" | "timer" | "operator" | "line" | "router" | "panel" | "unknown";
+type How = {
+  by: HowBy; title: string; detail: string | null;
+  actor: { name: string; email: string | null } | null;
+  method: string | null; source: "panel" | "cause"; steps: string[];
+};
 type RecordRow = {
   id: string; sessionId: string; username: string | null; subscriberId: number | null; fullName: string | null;
   nasIp: string; nasName: string | null; nasPortId: string | null; nasPortType: string | null;
@@ -35,7 +42,9 @@ type RecordRow = {
   start: string | null; stop: string | null; durationSec: number | null;
   downloadBytes: number | null; uploadBytes: number | null; rawCause: string | null;
   terminateCode: number; terminateKey: string; terminateLabel: string; terminateDescription: string;
-  terminateMeaning: string; terminateAction: string; terminateCategory: CauseCategory; terminateSeverity: CauseSeverity;
+  terminateMeaning: string; terminateAction: string; terminateHow?: string;
+  terminateCategory: CauseCategory; terminateSeverity: CauseSeverity;
+  how?: How;
 };
 type Report = {
   window: { sinceHours: number; from: string; to: string; unit: "hour" | "day" };
@@ -51,6 +60,17 @@ type Report = {
 
 const WINDOWS: Array<[number, string]> = [[24, "24 hours"], [168, "7 days"], [720, "30 days"], [2160, "90 days"]];
 const PAGE = 50;
+
+/** Who or what ended the session — the "how" tag on every log entry. */
+const HOW_META: Record<HowBy, { label: string; cat: CauseCategory }> = {
+  customer: { label: "Customer side", cat: "customer" },
+  line:     { label: "Line dropped",  cat: "link" },
+  router:   { label: "Router (NAS)",  cat: "router" },
+  timer:    { label: "Timer",         cat: "timer" },
+  operator: { label: "Operator",      cat: "operator" },
+  panel:    { label: "Panel",         cat: "panel" },
+  unknown:  { label: "Not reported",  cat: "other" },
+};
 
 // ── formatting ─────────────────────────────────────────────────
 const nf = (n: number | null | undefined) => (n == null ? "—" : Number(n).toLocaleString());
@@ -70,8 +90,10 @@ function bytes(b: number | null | undefined) {
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
 }
-const when = (d: string | null | undefined) =>
-  d ? new Date(d).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+const clock = (d: string | null | undefined) =>
+  d ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+const full = (d: string | null | undefined) =>
+  d ? new Date(d).toLocaleString([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
 function ago(d: string | null | undefined) {
   if (!d) return "—";
   const sec = Math.max(0, (Date.now() - new Date(d).getTime()) / 1000);
@@ -80,37 +102,60 @@ function ago(d: string | null | undefined) {
   if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
   return `${Math.floor(sec / 86400)}d ago`;
 }
+function dayKey(d: string | null) {
+  if (!d) return "unknown";
+  const x = new Date(d);
+  return `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+}
+function dayLabel(d: string | null) {
+  if (!d) return "Unknown date";
+  const x = new Date(d); const now = new Date();
+  const start = (y: Date) => new Date(y.getFullYear(), y.getMonth(), y.getDate()).getTime();
+  const diff = Math.round((start(now) - start(x)) / 86_400_000);
+  const date = x.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+  return diff === 0 ? `Today · ${date}` : diff === 1 ? `Yesterday · ${date}` : date;
+}
+const initials = (name: string) =>
+  name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
 
 export default function DisconnectsPanel() {
   const [hours, setHours] = useState(168);
   const [cause, setCause] = useState<string>("");
   const [category, setCategory] = useState<string>("");
   const [nasIp, setNasIp] = useState("");
-  const [userInput, setUserInput] = useState("");
+  const [findInput, setFindInput] = useState("");
+  const [find, setFind] = useState("");
   const [username, setUsername] = useState("");
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [openRow, setOpenRow] = useState<string | null>(null);
+  const [allReasons, setAllReasons] = useState(false);
   const [routerOptions, setRouterOptions] = useState<Record<string, string | null>>({});
   const reqId = useRef(0);
+  const logRef = useRef<HTMLElement | null>(null);
 
-  // Deep links: /disconnects?username=…&cause=…
+  // Deep links: /logs?tab=disconnects&username=…&cause=…&hours=…
   useEffect(() => {
     try {
       const q = new URLSearchParams(window.location.search);
-      const u = q.get("username"); if (u) { setUserInput(u); setUsername(u); }
+      const u = q.get("username"); if (u) { setUsername(u); setFindInput(u); }
       const c = q.get("cause"); if (c) setCause(c);
       const h = Number(q.get("hours")); if (WINDOWS.some(([w]) => w === h)) setHours(h);
     } catch { /* no query */ }
   }, []);
 
-  // Username box applies after typing stops.
+  // The search box applies after typing stops.
   useEffect(() => {
-    const t = setTimeout(() => { setUsername(userInput.trim()); setOffset(0); }, 450);
+    const t = setTimeout(() => {
+      const v = findInput.trim();
+      setFind((prev) => (prev === v ? prev : v));
+      if (username && v !== username) setUsername("");
+      setOffset(0);
+    }, 450);
     return () => clearTimeout(t);
-  }, [userInput]);
+  }, [findInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(async () => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
@@ -122,6 +167,7 @@ export default function DisconnectsPanel() {
     if (category) q.set("category", category);
     if (nasIp) q.set("nasIp", nasIp);
     if (username) q.set("username", username);
+    else if (find) q.set("search", find);
     try {
       const r = await fetch(`${API}/logs/disconnects?${q}`, { headers: { Authorization: `Bearer ${token}` } });
       if (id !== reqId.current) return;
@@ -138,6 +184,7 @@ export default function DisconnectsPanel() {
       setRouterOptions((prev) => {
         const next = { ...prev };
         for (const x of j.routers || []) next[x.nasIp] = x.name || next[x.nasIp] || null;
+        for (const x of j.records || []) if (x.nasIp) next[x.nasIp] = x.nasName || next[x.nasIp] || null;
         return next;
       });
     } catch {
@@ -145,7 +192,7 @@ export default function DisconnectsPanel() {
     } finally {
       if (id === reqId.current) setBusy(false);
     }
-  }, [hours, cause, category, nasIp, username, offset]);
+  }, [hours, cause, category, nasIp, username, find, offset]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -155,24 +202,43 @@ export default function DisconnectsPanel() {
     return { code: c?.code || 0, key, label: c?.label || label || key, category: c?.category || "other", severity: c?.severity || "info", description: c?.description, meaning: c?.meaning };
   };
 
-  const pickCause = (key: string) => { setCause((c) => (c === key ? "" : key)); setCategory(""); setOffset(0); setOpenRow(null); };
+  const toLog = () => { try { logRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); } catch { /* old browser */ } };
+  const pickCause = (key: string, scroll = false) => {
+    setCause((c) => (c === key ? "" : key)); setCategory(""); setOffset(0); setOpenRow(null);
+    if (scroll) toLog();
+  };
   const pickCategory = (id: string) => { setCategory((c) => (c === id ? "" : id)); setCause(""); setOffset(0); setOpenRow(null); };
   const clearSel = () => { setCause(""); setCategory(""); setOffset(0); setOpenRow(null); };
 
   const standard = (data?.causes || []).filter((c) => c.standard);
   const extra = (data?.causes || []).filter((c) => !c.standard && c.count > 0);
   const maxCause = Math.max(1, ...standard.map((c) => c.count), ...extra.map((c) => c.count));
+  const reasonChips = (data?.causes || [])
+    .filter((c) => allReasons || c.count > 0 || c.key === cause)
+    .sort((a, b) => (allReasons ? (a.standard === b.standard ? (a.code || 99) - (b.code || 99) : a.standard ? -1 : 1) : b.count - a.count));
   const sel = cause ? byKey.get(cause) : null;
   const selCat = category ? data?.categories.find((c) => c.id === category) : null;
   const t = data?.totals;
+
+  // The log, grouped by the day each session ended.
+  const groups = useMemo(() => {
+    const out: { key: string; label: string; items: RecordRow[] }[] = [];
+    for (const r of data?.records || []) {
+      const k = dayKey(r.stop);
+      let g = out[out.length - 1];
+      if (!g || g.key !== k) { g = { key: k, label: dayLabel(r.stop), items: [] }; out.push(g); }
+      g.items.push(r);
+    }
+    return out;
+  }, [data]);
 
   return (
     <div id={s.root} className={`${s.page}${busy && data ? " " + s.loading : ""}`}>
       <header className={s.head}>
         <div>
           <div className={s.eyebrow}>RADIUS · Acct-Terminate-Cause</div>
-          <h2>Why sessions ended</h2>
-          <p>Every disconnect across your customers, grouped by the eighteen standard termination causes. Pick a cause or a category to see the sessions, customers and routers behind it.</p>
+          <h2>Disconnect log</h2>
+          <p>Every session that ended — who it was, when, how it was disconnected, the NAS and port it was on, and the client’s MAC and IP. Click an entry for every detail.</p>
         </div>
         <div className={s.controls}>
           <div className={s.seg} role="group" aria-label="Time window">
@@ -180,15 +246,13 @@ export default function DisconnectsPanel() {
               <button key={h} type="button" aria-pressed={hours === h} onClick={() => { setHours(h); setOffset(0); }}>{label}</button>
             ))}
           </div>
-          <select id="disc-router" className={s.select} value={nasIp} aria-label="Router"
+          <select id="disc-router" className={s.select} value={nasIp} aria-label="NAS"
             onChange={(e) => { setNasIp(e.target.value); setOffset(0); }}>
-            <option value="">All routers</option>
+            <option value="">All NAS / routers</option>
             {Object.entries(routerOptions).map(([ip, name]) => (
               <option key={ip} value={ip}>{name ? `${name} (${ip})` : ip}</option>
             ))}
           </select>
-          <input id="disc-user" className={s.userBox} placeholder="Customer username" value={userInput}
-            aria-label="Customer username" onChange={(e) => setUserInput(e.target.value)} />
         </div>
       </header>
 
@@ -206,26 +270,122 @@ export default function DisconnectsPanel() {
           sub={t?.topCause ? `${nf(t.topCause.count)} sessions` : "nothing ended yet"} />
       </section>
 
-      {/* ── Category split + trend + routers ── */}
+      {/* ── Filters ── */}
+      <section className={s.filters} aria-label="Filter the log">
+        <div className={s.filterRow}>
+          <label className={s.findWrap} htmlFor="disc-find">
+            <span className={s.findIcon} aria-hidden>⌕</span>
+            <input id="disc-find" className={s.findBox} value={findInput} placeholder="Find a username, MAC address or IP"
+              onChange={(e) => setFindInput(e.target.value)} autoComplete="off" spellCheck={false} />
+            {findInput && <button type="button" className={s.findClear} aria-label="Clear search" onClick={() => setFindInput("")}>×</button>}
+          </label>
+          <div className={s.typeRow} role="group" aria-label="How it ended">
+            {(data?.categories || []).filter((c) => c.count > 0 || category === c.id).map((c) => (
+              <button key={c.id} type="button" className={s.catPick} style={catVar(c.id)} aria-pressed={category === c.id}
+                title={c.about} onClick={() => pickCategory(c.id)}>
+                <i />{c.label} <b>{nf(c.count)}</b>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={s.reasonRow} role="group" aria-label="Reason">
+          <span className={s.filterLabel}>Reason</span>
+          <button type="button" className={s.reasonAll} aria-pressed={!cause && !category} onClick={clearSel}>All · {nf(t?.ended)}</button>
+          {reasonChips.map((c) => (
+            <button key={c.key} type="button" className={s.reasonPick} aria-pressed={cause === c.key}
+              onClick={() => pickCause(c.key)} title={`${c.description}\n${c.meaning}`}>
+              <CauseBadge compact cause={{ ...c, label: `${c.label} · ${nf(c.count)}` }} title="" />
+            </button>
+          ))}
+          <button type="button" className={s.moreLink} onClick={() => setAllReasons((v) => !v)}>
+            {allReasons ? "Only reasons that happened" : "Show all 18 reasons"}
+          </button>
+        </div>
+      </section>
+
+      {/* ── Selection detail ── */}
+      {(sel || selCat) && (
+        <section className={s.focus} style={catVar(sel ? sel.category : selCat!.id)} aria-live="polite">
+          <div className={s.focusHead}>
+            <div className={s.focusTitle}>
+              <span className={`${s.num}${sel?.code ? "" : " " + s.dot}`} style={catVar(sel ? sel.category : selCat!.id)}>{sel ? (sel.code || "•") : "•"}</span>
+              <div>
+                <h3>{sel ? sel.label : selCat!.label} {sel && <SeverityTag severity={sel.severity} />}</h3>
+                <p>{sel ? sel.description : selCat!.about}</p>
+              </div>
+            </div>
+            <button type="button" className={s.clear} onClick={clearSel}>Show all reasons</button>
+          </div>
+          {sel && (
+            <dl className={s.explain}>
+              <div><dt>What it usually means</dt><dd>{sel.meaning}</dd></div>
+              <div><dt>What to check</dt><dd>{sel.action}</dd></div>
+              <div>
+                <dt>In this window</dt>
+                <dd>
+                  {nf(sel.count)} session{sel.count === 1 ? "" : "s"} ({pct(sel.share)}) · {nf(sel.customers)} customer{sel.customers === 1 ? "" : "s"}
+                  <br />Average session {dur(sel.avgSessionSec)} · last {ago(sel.lastAt)}
+                  <br /><span className={s.faint}>{sel.code ? `Code ${sel.code} · ` : ""}{sel.key}</span>
+                </dd>
+              </div>
+            </dl>
+          )}
+        </section>
+      )}
+
+      {/* ── THE LOG ── */}
+      <section className={s.panel} ref={logRef} aria-label="Disconnect log">
+        <div className={s.panelHead}>
+          <h3>{sel ? `Ended by ${sel.label}` : selCat ? `Ended — ${selCat.label}` : find || username ? `Disconnects matching “${username || find}”` : "Latest disconnects"}</h3>
+          <span>{data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…"}</span>
+        </div>
+        {!data ? (
+          <div className={s.empty}>Loading the disconnect log…</div>
+        ) : !data.records.length ? (
+          <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
+        ) : (
+          <>
+            <ol className={s.feed}>
+              {groups.map((g) => (
+                <li key={g.key} className={s.dayGroup}>
+                  <div className={s.dayHead}><span>{g.label}</span><em>{g.items.length} disconnect{g.items.length === 1 ? "" : "s"}</em></div>
+                  <ol className={s.events}>
+                    {g.items.map((r) => (
+                      <EventRow key={r.id} r={r} open={openRow === r.id} onToggle={() => setOpenRow(openRow === r.id ? null : r.id)} />
+                    ))}
+                  </ol>
+                </li>
+              ))}
+            </ol>
+            <div className={s.pager}>
+              <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.recordsTotal))} of {nf(data.recordsTotal)}</span>
+              <div>
+                <button type="button" className={s.linkBtn} disabled={offset === 0 || busy} onClick={() => { setOffset((o) => Math.max(0, o - PAGE)); toLog(); }}>← Newer</button>
+                <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.recordsTotal || busy} onClick={() => { setOffset((o) => o + PAGE); toLog(); }}>Older →</button>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* ── Breakdown ── */}
+      <div className={s.subHead}>Breakdown for this window</div>
       <div className={s.twoCol}>
         <section className={s.panel}>
           <div className={s.panelHead}>
             <h3>Who or what ended them</h3>
-            <span>Click a category to filter</span>
+            <span>Click a part to filter the log</span>
           </div>
           <div className={s.split} aria-label="Share by category">
             {(data?.categories || []).filter((c) => c.count > 0).map((c) => (
               <button key={c.id} type="button" style={{ ...catVar(c.id), width: `${c.share * 100}%` }}
                 title={`${c.label}: ${nf(c.count)} (${pct(c.share)}) — ${c.about}`} aria-label={`${c.label} ${pct(c.share)}`}
-                onClick={() => pickCategory(c.id)} />
+                onClick={() => { pickCategory(c.id); toLog(); }} />
             ))}
           </div>
-          <div className={s.splitLegend}>
-            {(data?.categories || []).filter((c) => c.id !== "other" || c.count > 0).map((c) => (
-              <button key={c.id} type="button" className={`${s.catPick}${c.count ? "" : " " + s.zero}`} style={catVar(c.id)}
-                aria-pressed={category === c.id} title={c.about} onClick={() => pickCategory(c.id)}>
-                <i />{c.label} <b>{nf(c.count)}</b> <em>{pct(c.share)}</em>
-              </button>
+          <div className={s.legendRow}>
+            {(data?.categories || []).filter((c) => c.count > 0).map((c) => (
+              <span key={c.id} style={catVar(c.id)}><i />{c.label} <b>{pct(c.share)}</b></span>
             ))}
           </div>
           <div className={s.subHead}>Over time</div>
@@ -234,8 +394,8 @@ export default function DisconnectsPanel() {
 
         <section className={s.panel}>
           <div className={s.panelHead}>
-            <h3>By router</h3>
-            <span>{sel ? sel.label : selCat ? selCat.label : "All causes"}</span>
+            <h3>By NAS / router</h3>
+            <span>{sel ? sel.label : selCat ? selCat.label : "All reasons"}</span>
           </div>
           {!data?.routers?.length ? (
             <div className={s.empty}>No disconnects in this window.</div>
@@ -246,7 +406,8 @@ export default function DisconnectsPanel() {
                 return (
                   <div key={r.nasIp} className={s.barRow}>
                     <div className={s.barTop}>
-                      <strong title={r.nasIp}>{r.name || r.nasIp}</strong>
+                      <button type="button" className={s.barName} title={`Show only ${r.name || r.nasIp}`}
+                        onClick={() => { setNasIp(r.nasIp); setOffset(0); toLog(); }}>{r.name || r.nasIp}</button>
                       <span>{nf(r.count)}{r.abnormal ? ` · ${nf(r.abnormal)} need attention` : ""}</span>
                     </div>
                     <div className={s.track} title={`${nf(r.abnormal)} faults or line drops of ${nf(r.count)}`}>
@@ -265,77 +426,10 @@ export default function DisconnectsPanel() {
         </section>
       </div>
 
-      {/* ── All 18 standard causes ── */}
-      <section className={s.panel}>
-        <div className={s.panelHead}>
-          <h3>All termination causes</h3>
-          <span>RFC 2866 · routers send the number or the name · click to see the related records</span>
-        </div>
-        <div className={s.causeGrid}>
-          {standard.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={pickCause} />)}
-        </div>
-        {extra.length > 0 && (
-          <>
-            <div className={s.subHead}>Panel and non-standard causes</div>
-            <div className={s.causeGrid}>
-              {extra.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={pickCause} />)}
-            </div>
-          </>
-        )}
-        <div className={s.splitLegend} aria-label="Severity legend" style={{ marginTop: 12 }}>
-          {(Object.keys(SEVERITY_META) as CauseSeverity[]).map((k) => (
-            <span key={k} title={SEVERITY_META[k].about} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--muted)" }}>
-              <SeverityTag severity={k} /> {SEVERITY_META[k].about}
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Selection detail ── */}
-      {(sel || selCat) && (
-        <section className={s.focus} style={catVar(sel ? sel.category : selCat!.id)} aria-live="polite">
-          <div className={s.focusHead}>
-            <div className={s.focusTitle}>
-              <span className={`${s.num}${sel?.code ? "" : " " + s.dot}`} style={catVar(sel ? sel.category : selCat!.id)}>{sel ? (sel.code || "•") : "•"}</span>
-              <div>
-                <h3>{sel ? sel.label : selCat!.label} {sel && <SeverityTag severity={sel.severity} />}</h3>
-                <p>{sel ? sel.description : selCat!.about}</p>
-              </div>
-            </div>
-            <button type="button" className={s.clear} onClick={clearSel}>Show all causes</button>
-          </div>
-          {sel && (
-            <dl className={s.explain}>
-              <div><dt>What it usually means</dt><dd>{sel.meaning}</dd></div>
-              <div><dt>What to check</dt><dd>{sel.action}</dd></div>
-              <div>
-                <dt>In this window</dt>
-                <dd>
-                  {nf(sel.count)} session{sel.count === 1 ? "" : "s"} ({pct(sel.share)}) · {nf(sel.customers)} customer{sel.customers === 1 ? "" : "s"}
-                  <br />Average session {dur(sel.avgSessionSec)} · last {ago(sel.lastAt)}
-                  <br /><span className={s.faint}>{sel.code ? `Code ${sel.code} · ` : ""}{sel.key}</span>
-                </dd>
-              </div>
-            </dl>
-          )}
-          {selCat && (
-            <div className={s.tagRow}>
-              {(data?.causes || []).filter((c) => c.category === selCat.id && (c.standard || c.count)).map((c) => (
-                <button key={c.key} type="button" className={s.catPick} style={catVar(c.category)} onClick={() => pickCause(c.key)}
-                  title={c.description}>
-                  <i />{c.code ? `${c.code} · ` : ""}{c.label} <b>{nf(c.count)}</b>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ── Customers ── */}
       <section className={s.panel}>
         <div className={s.panelHead}>
           <h3>Customers who disconnected most</h3>
-          <span>{sel ? `with ${sel.label}` : selCat ? `in ${selCat.label}` : "all causes"} · top 15</span>
+          <span>{sel ? `with ${sel.label}` : selCat ? `in ${selCat.label}` : "all reasons"} · top 15</span>
         </div>
         {!data?.customers?.length ? (
           <div className={s.empty}>{data ? "No customer disconnects match." : "Loading…"}</div>
@@ -343,7 +437,7 @@ export default function DisconnectsPanel() {
           <div className={s.tableWrap}>
             <table className={`${s.table} ${s.plain}`}>
               <thead><tr>
-                <th>Customer</th><th className={s.r}>Disconnects</th><th className={s.r}>Need attention</th><th>Last</th><th>Most common causes</th>
+                <th>Customer</th><th className={s.r}>Disconnects</th><th className={s.r}>Need attention</th><th>Last</th><th>Most common reasons</th><th aria-label="Actions" />
               </tr></thead>
               <tbody>
                 {data.customers.map((c) => (
@@ -357,12 +451,17 @@ export default function DisconnectsPanel() {
                     <td className={s.r}><b>{nf(c.count)}</b></td>
                     <td className={s.r} style={{ color: c.abnormal ? SEVERITY_META.warn.color : "var(--muted)" }}>{nf(c.abnormal)}</td>
                     <td>
-                      <div>{ago(c.lastAt)}</div>
+                      <div className={s.cellMain}>{ago(c.lastAt)}</div>
                       {c.lastKey && <div className={s.whoSub}>{badgeFor(c.lastKey).label}</div>}
                     </td>
                     <td><div className={s.tagRow}>{c.top.map((x) => (
                       <CauseBadge key={x.key} compact cause={{ ...badgeFor(x.key, x.label), label: `${badgeFor(x.key, x.label).label} · ${nf(x.count)}` }} />
                     ))}</div></td>
+                    <td>
+                      <button type="button" className={s.linkBtn} onClick={() => { setFindInput(c.username); setUsername(c.username); setFind(""); clearSel(); toLog(); }}>
+                        Show in log
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -371,93 +470,108 @@ export default function DisconnectsPanel() {
         )}
       </section>
 
-      {/* ── Session records ── */}
       <section className={s.panel}>
         <div className={s.panelHead}>
-          <h3>{sel ? `Sessions ended by ${sel.label}` : selCat ? `Sessions ended — ${selCat.label}` : "Latest disconnects"}</h3>
-          <span>{data ? `${nf(data.recordsTotal)} session${data.recordsTotal === 1 ? "" : "s"} · click a row for every detail` : "…"}</span>
+          <h3>All 18 termination causes</h3>
+          <span>RFC 2866 · routers send the number or the name · click one to filter the log</span>
         </div>
-        {!data?.records?.length ? (
-          <div className={s.empty}>{data ? "No sessions ended with this cause in the window." : "Loading…"}</div>
-        ) : (
+        <div className={s.causeGrid}>
+          {standard.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={(k) => pickCause(k, true)} />)}
+        </div>
+        {extra.length > 0 && (
           <>
-            <div className={s.tableWrap}>
-              <table className={s.table}>
-                <thead><tr>
-                  <th aria-label="Expand" style={{ width: 22 }} /><th>Ended</th><th>Customer</th><th>Router</th><th>IP / MAC</th>
-                  <th className={s.r}>Duration</th><th className={s.r}>Down / Up</th><th>Cause</th>
-                </tr></thead>
-                <tbody>
-                  {data.records.map((r) => {
-                    const open = openRow === r.id;
-                    const toggle = () => setOpenRow(open ? null : r.id);
-                    return (
-                      <React.Fragment key={r.id}>
-                        <tr className={`${s.row}${open ? " " + s.open : ""}`} tabIndex={0} aria-expanded={open}
-                          onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
-                          <td><span className={s.chev}>›</span></td>
-                          <td style={{ whiteSpace: "nowrap" }}>{when(r.stop)}<div className={s.whoSub}>{ago(r.stop)}</div></td>
-                          <td>
-                            <div className={s.who}>
-                              {r.subscriberId
-                                ? <Link href={`/subscribers/${r.subscriberId}`} onClick={(e) => e.stopPropagation()}>{r.fullName || r.username}</Link>
-                                : (r.fullName || r.username || "—")}
-                            </div>
-                            <div className={s.whoSub}>{r.username}</div>
-                          </td>
-                          <td>{r.nasName || <span className={s.ip}>{r.nasIp}</span>}{r.nasName && <div className={s.faint}>{r.nasIp}</div>}</td>
-                          <td><span className={s.ip}>{r.framedIp || "—"}</span><div className={s.faint}>{r.mac || ""}</div></td>
-                          <td className={s.r}>{dur(r.durationSec)}</td>
-                          <td className={s.r}>{bytes(r.downloadBytes)}<div className={s.whoSub}>{bytes(r.uploadBytes)}</div></td>
-                          <td>
-                            <CauseBadge cause={{ code: r.terminateCode, key: r.terminateKey, label: r.terminateLabel, category: r.terminateCategory, severity: r.terminateSeverity, description: r.terminateDescription, meaning: r.terminateMeaning }} />
-                          </td>
-                        </tr>
-                        {open && (
-                          <tr className={s.detail}>
-                            <td colSpan={8}>
-                              <div className={s.detailGrid}>
-                                <Field k="Started" v={r.start ? new Date(r.start).toLocaleString() : "—"} />
-                                <Field k="Ended" v={r.stop ? new Date(r.stop).toLocaleString() : "—"} />
-                                <Field k="Duration" v={dur(r.durationSec)} />
-                                <Field k="Downloaded" v={bytes(r.downloadBytes)} />
-                                <Field k="Uploaded" v={bytes(r.uploadBytes)} />
-                                <Field k="Leased IP" v={r.framedIp || "—"} mono />
-                                <Field k="MAC (Calling-Station)" v={r.mac || "—"} mono />
-                                <Field k="Router" v={r.nasName ? `${r.nasName} · ${r.nasIp}` : r.nasIp} />
-                                <Field k="NAS port" v={[r.nasPortId, r.nasPortType].filter(Boolean).join(" · ") || "—"} />
-                                <Field k="Service (Called-Station)" v={r.service || "—"} />
-                                <Field k="Session ID" v={r.sessionId || "—"} mono />
-                                <Field k="Raw cause sent" v={r.rawCause || "(none)"} mono />
-                              </div>
-                              <div className={s.detailNote}>
-                                <div><strong>{r.terminateCode ? `#${r.terminateCode} ` : ""}{r.terminateLabel}</strong> — {r.terminateDescription}</div>
-                                <div><strong>Usually means:</strong> {r.terminateMeaning}</div>
-                                <div><strong>What to check:</strong> {r.terminateAction}</div>
-                                {r.subscriberId && (
-                                  <div><Link href={`/subscribers/${r.subscriberId}`}>Open {r.fullName || r.username}’s profile →</Link></div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className={s.pager}>
-              <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.recordsTotal))} of {nf(data.recordsTotal)}</span>
-              <div>
-                <button type="button" className={s.linkBtn} disabled={offset === 0 || busy} onClick={() => setOffset((o) => Math.max(0, o - PAGE))}>← Newer</button>
-                <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.recordsTotal || busy} onClick={() => setOffset((o) => o + PAGE)}>Older →</button>
-              </div>
+            <div className={s.subHead}>Panel and non-standard causes</div>
+            <div className={s.causeGrid}>
+              {extra.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={(k) => pickCause(k, true)} />)}
             </div>
           </>
         )}
+        <div className={s.legendRow} aria-label="Severity legend" style={{ marginTop: 12 }}>
+          {(Object.keys(SEVERITY_META) as CauseSeverity[]).map((k) => (
+            <span key={k} title={SEVERITY_META[k].about}><SeverityTag severity={k} /> {SEVERITY_META[k].about}</span>
+          ))}
+        </div>
       </section>
     </div>
+  );
+}
+
+/** One disconnect: who, when, how, which NAS, MAC and IP — and every detail on click. */
+function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle: () => void }) {
+  const how: How = r.how || { by: "unknown", title: r.terminateHow || r.terminateMeaning, detail: null, actor: null, method: null, source: "cause", steps: [] };
+  const hm = HOW_META[how.by] || HOW_META.unknown;
+  const sev = SEVERITY_META[r.terminateSeverity] || SEVERITY_META.info;
+  const name = r.fullName || r.username || "Unknown customer";
+  const port = [r.nasPortId, r.nasPortType].filter(Boolean).join(" · ");
+  return (
+    <li className={`${s.ev}${open ? " " + s.evOpen : ""}`} style={{ ["--sev" as any]: sev.color }}>
+      <button type="button" className={s.evMain} aria-expanded={open} onClick={onToggle}>
+        <span className={s.evTime}>
+          <b>{clock(r.stop)}</b>
+          <span>{ago(r.stop)}</span>
+        </span>
+        <span className={s.evBody}>
+          <span className={s.evTop}>
+            <span className={s.avatar} aria-hidden>{initials(name)}</span>
+            <span className={s.evWho}>
+              <span className={s.evName}>{name}</span>
+              {r.username && r.username !== name && <span className={s.evUser}>{r.username}</span>}
+            </span>
+            <span className={s.evCause}>
+              <CauseBadge cause={{ code: r.terminateCode, key: r.terminateKey, label: r.terminateLabel, category: r.terminateCategory, severity: r.terminateSeverity, description: r.terminateDescription, meaning: r.terminateMeaning }} />
+              <SeverityTag severity={r.terminateSeverity} />
+            </span>
+          </span>
+          <span className={s.evHow}>
+            <span className={s.howTag} style={catVar(hm.cat)}>{hm.label}</span>
+            <span className={s.howText}>
+              {how.title}
+              {how.actor && <> — by <b>{how.actor.name}</b></>}
+              {how.method && <span className={s.faint}> · via {how.method}</span>}
+            </span>
+          </span>
+          <span className={s.evFacts}>
+            <span className={s.fact}><span className={s.factK}>NAS</span><span className={s.factV}>{r.nasName || r.nasIp}{r.nasName && <span className={s.faint}> {r.nasIp}</span>}{port && <span className={s.faint}> · {port}</span>}</span></span>
+            <span className={s.fact}><span className={s.factK}>MAC</span><span className={`${s.factV} ${s.ip}`}>{r.mac || "—"}</span></span>
+            <span className={s.fact}><span className={s.factK}>IP</span><span className={`${s.factV} ${s.ip}`}>{r.framedIp || "—"}</span></span>
+            <span className={s.fact}><span className={s.factK}>Online for</span><span className={s.factV}>{dur(r.durationSec)}</span></span>
+            <span className={s.fact}><span className={s.factK}>Data</span><span className={s.factV}>↓ {bytes(r.downloadBytes)} · ↑ {bytes(r.uploadBytes)}</span></span>
+          </span>
+        </span>
+        <span className={s.chev} aria-hidden>›</span>
+      </button>
+      {open && (
+        <div className={s.evDetail}>
+          <div className={s.detailGrid}>
+            <Field k="Disconnected at" v={full(r.stop)} />
+            <Field k="Connected at" v={full(r.start)} />
+            <Field k="Online for" v={dur(r.durationSec)} />
+            <Field k="Customer" v={r.fullName ? `${r.fullName} (${r.username})` : (r.username || "—")} />
+            <Field k="MAC address (Calling-Station)" v={r.mac || "—"} mono />
+            <Field k="Leased IP" v={r.framedIp || "—"} mono />
+            <Field k="NAS / router" v={r.nasName ? `${r.nasName} · ${r.nasIp}` : r.nasIp} />
+            <Field k="NAS port" v={port || "—"} />
+            <Field k="Service (Called-Station)" v={r.service || "—"} />
+            <Field k="Downloaded" v={bytes(r.downloadBytes)} />
+            <Field k="Uploaded" v={bytes(r.uploadBytes)} />
+            <Field k="Session ID" v={r.sessionId || "—"} mono />
+            <Field k="Raw cause sent" v={r.rawCause || "(none)"} mono />
+            <Field k="Disconnected by" v={how.actor ? `${how.actor.name}${how.actor.email ? ` (${how.actor.email})` : ""}` : hm.label} />
+            {how.method && <Field k="Method" v={how.method} />}
+          </div>
+          <div className={s.detailNote}>
+            <div><strong>How:</strong> {how.title}{how.detail ? ` — ${how.detail}` : ""}</div>
+            <div><strong>{r.terminateCode ? `#${r.terminateCode} ` : ""}{r.terminateLabel}:</strong> {r.terminateDescription}</div>
+            <div><strong>Usually means:</strong> {r.terminateMeaning}</div>
+            <div><strong>What to check:</strong> {r.terminateAction}</div>
+            {how.steps.length > 0 && <div><strong>Panel steps:</strong> {how.steps.join(" → ")}</div>}
+            {r.subscriberId && (
+              <div><Link href={`/subscribers/${r.subscriberId}`}>Open {name}’s profile →</Link></div>
+            )}
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 

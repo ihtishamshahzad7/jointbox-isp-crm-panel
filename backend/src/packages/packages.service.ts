@@ -1809,7 +1809,7 @@ export class PackagesService {
         synced++;
         if (kick) {
           try {
-            await this.network.disconnect(sub.username!);
+            await this.network.disconnect(sub.username!, undefined, 'plan-change');
             kicked++;
           } catch {
             // Session may simply be offline — the rewritten profile already

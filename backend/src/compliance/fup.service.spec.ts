@@ -152,7 +152,7 @@ describe('FupService', () => {
       await svc.enforce();
 
       expect(radiusSync.removeSubscriberFromRadius).toHaveBeenCalledWith('alice');
-      expect(network.disconnect).toHaveBeenCalledWith('alice');
+      expect(network.disconnect).toHaveBeenCalledWith('alice', undefined, expect.stringMatching(/^fup-/));
       expect(prisma.subscriber.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 1 }, data: expect.objectContaining({ fupApplied: true }) }),
       );
@@ -177,7 +177,7 @@ describe('FupService', () => {
       const pkgArg = radiusSync.syncSubscriberProfile.mock.calls[0][2];
       expect(pkgArg.downloadSpeed).toBe(2); // FUP speed, not the plan's 10
       expect(pkgArg.uploadSpeed).toBe(2);
-      expect(network.disconnect).toHaveBeenCalledWith('alice');
+      expect(network.disconnect).toHaveBeenCalledWith('alice', undefined, expect.stringMatching(/^fup-/));
       expect(prisma.subscriber.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ fupApplied: true }) }),
       );
@@ -314,7 +314,7 @@ describe('FupService', () => {
       expect(res).toMatchObject({ released: true, username: 'alice' });
       const pkgArg = radiusSync.syncSubscriberProfile.mock.calls[0][2];
       expect(pkgArg.downloadSpeed).toBe(10); // full plan speed restored, not 2
-      expect(network.disconnect).toHaveBeenCalledWith('alice');
+      expect(network.disconnect).toHaveBeenCalledWith('alice', undefined, expect.stringMatching(/^fup-/));
       expect(prisma.subscriber.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 1 }, data: { fupApplied: false, fupAppliedAt: null } }),
       );

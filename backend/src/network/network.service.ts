@@ -166,7 +166,13 @@ export class NetworkService {
    * straight at the MikroTik API and remove /ppp/active, and we only report
    * success when something actually cut the session.
    */
-  async disconnect(username: string, actor?: any) {
+  /**
+   * `why` names the panel feature that asked for the cut (operator-kick,
+   * plan-change, static-ip-change, fup-block…). It is stored with the session
+   * action log so the Logs → Disconnect log can say HOW a customer was dropped,
+   * not just the RADIUS cause the router reported.
+   */
+  async disconnect(username: string, actor?: any, why?: string) {
     const rows = await this.prisma.$queryRaw<Array<any>>`
       SELECT acctsessionid, nasipaddress, framedipaddress
       FROM radacct WHERE username = ${username} AND acctstoptime IS NULL
@@ -302,6 +308,7 @@ export class NetworkService {
       acctSessionId: session?.acctsessionid ?? null,
       framedIp: session?.framedipaddress ?? null,
       method: cut ? method : null,
+      why: why ?? (actorId ? 'operator-kick' : null),
       verified: verified === null ? null : verified,
       attempts: trail,
       timestamp: new Date().toISOString(),
@@ -329,7 +336,8 @@ export class NetworkService {
           `${username} @ ${nas?.nasname ?? nas?.nasIp ?? 'unknown NAS'}` +
           (session?.acctsessionid ? ` (session ${session.acctsessionid})` : '') +
           ` — ${trail.join(' → ')} — ` +
-          (cut ? `SUCCESS via ${method}` : 'FAILED — still online'),
+          (cut ? `SUCCESS via ${method}` : 'FAILED — still online') +
+          (why ? ` — reason: ${why}` : ''),
       },
     }).catch(() => null);
 
@@ -349,11 +357,28 @@ export class NetworkService {
   }
 
   /** Cut EVERY open session for a username (duplicate-login takedown). */
-  async cutAllSessions(username: string) {
+  async cutAllSessions(username: string, actor?: any) {
     const result = await this.coa.cutAllSessions(username);
+    const actorId = actor?.id ?? actor?.userId ?? actor?.sub ?? null;
     await this.prisma.activityLog.create({
-      data: { action: 'DISCONNECT_ALL', entity: 'Session', details: `${username}: ${result.sessionsCut} session(s) cut, ${result.closed} row(s) closed` },
+      data: {
+        userId: actorId ?? undefined,
+        action: 'DISCONNECT_ALL', entity: 'Session',
+        details: `${username}: ${result.sessionsCut} session(s) cut, ${result.closed} row(s) closed`,
+      },
     });
+    // Same structured record the single disconnect writes, so the Disconnect
+    // log can attribute these cuts to the operator who asked for them.
+    await this.prisma.systemLog.create({
+      data: {
+        level: 'INFO', source: 'disconnect',
+        message: `All sessions cut: "${username}" — ${result.sessionsCut} session(s)`,
+        metadata: JSON.stringify({
+          action: 'DISCONNECT_ALL', actorId, username, why: 'duplicate-takedown',
+          sessionsCut: result.sessionsCut, timestamp: new Date().toISOString(),
+        }),
+      },
+    }).catch(() => null);
     return { disconnected: true, ...result };
   }
 

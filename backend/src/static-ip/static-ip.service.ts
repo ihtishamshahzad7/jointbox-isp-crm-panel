@@ -519,7 +519,7 @@ export class StaticIpService {
     let reconnected = false;
     let method = 'none';
     try {
-      const r = await this.network.disconnect(username);
+      const r = await this.network.disconnect(username, undefined, 'static-ip-change');
       reconnected = true;
       method = r?.method ?? 'coa';
     } catch (e: any) {
@@ -728,7 +728,7 @@ export class StaticIpService {
         ).catch(() => null);
       }
       if (holder?.username) {
-        await this.network.disconnect(holder.username);
+        await this.network.disconnect(holder.username, undefined, 'static-ip-released');
         disconnectResult = 'session-cut'; // disconnect() only returns once verified
       }
     } catch (e: any) {

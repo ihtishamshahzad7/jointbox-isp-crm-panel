@@ -244,7 +244,7 @@ export class FupService {
   private async applyBlock(sub: any, usedGb: number, quotaGb: number) {
     try {
       await this.radiusSync.removeSubscriberFromRadius(sub.username).catch(() => null);
-      await this.network.disconnect(sub.username).catch(() => null);
+      await this.network.disconnect(sub.username, undefined, 'fup-block').catch(() => null);
       await this.prisma.subscriber.update({
         where: { id: sub.id }, data: { fupApplied: true, fupAppliedAt: new Date() },
       });
@@ -325,7 +325,7 @@ export class FupService {
           idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
         },
       );
-      await this.network.disconnect(sub.username).catch(() => null);
+      await this.network.disconnect(sub.username, undefined, 'fup-throttle').catch(() => null);
 
       await this.prisma.subscriber.update({
         where: { id: sub.id },
@@ -385,7 +385,7 @@ export class FupService {
         idleTimeout: Number(process.env.HOTSPOT_IDLE_TIMEOUT || 0) || null,
       },
     );
-    await this.network.disconnect(sub.username).catch(() => null);
+    await this.network.disconnect(sub.username, actor, 'fup-restore').catch(() => null);
 
     await this.prisma.subscriber.update({
       where: { id: subscriberId },

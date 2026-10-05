@@ -135,7 +135,7 @@ describe('StaticIpService', () => {
     }));
     expect(subscribers.syncToRadius).toHaveBeenCalledWith(2);
     // The disconnect happens only after the RADIUS sync succeeded:
-    expect(network.disconnect).toHaveBeenCalledWith('jane');
+    expect(network.disconnect).toHaveBeenCalledWith('jane', undefined, 'static-ip-change');
     expect(
       subscribers.syncToRadius.mock.invocationCallOrder[0],
     ).toBeLessThan(network.disconnect.mock.invocationCallOrder[0]);
@@ -248,7 +248,7 @@ describe('StaticIpService', () => {
     expect(subscribers.syncToRadius).toHaveBeenCalledWith(2);
     // The released IP must never be handed out again by a stale router secret:
     expect(mikrotik.clearSecretRemoteAddress).toHaveBeenCalledWith('192.168.88.17', 8728, 'admin', 'secret', 'jane');
-    expect(network.disconnect).toHaveBeenCalledWith('jane');
+    expect(network.disconnect).toHaveBeenCalledWith('jane', undefined, 'static-ip-released');
     expect(prisma.activityLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ action: 'STATIC_IP_REMOVED', details: expect.stringContaining('192.168.88.151') }),
     }));

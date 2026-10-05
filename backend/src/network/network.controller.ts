@@ -47,14 +47,14 @@ export class NetworkController {
   async disconnect(@Param('username') username: string, @Req() req: any) {
     await this.assertOwns(req.user, { username });
     // actor → logged as the disconnect's requester in the session action log.
-    return this.network.disconnect(username, req.user);
+    return this.network.disconnect(username, req.user, 'operator-kick');
   }
 
   /** Cut EVERY open session for one username — duplicate-login takedown. */
   @Post('disconnect/:username/all')
   async cutAll(@Param('username') username: string, @Req() req: any) {
     await this.assertOwns(req.user, { username });
-    return this.network.cutAllSessions(username);
+    return this.network.cutAllSessions(username, req.user);
   }
 
   /**

@@ -10,6 +10,7 @@ export interface DisconnectQuery {
   sinceHours?: number;
   nasIp?: string;
   username?: string;
+  search?: string;     // username, MAC address or IP
   cause?: string;      // canonical key, e.g. "Lost-Carrier"
   category?: string;   // e.g. "link"
   limit?: number;
@@ -60,6 +61,25 @@ export class DisconnectsService {
     if (scoped && Object.keys(scoped).length) and.push(scoped);
     if (q.nasIp && isIP(String(q.nasIp).trim())) and.push({ nasipaddress: String(q.nasIp).trim() });
     if (q.username) and.push({ username: String(q.username).trim().slice(0, 64) });
+    // One box for what an operator actually has in hand: a username, the
+    // customer's MAC address (any separator) or the IP they were given.
+    const term = String(q.search ?? '').trim().slice(0, 64);
+    if (term) {
+      const ors: any[] = [
+        { username: { contains: term, mode: 'insensitive' } },
+        { callingstationid: { contains: term, mode: 'insensitive' } },
+      ];
+      const macish = term.replace(/[^0-9a-f]/gi, '');
+      if (macish.length >= 4) {
+        // "00-11-22" and "001122" find "00:11:22:…"
+        const colon = macish.match(/.{1,2}/g)!.join(':');
+        if (colon.toLowerCase() !== term.toLowerCase()) {
+          ors.push({ callingstationid: { contains: colon, mode: 'insensitive' } });
+        }
+      }
+      if (isIP(term)) ors.push({ framedipaddress: term });
+      and.push({ OR: ors });
+    }
     const ended: any = { AND: [...and, { acctstoptime: { gte: from, lte: to } }] };
 
     // 1. Per raw cause value — the base every other figure maps through.
@@ -212,6 +232,8 @@ export class DisconnectsService {
     const topUsers = Array.from(users.values()).sort((a, b) => b.count - a.count || b.abnormal - a.abnormal).slice(0, 15);
     const subByName = await this.subscriberNames(actor, topUsers.map((u) => u.username));
 
+    const howBySession = await this.attribute(actor, rows);
+
     const topKeys = (m: Map<string, number>, n = 3) => Array.from(m.entries())
       .sort((a, b) => b[1] - a[1]).slice(0, n)
       .map(([key, count]) => ({ key, label: byKey.get(key)?.info.label || key, count }));
@@ -298,11 +320,116 @@ export class DisconnectsService {
         uploadBytes: r.acctinputoctets != null ? Number(r.acctinputoctets) : null,
         rawCause: r.acctterminatecause,
         ...fieldsOf(endedInfo(r.acctterminatecause)),
+        how: howBySession.get(String(r.radacctid)) || this.howFromCause(endedInfo(r.acctterminatecause)),
       })),
       recordsTotal,
       offset,
       limit,
     };
+  }
+
+  /** HOW a session ended, from the cause alone (no panel action recorded). */
+  private howFromCause(info: TerminateInfo): DisconnectHow {
+    const by: DisconnectHow['by'] =
+      info.category === 'customer' ? 'customer'
+        : info.category === 'timer' ? 'timer'
+        : info.category === 'operator' ? 'operator'
+        : info.category === 'link' ? 'line'
+        : info.category === 'router' || info.category === 'port' || info.category === 'service' ? 'router'
+        : info.category === 'panel' ? 'panel'
+        : 'unknown';
+    const extra = info.key === 'Admin-Reset'
+      ? 'No disconnect was made from the panel at that time, so it was most likely reset on the router itself.'
+      : null;
+    return { by, title: info.how, detail: extra, actor: null, method: null, source: 'cause', steps: [] };
+  }
+
+  /**
+   * Match each record to the panel action that ended it, if any: an operator's
+   * Disconnect / Cut-all click, a plan or static-IP change, a fair-usage rule
+   * or the automatic duplicate-login sweep. These write a structured log entry
+   * (with the RADIUS session id when one was open), so a record can say "Cut
+   * from the panel by Ali via RADIUS CoA" instead of a bare "Admin Reset".
+   *
+   * Operator names are shown only for accounts inside the viewer's own tree.
+   */
+  private async attribute(actor: Actor, rows: any[]): Promise<Map<string, DisconnectHow>> {
+    const out = new Map<string, DisconnectHow>();
+    const stops = rows.map((r) => r.acctstoptime?.getTime?.()).filter((t): t is number => !!t);
+    if (!rows.length || !stops.length) return out;
+    const lo = new Date(Math.min(...stops) - 10 * 60_000);
+    const hi = new Date(Math.max(...stops) + 10 * 60_000);
+    const names = new Set(rows.map((r) => r.username).filter(Boolean));
+    const sessionIds = new Set(rows.map((r) => r.acctsessionid).filter(Boolean));
+
+    type Ev = { at: number; username: string | null; sessionId: string | null; cutIds: string[]; actorId: number | null; why: string | null; method: string | null; steps: string[] };
+    const events: Ev[] = [];
+    try {
+      const logs = await this.prisma.systemLog.findMany({
+        where: { source: { in: ['disconnect', 'simultaneous-use'] }, level: 'INFO', createdAt: { gte: lo, lte: hi } },
+        orderBy: { createdAt: 'desc' },
+        take: 2000,
+        select: { createdAt: true, metadata: true },
+      });
+      for (const l of logs) {
+        let m: any = null;
+        try { m = l.metadata ? JSON.parse(String(l.metadata)) : null; } catch { m = null; }
+        if (!m || (m.action && String(m.action).includes('FAILED'))) continue;
+        const uname = m.username ? String(m.username) : null;
+        const ids: string[] = Array.isArray(m.cutSessionIds) ? m.cutSessionIds.map(String) : [];
+        if (uname && !names.has(uname) && !ids.some((x) => sessionIds.has(x))) continue;
+        events.push({
+          at: l.createdAt.getTime(),
+          username: uname,
+          sessionId: m.acctSessionId ? String(m.acctSessionId) : null,
+          cutIds: ids,
+          actorId: m.actorId != null ? Number(m.actorId) || null : null,
+          why: m.why ? String(m.why) : null,
+          method: m.method ? String(m.method) : null,
+          steps: Array.isArray(m.attempts) ? m.attempts.map(String).slice(0, 8) : [],
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`Disconnect attribution skipped: ${e?.message || e}`);
+      return out;
+    }
+    if (!events.length) return out;
+
+    // Names for operators inside the viewer's own tree only.
+    const actorIds = Array.from(new Set(events.map((e) => e.actorId).filter((x): x is number => !!x)));
+    const visible = new Map<number, { name: string; email: string }>();
+    if (actorIds.length) {
+      const tree = this.scope.isAdmin(actor?.role)
+        ? null
+        : new Set(await this.scope.descendantIds(await this.scope.rootId(actor)));
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: actorIds } }, select: { id: true, name: true, email: true },
+      });
+      for (const u of users) if (!tree || tree.has(u.id)) visible.set(u.id, { name: u.name || u.email, email: u.email });
+    }
+
+    for (const r of rows) {
+      const stop = r.acctstoptime?.getTime?.();
+      if (!stop) continue;
+      const sid = r.acctsessionid ? String(r.acctsessionid) : null;
+      // Exact session id first; otherwise the same customer within 3 minutes.
+      const ev = events.find((e) => sid && (e.sessionId === sid || e.cutIds.includes(sid)))
+        || events.find((e) => !e.sessionId && !e.cutIds.length && e.username === r.username && Math.abs(e.at - stop) <= 3 * 60_000);
+      if (!ev) continue;
+      const who = ev.actorId ? visible.get(ev.actorId) : undefined;
+      const why = WHY[ev.why || (ev.actorId ? 'operator-kick' : 'panel')] || WHY.panel;
+      const method = ev.method === 'mikrotik-api' ? 'MikroTik API' : ev.method === 'coa' || ev.method === 'radius-coa' ? 'RADIUS CoA' : ev.method || null;
+      out.set(String(r.radacctid), {
+        by: why.by,
+        title: why.title,
+        detail: why.detail,
+        actor: ev.actorId ? (who ? { name: who.name, email: who.email } : { name: 'Your provider', email: null }) : null,
+        method,
+        source: 'panel',
+        steps: ev.steps,
+      });
+    }
+    return out;
   }
 
   private async nasNames(actor: Actor, ips: string[]): Promise<Map<string, string>> {
@@ -338,3 +465,27 @@ export class DisconnectsService {
     return out;
   }
 }
+
+export interface DisconnectHow {
+  by: 'customer' | 'timer' | 'operator' | 'line' | 'router' | 'panel' | 'unknown';
+  title: string;
+  detail: string | null;
+  actor: { name: string; email: string | null } | null;
+  method: string | null;     // "RADIUS CoA" | "MikroTik API"
+  source: 'panel' | 'cause'; // a recorded panel action, or read from the cause
+  steps: string[];           // the panel's attempt trail, when it cut the session
+}
+
+/** Panel features that cut sessions, in the words an operator would use. */
+const WHY: Record<string, { by: DisconnectHow['by']; title: string; detail: string | null }> = {
+  'operator-kick':      { by: 'operator', title: 'Disconnected from the panel', detail: 'An operator pressed Disconnect on this customer.' },
+  'duplicate-takedown': { by: 'operator', title: 'All sessions cut from the panel', detail: 'An operator cut every open session for this login (duplicate login).' },
+  'duplicate-sweep':    { by: 'panel', title: 'Automatic duplicate-login sweep', detail: 'The same login was online from more than one device, so the panel cut the extra sessions.' },
+  'plan-change':        { by: 'panel', title: 'Reconnected after a plan change', detail: 'The package changed, so the session was restarted to apply the new speed.' },
+  'static-ip-change':   { by: 'panel', title: 'Reconnected to apply a new static IP', detail: 'The customer was given a static IP, so the session was restarted to pick it up.' },
+  'static-ip-released': { by: 'panel', title: 'Reconnected after the static IP was released', detail: 'The static IP was taken back, so the session was restarted on a pool address.' },
+  'fup-block':          { by: 'panel', title: 'Fair-usage limit reached — blocked', detail: 'The data quota ran out and the plan blocks at the limit.' },
+  'fup-throttle':       { by: 'panel', title: 'Fair-usage limit reached — speed reduced', detail: 'The data quota ran out, so the session was restarted on the reduced speed.' },
+  'fup-restore':        { by: 'panel', title: 'Fair-usage reset — full speed restored', detail: 'The fair-usage limit was released and the session restarted at full speed.' },
+  panel:                { by: 'panel', title: 'Disconnected by the panel', detail: null },
+};
