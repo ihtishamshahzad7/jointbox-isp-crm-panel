@@ -9,20 +9,13 @@ import { SecretsService } from '../common/secrets.service';
  *   • snmpCommunity, snmpV3AuthPass, snmpV3PrivPass  → encrypted at rest.
  *     Only our own pollers read them, so encryption is contained and safe.
  *
- *   • RADIUS `secret`  → NOT encrypted, on purpose. FreeRADIUS is configured
- *     with `read_clients = yes` and reads this column straight out of the
- *     database to authenticate every router. Encrypting it would silently break
- *     RADIUS for the whole network. It is still MASKED in API responses so it
- *     never reaches the browser.
+ *   • RADIUS `secret` / encrypted vault → encrypted at rest. FreeRADIUS no longer
+ *     reads the application database for client secrets. The backend decrypts the
+ *     value only when rebuilding its protected FreeRADIUS clients file.
  *
- *   • apiPassword  → encrypted at rest. Roughly forty call sites across ten
- *     services (CoA, sync, IP pools, static IP, integrity checks…) read this
- *     column and pass it down, so rather than edit all of them — the risky
- *     drive-by this comment used to warn about — decryption happens inside
- *     MikrotikClient's constructor, the one point where the value is actually
- *     used to authenticate. Callers hand us the column verbatim and are
- *     indifferent to whether it is ciphertext.
- *     Backfill existing plaintext rows with tools/encrypt-nas-passwords.js.
+ * Existing plaintext `secret` values are migration-only legacy data. The backend
+ *     encrypts them on startup and clears the plaintext column after the encrypted
+ *     value is persisted. New NAS rows never write plaintext secrets.
  *
  * Values already stored in plaintext keep working: decrypt() returns the input
  * unchanged when it is not an encrypted payload, so no data migration is needed.
@@ -30,7 +23,7 @@ import { SecretsService } from '../common/secrets.service';
 
 /** Fields that must never be returned to the browser in plaintext. */
 export const SECRET_FIELDS = [
-  'secret', 'apiPassword', 'snmpCommunity', 'snmpV3AuthPass', 'snmpV3PrivPass',
+  'secret', 'radiusSecretEnc', 'apiPassword', 'snmpCommunity', 'snmpV3AuthPass', 'snmpV3PrivPass',
 ] as const;
 
 const MASK = '••••••••';
