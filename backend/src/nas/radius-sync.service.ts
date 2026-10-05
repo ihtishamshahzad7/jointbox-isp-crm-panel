@@ -197,7 +197,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `✅ Connected to RADIUS database: ${database} on ${host}:${port}`,
       );
-      const result = await client.query('SELECT COUNT(*) FROM nas');
+      const result = await client.query('SELECT COUNT(*) FROM radius_nas_clients');
       this.logger.log(`📊 NAS table has ${result.rows[0].count} entries`);
     } catch (error: any) {
       this.connected = false;
@@ -817,20 +817,19 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       const existing = await this.pgClient.query(
-        'SELECT id FROM nas WHERE nasname = $1',
+        'SELECT id FROM radius_nas_clients WHERE nasname = $1',
         [nasIp],
       );
 
       if (existing.rows.length > 0) {
         await this.pgClient.query(
-          `UPDATE nas SET shortname=$1, secret=$2, description=$3, type='other'
-           WHERE nasname=$4`,
+          `UPDATE radius_nas_clients SET shortname=$1, secret=$2, description=$3, type='other' WHERE nasname=$4`,
           [nasName, secret, `Auto-synced from CRM: ${nasName}`, nasIp],
         );
         this.logger.log(`✅ NAS updated in FreeRADIUS: ${nasName} (${nasIp})`);
       } else {
         await this.pgClient.query(
-          `INSERT INTO nas (nasname, shortname, type, secret, description)
+          `INSERT INTO radius_nas_clients (nasname, shortname, type, secret, description)
            VALUES ($1, $2, 'other', $3, $4)`,
           [nasIp, nasName, secret, `Auto-synced from CRM: ${nasName}`],
         );
@@ -850,7 +849,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       const result = await this.pgClient.query(
-        'DELETE FROM nas WHERE nasname = $1 RETURNING id',
+        'DELETE FROM radius_nas_clients WHERE nasname = $1 RETURNING id',
         [nasIp],
       );
       if (result.rows.length > 0) {
@@ -871,7 +870,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       const result = await this.pgClient.query(
-        'SELECT id, nasname, shortname, secret, type, description FROM nas ORDER BY id',
+        'SELECT id, nasname, shortname, secret, type, description FROM radius_nas_clients ORDER BY id',
       );
       return result.rows;
     } catch (error: any) {
@@ -884,7 +883,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       const result = await this.pgClient.query(
-        'SELECT id, nasname, shortname, secret, type, description FROM nas WHERE nasname = $1',
+        'SELECT id, nasname, shortname, secret, type, description FROM radius_nas_clients WHERE nasname = $1',
         [nasIp],
       );
       return result.rows[0] || null;
@@ -898,7 +897,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     try {
       this.ensureConnected();
       const result = await this.pgClient.query(
-        'SELECT id FROM nas WHERE nasname = $1',
+        'SELECT id FROM radius_nas_clients WHERE nasname = $1',
         [nasIp],
       );
       return result.rows.length > 0;
@@ -911,7 +910,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       await this.pgClient.query(
-        'UPDATE nas SET secret = $1 WHERE nasname = $2',
+        'UPDATE radius_nas_clients SET secret = $1 WHERE nasname = $2',
         [newSecret, nasIp],
       );
       this.logger.log(`✅ NAS secret updated for ${nasIp}`);
@@ -923,6 +922,32 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ─────────────────────────────────────────────────────────────
+  /** Mirror the app-owned NAS list into the protected FreeRADIUS client store. */
+  async syncNasClient(nasIp: string, nasName: string, secret: string, description?: string | null): Promise<void> {
+    this.ensureConnected();
+    await this.pgClient.query(`INSERT INTO radius_nas_clients (nasname, shortname, type, secret, description)
+      VALUES ($1, $2, 'other', $3, $4)
+      ON CONFLICT (nasname) DO UPDATE SET shortname=EXCLUDED.shortname, secret=EXCLUDED.secret,
+      description=EXCLUDED.description, type=EXCLUDED.type`,
+      [nasIp, nasName, secret, description ?? \`Auto-synced from CRM: ${nasName}\`]);
+    await this.reloadFreeradius();
+  }
+
+  async syncAllNasClients(rows: Array<{ nasIp: string | null; shortname?: string | null; nasname: string; secret: string | null; description?: string | null }>): Promise<void> {
+    this.ensureConnected();
+    for (const row of rows) {
+      if (!row.secret) continue;
+      const ip = row.nasIp || row.nasname;
+      if (!ip) continue;
+      await this.pgClient.query(`INSERT INTO radius_nas_clients (nasname, shortname, type, secret, description)
+        VALUES ($1, $2, 'other', $3, $4)
+        ON CONFLICT (nasname) DO UPDATE SET shortname=EXCLUDED.shortname, secret=EXCLUDED.secret,
+        description=EXCLUDED.description, type=EXCLUDED.type`,
+        [ip, row.shortname || row.nasname, row.secret, row.description ?? null]);
+    }
+    await this.reloadFreeradius();
+  }
+
   // RADIUS STATUS & MONITORING
   // ─────────────────────────────────────────────────────────────
   async isRadiusAlive(): Promise<{
@@ -933,7 +958,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     try {
       this.ensureConnected();
       const [nasResult, sessionResult] = await Promise.all([
-        this.pgClient.query('SELECT COUNT(*) FROM nas'),
+        this.pgClient.query('SELECT COUNT(*) FROM radius_nas_clients'),
         // Count only sessions the NAS has reported on recently — the SAME 15-min
         // freshness rule the subscriber list, overview tile and detail page use.
         // Without this, a ghost session (Accounting-Stop lost, or a NAS with a
