@@ -526,11 +526,10 @@ export class NasService implements OnModuleInit {
       },
     });
 
+    // The app stores ciphertext; this method receives the plaintext only for
+    // the immediate protected-store synchronization.
     await this.radiusSync.syncNasClient(data.nasIp, data.shortname ?? data.nasName, data.secret, data.description);
-      this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
-    } catch (error: any) {
-      this.logger.warn(`NAS saved, but FreeRADIUS reload failed: ${error.message}`);
-    }
+    this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
     return sanitizeNas(nas);
   }
 
