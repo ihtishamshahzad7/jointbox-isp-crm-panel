@@ -9,11 +9,10 @@ import { SecretsService } from '../common/secrets.service';
  *   • snmpCommunity, snmpV3AuthPass, snmpV3PrivPass  → encrypted at rest.
  *     Only our own pollers read them, so encryption is contained and safe.
  *
- *   • RADIUS `secret`  → NOT encrypted, on purpose. FreeRADIUS is configured
- *     with `read_clients = yes` and reads this column straight out of the
- *     database to authenticate every router. Encrypting it would silently break
- *     RADIUS for the whole network. It is still MASKED in API responses so it
- *     never reaches the browser.
+ *   • RADIUS `secret`  → encrypted at rest with the same AES-256-GCM
+ *     envelope used by SecretsService. FreeRADIUS no longer reads this app
+ *     column directly; RadiusSyncService mirrors the plaintext only into its
+ *     protected client store using a dedicated RADIUS database role.
  *
  *   • apiPassword  → encrypted at rest. Roughly forty call sites across ten
  *     services (CoA, sync, IP pools, static IP, integrity checks…) read this
