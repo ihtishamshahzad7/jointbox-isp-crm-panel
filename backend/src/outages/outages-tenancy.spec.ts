@@ -32,6 +32,10 @@ function inScope(row: any, scope: any): boolean {
   const [byArea, byCreator] = scope.OR;
   const ids: number[] = byCreator.createdBy.in;
   const area = AREAS[row.areaId];
+  // Write scope (close / classify): owner of the area or creator only.
+  if (byArea.area.is.ownerId) {
+    return !!((area && byArea.area.is.ownerId.in.includes(area.ownerId)) || (row.createdBy != null && ids.includes(row.createdBy)));
+  }
   const reach = byArea.area.is.OR;
   const owned = area && reach[0].ownerId.in.includes(area.ownerId);
   const served = area && area.customersOf.some((u) => reach[1].subscribers.some.userId.in.includes(u));

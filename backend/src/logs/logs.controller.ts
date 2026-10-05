@@ -5,12 +5,16 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { BlockDemoGuard } from '../security/block-demo.guard';
 import { LogsService } from './logs.service';
+import { DisconnectsService } from './disconnects.service';
 
 // Demo accounts never see logs — security / no data leak.
 @UseGuards(JwtAuthGuard, PermissionsGuard, BlockDemoGuard)
 @Controller('logs')
 export class LogsController {
-  constructor(private readonly logs: LogsService) {}
+  constructor(
+    private readonly logs: LogsService,
+    private readonly disconnects: DisconnectsService,
+  ) {}
 
   // ── Unified Timeline ──────────────────────────────────────────
   @Get('timeline')
@@ -159,6 +163,31 @@ export class LogsController {
       username: username || undefined,
       cause: cause || undefined,
       sinceHours: sinceHours ? +sinceHours : undefined,
+    });
+  }
+
+  // ── Disconnect report: why sessions ended (all 18 RFC 2866 causes) ──
+  @Get('disconnects')
+  disconnectReport(
+    @Query('sinceHours') sinceHours: string,
+    @Query('nasIp') nasIp: string,
+    @Query('username') username: string,
+    @Query('cause') cause: string,
+    @Query('category') category: string,
+    @Query('limit') limit: string,
+    @Query('offset') offset: string,
+    @Query('tz') tz: string,
+    @Req() req: any,
+  ) {
+    return this.disconnects.report(req.user, {
+      sinceHours: sinceHours ? +sinceHours : undefined,
+      nasIp: nasIp || undefined,
+      username: username || undefined,
+      cause: cause || undefined,
+      category: category || undefined,
+      limit: limit ? +limit : undefined,
+      offset: offset ? +offset : undefined,
+      tz: tz ? +tz : undefined,
     });
   }
 

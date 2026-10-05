@@ -9,6 +9,9 @@ import {
 import { Observable } from 'rxjs';
 import { EventsService } from './events.service';
 import { SseAuthGuard } from './sse-auth.guard';
+import { ScopeService } from './scope.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { accountStatus } from '../auth/account-status';
 
 /**
  * Server-Sent Events endpoint.
@@ -33,7 +36,29 @@ import { SseAuthGuard } from './sse-auth.guard';
  */
 @Controller()
 export class EventsController {
-  constructor(private readonly events: EventsService) {}
+  constructor(
+    private readonly events: EventsService,
+    private readonly scope: ScopeService,
+    private readonly prisma?: PrismaService,
+  ) {}
+
+  /**
+   * Who may see an event: the account it concerns and the accounts above it
+   * (inside the same company). The bus used to deliver every company's logins
+   * (emails), payments (customer names, amounts) and monitor alerts (hosts) to
+   * every connected operator. An event with no owner is platform-level and
+   * reaches the platform account only.
+   */
+  private async visibleOwners(user: any): Promise<Set<number> | 'platform' | null> {
+    // A suspended account (or one under a suspended parent) gets nothing.
+    if (this.prisma && user?.sub) {
+      const st = await accountStatus(this.prisma, Number(user.sub));
+      if (!st || !st.active) return null;
+    }
+    if (user?.role === 'SUPER_ADMIN') return 'platform';
+    const root = await this.scope.rootId({ sub: user?.sub, role: user?.role } as any);
+    return new Set(await this.scope.descendantIds(root));
+  }
 
   /**
    * SSE stream — requires a valid JWT as a query parameter because the native
@@ -77,7 +102,20 @@ export class EventsController {
       // only fires for unnamed frames. The event name rides INSIDE the data
       // instead ({type, data}), which the frontend use-sse hook reads via its
       // generic onmessage handler.
+      let visible: Set<number> | 'platform' | null = null;
+      let loadedAt = 0;
+      const refresh = async () => {
+        visible = await this.visibleOwners(req.user).catch(() => null);
+        loadedAt = Date.now();
+      };
+      void refresh();
       const unsub = this.events.subscribe((event, payload) => {
+        if (Date.now() - loadedAt > 5 * 60_000) void refresh();
+        const owner = payload?.ownerUserId;
+        const ok = visible === 'platform'
+          ? owner == null
+          : visible instanceof Set && owner != null && visible.has(Number(owner));
+        if (!ok) return;
         subscriber.next({ data: { type: event, data: payload } } as MessageEvent);
       });
 

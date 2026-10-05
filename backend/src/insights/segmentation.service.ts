@@ -343,9 +343,16 @@ export class SegmentationService {
         },
       }),
       this.liveSessions(),
-      this.prisma.ticket.groupBy({ by: ['status'], _count: { _all: true } }).catch(() => [] as any[]),
-      this.prisma.invoice.groupBy({ by: ['status'], _count: { _all: true }, _sum: { dueAmount: true } })
-        .catch(() => [] as any[]),
+      // Same customers as above — these totals were summed across every
+      // company on the server.
+      this.prisma.ticket.groupBy({
+        by: ['status'], _count: { _all: true },
+        ...(Object.keys(where).length ? { where: { subscriber: where } } : {}),
+      }).catch(() => [] as any[]),
+      this.prisma.invoice.groupBy({
+        by: ['status'], _count: { _all: true }, _sum: { dueAmount: true },
+        ...(Object.keys(where).length ? { where: { subscriber: where } } : {}),
+      }).catch(() => [] as any[]),
     ]);
 
     const now = Date.now();
@@ -524,7 +531,11 @@ export class SegmentationService {
   async drilldown(dimension: string, key: string, actor?: Actor) {
     const base = await this.scopeWhere(actor);
     const id = key.includes(':') ? key.split(':')[1] : key;
-    const where: any = { ...base };
+    // The segment filter is ADDED to the caller's scope, never merged into it:
+    // setting where.userId for the "reseller" slice replaced the scope's own
+    // userId filter, so /segments/reseller/user:<any id> listed another
+    // company's customers (names, phones, usernames).
+    const where: any = {};
 
     switch (dimension) {
       case 'nas':      where.nasId = id === 'none' ? null : Number(id); break;
@@ -559,9 +570,10 @@ export class SegmentationService {
         break;
     }
 
+    const scoped = Object.keys(base).length ? { AND: [base, where] } : where;
     const [subs, live] = await Promise.all([
       this.prisma.subscriber.findMany({
-        where,
+        where: scoped,
         select: {
           id: true, fullName: true, username: true, phone: true, status: true,
           nas: { select: { nasname: true } },

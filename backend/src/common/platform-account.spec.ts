@@ -49,7 +49,7 @@ function db(users: any[], extra: Partial<Record<string, any[]>> = {}) {
     nas: table(extra.nas ?? []),
   };
   for (const m of ['package', 'ipPool', 'area', 'staticIp', 'inventoryItem', 'monitorTarget', 'networkDevice',
-    'alertRule', 'prefixPool', 'prefixAllocation', 'uploadedFile', 'accessGroup', 'isp']) p[m] = table(extra[m] ?? []);
+    'alertRule', 'prefixPool', 'prefixAllocation', 'uploadedFile', 'accessGroup', 'isp', 'webhook']) p[m] = table(extra[m] ?? []);
   return p;
 }
 const quiet = { warn: () => undefined };

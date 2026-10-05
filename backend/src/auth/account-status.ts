@@ -24,7 +24,7 @@ import { PrismaService } from '../prisma/prisma.service';
 const TTL_MS = 30_000;
 
 /** `role` is the account's CURRENT role — a role change applies within the cache TTL, not at token expiry. */
-type Status = { active: boolean; mustChangePassword: boolean; role?: string; at: number };
+type Status = { active: boolean; mustChangePassword: boolean; role?: string; isDemo?: boolean; tokenVersion?: number; at: number };
 const cache = new Map<number, Status>();
 
 export async function accountStatus(
@@ -36,7 +36,7 @@ export async function accountStatus(
 
   const u = await prisma.user.findUnique({
     where: { id: userId },
-    select: { isActive: true, mustChangePassword: true, role: true },
+    select: { isActive: true, mustChangePassword: true, role: true, isDemo: true, tokenVersion: true },
   });
   if (!u) {
     cache.delete(userId);
@@ -74,6 +74,8 @@ export async function accountStatus(
     active: chainActive,
     mustChangePassword: u.mustChangePassword === true,
     role: (u as any).role ? String((u as any).role) : undefined,
+    isDemo: (u as any).isDemo === true,
+    tokenVersion: Number((u as any).tokenVersion ?? 0),
     at: Date.now(),
   };
   cache.set(userId, s);

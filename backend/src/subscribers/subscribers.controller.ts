@@ -319,7 +319,12 @@ export class SubscribersController {
         await this.scope.assertPackage(req.user, Number(body.packageId));
       }
     }
-    return this.subscribersService.activateRenewal({ ...body, actorId: req.user?.sub });
+    return this.subscribersService.activateRenewal({
+      ...body,
+      actorId: req.user?.sub,
+      // Set here, never from the body.
+      ownerMayExtend: !!req.user && this.scope.isOwner(req.user.role),
+    });
   }
 
   @Delete('bulk-delete')

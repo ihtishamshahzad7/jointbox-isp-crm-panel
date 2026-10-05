@@ -101,6 +101,8 @@ export class RenewalService {
      *  placeholder expiry set at creation. So a subscriber created on the 1st
      *  but activated on the 6th runs 6th → 6th next month, not from the 1st. */
     fromActivation?: boolean;
+    /** Longest period this activation may grant (see the cap below). */
+    maxDays?: number;
   }, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, subscriberId);
     // Quoting another company's package would read back its price.
@@ -129,8 +131,9 @@ export class RenewalService {
      */
     let effectiveOwnerId = sub.userId ?? null;
     let claimed = false;
-    if (actor && !this.scope.isAdmin((actor as any).role)) {
-      const actorId = this.scope.actorId(actor);
+    if (actor && !this.scope.isAdmin((actor as any).role) && (actor as any).role !== 'AUDITOR') {
+      // Staff price for the account they work for (same rule as activation).
+      const actorId = await this.scope.rootId(actor);
       if (actorId && sub.userId !== actorId) {
         const below = await this.scope.descendantIds(actorId);
         if (!(sub.userId != null && below.includes(sub.userId))) {
@@ -228,10 +231,24 @@ export class RenewalService {
       }
     }
 
+    /**
+     * ONE CHARGE, ONE PERIOD. The wallet settlement is a flat per-activation
+     * cost, so DAYS: 3650 or DATE: 2099-01-01 debited one month and granted
+     * ten years. Accounts below the company may grant at most one package
+     * period per activation; the company itself up to a year.
+     */
+    const cap = opts.maxDays ?? (actor && !this.scope.isOwner((actor as any).role) ? duration + 1 : undefined);
+    if (cap != null && days > cap) {
+      throw new BadRequestException(
+        `One activation covers at most ${cap} day(s) of this package. Activate again when this period runs out.`,
+      );
+    }
+
     const expiry = new Date(base);
     expiry.setDate(expiry.getDate() + days);
 
     const extra = Number(opts.extraFee || 0);
+    if (!Number.isFinite(extra) || extra < 0) throw new BadRequestException('The extra fee must be zero or more.');
     const total = Math.round(amount + extra);
 
     /**
@@ -329,6 +346,14 @@ export class RenewalService {
     if (credit.status === 'SETTLED') return credit;
     if (actor) await this.scope.assertSubscriber(actor, credit.subscriberId);
 
+    // Claim the credit first: two settles at once both saw it OUTSTANDING and
+    // each wrote a paid invoice, a payment and ledger entries.
+    const claim = await this.prisma.creditExtension.updateMany({
+      where: { id: creditId, status: { not: 'SETTLED' } },
+      data: { status: 'SETTLED', settledAt: new Date(), settledBy: actor ? this.scope.actorId(actor) : null },
+    });
+    if (claim.count === 0) return this.prisma.creditExtension.findUnique({ where: { id: creditId } });
+
     const invoice = await this.prisma.invoice.create({
       data: {
         ...(await this.currency.invoiceStamp()),
@@ -368,12 +393,7 @@ export class RenewalService {
 
     return this.prisma.creditExtension.update({
       where: { id: creditId },
-      data: {
-        status: 'SETTLED',
-        settledAt: new Date(),
-        settledBy: actor ? this.scope.actorId(actor) : null,
-        invoiceId: invoice.id,
-      },
+      data: { invoiceId: invoice.id },
     });
   }
 

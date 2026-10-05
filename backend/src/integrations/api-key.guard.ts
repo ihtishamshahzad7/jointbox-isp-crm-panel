@@ -3,6 +3,8 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ApiKeysService } from './api-keys.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { accountStatus } from '../auth/account-status';
 
 /** Mark a public-API route with the scope it needs: @RequireScope('write') */
 export const RequireScope = (scope: string) => SetMetadata('apiScope', scope);
@@ -20,6 +22,7 @@ export class ApiKeyGuard implements CanActivate {
   constructor(
     private apiKeys: ApiKeysService,
     private reflector: Reflector,
+    private prisma: PrismaService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -29,11 +32,19 @@ export class ApiKeyGuard implements CanActivate {
     const auth = req.headers['authorization'] || '';
     const raw = header || (auth.startsWith('ApiKey ') ? auth.slice(7) : '');
 
-    const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '')
-      .toString()
-      .split(',')[0];
+    // req.ip honours `trust proxy`. The left-most X-Forwarded-For entry is
+    // client-written, so it could satisfy a key's IP allow-list from anywhere.
+    const ip = String(req.ip || req.socket?.remoteAddress || '');
 
     const key = await this.apiKeys.validate(String(raw).trim(), ip);
+
+    // A key works only while its owner (and every account above it) is
+    // active — suspending a company or reseller used to leave its API keys
+    // fully working.
+    const status = key?.ownerId ? await accountStatus(this.prisma, Number(key.ownerId)) : null;
+    if (!status || !status.active) {
+      throw new ForbiddenException('The account that owns this API key is suspended or no longer exists.');
+    }
 
     const required = this.reflector.get<string>('apiScope', context.getHandler());
     if (required && !this.apiKeys.hasScope(key, required)) {

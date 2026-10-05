@@ -124,10 +124,7 @@ export default function ReversalsPage() {
           </select>
           <input style={{ ...input, flex: 1, minWidth: 220 }} placeholder="Reason (required)" value={form.reason}
             onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} />
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: T.muted, cursor: "pointer" }}>
-            <input type="checkbox" checked={form.revertService} onChange={(e) => setForm((f) => ({ ...f, revertService: e.target.checked }))} />
-            Set service inactive
-          </label>
+          <span style={{ fontSize: 12, color: T.muted }}>The customer&apos;s service stops with the refund.</span>
           <button onClick={submit} disabled={busy}
             style={{ border: "none", cursor: "pointer", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, color: "#fff", background: "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)", opacity: busy ? 0.6 : 1 }}>
             {busy ? "…" : "Reverse"}

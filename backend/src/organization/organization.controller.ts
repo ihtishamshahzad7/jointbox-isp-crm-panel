@@ -117,7 +117,8 @@ export class OrganizationController {
       // Only the business owner may deliberately allow an overdraft.
       enforce: isOwner ? body?.enforce !== false : true,
       byUserId: req.user?.sub,
-      event: body?.event,
+      // No caller-chosen event: it made every call a "new" settlement, so a
+      // parent could charge a child's wallet as many times as it liked.
     });
   }
 
@@ -186,6 +187,11 @@ export class OrganizationController {
     @Request() req: any,
   ) {
     await this.scope.assertSubscriber(req.user, +subscriberId);
+    // Reversing a settlement moves money back up the chain — the company's
+    // decision, not the dealer's that was charged.
+    if (!this.scope.isOwner(req.user?.role)) {
+      throw new ForbiddenException('Only your company account can reverse a settlement.');
+    }
     return this.pricing.reverseActivation(+subscriberId, {
       reference: body?.reference,
       reason: body?.reason,

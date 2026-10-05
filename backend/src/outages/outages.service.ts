@@ -140,6 +140,23 @@ export class OutagesService {
     if (!hit) throw new NotFoundException('Outage not found');
   }
 
+  /**
+   * Changing an outage (closing it, re-classifying it) is for whoever owns its
+   * area or raised it. Merely having customers in the area lets you SEE it —
+   * a dealer could otherwise close its company's outage, which also flips the
+   * public status page back to "up".
+   */
+  private async assertOutageWritable(actor: Actor, id: number): Promise<void> {
+    if (!actor || this.scope.isPlatformOwner(actor)) return;
+    const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
+    const mine = ids.length ? ids : [0];
+    const hit = await this.prisma.powerOutage.findFirst({
+      where: { AND: [{ id }, { OR: [{ area: { is: { ownerId: { in: mine } } } }, { createdBy: { in: mine } }] }] },
+      select: { id: true },
+    });
+    if (!hit) throw new NotFoundException('Outage not found');
+  }
+
   /** A schedule is managed by whoever owns its area. */
   private async assertAreaOwned(actor: Actor, areaId: number): Promise<void> {
     if (!actor || this.scope.isPlatformOwner(actor)) return;
@@ -769,7 +786,10 @@ export class OutagesService {
 
   // ── Actions ──────────────────────────────────────────────────
   async classify(id: number, type: string, notes?: string, actor?: Actor) {
-    await this.assertOutage(actor, id);
+    await this.assertOutageWritable(actor, id);
+    if (!['SCHEDULED', 'UNSCHEDULED', 'NETWORK', 'UNKNOWN'].includes(String(type))) {
+      throw new BadRequestException('Unknown outage type.');
+    }
     return this.prisma.powerOutage.update({
       where: { id },
       data: { type: type as any, notes: notes ?? undefined },
@@ -777,7 +797,7 @@ export class OutagesService {
   }
 
   async close(id: number, actor?: Actor) {
-    await this.assertOutage(actor, id);
+    await this.assertOutageWritable(actor, id);
     return this.prisma.powerOutage.update({
       where: { id },
       data: { endedAt: new Date() },

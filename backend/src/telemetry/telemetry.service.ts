@@ -35,6 +35,13 @@ export class TelemetryService {
    * company's equipment for whoever asked. They narrow to this list instead.
    * A missing actor fails closed: these are only ever called for a request.
    */
+  /** Routers owned by any of these accounts. */
+  async ownedNasIds(ownerIds: number[]): Promise<number[]> {
+    if (!ownerIds.length) return [];
+    const rows = await this.prisma.nas.findMany({ where: { ownerId: { in: ownerIds } }, select: { id: true } });
+    return rows.map((n) => n.id);
+  }
+
   async visibleNasIds(actor: any): Promise<number[] | null> {
     if (this.scope.isPlatformOwner(actor)) return null;
     if (!actor) return [];
@@ -54,14 +61,9 @@ export class TelemetryService {
      */
     let where: any = opts.nasId ? { nasId: opts.nasId } : undefined;
     if (opts.actor && !this.scope.isAdmin(opts.actor.role)) {
-      const allowed = await this.prisma.nas.findMany({
-        where: await this.scope.nasWhere(opts.actor),
-        select: { id: true },
-      });
-      const ids = allowed.map((n) => n.id);
-      where = opts.nasId
-        ? { nasId: ids.includes(opts.nasId) ? opts.nasId : -1 }
-        : { nasId: { in: ids.length ? ids : [-1] } };
+      // Own routers in full; shared routers only for the caller's customers.
+      const scoped = await this.scope.networkLogWhere(opts.actor);
+      where = opts.nasId ? { AND: [{ nasId: opts.nasId }, scoped] } : scoped;
     }
     return this.prisma.networkLog.findMany({
       where,

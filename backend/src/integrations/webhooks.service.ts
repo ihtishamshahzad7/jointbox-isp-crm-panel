@@ -174,11 +174,18 @@ export class WebhooksService {
 
   private async dispatch(event: string, payload: Record<string, any>, ownerId?: number | null) {
     const hooks = await this.prisma.webhook.findMany({ where: { isActive: true } });
+    /**
+     * An owned webhook receives events about ITS OWN tree only: the account
+     * the event concerns must be the hook's owner or beneath it. Before, an
+     * event without an owner (every billing event) went to every company's
+     * webhooks, and a dealer's event never reached its company's hook.
+     * A hook with no owner gets only events that concern no account.
+     */
+    const chain = ownerId ? await this.scope.ancestorIds(Number(ownerId)) : [];
     const targets = hooks.filter((h) => {
       if (h.events !== '*' && !h.events.split(',').map((s) => s.trim()).includes(event)) return false;
-      // An owned webhook only receives events for its own subtree.
-      if (h.ownerId && ownerId && h.ownerId !== ownerId) return false;
-      return true;
+      if (h.ownerId) return chain.includes(h.ownerId);
+      return !ownerId;
     });
     if (!targets.length) return;
 

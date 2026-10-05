@@ -52,6 +52,7 @@ describe('UsersService — role ladder', () => {
       assertUser: jest.fn().mockResolvedValue(undefined),
       actorId: jest.fn().mockReturnValue(2),
     };
+    scope.assertUserWritable = (a: any, id: number) => scope.assertUser(a, id);
     return { prisma, scope, svc: new UsersService(prisma, scope) };
   }
 

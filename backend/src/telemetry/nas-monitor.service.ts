@@ -565,13 +565,27 @@ export class NasMonitorService {
   }
 
   /** Recent operational alerts (mass-disconnect, drift, outages) for the ops screen. */
-  async opsAlerts(limit = 40) {
-    return this.prisma.systemLog.findMany({
+  async opsAlerts(limit = 40, ownedNasIds?: number[] | null) {
+    const rows = await this.prisma.systemLog.findMany({
       where: { level: { in: ['WARN', 'ERROR', 'CRITICAL'] } },
       orderBy: { createdAt: 'desc' },
-      take: Math.min(Math.max(limit, 1), 100),
+      take: ownedNasIds ? 500 : Math.min(Math.max(limit, 1), 100),
       select: { id: true, level: true, source: true, message: true, createdAt: true },
     });
+    if (!ownedNasIds) return rows;
+    /**
+     * The system log is the whole installation's: the platform's console
+     * commands, every company's router names and IPs, other companies'
+     * customer usernames. A company sees only the lines about its own routers.
+     */
+    if (!ownedNasIds.length) return [];
+    const nas = await this.prisma.nas.findMany({
+      where: { id: { in: ownedNasIds } },
+      select: { nasname: true, nasIp: true, shortname: true },
+    });
+    const tokens = [...new Set(nas.flatMap((n: any) => [n.nasname, n.nasIp, n.shortname]).filter((t: any) => t && String(t).length >= 3))]
+      .map((t: any) => new RegExp(`(^|[^\\w.-])${String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w.-])`, 'i'));
+    return rows.filter((r) => tokens.some((rx) => rx.test(r.message || ''))).slice(0, Math.min(Math.max(limit, 1), 100));
   }
 
   /** Current per-VLAN online + throughput snapshot (latest bucket). */

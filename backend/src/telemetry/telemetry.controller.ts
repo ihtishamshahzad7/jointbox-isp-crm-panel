@@ -78,9 +78,13 @@ export class TelemetryController {
 
   /** Recent operational alerts (admin ops screen). Demo accounts blocked. */
   @Get('ops-alerts')
-  opsAlerts(@Req() req: any) {
+  async opsAlerts(@Req() req: any) {
     if (req?.user?.isDemo) return [];
-    return this.monitor.opsAlerts(40);
+    if (this.scope.isPlatformOwner(req.user)) return this.monitor.opsAlerts(40);
+    // Only routers the caller's own company tree OWNS (not ones shared to it).
+    const ids = await this.scope.descendantIds(await this.scope.rootId(req.user));
+    const own = await this.telemetry.ownedNasIds(ids);
+    return this.monitor.opsAlerts(40, own);
   }
 
   /** MRTG-style traffic for a NAS: range = 1h | 6h | 7d | 30d, optional vlan. */

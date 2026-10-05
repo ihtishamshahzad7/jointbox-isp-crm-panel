@@ -37,6 +37,7 @@ function make() {
       if (!(TREE[Number(a.sub)] ?? []).includes(id)) throw new ForbiddenException('outside');
     }),
   };
+  scope.assertUserWritable = (a: any, id: number) => scope.assertUser(a, id);
   return { prisma, svc: new UsersService(prisma, scope) };
 }
 const as = (sub: number) => ({ sub, role: USERS[sub].role }) as any;

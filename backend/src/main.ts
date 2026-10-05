@@ -183,7 +183,7 @@ async function bootstrap() {
     // operator out for browsing quickly.
     const sensitive =
       req.method === 'POST' &&
-      /^\/(auth\/(login|refresh|verify|change-password)|demo\/create|portal\/(login|register)|public\/hotspot)\b/.test(path);
+      /^\/(auth\/(login|refresh|verify|change-password)|demo\/create|portal\/(login|register|recharge|change-password)|public\/hotspot|vouchers\/redeem)\b/.test(path);
     const key = `${sensitive ? 'a' : 'g'}:${req.ip}`;
     const limit = sensitive ? RL_MAX_AUTH : RL_MAX;
     const now = Date.now();

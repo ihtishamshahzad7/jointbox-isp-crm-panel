@@ -390,6 +390,7 @@ export class PaymentsService {
       method: payment.method,
       invoiceNo: payment.invoice?.invoiceNo,
       subscriberName: payment.subscriber?.fullName,
+      ownerUserId: (subscriber as any)?.userId ?? null,
     });
     return payment;
   }

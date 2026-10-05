@@ -63,7 +63,8 @@ export class ReportsService {
       payments,
     ] = await Promise.all([
       this.prisma.subscriber.count({ where: sub }),
-      this.prisma.package.count(),                  // catalogue — shared
+      // Packages are company-owned now — count the caller's own catalogue.
+      this.prisma.package.count({ where: actor ? await this.scope.packageWhere(actor as any) : {} }),
       this.prisma.area.count({ where: owned }),
       this.prisma.nas.count({ where: await this.scope.nasWhere(actor as any) }),
       this.prisma.invoice.count({ where: bySub }),

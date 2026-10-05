@@ -6802,3 +6802,21 @@ body {
   color: var(--muted); font-size: 12px; line-height: 1.55;
   padding-top: 2px;
 }
+
+/* ── Dark theme: headings and zebra rows ─────────────────────────────────
+   Two light-palette literals above (`.main h1–h4 { color:#1C2434 }` and
+   `tbody tr:nth-child(even) { background:#F7F9FC }`) were never given a dark
+   counterpart, so in dark mode every page heading went near-black on the dark
+   ground and every second table row turned white under light text. */
+html[data-theme="dark"] .main h1,
+html[data-theme="dark"] .main h2,
+html[data-theme="dark"] .main h3,
+html[data-theme="dark"] .main h4 { color: var(--text); }
+html[data-theme="dark"] tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .main h1,
+  html:not([data-theme]) .main h2,
+  html:not([data-theme]) .main h3,
+  html:not([data-theme]) .main h4 { color: var(--text); }
+  html:not([data-theme]) tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+}

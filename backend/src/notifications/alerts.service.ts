@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { SecretsService } from '../common/secrets.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { safeFetch } from '../security/outbound-guard';
 
 /**
  * AlertsService — operational alerts to Discord and WhatsApp.
@@ -75,6 +76,15 @@ export class AlertsService {
     if (!v) {
       await this.prisma.userAlertChannel.deleteMany({ where: { userId, kind } });
       return { kind, configured: false };
+    }
+    /**
+     * A Discord channel is a Discord webhook URL — nothing else. Any URL used
+     * to be accepted and POSTed to by the server, so an account could point it
+     * at 127.0.0.1 or the cloud metadata address and probe the server's own
+     * network through the "test" button.
+     */
+    if (kind === 'DISCORD' && !/^https:\/\/(?:[a-z0-9-]+\.)?(?:discord\.com|discordapp\.com)\/api\/webhooks\/[^\s]+$/i.test(v)) {
+      throw new BadRequestException('Paste a Discord webhook URL (https://discord.com/api/webhooks/…).');
     }
     const data = {
       valueEnc: this.secrets.encryptValue(v),
@@ -152,11 +162,13 @@ export class AlertsService {
       }],
     };
     try {
-      const res = await fetch(url, {
+      // safeFetch refuses private / loopback / metadata destinations, including
+      // after a redirect.
+      const res = await safeFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      }, 'EXTERNAL');
       if (!res.ok) { this.log.warn(`Discord alert failed: HTTP ${res.status}`); return false; }
       return true;
     } catch (e: any) {

@@ -1,5 +1,5 @@
 import {
-  BadRequestException, ForbiddenException, Injectable, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -663,6 +663,11 @@ export class AccountingService {
     userId?: number,
     tx?: any,
   ) {
+    // A deduction of zero or less is not a deduction: a negative amount passed
+    // the "balance < amount" check and CREDITED the wallet.
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      throw new BadRequestException('Amount to deduct must be greater than zero.');
+    }
     /**
      * A3: THE LOCK NOW LIVES INSIDE A TRANSACTION, BECAUSE OTHERWISE IT IS NOT
      * A LOCK.
@@ -806,8 +811,8 @@ export class AccountingService {
     // may refund any slice up to what's left un-refunded on this payment.
     const alreadyRefunded = (payment as any).refundedAmount || 0;
     const remaining = round2(payment.amount - alreadyRefunded);
-    const refundAmt = amount == null ? remaining : round2(amount);
-    if (refundAmt <= 0) throw new BadRequestException('Refund amount must be greater than zero');
+    const refundAmt = amount == null ? remaining : round2(Number(amount));
+    if (!Number.isFinite(refundAmt) || refundAmt <= 0) throw new BadRequestException('Refund amount must be greater than zero');
     if (refundAmt > remaining + 0.005) {
       throw new BadRequestException(
         `Refund of ${refundAmt} exceeds the ${remaining} still refundable on payment ${payment.paymentNo}.`,
@@ -834,16 +839,26 @@ export class AccountingService {
     const newDue = invoice ? round2(invoice.total - newPaid) : 0;
     const newStatus = invoice ? (newPaid <= 0 ? 'UNPAID' : newPaid < invoice.total ? 'PARTIAL' : 'PAID') : null;
 
+    /**
+     * CLAIM THE REFUND ATOMICALLY. The refunded total was read above and
+     * written back as a plain value, so two refunds at once both passed the
+     * "remaining" check and the money went out twice. The claim only succeeds
+     * while the row still holds the total we read.
+     */
+    const claim = await this.prisma.payment.updateMany({
+      where: { id: paymentId, refundedAt: null, refundedAmount: alreadyRefunded },
+      data: {
+        refundedAmount: round2(alreadyRefunded + refundAmt),
+        refundReason: reason.trim(),
+        refundedBy: userId,
+        ...(fullyRefunded ? { refundedAt: new Date() } : {}),
+      } as any,
+    });
+    if (claim.count === 0) {
+      throw new ConflictException('This payment was just refunded by someone else. Reload and check what is left to refund.');
+    }
+
     await this.prisma.$transaction([
-      this.prisma.payment.update({
-        where: { id: paymentId },
-        data: {
-          refundedAmount: round2(alreadyRefunded + refundAmt),
-          refundReason: reason.trim(),
-          refundedBy: userId,
-          ...(fullyRefunded ? { refundedAt: new Date() } : {}),
-        } as any,
-      }),
       ...(invoice && newStatus
         ? [this.prisma.invoice.update({
             where: { id: invoice.id },
@@ -975,11 +990,14 @@ export class AccountingService {
 
     const already = (payment as any).refundedAmount || 0;
     const remaining = round2(payment.amount - already);
-    const refundAmt = body.amount == null ? remaining : round2(body.amount);
+    const refundAmt = body.amount == null ? remaining : round2(Number(body.amount));
+    if (!Number.isFinite(refundAmt) || refundAmt <= 0) throw new BadRequestException('Refund amount must be greater than zero');
 
+    // The threshold applies to the running total refunded on this payment —
+    // splitting one big refund into slices under the limit skipped approval.
     const { refundApprovalThreshold } = await this.getFinanceSettings(actor as any);
     const needsApproval =
-      refundApprovalThreshold > 0 && refundAmt > refundApprovalThreshold && !this.isOwner(actor?.role);
+      refundApprovalThreshold > 0 && round2(already + refundAmt) > refundApprovalThreshold && !this.isOwner(actor?.role);
 
     if (!needsApproval) {
       return this.refundPayment(paymentId, reason, body.toBalance === true, actor?.sub, body.amount);

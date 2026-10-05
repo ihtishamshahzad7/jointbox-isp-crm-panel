@@ -130,6 +130,21 @@ export class InventoryService {
       throw new ConflictException(`Serial "${serial}" already exists (item #${exists.id}).`);
     }
 
+    /**
+     * Stock is held by an account in the caller's own tree. The holder id was
+     * taken from the body unchecked, so a dealer could put items into another
+     * company's inventory; and an item with no holder landed in a shared
+     * "unassigned" pool no company can see. Unassigned now means the caller's
+     * own store.
+     */
+    let ownerId: number | null = data.ownerId ? Number(data.ownerId) : null;
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      if (ownerId) await this.scope.assertUser(actor, ownerId);
+      else ownerId = await this.scope.rootId(actor);
+    }
+    const price = data.purchasePrice != null && data.purchasePrice !== '' ? Number(data.purchasePrice) : null;
+    if (price != null && (!Number.isFinite(price) || price < 0)) throw new BadRequestException('Purchase price must be zero or more.');
+
     const item = await this.prisma.inventoryItem.create({
       data: {
         serialNumber:  serial,
@@ -138,11 +153,11 @@ export class InventoryService {
         brand:         data.brand || null,
         model:         data.model || null,
         status:        data.ownerId ? 'ASSIGNED' : 'IN_STOCK',
-        purchasePrice: data.purchasePrice ? Number(data.purchasePrice) : null,
+        purchasePrice: price,
         purchaseDate:  data.purchaseDate  ? new Date(data.purchaseDate)  : null,
         warrantyUntil: data.warrantyUntil ? new Date(data.warrantyUntil) : null,
         supplier:      data.supplier || null,
-        ownerId:       data.ownerId ? Number(data.ownerId) : null,
+        ownerId,
         notes:         data.notes || null,
       },
     });

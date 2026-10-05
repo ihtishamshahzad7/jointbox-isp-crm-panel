@@ -30,7 +30,13 @@ function HubInner({
     if (urlTab && tabs.some((t) => t.id === urlTab)) return urlTab;
     return tabs[0]?.id;
   });
-  const [seen, setSeen] = useState<Set<string>>(new Set([tabs[0]?.id]));
+  // A deep link (?tab=nas) opens on that tab, so it must count as seen from the
+  // start — otherwise only the first tab is ever rendered and the linked one
+  // shows its title over an empty page.
+  const [seen, setSeen] = useState<Set<string>>(() => new Set([active]));
+  useEffect(() => {
+    if (active && !seen.has(active)) setSeen((p) => new Set(p).add(active));
+  }, [active, seen]);
 
   useEffect(() => {
     if (urlTab || !storageKey) return;

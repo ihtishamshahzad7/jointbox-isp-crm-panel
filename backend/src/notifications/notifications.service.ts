@@ -73,6 +73,11 @@ export class NotificationsService implements OnModuleInit {
     };
   }
 
+  /** A user's own phone and email (for test sends). */
+  async contactOf(userId: number) {
+    return this.prisma.user.findUnique({ where: { id: userId }, select: { phone: true, email: true } });
+  }
+
   // ── Template rendering ────────────────────────────────────────
   render(text: string, vars: Record<string, any>) {
     return text.replace(/\{(\w+)\}/g, (_, key) => {
@@ -477,7 +482,10 @@ export class NotificationsService implements OnModuleInit {
     const init: any = { method };
     if (method === 'POST') {
       const bodyTpl = process.env.SMS_GATEWAY_BODY || '{"to":"{phone}","message":"{message}"}';
-      init.body = bodyTpl.replace('{phone}', phone).replace('{message}', message.replace(/"/g, '\\"'));
+      // JSON-escape what goes into the JSON template (quotes, backslashes,
+      // newlines): escaping only quotes let a message rewrite the request body.
+      const j = (v: string) => JSON.stringify(String(v)).slice(1, -1);
+      init.body = bodyTpl.replace('{phone}', j(phone)).replace('{message}', j(message));
       init.headers = { 'Content-Type': 'application/json' };
     }
     const res = await fetch(finalUrl, init);

@@ -147,6 +147,7 @@ export async function claimOrphans(
     'uploadedFile',
     'accessGroup',
     'isp',
+    'webhook',
   ];
   await prisma.nas.updateMany({
     where: { AND: [{ ownerId: null }, notDemoNas] },

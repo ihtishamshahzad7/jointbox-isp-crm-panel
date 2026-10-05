@@ -530,6 +530,7 @@ export class InvoicesService {
       method: data.method,
       invoiceNo: invoice.invoiceNo,
       subscriberName: paySubscriber?.fullName,
+      ownerUserId: paySubscriber?.userId ?? null,
     });
 
     return this.prisma.invoice.update({

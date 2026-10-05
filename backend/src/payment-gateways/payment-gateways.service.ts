@@ -340,9 +340,21 @@ export class PaymentGatewaysService {
   // — reading exposes credentials and other companies' payments, and writing
   // could redirect every company's customer payments.
 
+  /**
+   * Provider secrets (webhook secrets, salts) never leave the server: list and
+   * read show which secret keys are set, not their values. Updates replace a
+   * key only when a new value is sent.
+   */
+  private static masked(g: any) {
+    if (!g) return g;
+    const secret = (g.secretConfig ?? {}) as Record<string, any>;
+    const { secretConfig: _s, ...rest } = g;
+    return { ...rest, secretKeysSet: Object.keys(secret).filter((k) => secret[k] != null && secret[k] !== '') };
+  }
+
   async adminList(query: any, actor: any) {
     this.scope.assertPlatformOwner(actor);
-    return this.prisma.paymentGateway.findMany({
+    const rows = await this.prisma.paymentGateway.findMany({
       where: {
         ...(query?.provider ? { provider: query.provider } : {}),
         ...(query?.isActive ? { isActive: query.isActive === 'true' } : {}),
@@ -354,13 +366,14 @@ export class PaymentGatewaysService {
       },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
     });
+    return rows.map((g) => PaymentGatewaysService.masked(g));
   }
 
   async adminGet(id: number, actor: any) {
     this.scope.assertPlatformOwner(actor);
     const g = await this.prisma.paymentGateway.findUnique({ where: { id } });
     if (!g) throw new NotFoundException(`Gateway ${id} not found`);
-    return g;
+    return PaymentGatewaysService.masked(g);
   }
 
   async adminCreate(body: any, actor: any) {
@@ -380,19 +393,29 @@ export class PaymentGatewaysService {
         isActive: body.isActive !== false,
         supportedCurrencies: body.supportedCurrencies ?? null,
       },
-    });
+    }).then((g) => PaymentGatewaysService.masked(g));
   }
 
   async adminUpdate(id: number, body: any, actor: any) {
     this.scope.assertPlatformOwner(actor);
     const existing = await this.prisma.paymentGateway.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Gateway ${id} not found`);
-    return this.prisma.paymentGateway.update({
+    // The form never receives current secret values, so it sends only the
+    // keys being changed: merge them over what is stored.
+    let secretConfig: any;
+    if (body.secretConfig && typeof body.secretConfig === 'object') {
+      secretConfig = { ...((existing.secretConfig ?? {}) as any) };
+      for (const [k, v] of Object.entries(body.secretConfig)) {
+        if (v === null) delete secretConfig[k];
+        else if (v !== '' && v !== undefined) secretConfig[k] = v;
+      }
+    }
+    const updated = await this.prisma.paymentGateway.update({
       where: { id },
       data: {
         ...(body.name ? { name: body.name } : {}),
         ...(body.publicConfig ? { publicConfig: body.publicConfig } : {}),
-        ...(body.secretConfig ? { secretConfig: body.secretConfig } : {}),
+        ...(secretConfig ? { secretConfig } : {}),
         ...(body.webhookUrl !== undefined ? { webhookUrl: body.webhookUrl } : {}),
         ...(typeof body.feePercent === 'number' ? { feePercent: body.feePercent } : {}),
         ...(typeof body.feeFixed === 'number' ? { feeFixed: body.feeFixed } : {}),
@@ -401,6 +424,7 @@ export class PaymentGatewaysService {
         ...(body.supportedCurrencies !== undefined ? { supportedCurrencies: body.supportedCurrencies } : {}),
       },
     });
+    return PaymentGatewaysService.masked(updated);
   }
 
   async adminRemove(id: number, actor: any) {

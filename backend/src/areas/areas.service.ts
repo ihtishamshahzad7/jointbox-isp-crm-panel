@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -50,9 +50,13 @@ export class AreasService {
   }
 
   async create(data: { name: string; city?: string }, actor?: Actor) {
+    const d: any = data || {};
+    if (!String(d.name || '').trim()) throw new BadRequestException('Name is required');
     return this.prisma.area.create({
       data: {
-        ...data,
+        name: String(d.name).trim(),
+        city: d.city ? String(d.city) : null,
+        ...(d.description !== undefined ? { description: d.description ? String(d.description) : null } : {}),
         // Stamp the creator. Without this the area belongs to nobody and
         // falls out of every scoped query, including its creator's.
         ownerId: actor ? this.scope.actorId(actor) : null,
@@ -72,7 +76,16 @@ export class AreasService {
 
   async update(id: number, data: any, actor?: Actor) {
     await this.assertOwnsArea(id, actor);
-    return this.prisma.area.update({ where: { id }, data });
+    // Only the editable fields: the body went straight into the update, so an
+    // edit could also set ownerId and hand the area to another company.
+    const clean: any = {};
+    if (data?.name !== undefined) {
+      if (!String(data.name).trim()) throw new BadRequestException('Name is required');
+      clean.name = String(data.name).trim();
+    }
+    for (const k of ['city', 'description']) if (data?.[k] !== undefined) clean[k] = data[k] == null || data[k] === '' ? null : String(data[k]);
+    if (typeof data?.isActive === 'boolean') clean.isActive = data.isActive;
+    return this.prisma.area.update({ where: { id }, data: clean });
   }
 
   async remove(id: number, actor?: Actor) {

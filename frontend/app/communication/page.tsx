@@ -134,10 +134,11 @@ export default function CommunicationPage() {
   }
 
   async function doTest() {
-    if (!testForm.recipient) return setMsg("Enter a phone/email for the test");
+    if (!testForm.recipient) return setMsg("Enter your own phone or email for the test");
     setBusy(true);
     try {
-      await fetch(`${API}/communication/test`, { method: "POST", headers, body: JSON.stringify(testForm) });
+      const r = await fetch(`${API}/communication/test`, { method: "POST", headers, body: JSON.stringify(testForm) });
+      if (!r.ok) { const e = await r.json().catch(() => null); setMsg(e?.message || "The test message could not be sent"); return; }
       setMsg("Test message queued — check the Log tab");
     } finally { setBusy(false); }
   }

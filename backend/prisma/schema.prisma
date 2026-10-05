@@ -655,6 +655,9 @@ model User {
   /// except change-password / profile / logout with 403, so a panel cannot be
   /// operated on credentials that are printed in our own install script.
   mustChangePassword Boolean @default(false)
+  /// Bumped to sign out every session of this account at once (password
+  /// change, password reset by the parent). Tokens carry it as `tv`.
+  tokenVersion       Int     @default(0)
 
   // ── KYC for the account holder (reseller / staff), mirroring Subscriber KYC.
   // Regulators require a verified identity behind every account, not just every

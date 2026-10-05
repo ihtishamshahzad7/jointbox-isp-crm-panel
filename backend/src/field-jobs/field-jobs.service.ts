@@ -212,6 +212,20 @@ export class FieldJobsService {
     if (data.subscriberId && actor) {
       await this.scope.assertSubscriber(actor, Number(data.subscriberId));
     }
+    /**
+     * The ticket and the technician must be the caller's too. Unchecked, a
+     * dealer could attach a job to another company's ticket (completing the
+     * job then resolved and overwrote that ticket) or drop a job — with the
+     * customer's address and phone — into another company's technician's list.
+     */
+    if (data.ticketId && actor) {
+      const t = await this.prisma.ticket.findUnique({ where: { id: Number(data.ticketId) }, select: { subscriberId: true } });
+      if (!t) throw new NotFoundException('Ticket not found');
+      await this.scope.assertViaSubscriber(actor, t.subscriberId, 'Ticket');
+    }
+    if (data.assignedTo && actor && !this.scope.isAdmin(actor.role)) {
+      await this.scope.assertUser(actor, Number(data.assignedTo));
+    }
 
     // Default the address from the subscriber so the technician has somewhere
     // to go without anyone retyping it.

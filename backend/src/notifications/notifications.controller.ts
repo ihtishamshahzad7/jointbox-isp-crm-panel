@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Request, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { AlertsService } from './alerts.service';
 import { NotificationFeedService } from './notification-feed.service';
@@ -154,8 +154,25 @@ export class NotificationsController {
     return this.notifications.bulkSend({ ...body, createdBy: req.user?.sub, actor: req.user });
   }
 
+  /**
+   * A test message goes to the caller's OWN phone or email. It used to send
+   * any text to any number through the installation's SMS gateway / mail
+   * account — open to every account down to the demo login.
+   */
   @Post('test')
-  test(@Body() body: { channel: 'SMS' | 'EMAIL'; recipient: string; message: string }, @Request() req: any) {
+  async test(@Body() body: { channel: 'SMS' | 'EMAIL'; recipient: string; message: string }, @Request() req: any) {
+    if (!this.scope.isOwner(req.user?.role)) {
+      throw new ForbiddenException('Only your company account can send test messages.');
+    }
+    const me = await this.notifications.contactOf(Number(req.user?.sub));
+    const to = String(body?.recipient || '').trim();
+    const digits = (v: any) => String(v || '').replace(/\D/g, '');
+    const ok = body?.channel === 'EMAIL'
+      ? !!me?.email && to.toLowerCase() === String(me.email).toLowerCase()
+      : !!me?.phone && digits(to).length >= 7 && digits(to).slice(-10) === digits(me.phone).slice(-10);
+    if (!ok) {
+      throw new BadRequestException('Send the test to your own phone or email (the ones on your profile).');
+    }
     return this.notifications.send({
       channel: body.channel,
       recipient: body.recipient,

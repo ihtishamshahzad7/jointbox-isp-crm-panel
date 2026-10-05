@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { portalPasswordVersion } from './portal-session';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../common/cache.service';
@@ -50,7 +51,10 @@ export class PortalService {
     }
     await this.cache.del(rlKey);
 
-    const token = this.jwt.sign({ sub: sub.id, username: sub.username, scope: 'subscriber' }, { expiresIn: '30d' });
+    const token = this.jwt.sign(
+      { sub: sub.id, username: sub.username, scope: 'subscriber', pv: portalPasswordVersion(sub.password) },
+      { expiresIn: '30d' },
+    );
     return { token, subscriber: this.publicProfile(sub) };
   }
 
@@ -213,6 +217,11 @@ export class PortalService {
     return {
       changed: true,
       note: 'Password updated. Reconnect for it to take effect.',
+      // Older portal sessions end with the old password; this one carries on.
+      token: this.jwt.sign(
+        { sub: sub.id, username: sub.username, scope: 'subscriber', pv: portalPasswordVersion(pw) },
+        { expiresIn: '30d' },
+      ),
     };
   }
 
@@ -442,7 +451,7 @@ export class PortalService {
 
     // Issue a JWT so the subscriber can pay immediately
     const token = this.jwt.sign(
-      { sub: sub.id, username: sub.username, scope: 'subscriber' },
+      { sub: sub.id, username: sub.username, scope: 'subscriber', pv: portalPasswordVersion(password) },
       { expiresIn: '7d' },
     );
 

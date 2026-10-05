@@ -13,6 +13,27 @@ import { permissionForRoute } from '../security/route-permissions';
  * Skipped: GET requests, auth login/verify (login logs handle those), and the
  * logs endpoints themselves (so reading logs doesn't spam logs).
  */
+/**
+ * What of a request body may go into the audit log. Only top-level keys named
+ * like secrets were removed, so bodies shaped { key: 'WHATSAPP_TOKEN', value:
+ * '…' } or { kind, value, extra } (alert channels, settings) were stored in
+ * plain text — readable by anyone who can read the log. Nested objects are
+ * walked, and setting-shaped values are masked.
+ */
+const SECRET_KEY = /pass|secret|token|pin\b|otp|code|key|value|extra|webhook|credential|community|apikey|salt|private|auth/i;
+export function redactForAudit(body: any, depth = 0): any {
+  if (body == null || typeof body !== 'object') return body;
+  if (depth > 3) return '[…]';
+  if (Array.isArray(body)) return body.slice(0, 20).map((v) => redactForAudit(v, depth + 1));
+  const out: any = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (SECRET_KEY.test(k)) { out[k] = '[redacted]'; continue; }
+    if (typeof v === 'string' && /^(https?:\/\/[^\s]*@|[A-Za-z0-9_\-]{32,}$)/.test(v)) { out[k] = '[redacted]'; continue; }
+    out[k] = typeof v === 'object' ? redactForAudit(v, depth + 1) : v;
+  }
+  return out;
+}
+
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
   constructor(private prisma: PrismaService) {}
@@ -44,18 +65,16 @@ export class AuditInterceptor implements NestInterceptor {
     // show who really did it, not just the account it was done under.
     const imp = req.user?.imp;
     const traceId = req.traceId || null;
-    const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0] || null;
+    // req.ip honours `trust proxy`; the left-most X-Forwarded-For entry is
+    // whatever the client chose to write.
+    const ip = String(req.ip || req.socket?.remoteAddress || '') || null;
     const userAgent = req.headers['user-agent'] || null;
 
     // short, safe detail from body (no passwords/secrets)
     let detail: string | undefined;
     try {
       if (req.body && typeof req.body === 'object') {
-        const clone: any = { ...req.body };
-        for (const k of Object.keys(clone)) {
-          if (/pass|secret|token|pin|otp|code/i.test(k)) delete clone[k];
-        }
-        detail = JSON.stringify(clone).slice(0, 300);
+        detail = JSON.stringify(redactForAudit(req.body)).slice(0, 300);
       }
     } catch {
       /* ignore */

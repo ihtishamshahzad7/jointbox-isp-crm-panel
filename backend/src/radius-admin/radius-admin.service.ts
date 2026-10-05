@@ -29,6 +29,10 @@ export class RadiusAdminService {
 
   /** Reject anything outside the FreeRADIUS config tree (path-traversal safe). */
   private safePath(rel: string): string {
+    // Plain file names only — no quotes, spaces or shell metacharacters.
+    if (!/^[A-Za-z0-9._\/-]+$/.test(String(rel || ''))) {
+      throw new BadRequestException('That is not a valid FreeRADIUS config path.');
+    }
     const abs = path.resolve(RAD, rel.replace(/^\/+/, ''));
     if (abs !== RAD && !abs.startsWith(RAD + path.sep)) {
       throw new BadRequestException('Path is outside the FreeRADIUS config directory.');
@@ -167,13 +171,15 @@ export class RadiusAdminService {
     const abs = this.safePath(rel);
     // Backup first.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    await this.sh(`cp -a '${abs}' '${abs}.bak.${stamp}' 2>/dev/null || true`);
+    // fs.copyFile, not a shell `cp`: a path containing a quote broke out of
+    // the shell string and ran commands as the service user.
+    await fs.copyFile(abs, `${abs}.bak.${stamp}`).catch(() => undefined);
     await fs.writeFile(abs, content, 'utf8').catch((e) => { throw new BadRequestException(`Cannot write: ${e.message}`); });
     // Validate — if it breaks, restore the backup and report.
     const check = await this.sh('freeradius -XC 2>&1 | tail -8');
     const ok = /Configuration appears to be OK/.test(check.out);
     if (!ok) {
-      await this.sh(`cp -a '${abs}.bak.${stamp}' '${abs}' 2>/dev/null || true`);
+      await fs.copyFile(`${abs}.bak.${stamp}`, abs).catch(() => undefined);
       return { ok: false, restored: true, check: check.out };
     }
     const restart = await this.sh('systemctl restart freeradius');

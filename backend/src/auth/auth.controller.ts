@@ -9,10 +9,12 @@ import {
   Get,
   UseGuards,
   UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './auth.guard';
 import { TokenBlacklistService } from './token-blacklist.service';
+import { PermissionsGuard } from '../security/permissions.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -23,7 +25,9 @@ export class AuthController {
 
   @Post('impersonate/:userId')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
+  // PermissionsGuard: a parent's "no switching" deny on users.switchProfile
+  // was never checked here.
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
   async impersonate(@Param('userId') userId: string, @Req() req: any) {
     return this.authService.impersonate(req.user, +userId);
   }
@@ -50,11 +54,10 @@ export class AuthController {
 
     console.log('📝 Login attempt for email:', email);
 
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]?.trim()) ||
-      req.socket?.remoteAddress ||
-      req.connection?.remoteAddress ||
-      'Unknown';
+    // req.ip honours `trust proxy` (one hop: nginx). The left-most
+    // X-Forwarded-For entry is whatever the client wrote, so it could not key
+    // a lock-out or a login log.
+    const ip = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'Unknown';
     const userAgent = req.headers['user-agent'] || 'Unknown';
 
     return this.authService.login(email, password, ip, userAgent, code);
@@ -120,6 +123,9 @@ export class AuthController {
     @Req() req: any,
     @Body() body: { currentPassword?: string; newPassword?: string },
   ) {
+    // The demo login is shared by every visitor; one of them changing its
+    // password locked everyone else out.
+    if (req.user?.isDemo) throw new ForbiddenException('The demo account password cannot be changed.');
     const old = req.headers.authorization?.replace('Bearer ', '');
     const result = await this.authService.changeOwnPassword(
       Number(req.user.sub),

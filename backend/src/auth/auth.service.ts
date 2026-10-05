@@ -16,6 +16,17 @@ import { verifyTotp } from '../security/totp';
 
 @Injectable()
 export class AuthService {
+  /**
+   * A user row as it may leave the server: no password hash, no 2FA seed,
+   * no lock-out counters. The 2FA secret was returned on login, verify and
+   * impersonation (the frontend kept it in localStorage), so anyone who saw
+   * one response — or switched into an account — held its 2FA forever.
+   */
+  static safeUser<T extends Record<string, any>>(u: T): Omit<T, 'password' | 'twoFactorSecret'> {
+    const { password: _p, twoFactorSecret: _t, failedLoginCount: _f, lockedUntil: _l, ...rest } = (u || {}) as any;
+    return rest;
+  }
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -35,18 +46,31 @@ export class AuthService {
   private failKey(email: string, ip?: string) {
     return `${(email || '').toLowerCase()}|${ip || ''}`;
   }
+  /**
+   * Per email+IP, and per email from ANY address: rotating the source address
+   * (or a forged X-Forwarded-For) used to give unlimited guesses at one
+   * account. The per-account ceiling is higher so one noisy office does not
+   * lock a colleague out.
+   */
+  private static readonly MAX_FAILS_ACCOUNT = 25;
   private assertNotLocked(email: string, ip?: string) {
+    const now = Date.now();
     const rec = this.loginAttempts.get(this.failKey(email, ip));
-    if (rec && rec.count >= AuthService.MAX_FAILS && rec.until > Date.now()) {
-      const mins = Math.ceil((rec.until - Date.now()) / 60000);
+    const acct = this.loginAttempts.get(this.failKey(email, '*'));
+    const locked = (rec && rec.count >= AuthService.MAX_FAILS && rec.until > now ? rec : null)
+      || (acct && acct.count >= AuthService.MAX_FAILS_ACCOUNT && acct.until > now ? acct : null);
+    if (locked) {
+      const mins = Math.ceil((locked.until - now) / 60000);
       throw new UnauthorizedException(`Too many failed attempts. Try again in ${mins} minute(s).`);
     }
   }
   private registerFail(email: string, ip?: string) {
-    const key = this.failKey(email, ip);
-    const rec = this.loginAttempts.get(key);
-    const count = (rec && rec.until > Date.now() ? rec.count : 0) + 1;
-    this.loginAttempts.set(key, { count, until: Date.now() + AuthService.LOCK_MS });
+    for (const key of [this.failKey(email, ip), this.failKey(email, '*')]) {
+      const rec = this.loginAttempts.get(key);
+      const count = (rec && rec.until > Date.now() ? rec.count : 0) + 1;
+      this.loginAttempts.set(key, { count, until: Date.now() + AuthService.LOCK_MS });
+    }
+    if (this.loginAttempts.size > 50_000) this.loginAttempts.clear();
   }
 
   async login(
@@ -111,8 +135,9 @@ export class AuthService {
       );
     }
 
-    // Correct password → clear the failed-attempt counter for this email+IP.
-    this.loginAttempts.delete(this.failKey(email, ip));
+    // The counters are cleared only once the WHOLE login succeeds (after 2FA
+    // below): clearing on a correct password let anyone holding the password
+    // guess 6-digit codes without ever being locked out.
 
     // A suspended account does not log in. Checked AFTER the password, so only
     // someone who already holds the credentials learns the account exists and
@@ -145,9 +170,12 @@ export class AuthService {
           status: 'FAILED',
           failReason: 'Invalid 2FA code',
         });
+        this.registerFail(email, ip);
         throw new UnauthorizedException('Invalid two-factor code');
       }
     }
+    this.loginAttempts.delete(this.failKey(email, ip));
+    this.loginAttempts.delete(this.failKey(email, '*'));
 
     // Phase 4A: login anomaly flag — first login from a new IP is recorded 🔍
     if (ip && ip !== 'Unknown') {
@@ -186,6 +214,9 @@ export class AuthService {
       role: user.role,
       name: user.name,
       isDemo: (user as any).isDemo === true,
+      // The account's session version: a password change bumps it and every
+      // older token stops working (see JwtStrategy).
+      tv: Number((user as any).tokenVersion ?? 0),
       // Two sign-ins in the same second must not share one token string —
       // signing out (blacklisting) one would sign out the other.
       jti: randomUUID(),
@@ -196,13 +227,15 @@ export class AuthService {
     });
 
     // Remove password from response
-    const { password: _, ...userWithoutPassword } = user;
+    const userWithoutPassword = AuthService.safeUser(user);
 
     console.log('🎉 Login successful for:', email);
     this.events.broadcast('login', {
       email: user.email,
       name: user.name,
       role: user.role,
+      // Who may see it: the live feed delivers only to accounts above/at it.
+      ownerUserId: user.id,
     });
 
     return {
@@ -221,8 +254,7 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    const { password: _, ...userWithoutPassword } = user;
-    return userWithoutPassword;
+    return AuthService.safeUser(user);
   }
 
   async verifyToken(token: string) {
@@ -255,6 +287,11 @@ export class AuthService {
       if (user.isActive === false) {
         throw new UnauthorizedException('This account is suspended.');
       }
+      // A signed-out session (password changed since it was issued) cannot be
+      // renewed — refresh used to re-mint any valid token forever.
+      if (Number(decoded?.tv ?? 0) !== Number((user as any).tokenVersion ?? 0)) {
+        throw new UnauthorizedException('This session has been signed out. Sign in again.');
+      }
 
       // Same claims as login. isDemo was missing here, so a demo session that
       // refreshed its token came back as an ordinary account — and every
@@ -265,6 +302,8 @@ export class AuthService {
         role: user.role,
         name: user.name,
         isDemo: (user as any).isDemo === true,
+        tv: Number((user as any).tokenVersion ?? 0),
+        jti: randomUUID(),
       };
 
       /**
@@ -302,13 +341,27 @@ export class AuthService {
   // every action is auditable back to the real operator.
   // ─────────────────────────────────────────────────────────────
   async impersonate(actor: any, targetUserId: number) {
-    // Only the ISP/admin, or someone whose subtree contains the target, may switch in.
+    /**
+     * Only into accounts strictly BELOW the caller. Staff and auditors do not
+     * switch accounts at all: a staff member's scope is its owner's, so the
+     * old subtree check let a company's staff member sign in AS the company.
+     */
+    if (actor?.role === 'SALES' || actor?.role === 'AUDITOR') {
+      throw new ForbiddenException('Staff and auditor accounts cannot switch into other accounts.');
+    }
     const scopeActor: Actor = { sub: actor?.sub, role: actor?.role };
     await this.scope.assertUser(scopeActor, targetUserId);
 
     const target = await this.prisma.user.findUnique({ where: { id: targetUserId } });
     if (!target) throw new UnauthorizedException('Target user not found');
     if (target.id === actor?.sub) throw new UnauthorizedException('Already on this account');
+    if (actor?.role !== 'SUPER_ADMIN') {
+      if (target.role === 'ADMIN' || target.role === 'SUPER_ADMIN') {
+        throw new ForbiddenException('You cannot switch into a company or platform account.');
+      }
+      const below = await this.scope.descendantIds(Number(actor?.sub));
+      if (!below.includes(target.id)) throw new ForbiddenException('This account is outside your hierarchy.');
+    }
     // The platform account opens a COMPANY (to support it); people inside the
     // company are reached from there, never straight from the platform.
     if (actor?.role === 'SUPER_ADMIN' && target.role !== 'ADMIN') {
@@ -338,11 +391,14 @@ export class AuthService {
         role: target.role,
         name: target.name,
         imp: { by: rootBy, byName: rootName, byRole: rootRole },
+        isDemo: (target as any).isDemo === true,
+        tv: Number((target as any).tokenVersion ?? 0),
+        jti: randomUUID(),
       },
       { expiresIn: '1d' },
     );
 
-    const { password: _p, ...user } = target;
+    const user = AuthService.safeUser(target);
     return { token, user, impersonating: true, actingAs: target.name };
   }
 
@@ -355,10 +411,15 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('Original account not found');
 
     const token = this.jwtService.sign(
-      { sub: user.id, email: user.email, role: user.role, name: user.name },
+      {
+        sub: user.id, email: user.email, role: user.role, name: user.name,
+        isDemo: (user as any).isDemo === true,
+        tv: Number((user as any).tokenVersion ?? 0),
+        jti: randomUUID(),
+      },
       { expiresIn: '7d' },
     );
-    const { password: _p, ...safe } = user;
+    const safe = AuthService.safeUser(user);
     return { token, user: safe, impersonating: false };
   }
 
@@ -427,9 +488,12 @@ export class AuthService {
       throw new BadRequestException('That is the published default password. Choose your own.');
     }
 
-    await this.prisma.user.update({
+    // Bump the session version: every other session of this account ends —
+    // the reason for changing a password is often that someone else has it.
+    const updated = await this.prisma.user.update({
       where: { id: userId },
-      data: { password: await bcrypt.hash(next, 10), mustChangePassword: false },
+      data: { password: await bcrypt.hash(next, 10), mustChangePassword: false, tokenVersion: { increment: 1 } },
+      select: { tokenVersion: true },
     });
     invalidateAccountStatus(userId);
 
@@ -440,6 +504,7 @@ export class AuthService {
         role: user.role,
         name: user.name,
         isDemo: (user as any).isDemo === true,
+        tv: Number(updated.tokenVersion ?? 0),
         // Unique per issue: signed in the same second as the old token, an
         // identical payload produced the IDENTICAL string — and blacklisting
         // the old token then revoked the new one too.

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingService } from '../accounting/accounting.service';
@@ -10,6 +10,7 @@ import { WebhooksService } from '../integrations/webhooks.service';
 import { ProrationService } from './proration.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { CurrencyService } from '../common/currency.service';
+import { ResellerPricingService } from '../organization/reseller-pricing.service';
 
 /**
  * Phase 1 billing automation.
@@ -36,6 +37,9 @@ export class BillingService {
     // Daily-rate proration for partial-cycle billing.
     private proration: ProrationService,
     private currency: CurrencyService,
+    // The reseller chain pays its cost for every renewed period, exactly as
+    // it does for a manual activation.
+    @Optional() private pricing?: ResellerPricingService,
   ) {
     this.queue.registerProcessor('billing-auto-invoice', (d) => this.runAutoInvoice(d?.dryRun === true, d?.companyId ?? null));
     this.queue.registerProcessor('billing-auto-renewal', (d) => this.runAutoRenewal(d?.dryRun === true, d?.companyId ?? null));
@@ -230,6 +234,7 @@ export class BillingService {
         // requiring the full price up front. This matches Zal Ultra behaviour
         // where subscribers can return from expiry with a partial payment.
         let chargeAmount = price;
+        let grantDays = duration;
         /**
          * THE PERIOD IS PART OF THE IDEMPOTENCY KEY.
          *
@@ -258,6 +263,9 @@ export class BillingService {
             const remainingDays = duration - daysLapsed;
             const dailyRate = duration > 0 ? price / duration : price / 30;
             chargeAmount = Math.round(dailyRate * remainingDays);
+            // Pay for the days left in the cycle, get the days left in the
+            // cycle — it used to charge 29/30 and grant a full 30.
+            grantDays = remainingDays;
             renewalNote = `Pro-rated renewal (${remainingDays}/${duration} days) - ${sub.package!.name}`;
           }
         }
@@ -274,7 +282,27 @@ export class BillingService {
         // The result is CHECKED. If the charge was already taken for this
         // period the renewal must stop here — continuing would issue a paid
         // invoice for money that did not move, which is how the books drifted.
-        const deduction = await this.accounting.deductBalance(sub.id, chargeAmount, renewalNote);
+        /**
+         * The owner's reseller chain is charged for this period FIRST, like a
+         * manual activation. Auto-renewal used to take only the customer's
+         * wallet, so a dealer-owned customer renewed every night with no cost
+         * to the dealer and no revenue to anyone above it. If the dealer
+         * cannot pay, this customer is not renewed tonight.
+         */
+        if (sub.userId && this.pricing) {
+          const settled: any = await this.pricing.settleActivation(sub.id, {
+            byUserId: sub.userId,
+            event: `AUTO:${sub.packageId}:${period}`,
+          });
+          if (!settled?.settled && !settled?.alreadySettled) {
+            throw new Error(settled?.reason || 'reseller charge failed');
+          }
+        }
+
+        // A free plan has nothing to deduct (deductBalance refuses 0).
+        const deduction = chargeAmount > 0
+          ? await this.accounting.deductBalance(sub.id, chargeAmount, renewalNote)
+          : { subscriberId: sub.id, balance: sub.balance, alreadyDeducted: false };
         if ((deduction as any)?.alreadyDeducted) {
           lines.push(`SKIP #${sub.id} ${sub.username}: already charged for ${period}`);
           continue;
@@ -283,7 +311,7 @@ export class BillingService {
         // 2. paid invoice + payment
         const invoiceNo = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}-${sub.id}`;
         const newExpiry = new Date();
-        newExpiry.setDate(newExpiry.getDate() + (sub.package!.duration || 30));
+        newExpiry.setDate(newExpiry.getDate() + grantDays);
         const invoice = await this.prisma.invoice.create({
           data: {
             ...(await this.currency.invoiceStamp()),
@@ -350,7 +378,7 @@ export class BillingService {
           amount: chargeAmount,
           invoiceNo,
           expiryDate: newExpiry,
-        });
+        }, sub.userId ?? null);
         lines.push(`renewed #${sub.id} ${sub.username} until ${newExpiry.toISOString().slice(0, 10)}`);
         succeeded++;
       } catch (e: any) {
@@ -417,7 +445,7 @@ export class BillingService {
           username: sub.username,
           fullName: sub.fullName,
           expiryDate: sub.serviceSettings?.expiryDate ?? null,
-        });
+        }, sub.userId ?? null);
         lines.push(`suspended #${sub.id} ${sub.username} (${kicked})`);
         succeeded++;
       } catch (e: any) {

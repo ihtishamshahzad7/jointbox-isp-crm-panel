@@ -607,6 +607,46 @@ export class ScopeService {
     }
   }
 
+  /**
+   * Network log rows the caller may read. On a router its own tree OWNS, all
+   * of them; on a router merely SHARED to it, only rows about its own
+   * customers and router-level rows that name no customer — a shared router's
+   * log otherwise listed the owner's and sibling franchises' usernames.
+   */
+  async networkLogWhere(actor: Actor): Promise<any> {
+    if (!actor) return {};
+    if (this.isAdmin(actor.role)) {
+      // Demo sessions are synthetic; they stay out of a real network log.
+      const sub = await this.subscriberWhere(actor);
+      return Object.keys(sub).length ? { subscriber: sub } : {};
+    }
+    const tree = await this.descendantIds(await this.rootId(actor));
+    const visible = await this.prisma.nas.findMany({ where: await this.nasWhere(actor), select: { id: true, ownerId: true } });
+    const owned = visible.filter((n: any) => n.ownerId != null && tree.includes(n.ownerId)).map((n: any) => n.id);
+    const shared = visible.filter((n: any) => !owned.includes(n.id)).map((n: any) => n.id);
+    const subWhere = await this.subscriberWhere(actor);
+    const or: any[] = [{ subscriber: subWhere }];
+    if (owned.length) or.push({ nasId: { in: owned } });
+    if (shared.length) or.push({ AND: [{ nasId: { in: shared } }, { subscriberId: null }, { username: null }] });
+    return { OR: or };
+  }
+
+  /**
+   * For CHANGES to an account. Staff (SALES) work inside their owner's scope,
+   * so assertUser() admits the owner itself — which let a company's staff
+   * member reset the company account's password, suspend it, rewrite its
+   * permissions or sign in as it. Staff manage the business beneath their
+   * owner, never the owner.
+   */
+  async assertUserWritable(actor: Actor, targetUserId: number): Promise<void> {
+    await this.assertUser(actor, targetUserId);
+    if (this.isAdmin(actor?.role)) return;
+    const root = await this.rootId(actor);
+    if (root !== this.actorId(actor) && Number(targetUserId) === root) {
+      throw new ForbiddenException('Staff cannot change the account they work for.');
+    }
+  }
+
   // ── Route-level tenancy checks ──────────────────────────────────────────
   //
   // Every cross-company leak found so far had the same shape: a handler that

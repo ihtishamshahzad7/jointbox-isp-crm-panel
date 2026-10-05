@@ -66,6 +66,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!payload.imp && !status.active) {
       throw new UnauthorizedException('This account is suspended. Contact your provider.');
     }
+    // Signed out everywhere (password changed or reset since this token was
+    // issued). Tokens from before this check carry no version = 0.
+    if (Number(payload?.tv ?? 0) !== Number(status.tokenVersion ?? 0)) {
+      throw new UnauthorizedException('This session has been signed out. Sign in again.');
+    }
+    // An "act as" session lives only as long as the operator who opened it:
+    // a suspended (or deleted) operator's switched-in session stops too.
+    if (payload.imp?.by) {
+      const by = await accountStatus(this.prisma, Number(payload.imp.by));
+      if (!by || !by.active) throw new UnauthorizedException('The account that opened this session is no longer active.');
+    }
     const path = String(req?.originalUrl || req?.url || '').split('?')[0];
     if (!payload.imp && status.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.test(path)) {
       throw new ForbiddenException('PASSWORD_CHANGE_REQUIRED');
@@ -81,7 +92,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       role: status.role || payload.role,
       name: payload.name,
       imp: payload.imp,     // present when this is an "act as" session
-      isDemo: payload.isDemo === true,
+      // From the database, not only the token: impersonation tokens carried no
+      // isDemo claim, so switching into a demo child lifted every demo block.
+      isDemo: payload.isDemo === true || status.isDemo === true,
       mustChangePassword: status.mustChangePassword,
     };
   }

@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -152,12 +152,41 @@ export class ResellerPricingService {
     const subresellerProfit = body.subresellerProfit !== undefined ? Number(body.subresellerProfit) : undefined;
     const subscriberProfit = body.subscriberProfit !== undefined ? Number(body.subscriberProfit) : undefined;
 
+    if (priceVal !== undefined && (!Number.isFinite(priceVal) || priceVal < 0)) {
+      throw new BadRequestException('Price must be zero or more.');
+    }
     // If no price is provided, read the existing one (or package default) for upsert
     const existingPrice = priceVal !== undefined ? priceVal : (
       await this.prisma.resellerPackagePrice.findUnique({
         where: { userId_packageId: { userId, packageId } },
       }).then((r) => r?.price)
     );
+    // A new row needs a buy price — creating one from only a retail price
+    // stored a buy price of 0, below the caller's own cost.
+    if (existingPrice == null) {
+      throw new BadRequestException('Set the price this account pays for the package first.');
+    }
+    /**
+     * Never above what this account already charges its OWN accounts for the
+     * package: raising a franchise from 800 to 1200 while it sells to its
+     * dealer at 1000 made every dealer activation cost the franchise 200.
+     */
+    if (priceVal !== undefined) {
+      const children = await this.prisma.user.findMany({ where: { parentId: userId }, select: { id: true } });
+      if (children.length) {
+        const lowest = await this.prisma.resellerPackagePrice.findFirst({
+          where: { packageId, userId: { in: children.map((c) => c.id) } },
+          orderBy: { price: 'asc' },
+          select: { price: true },
+        });
+        if (lowest && priceVal > Number(lowest.price)) {
+          throw new ForbiddenException(
+            `${target.name} sells this package to its own accounts at ${lowest.price}. ` +
+            `Charging it ${priceVal} would make it lose money on every activation — ask it to raise its prices first.`,
+          );
+        }
+      }
+    }
 
     return this.prisma.resellerPackagePrice.upsert({
       where: { userId_packageId: { userId, packageId } },
@@ -207,6 +236,19 @@ export class ResellerPricingService {
     const existing = await this.prisma.resellerPackagePrice.findUnique({
       where: { userId_packageId: { userId: meId, packageId: pkgId } },
     });
+
+    /**
+     * Only a package that reaches me from above (or is my own). Creating this
+     * row is what makes a package visible, so without the check any account —
+     * even another company — could hand itself any package by id and then
+     * activate customers on it.
+     */
+    if (!existing && !this.scope.isAdmin(actor?.role)) {
+      const chain = await this.scope.ancestorIds(meId); // [me, parent, …]
+      const fromAbove = (pkg.ownerId != null && chain.includes(pkg.ownerId))
+        || (await this.prisma.resellerPackagePrice.count({ where: { packageId: pkgId, userId: { in: chain } } })) > 0;
+      if (!fromAbove) throw new NotFoundException('Package not found');
+    }
 
     // My real cost per activation:
     //   • explicit row if I have one,
@@ -1177,6 +1219,14 @@ export class ResellerPricingService {
     if (!reason) throw new ForbiddenException('A reason is required to reverse a settlement.');
 
     const reference = opts.reference || `SUB#${subscriberId}`;
+    /**
+     * The reference must be THIS customer's settlement. It was taken from the
+     * body as-is, so any account could reverse another customer's (or another
+     * company's) activation or top-up by guessing its predictable reference.
+     */
+    if (reference !== `SUB#${subscriberId}` && !reference.startsWith(`SUB#${subscriberId}:`)) {
+      throw new ForbiddenException(`That settlement does not belong to subscriber #${subscriberId}.`);
+    }
     const reversalReference = `REV#${reference}`;
 
     // IDEMPOTENCY: if this settlement was already reversed, refuse.
@@ -1201,6 +1251,11 @@ export class ResellerPricingService {
     const note = opts.reasonCode ? `[${opts.reasonCode}] ${reason}` : reason;
 
     await this.prisma.$transaction(async (tx) => {
+      // Two reversals at once both passed the check above and refunded twice.
+      // Serialise on the reference and look again inside the transaction.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${reversalReference}))`;
+      const again = await tx.userBalanceTransaction.findFirst({ where: { reference: reversalReference }, select: { id: true } });
+      if (again) throw new ForbiddenException('This settlement was already reversed. It cannot be reversed twice.');
       for (const row of rows) {
         const signed = Number(row.amount || 0);
         if (!signed) continue;
@@ -1235,21 +1290,24 @@ export class ResellerPricingService {
           },
         });
       }
-      // Keep service state consistent with the ledger when asked.
-      if (opts.revertService) {
-        await tx.subscriber.update({ where: { id: subscriberId }, data: { status: 'INACTIVE' } }).catch(() => null);
-      }
+      /**
+       * A refunded activation is not a paid one: the service stops with it.
+       * It used to stay ACTIVE unless the caller asked — so a dealer could
+       * take its money back and keep the customer online.
+       */
+      await tx.subscriber.update({ where: { id: subscriberId }, data: { status: 'INACTIVE' } }).catch(() => null);
+      await tx.serviceSettings.updateMany({ where: { subscriberId, expiryDate: { gt: new Date() } }, data: { expiryDate: new Date() } }).catch(() => null);
     });
 
     await this.prisma.activityLog.create({
       data: {
         userId: opts.actorId ?? null, action: 'REVERSE_ACTIVATION',
         entity: 'Subscriber', entityId: subscriberId,
-        details: `Reversed ${reference} — ${note}${opts.revertService ? ' (service set INACTIVE)' : ''}`,
+        details: `Reversed ${reference} — ${note} (service set INACTIVE)`,
       },
     }).catch(() => null);
 
-    return { reversed: true, subscriberId, reference, reversalReference, reversedRows: rows.length, revertedService: !!opts.revertService };
+    return { reversed: true, subscriberId, reference, reversalReference, reversedRows: rows.length, revertedService: true };
   }
 
   /**

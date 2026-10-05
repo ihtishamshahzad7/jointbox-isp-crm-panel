@@ -235,8 +235,10 @@ export default function SecurityPage() {
   async function enroll() {
     setBusy(true);
     try {
-      const r = await fetch(`${API}/security/2fa/enroll`, { method: "POST", headers });
-      setEnrollment(await r.json());
+      const r = await fetch(`${API}/security/2fa/enroll`, { method: "POST", headers, body: JSON.stringify({ code: tfaCode }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(data?.message || "Could not start two-factor setup"); return; }
+      setEnrollment(data);
     } finally { setBusy(false); }
   }
 

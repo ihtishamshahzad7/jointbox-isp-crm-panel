@@ -193,7 +193,7 @@ describe('GatewayService — Paystack', () => {
       const { svc, onSuccess, onFailure } = makeService();
 
       await expect(svc.paystackVerify('KEY-1')).resolves.toBe(true);
-      expect(onSuccess).toHaveBeenCalledWith('KEY-1', 'KEY-1', expect.any(String));
+      expect(onSuccess).toHaveBeenCalledWith('KEY-1', 'KEY-1', expect.any(String), 'PAYSTACK');
       expect(onFailure).not.toHaveBeenCalled();
     });
 

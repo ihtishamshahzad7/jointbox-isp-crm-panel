@@ -194,7 +194,7 @@ describe('GatewayService — webhooks', () => {
       const { svc, onSuccess } = makeService();
       const r = await svc.settleFromWebhook({ ...base, amount: 150050, currency: 'NGN' });
       expect(r.ok).toBe(true);
-      expect(onSuccess).toHaveBeenCalledWith('KEY-1', 'KEY-1', undefined);
+      expect(onSuccess).toHaveBeenCalledWith('KEY-1', 'KEY-1', undefined, 'PAYSTACK');
     });
 
     it('REFUSES a verified webhook reporting the WRONG amount', async () => {

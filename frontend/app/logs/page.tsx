@@ -6,6 +6,8 @@ import { silent } from "../components/silent";
 import API from "../components/api";
 import { WinBoxLog } from "../components/winbox-log";
 import { LogRecordsTable } from "../components/log-records-table";
+import { CauseBadge, SeverityTag, causeOf, resolveCause } from "./terminate-cause";
+import DisconnectsPanel from "./disconnects-panel";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -164,6 +166,16 @@ export default function LogsPage() {
     } finally { setLoading(false); }
   }, [token, focusUser, radCause, radWindow]);
 
+  // Deep link: /logs?tab=disconnects (only this page's own tab ids — inside the
+  // Insights hub the same parameter names the hub tab, and is ignored here).
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const want = q.get("logTab") || q.get("tab");
+      if (want && tabs.some((x) => x.id === want)) setActiveTab(want);
+    } catch { /* no query */ }
+  }, []);
+
   // Initial load
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
@@ -265,6 +277,7 @@ export default function LogsPage() {
     { id: "system",     label: "⚙️ System" },
     { id: "sessions",   label: "🟢 Sessions" },
     { id: "radsess",    label: "📶 RADIUS Sessions" },
+    { id: "disconnects", label: "🔌 Disconnect Reasons" },
     { id: "failed",     label: "⛔ Failed" },
     { id: "radius",     label: "🩺 RADIUS" },
   ];
@@ -647,6 +660,10 @@ export default function LogsPage() {
           <>
             {/* Time window */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+              <button type="button" onClick={() => setActiveTab("disconnects")}
+                style={{ order: 99, marginLeft: "auto", fontSize: 11.5, fontWeight: 700, color: t.accent, background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
+                Disconnect reasons — all 18 causes →
+              </button>
               <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Window:</span>
               {[[0,"All"],[24,"24h"],[72,"3d"],[168,"7d"]].map(([h,lbl]) => (
                 <button key={h as number} onClick={() => setRadWindow(h as number)}
@@ -671,11 +688,11 @@ export default function LogsPage() {
                 return (
                   <button key={val} onClick={() => setRadCause(active ? "" : val)}
                     title={c.online ? "Currently online" : `Terminate code #${c.code}`}
-                    style={{ fontSize: 11, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
-                      border: `1px solid ${active ? t.accent : t.cardBorder}`,
-                      background: active ? t.accent : (c.online ? "rgba(74,222,128,.1)" : "rgba(251,191,36,.1)"),
-                      color: active ? "#fff" : (c.online ? "#4ade80" : "#fbbf24") }}>
-                    {c.online ? "● Online" : `#${c.code} ${c.label}`} · {c.count}
+                    style={{ fontSize: 11, padding: c.online ? "5px 11px" : 2, borderRadius: 999, cursor: "pointer",
+                      border: `${active ? 2 : 1}px solid ${active ? t.accent : (c.online ? t.cardBorder : "transparent")}`,
+                      background: c.online ? (active ? t.accent : "rgba(74,222,128,.1)") : "transparent",
+                      color: c.online ? (active ? "#fff" : "#16a34a") : t.text }}>
+                    {c.online ? `● Online · ${c.count}` : <CauseBadge compact cause={{ ...resolveCause(c.code || c.label), label: `${c.label} · ${c.count}` }} title="" />}
                   </button>
                 );
               })}
@@ -695,9 +712,12 @@ export default function LogsPage() {
                     <td style={{ padding: "8px 12px" }}>
                       {s.online
                         ? <Badge color="#4ade80" bg="#14532d">● Online</Badge>
-                        : <span title={s.terminateDescription} style={{ cursor: "help" }}>
-                            <Badge color="#fbbf24" bg="#78350f">#{s.terminateCode} {s.terminateLabel}</Badge>
-                            <div style={{ fontSize: 10, color: t.textMuted, marginTop: 3, maxWidth: 340 }}>{s.terminateDescription}</div>
+                        : <span style={{ display: "grid", gap: 3, maxWidth: 360 }}>
+                            <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                              <CauseBadge compact cause={causeOf(s)} />
+                              <SeverityTag severity={s.terminateSeverity} />
+                            </span>
+                            <span style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.45 }}>{s.terminateMeaning || s.terminateDescription}</span>
                           </span>}
                     </td>
                     <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>{s.framedIp || "—"}<div style={{ fontSize: 10, color: t.textMuted }}>{s.nasIp}</div></td>
@@ -709,6 +729,9 @@ export default function LogsPage() {
               }} />
           </>
           )}
+
+          {/* ═══════════════ TAB: DISCONNECT REASONS (all 18 RFC 2866 causes) ═══════════════ */}
+          {activeTab === "disconnects" && <DisconnectsPanel />}
 
           {/* ═══════════════ TAB: FAILED ACTIVATIONS ═══════════════ */}
           {activeTab === "failed" && (

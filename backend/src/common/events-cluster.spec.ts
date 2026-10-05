@@ -174,7 +174,7 @@ describe('A1: live events across a PM2 cluster', () => {
 
   it('refuses a new stream past MAX_SSE_CLIENTS rather than accumulating', async () => {
     const events: any = { listenerCount: () => 500, subscribe: jest.fn(), getStats: jest.fn() };
-    const controller = new EventsController(events);
+    const controller = new EventsController(events, {} as any);
     process.env.MAX_SSE_CLIENTS = '500';
     expect(() => controller.stream({} as any)).toThrow(/already streaming to 500/);
     delete process.env.MAX_SSE_CLIENTS;
@@ -183,7 +183,7 @@ describe('A1: live events across a PM2 cluster', () => {
   it('accepts a stream below the limit', () => {
     const unsub = jest.fn();
     const events: any = { listenerCount: () => 3, subscribe: jest.fn(() => unsub), getStats: jest.fn() };
-    expect(() => new EventsController(events).stream({} as any)).not.toThrow();
+    expect(() => new EventsController(events, {} as any).stream({} as any)).not.toThrow();
   });
 
   it('closes both Redis connections on shutdown', async () => {
@@ -191,5 +191,36 @@ describe('A1: live events across a PM2 cluster', () => {
     await svc.onModuleDestroy();
     expect(clients[0].quit).toHaveBeenCalled();
     expect(clients[1].quit).toHaveBeenCalled();
+  });
+});
+
+describe('live feed is per tenant', () => {
+  function stream(user: any, visible: number[]) {
+    let handler: any;
+    const events: any = { listenerCount: () => 0, subscribe: jest.fn((cb: any) => { handler = cb; return () => undefined; }) };
+    const scope: any = { rootId: jest.fn(async () => user.sub), descendantIds: jest.fn(async () => visible) };
+    const got: any[] = [];
+    const sub = new EventsController(events, scope).stream({ user } as any).subscribe((m: any) => got.push(m));
+    return { emit: (e: string, p: any) => handler(e, p), got, close: () => sub.unsubscribe() };
+  }
+
+  it("delivers only events about the viewer's own tree", async () => {
+    const s = stream({ sub: 10, role: 'ADMIN' }, [10, 11]);
+    await new Promise((r) => setTimeout(r, 0));
+    s.emit('payment', { amount: 1, ownerUserId: 11 });
+    s.emit('payment', { amount: 2, ownerUserId: 20 }); // another company
+    s.emit('login', { email: 'x' });                    // no owner → platform only
+    const data = s.got.filter((m) => m.data?.type && m.data.type !== 'connected').map((m) => m.data.data.amount);
+    s.close();
+    expect(data).toEqual([1]);
+  });
+
+  it('the platform account sees platform-level events only', async () => {
+    const s = stream({ sub: 1, role: 'SUPER_ADMIN' }, []);
+    await new Promise((r) => setTimeout(r, 0));
+    s.emit('payment', { amount: 2, ownerUserId: 20 });
+    s.emit('notice', { text: 'hi' });
+    s.close();
+    expect(s.got.filter((m) => m.data?.type && m.data.type !== 'connected').map((m) => m.data.type)).toEqual(['notice']);
   });
 });

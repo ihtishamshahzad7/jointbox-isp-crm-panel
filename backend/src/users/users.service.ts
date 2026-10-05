@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { invalidateAllAccountStatus } from '../auth/account-status';
+import { invalidateAllAccountStatus, invalidateAccountStatus } from '../auth/account-status';
 import * as bcrypt from 'bcrypt';
 import { validatePassword } from '../security/security.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -1022,7 +1022,7 @@ export class UsersService {
     actor?: Actor,
   ) {
     await this.assertPlatformTarget(actor, id);
-    if (actor) await this.scope.assertUser(actor, id);
+    if (actor) await this.scope.assertUserWritable(actor, id);
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
 
@@ -1041,6 +1041,7 @@ export class UsersService {
     // Your own password needs your current one — a borrowed session must not
     // be enough to lock the owner out. (Settings uses /auth/change-password.)
     if (actor && this.scope.actorId(actor) === id && data.password) {
+      if ((actor as any).isDemo) throw new ForbiddenException('The demo account password cannot be changed.');
       const ok = typeof currentPassword === 'string' && currentPassword.length > 0
         && (await bcrypt.compare(currentPassword, (user as any).password || ''));
       if (!ok) throw new BadRequestException('Enter your current password to set a new one.');
@@ -1205,11 +1206,14 @@ export class UsersService {
       const policyError = validatePassword(data.password);
       if (policyError) throw new BadRequestException(policyError);
       updateData.password = await bcrypt.hash(data.password, 10);
+      // A new password ends every existing session of that account.
+      updateData.tokenVersion = { increment: 1 };
     } else {
       delete updateData.password;
     }
 
-    return this.prisma.user.update({
+    const changedPassword = !!updateData.password;
+    const saved = await this.prisma.user.update({
       where: { id },
       data:  updateData,
       select: {
@@ -1225,6 +1229,8 @@ export class UsersService {
         commissionPercent: true,
       },
     });
+    if (changedPassword) invalidateAccountStatus(id);
+    return saved;
   }
 
   /**
@@ -1350,7 +1356,7 @@ export class UsersService {
 
   async delete(id: number, actor?: Actor) {
     await this.assertPlatformTarget(actor, id);
-    if (actor) await this.scope.assertUser(actor, id);
+    if (actor) await this.scope.assertUserWritable(actor, id);
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
 
@@ -1412,7 +1418,7 @@ export class UsersService {
 
   async toggleStatus(id: number, actor?: Actor) {
     await this.assertPlatformTarget(actor, id);
-    if (actor) await this.scope.assertUser(actor, id);
+    if (actor) await this.scope.assertUserWritable(actor, id);
     // Suspension is now enforced on every request, so suspending yourself
     // would lock you out mid-click with nobody above you to undo it.
     if (actor && this.scope.actorId(actor) === id) {

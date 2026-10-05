@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { invalidateAccountStatus } from '../auth/account-status';
 import { CacheService } from '../common/cache.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { generateSecret, otpauthUrl, verifyTotp } from './totp';
@@ -438,7 +439,7 @@ export class SecurityService {
 
   /** Set the child's permissions. `denied` = list of keys to block; everything else allowed. */
   async setChildPermissions(actor: Actor, childUserId: number, denied: string[]) {
-    await this.scope.assertUser(actor, childUserId);
+    await this.scope.assertUserWritable(actor, childUserId);
     // assertUser() admits the caller's own id (a subtree includes its root), so
     // without this an account could clear a deny its PARENT placed on it.
     // These keys are the parent's to set, never the account's own.
@@ -542,9 +543,15 @@ export class SecurityService {
   }
 
   /** Step 1: generate a secret (not yet active). Returns manual key + otpauth URL. */
-  async enrollTwoFactor(userId: number) {
+  async enrollTwoFactor(userId: number, currentCode = '') {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new UnauthorizedException();
+    // Re-enrolling replaces the secret and switches 2FA off until confirmed —
+    // the same as disabling it, so it needs a current code like disable does.
+    // (A stolen session could otherwise strip 2FA silently.)
+    if (user.twoFactorEnabled && !verifyTotp(user.twoFactorSecret || '', currentCode)) {
+      throw new BadRequestException('Enter a current code from your authenticator app to set up a new one.');
+    }
     const secret = generateSecret();
     await this.prisma.user.update({ where: { id: userId }, data: { twoFactorSecret: secret, twoFactorEnabled: false } });
     return {
@@ -604,10 +611,19 @@ export class SecurityService {
         throw new NotFoundException('Session not found');
       }
     }
-    await this.prisma.sessionLog.update({
+    const ended = await this.prisma.sessionLog.update({
       where: { sessionId },
       data: { isActive: false, logoutAt: new Date() },
+      select: { userId: true },
     });
+    // Marking the row was all this did — nothing in sign-in reads it, so the
+    // "logged out" session kept working. Bumping the account's session
+    // version actually ends its sessions (all of them: tokens are not tracked
+    // one by one).
+    if (ended?.userId) {
+      await this.prisma.user.update({ where: { id: ended.userId }, data: { tokenVersion: { increment: 1 } } }).catch(() => null);
+      invalidateAccountStatus(ended.userId);
+    }
     await this.prisma.activityLog.create({
       data: { userId: byUserId, action: 'REMOTE_LOGOUT', entity: 'Session', details: sessionId },
     });

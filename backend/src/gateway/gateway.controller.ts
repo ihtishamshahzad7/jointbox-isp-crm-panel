@@ -62,7 +62,8 @@ export class GatewayController {
 
   /** Sandbox checkout page — end-to-end test without a real gateway. */
   @Get('sandbox/checkout/:key')
-  sandboxCheckout(@Param('key') key: string, @Res() res: Response) {
+  async sandboxCheckout(@Param('key') key: string, @Res() res: Response) {
+    if (!(await this.isSandboxTx(key))) return res.status(404).send('Not found');
     res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sandbox Gateway</title>
 <style>body{font-family:system-ui;background:#0c1220;color:#e2e8f0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
@@ -77,12 +78,21 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
   @Post('sandbox/confirm/:key')
   async sandboxConfirm(@Param('key') key: string, @Body() body: any, @Res() res: Response) {
     const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
+    // Only a SANDBOX transaction, and only while the sandbox is switched on —
+    // this route used to settle ANY gateway's transaction for free.
+    if (!(await this.isSandboxTx(key))) return res.status(404).send('Not found');
     if (body?.result === 'success') {
-      await this.gateway.handleSuccess(key, `SANDBOX-${Date.now()}`);
+      await this.gateway.handleSuccess(key, `SANDBOX-${Date.now()}`, undefined, 'SANDBOX');
       return res.redirect(`${frontend}/portal?paid=1`);
     }
     await this.gateway.handleFailure(key, 'cancelled');
     return res.redirect(`${frontend}/portal?paid=0`);
+  }
+
+  private async isSandboxTx(key: string): Promise<boolean> {
+    if (!this.gateway.availableGateways().includes('SANDBOX')) return false;
+    const tx = await this.gateway.findTransactionByIdempotencyKey(key);
+    return !!tx && tx.gateway === 'SANDBOX';
   }
 
   /** Stripe redirect callback (also handles cancel). */
@@ -90,8 +100,10 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
   async stripeCallback(@Query('key') key: string, @Query('result') result: string, @Res() res: Response) {
     const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
     if (result === 'success') {
-      await this.gateway.handleSuccess(key, 'stripe-redirect');
-      return res.redirect(`${frontend}/portal?paid=1`);
+      // Confirmed with Stripe, not taken from the URL. If Stripe has not
+      // marked it paid yet, the signed webhook settles it moments later.
+      const ok = await this.gateway.stripeVerify(key);
+      return res.redirect(`${frontend}/portal?paid=${ok ? 1 : 'pending'}`);
     }
     await this.gateway.handleFailure(key, 'cancelled');
     return res.redirect(`${frontend}/portal?paid=0`);
@@ -259,8 +271,15 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
   @Post('callback/razorpay')
   async razorpayCallback(@Query('key') key: string, @Body() body: any, @Res() res: Response) {
     const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
-    const ok = this.gateway.verifyRazorpaySignature(body?.razorpay_order_id, body?.razorpay_payment_id, body?.razorpay_signature);
-    if (ok) { await this.gateway.handleSuccess(key, body?.razorpay_payment_id, JSON.stringify(body).slice(0, 2000)); return res.redirect(`${frontend}/portal?paid=1`); }
+    // The signed order must be THIS transaction's order — a valid signature for
+    // some other (cheaper) order proves nothing about this one.
+    const tx = await this.gateway.findTransactionByIdempotencyKey(key);
+    const ok = !!tx && tx.gateway === 'RAZORPAY' && !!tx.gatewayRef && tx.gatewayRef === body?.razorpay_order_id
+      && this.gateway.verifyRazorpaySignature(body?.razorpay_order_id, body?.razorpay_payment_id, body?.razorpay_signature);
+    if (ok) {
+      const r = await this.gateway.handleSuccess(key, body?.razorpay_payment_id, JSON.stringify(body).slice(0, 2000), 'RAZORPAY');
+      return res.redirect(`${frontend}/portal?paid=${r.ok ? 1 : 0}`);
+    }
     await this.gateway.handleFailure(key, 'signature-mismatch');
     return res.redirect(`${frontend}/portal?paid=0`);
   }
@@ -296,15 +315,15 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
   }
 
   @Get('callback/sslcommerz')
-  async sslczCallbackGet(@Query('key') key: string, @Query('result') result: string, @Res() res: Response) {
-    return this.sslczHandle(key, result, {}, res);
+  async sslczCallbackGet(@Query('key') key: string, @Query('result') result: string, @Query('val_id') valId: string, @Res() res: Response) {
+    return this.sslczHandle(key, result, {}, res, valId);
   }
 
-  private async sslczHandle(key: string, result: string, body: any, res: Response) {
+  private async sslczHandle(key: string, result: string, body: any, res: Response, valId?: string) {
     const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
     if (result === 'success') {
-      await this.gateway.handleSuccess(key, body?.bank_tran_id || body?.tran_id || 'sslcz', JSON.stringify(body || {}));
-      return res.redirect(`${frontend}/portal?paid=1`);
+      const ok = await this.gateway.sslczVerify(key, String(body?.val_id || valId || ''));
+      return res.redirect(`${frontend}/portal?paid=${ok ? 1 : 'pending'}`);
     }
     await this.gateway.handleFailure(key, result || 'failed');
     return res.redirect(`${frontend}/portal?paid=0`);
@@ -389,7 +408,7 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
   async epCallback(@Query('key') key: string, @Query('result') result: string, @Res() res: Response) {
     const frontend = process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
     const r: any = await this.gateway.epHandle(key, result || 'failed');
-    return res.redirect(`${frontend}/portal?paid=${r?.ok ? 1 : 0}`);
+    return res.redirect(`${frontend}/portal?paid=${r?.ok ? 1 : r?.pending ? 'pending' : 0}`);
   }
 
   @Post('callback/easypaisa')

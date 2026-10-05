@@ -66,8 +66,11 @@ export class KycService {
     if (!check.valid) throw new BadRequestException(check.reason);
     const n = this.normalise(data.cnicNumber)!;
 
+    // Duplicates inside the caller's own book only: the list used to name
+    // every customer in every company holding that ID number.
+    const subScope = actor ? await this.scope.subscriberWhere(actor) : {};
     const duplicates = await this.prisma.subscriber.findMany({
-      where: { cnicNumber: n, id: { not: subscriberId } },
+      where: { AND: [{ cnicNumber: n, id: { not: subscriberId } }, subScope] },
       select: { id: true, fullName: true, username: true, status: true },
     });
 
@@ -219,8 +222,11 @@ export class KycService {
     if (!check.valid) throw new BadRequestException(check.reason);
     const n = this.normalise(data.cnicNumber)!;
 
+    const userScope = actor && !this.scope.isAdmin(actor.role)
+      ? { id: { in: await this.scope.descendantIds(await this.scope.rootId(actor)) } }
+      : {};
     const duplicates = await this.prisma.user.findMany({
-      where: { cnicNumber: n, id: { not: userId } },
+      where: { AND: [{ cnicNumber: n, id: { not: userId } }, userScope] },
       select: { id: true, name: true, role: true },
     });
     const expiry = data.cnicExpiry ? new Date(data.cnicExpiry) : null;
@@ -348,7 +354,7 @@ export class KycService {
     const out: any[] = [];
     for (const r of rows) {
       const subs = await this.prisma.subscriber.findMany({
-        where: { cnicNumber: r.cnicNumber },
+        where: { cnicNumber: r.cnicNumber, ...(scopeIds ? { userId: { in: scopeIds } } : {}) },
         select: { id: true, fullName: true, username: true, phone: true, status: true, kycStatus: true },
       });
       out.push({

@@ -37,6 +37,7 @@ function make() {
     actorId: (a: any) => Number(a?.sub),
     assertUser: jest.fn(async () => undefined),
   };
+  scope.assertUserWritable = (a: any, id: number) => scope.assertUser(a, id);
   return { prisma, scope, svc: new UsersService(prisma, scope) };
 }
 

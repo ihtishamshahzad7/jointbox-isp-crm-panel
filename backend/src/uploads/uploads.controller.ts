@@ -6,7 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtService } from '@nestjs/jwt';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, openSync, readSync, closeSync, unlinkSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,6 +19,47 @@ if (!existsSync(UPLOAD_DIR)) mkdirSync(UPLOAD_DIR, { recursive: true });
 
 /** What a stored name may look like — no path separators, no dot-files. */
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+
+/**
+ * The only types stored, and the extension each is saved under. The name used
+ * to keep the client's own extension while the filter trusted the client's
+ * declared type — so x.html declared as image/png was stored as .html and
+ * served inline from the panel's origin, where its script could read the
+ * signed-in operator's token.
+ */
+const EXT_FOR: Record<string, string> = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/webp': '.webp',
+  'image/gif': '.gif', 'image/heic': '.heic', 'image/heif': '.heif', 'application/pdf': '.pdf',
+};
+const TYPE_FOR: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.heic': 'image/heic', '.heif': 'image/heif', '.pdf': 'application/pdf',
+};
+
+/** The file's first bytes must match the type it claims. */
+export function contentMatches(path: string, mime: string): boolean {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, 'r');
+    const b = Buffer.alloc(16);
+    const n = readSync(fd, b, 0, 16, 0);
+    const head = b.subarray(0, n);
+    const ascii = head.toString('latin1');
+    switch (mime) {
+      case 'image/png': return head[0] === 0x89 && ascii.slice(1, 4) === 'PNG';
+      case 'image/jpeg': case 'image/jpg': return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+      case 'image/gif': return ascii.startsWith('GIF8');
+      case 'image/webp': return ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WEBP';
+      case 'image/heic': case 'image/heif': return ascii.slice(4, 8) === 'ftyp';
+      case 'application/pdf': return ascii.startsWith('%PDF');
+      default: return false;
+    }
+  } catch {
+    return false;
+  } finally {
+    if (fd != null) try { closeSync(fd); } catch { /* ignore */ }
+  }
+}
 
 /** How long a media token lives. The panel renews it well before this. */
 const MEDIA_TOKEN_TTL_S = 12 * 3600;
@@ -56,7 +97,7 @@ export class UploadsController {
         destination: UPLOAD_DIR,
         filename: (_req, file, cb) => {
           const unique = `${Date.now()}-${randomBytes(16).toString('hex')}`;
-          cb(null, `${unique}${extname(file.originalname).toLowerCase()}`);
+          cb(null, `${unique}${EXT_FOR[String(file.mimetype).toLowerCase()] || '.bin'}`);
         },
       }),
       limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
@@ -69,6 +110,10 @@ export class UploadsController {
   )
   async upload(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('No file uploaded');
+    if (!contentMatches(file.path || join(UPLOAD_DIR, file.filename), String(file.mimetype).toLowerCase())) {
+      try { unlinkSync(file.path || join(UPLOAD_DIR, file.filename)); } catch { /* ignore */ }
+      throw new BadRequestException('That file is not a real image or PDF.');
+    }
     const uploader = Number(req?.user?.sub ?? req?.user?.id) || null;
     this.logger.log(`Upload ${file.filename} by user ${uploader ?? 'unknown'}`);
     try {
@@ -147,8 +192,13 @@ export class UploadsController {
     if (!existsSync(path)) throw new NotFoundException('File not found');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', 'inline');
-    return res.sendFile(path, { dotfiles: 'deny' });
+    // Nothing served from here may run script on the panel's origin — even a
+    // file stored before uploads were checked.
+    res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox");
+    const type = TYPE_FOR[extname(name).toLowerCase()];
+    const contentType = type || 'application/octet-stream';
+    res.setHeader('Content-Disposition', type ? 'inline' : 'attachment');
+    return res.sendFile(path, { dotfiles: 'deny', headers: { 'Content-Type': contentType } });
   }
 
   /** Role and company of a viewer, cached for a minute (a page of avatars is many requests). */

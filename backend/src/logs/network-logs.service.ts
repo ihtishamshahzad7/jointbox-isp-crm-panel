@@ -80,17 +80,7 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
       const sub = await this.scope.subscriberWhere(actor);
       return Object.keys(sub).length ? { subscriber: sub } : {};
     }
-    const [subWhere, nasList] = await Promise.all([
-      this.scope.subscriberWhere(actor),
-      this.prisma.nas.findMany({ where: await this.scope.nasWhere(actor), select: { id: true } }),
-    ]);
-    const nasIds = nasList.map((n) => n.id);
-    return {
-      OR: [
-        { subscriber: subWhere },
-        ...(nasIds.length ? [{ nasId: { in: nasIds } }] : []),
-      ],
-    };
+    return this.scope.networkLogWhere(actor);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────
@@ -716,7 +706,7 @@ export class NetworkLogsService implements OnModuleInit, OnModuleDestroy {
             framedIp:     acct.framedipaddress ?? undefined,
             sessionId:    acct.acctsessionid,
             severity:     'INFO',
-            message:      `Session ended for ${acct.username ?? 'unknown'} — ${terminateInfo(acct.acctterminatecause).label}: ${terminateInfo(acct.acctterminatecause).description} (duration: ${acct.acctsessiontime ?? '?'}s)`,
+            message:      `Session ended for ${acct.username ?? 'unknown'} — ${terminateInfo(acct.acctterminatecause).label}${terminateInfo(acct.acctterminatecause).code ? ` (#${terminateInfo(acct.acctterminatecause).code})` : ''}: ${terminateInfo(acct.acctterminatecause).meaning} (duration: ${acct.acctsessiontime ?? '?'}s)`,
           });
         } else {
           // New active session

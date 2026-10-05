@@ -1,6 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 import { MonitoringService } from './monitoring.service';
 
+// These tests are about what a reachable service answers; the destination
+// guard (no loopback / metadata) has its own tests.
+jest.mock('../security/outbound-guard', () => ({
+  ...jest.requireActual('../security/outbound-guard'),
+  assertDestination: jest.fn(async (h: string) => {
+    if (/^(127\.|169\.254\.|localhost)/.test(h)) throw new Error(`Refusing to connect to ${h}`);
+    return { host: h, addresses: [] };
+  }),
+}));
+
 /**
  * "SOMETIMES DEVICE UP BUT SERVICE DOWN."
  *
@@ -128,5 +138,21 @@ describe('monitoring: service-level checks', () => {
     for (const field of ['checkType: true', 'port: true', 'path: true']) {
       expect(poll).toContain(field);
     }
+  });
+});
+
+describe('monitoring: destinations', () => {
+  const make = (diag: any) =>
+    new MonitoringService({} as any, {} as any, { broadcast: jest.fn() } as any, diag);
+  const probe = (svc: any, t: any) => (svc as any).probe(t);
+  it('a monitor never probes the server itself or the metadata address', async () => {
+    const diag = { httpCheck: jest.fn(async () => ({ status: 200 })), tcpPort: jest.fn(async () => ({ open: true })) };
+    const svc: any = make(diag);
+    for (const host of ['127.0.0.1', '169.254.169.254']) {
+      const r = await probe(svc, { host, checkType: 'TCP', port: 6379 });
+      expect(r.up).toBe(false);
+    }
+    expect(diag.tcpPort).not.toHaveBeenCalled();
+    expect(diag.httpCheck).not.toHaveBeenCalled();
   });
 });

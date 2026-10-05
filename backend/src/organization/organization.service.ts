@@ -353,7 +353,7 @@ export class OrganizationService {
       if (userId === this.scope.actorId(actor) && !this.scope.isAdmin(actor.role)) {
         throw new ForbiddenException('You cannot set your own commission. Your parent account controls it.');
       }
-      await this.scope.assertUser(actor, userId); // must be within your subtree
+      await this.scope.assertUserWritable(actor, userId); // must be within your subtree
     }
     return this.prisma.user.update({
       where: { id: userId },
@@ -403,7 +403,7 @@ export class OrganizationService {
     if (!Number.isFinite(amount) || amount > 1e10) throw new BadRequestException('That amount is too large for one transfer.');
     const actorId = this.scope.actorId(actor);
     if (targetUserId === actorId) throw new BadRequestException('Cannot withdraw from your own wallet');
-    await this.scope.assertUser(actor, targetUserId);
+    await this.scope.assertUserWritable(actor, targetUserId);
 
     const target = await this.prisma.user.findUnique({ where: { id: targetUserId } });
     if (!target) throw new NotFoundException('Account not found');
@@ -517,7 +517,7 @@ export class OrganizationService {
     if (!this.scope.isOwner(actor?.role) && !actorUser?.canTopupDownline) {
       throw new ForbiddenException('Only the ISP (or a delegate) can grant balance-adding permission.');
     }
-    await this.scope.assertUser(actor, targetUserId); // must be in your subtree
+    await this.scope.assertUserWritable(actor, targetUserId); // must be in your subtree
     const updated = await this.prisma.user.update({
       where: { id: targetUserId },
       data: { canTopupDownline: allowed },
@@ -615,7 +615,7 @@ export class OrganizationService {
     if (!this.scope.isOwner(actor?.role) && !actorUser?.canSetPackagePrice) {
       throw new ForbiddenException('You do not hold this permission, so you cannot grant it.');
     }
-    await this.scope.assertUser(actor, targetUserId); // must be your downline
+    await this.scope.assertUserWritable(actor, targetUserId); // must be your downline
 
     return this.prisma.user.update({
       where: { id: targetUserId },
@@ -654,7 +654,7 @@ export class OrganizationService {
         'You cannot add routers yourself, so you cannot grant that right to anyone else.',
       );
     }
-    await this.scope.assertUser(actor, targetUserId); // must be your downline
+    await this.scope.assertUserWritable(actor, targetUserId); // must be your downline
 
     return this.prisma.user.update({
       where: { id: targetUserId },
@@ -680,7 +680,7 @@ export class OrganizationService {
     const value = Number(limit);
     if (!Number.isFinite(value) || value < 0) throw new BadRequestException('Credit limit must be zero or more.');
     if (!this.scope.isAdmin(actor?.role)) {
-      await this.scope.assertUser(actor, targetUserId); // must be in my subtree
+      await this.scope.assertUserWritable(actor, targetUserId); // must be in my subtree
       /**
        * A credit limit is an overdraft the PARENT extends — an account could
        * set its own and spend money its parent never gave it. The company sets
@@ -715,7 +715,7 @@ export class OrganizationService {
     // Permission: the target must be inside the actor's subtree (and not the actor itself).
     const actorId = this.scope.actorId(actor);
     if (targetUserId === actorId) throw new BadRequestException('Cannot top up your own wallet');
-    await this.scope.assertUser(actor, targetUserId); // throws if outside subtree
+    await this.scope.assertUserWritable(actor, targetUserId); // throws if outside subtree
 
     const target = await this.prisma.user.findUnique({ where: { id: targetUserId } });
     if (!target) throw new NotFoundException('Account not found');
@@ -973,7 +973,7 @@ export class OrganizationService {
 
     // ISP can set pricing for any reseller; non-admin must use the regular hierarchy
     if (!this.scope.isAdmin(actor?.role)) {
-      await this.scope.assertUser(actor, userId);
+      await this.scope.assertUserWritable(actor, userId);
     }
 
     return this.prisma.resellerPackagePrice.upsert({
@@ -997,7 +997,7 @@ export class OrganizationService {
     if (!existing) throw new NotFoundException('No pricing found for this franchise-package pair');
 
     if (!this.scope.isAdmin(actor?.role)) {
-      await this.scope.assertUser(actor, userId);
+      await this.scope.assertUserWritable(actor, userId);
     }
 
     await this.prisma.resellerPackagePrice.delete({

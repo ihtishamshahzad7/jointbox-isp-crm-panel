@@ -1,5 +1,5 @@
 import {
-  Injectable, Logger, NotFoundException, BadRequestException, ConflictException,
+  Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -193,7 +193,9 @@ export class StaticIpService {
     const subIds = [...new Set(ip.history.map((h) => h.subscriberId))];
     const subs = subIds.length
       ? await this.prisma.subscriber.findMany({
-          where: { id: { in: subIds } },
+          // Only previous holders the caller may see — a free address that
+          // once belonged to another branch's customer must not name them.
+          where: { AND: [{ id: { in: subIds } }, actor ? await this.scope.subscriberWhere(actor) : {}] },
           select: { id: true, fullName: true, username: true },
         })
       : [];
@@ -752,16 +754,43 @@ export class StaticIpService {
     return updated;
   }
 
+  /**
+   * CHANGING or deleting a register row is for the account that loaded it (or
+   * one above it inside the company). Reading rows from above is fine — a
+   * dealer allocates from its company's free pool — but writes reused that
+   * read scope, so a dealer could block, move or delete the company's whole
+   * free register.
+   */
+  private async assertRowWritable(actor: Actor | undefined, id: number) {
+    if (!actor || this.scope.isAdmin(actor.role)) return;
+    const row = await this.prisma.staticIp.findUnique({ where: { id }, select: { ownerId: true } });
+    const mine = await this.scope.descendantIds(await this.scope.rootId(actor));
+    if (!row || row.ownerId == null || !mine.includes(row.ownerId)) {
+      throw new ForbiddenException('Only the account that added this address can change or delete it.');
+    }
+  }
+
   async update(id: number, data: any, actor?: Actor) {
-    await this.findOne(id, actor); // privacy + existence check
+    const current: any = await this.findOne(id, actor); // privacy + existence check
+    await this.assertRowWritable(actor, id);
     // Moving the address onto a router: only one the caller can see.
     if (actor && data.nasId) await this.scope.assertNas(actor, Number(data.nasId));
+    // Status changes here are register housekeeping only: allocation and
+    // release go through Assign/Release (they bill and touch RADIUS).
+    if (data.status !== undefined && data.status !== current.status) {
+      const allowed = ['AVAILABLE', 'RESERVED', 'BLOCKED'];
+      if (current.subscriberId || current.status === 'ASSIGNED' || !allowed.includes(String(data.status))) {
+        throw new BadRequestException('Use Assign or Release to change who holds this address.');
+      }
+    }
+    const price = data.monthlyPrice !== undefined && data.monthlyPrice !== null && data.monthlyPrice !== '' ? Number(data.monthlyPrice) : undefined;
+    if (price !== undefined && (!Number.isFinite(price) || price < 0)) throw new BadRequestException('Monthly price must be zero or more.');
     return this.prisma.staticIp.update({
       where: { id },
       data: {
         gateway: data.gateway,
         subnetMask: data.subnetMask,
-        monthlyPrice: data.monthlyPrice !== undefined ? Number(data.monthlyPrice) : undefined,
+        monthlyPrice: price,
         expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
         status: data.status,
         notes: data.notes,
@@ -772,6 +801,7 @@ export class StaticIpService {
 
   async remove(id: number, actor?: Actor) {
     const ip = await this.findOne(id, actor);
+    await this.assertRowWritable(actor, id);
     if (ip.subscriberId) {
       throw new BadRequestException('Release this address from its customer before deleting it.');
     }

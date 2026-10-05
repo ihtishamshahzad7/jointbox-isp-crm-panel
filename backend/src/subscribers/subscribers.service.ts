@@ -472,6 +472,8 @@ export class SubscribersService implements OnModuleInit {
         where: { id: Number(opts.newPackageId) }, select: { id: true },
       });
       if (!exists) throw new BadRequestException(`Package #${opts.newPackageId} not found for migration.`);
+      // The new package must be one the mover may use — not another company's.
+      if (opts.actor && !this.scope.isAdmin(opts.actor.role)) await this.scope.assertPackage(opts.actor, Number(opts.newPackageId));
       targetPackageId = Number(opts.newPackageId);
     }
     const migrated = targetPackageId !== sub.packageId;
@@ -1585,6 +1587,19 @@ export class SubscribersService implements OnModuleInit {
   }
 
   async create(data: any, actor?: Actor) {
+    /**
+     * Billing shortcuts belong to the company itself (recording its existing
+     * customer book). A franchise, dealer, retailer or staff member always
+     * pays for what it switches on: these came straight from the request
+     * body, so POST /subscribers { skipCharge: true, expiryDate: "2099-01-01" }
+     * put a customer online until 2099 with no invoice and no wallet charge.
+     */
+    if (actor && !this.scope.isOwner(actor.role)) {
+      data = { ...data };
+      delete data.skipCharge;
+      delete data.skipInvoice;
+      delete data.expiryDate;
+    }
     // IDEMPOTENCY: if the request carries a key and a subscriber was already
     // created with it (a retry or a double-clicked "Add"), return that record
     // instead of creating a duplicate and charging the wallet twice.
@@ -1696,6 +1711,9 @@ export class SubscribersService implements OnModuleInit {
       sellPrice = data.sellPrice != null && data.sellPrice !== ''
         ? Number(data.sellPrice)
         : (ownRetail ?? base);
+      if (!Number.isFinite(sellPrice as number) || (sellPrice as number) < 0) {
+        throw new BadRequestException('The price must be zero or more.');
+      }
 
       costPrice = await this.pricing.activationCost(ownerId, parseInt(data.packageId), base);
       profit = Math.round(((sellPrice ?? 0) - costPrice) * 100) / 100;
@@ -1869,7 +1887,9 @@ export class SubscribersService implements OnModuleInit {
         let expiry: Date | null = null;
         if (data.expiryDate) {
           const e = new Date(data.expiryDate);
-          if (!isNaN(e.getTime())) expiry = e;
+          // A migrated customer keeps their real remaining days — within reason.
+          const max = Date.now() + 400 * 86_400_000;
+          if (!isNaN(e.getTime()) && e.getTime() <= max) expiry = e;
         }
         // Declared OUTSIDE the if-block: the cycle length below needs it even
         // when the expiry came from the import file. (Was previously scoped
@@ -2058,6 +2078,11 @@ if (!unpaid && data.username && data.password) {
    */
   async setHold(id: number, onHold: boolean, reason: string | undefined, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, id);
+    // A hold keeps a customer online past expiry for as long as it lasts, so
+    // putting one on is the company's decision (anyone may clear one).
+    if (onHold && actor && !this.scope.isOwner(actor.role)) {
+      throw new ForbiddenException('Only your company account can put a customer on hold.');
+    }
     const updated = await this.prisma.subscriber.update({
       where: { id },
       data: { onHold, onHoldReason: onHold ? (reason?.trim() || 'Under dispute') : null },
@@ -2307,7 +2332,15 @@ if (!unpaid && data.username && data.password) {
         const ss = await this.prisma.serviceSettings.findUnique({ where: { subscriberId: id } });
         const expiry = ss?.expiryDate ? new Date(ss.expiryDate) : null;
         const cycleDays = ss?.duration && ss.duration > 0 ? ss.duration : 30;
-        let remainingDays = expiry ? Math.ceil((expiry.getTime() - Date.now()) / 86400_000) : cycleDays;
+        /**
+         * Only a PAID, running period has days to credit or charge. A customer
+         * registered without activation (cost recorded, never charged), or one
+         * with no expiry, used to count as a whole unused cycle — switching
+         * them from a 1000 plan to a 200 plan credited the dealer 800 that it
+         * never paid, as often as it liked.
+         */
+        const paidPeriod = old.status === 'ACTIVE' && !!expiry && expiry.getTime() > Date.now();
+        let remainingDays = paidPeriod ? Math.ceil((expiry!.getTime() - Date.now()) / 86400_000) : 0;
         remainingDays = Math.max(0, Math.min(remainingDays, cycleDays));
         const frac = cycleDays > 0 ? remainingDays / cycleDays : 0;
 
@@ -2324,7 +2357,7 @@ if (!unpaid && data.username && data.password) {
           where: { userId_packageId: { userId: old.userId, packageId: subscriber.packageId } },
           select: { retailPrice: true },
         });
-        const newSell = data.sellPrice != null && data.sellPrice !== '' ? Number(data.sellPrice)
+        const newSell = data.sellPrice != null && data.sellPrice !== '' && Number(data.sellPrice) >= 0 ? Number(data.sellPrice)
           : (ownRow?.retailPrice ?? newBase);
 
         if (net !== 0) {
@@ -2358,7 +2391,13 @@ if (!unpaid && data.username && data.password) {
         });
         this.logger.log(`Plan change #${id}: ${remainingDays}/${cycleDays}d left — credit ${creditOld}, charge ${chargeNew}, net ${net} to owner #${old.userId}`);
       } catch (e: any) {
-        if (e instanceof ForbiddenException) throw e; // insufficient balance must surface
+        if (e instanceof ForbiddenException) {
+          // The new plan was already saved above — an upgrade the wallet
+          // could not pay for must not stay in place (it would reach RADIUS
+          // on the next sync). Put the old plan back, then surface the error.
+          await this.prisma.subscriber.update({ where: { id }, data: { packageId: old.packageId } }).catch(() => null);
+          throw e;
+        }
         this.logger.warn(`Pro-rata plan change failed for #${id}: ${e?.message || e}`);
       }
     }
@@ -2895,12 +2934,29 @@ if (!unpaid && data.username && data.password) {
    */
   async grantGracePeriod(id: number, days: number, actor?: Actor, reason?: string) {
     if (actor) await this.scope.assertSubscriber(actor, id);
-    const d = Math.max(1, Math.min(Math.floor(Number(days) || 0), 90)); // 1..90 days
+    const owner = !actor || this.scope.isOwner(actor.role);
+    // The company may give up to 90 days; anyone below it up to a week.
+    const d = Math.max(1, Math.min(Math.floor(Number(days) || 0), owner ? 90 : 7));
     const sub = await this.prisma.subscriber.findUnique({
       where: { id },
       select: { id: true, username: true, password: true, fullName: true, status: true },
     });
     if (!sub) throw new NotFoundException('Subscriber not found');
+    /**
+     * Grace is extra time on a PAID period. It used to work on a customer who
+     * never paid (no expiry — then never swept, so online for good) and could
+     * be granted again and again. Now: a paid period must exist, and below
+     * the company, one grace per period.
+     */
+    const ss0 = await this.prisma.serviceSettings.findUnique({
+      where: { subscriberId: id }, select: { expiryDate: true, gracePeriodUntil: true },
+    });
+    if (!ss0?.expiryDate) {
+      throw new BadRequestException('This customer has no paid period to extend. Activate them instead.');
+    }
+    if (!owner && ss0.gracePeriodUntil && new Date(ss0.gracePeriodUntil) > new Date(ss0.expiryDate)) {
+      throw new BadRequestException('A grace period was already given for this billing period. Ask your company account for more.');
+    }
 
     const until = new Date(Date.now() + d * 86400_000);
     await this.prisma.serviceSettings.upsert({
@@ -3348,6 +3404,13 @@ if (!unpaid && data.username && data.password) {
     const subscriberId = Number(payload.subscriberId);
     const packageId = Number(payload.packageId);
     const extraFee = payload.extraFeeAmount ? Number(payload.extraFeeAmount) : 0;
+    // A negative fee turned "pay from balance" into "add to balance": a total
+    // of -999k passed the balance check and credited the customer's wallet.
+    if (!Number.isFinite(extraFee) || extraFee < 0) throw new BadRequestException('The extra fee must be zero or more.');
+    if (payload.sellPrice != null && payload.sellPrice !== '') {
+      const sp = Number(payload.sellPrice);
+      if (!Number.isFinite(sp) || sp < 0) throw new BadRequestException('The price must be zero or more.');
+    }
 
     const subscriber = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
@@ -3418,22 +3481,27 @@ if (!unpaid && data.username && data.password) {
     if (payload.actorId) {
       const actorUser = await this.prisma.user.findUnique({
         where: { id: Number(payload.actorId) },
-        select: { id: true, role: true, branchId: true },
+        select: { id: true, role: true, branchId: true, parentId: true },
       });
-      if (actorUser && !this.scope.isAdmin(actorUser.role) && subscriber.userId !== actorUser.id) {
-        const below = await this.scope.descendantIds(actorUser.id); // self + descendants
+      // Staff act for the account they work for: a staff member's activation
+      // is that account's sale. (Comparing against the staff member's own,
+      // empty subtree moved every customer a staff member touched onto the
+      // staff account, out of its dealer's book.) Auditors never claim.
+      const actingAs = actorUser?.role === 'SALES' ? actorUser.parentId : actorUser?.id;
+      if (actorUser && actingAs && actorUser.role !== 'AUDITOR' && !this.scope.isAdmin(actorUser.role) && subscriber.userId !== actingAs) {
+        const below = await this.scope.descendantIds(actingAs); // self + descendants
         const ownerIsBelowActor = subscriber.userId != null && below.includes(subscriber.userId);
         if (!ownerIsBelowActor) {
           await this.prisma.subscriber.update({
             where: { id: subscriberId },
             data: {
-              userId: actorUser.id,
+              userId: actingAs,
               salespersonId: actorUser.id,
               ...(actorUser.branchId != null ? { branchId: actorUser.branchId } : {}),
             },
           });
-          subscriber.userId = actorUser.id; // downstream quote/settlement price at this tier
-          this.logger.log(`Activation: subscriber #${subscriberId} claimed by reseller #${actorUser.id} (priced at their tier)`);
+          subscriber.userId = actingAs; // downstream quote/settlement price at this tier
+          this.logger.log(`Activation: subscriber #${subscriberId} claimed by account #${actingAs} (priced at their tier)`);
         }
       }
     }
@@ -3475,6 +3543,10 @@ if (!unpaid && data.username && data.password) {
     // the 30-day period runs from the activation date, not the creation date.
     // A custom expiry date always wins if the operator picked one.
     const firstActivation = subscriber.status !== 'ACTIVE' && mode !== 'DATE';
+    // Carry-over of an already-paid period is not capped (those days were
+    // paid to the previous owner); otherwise one activation = one period for
+    // accounts below the company, up to a year for the company itself.
+    const carryOver = !payload.mode && !payload.days && !(payload.expiryDateTime || payload.expiryDate) && mode === 'DAYS';
     const quote = await this.renewal.quote(subscriberId, {
       mode,
       packageId,
@@ -3482,6 +3554,7 @@ if (!unpaid && data.username && data.password) {
       expiryDate: effectiveExpiryDate,
       extraFee: extraFee,
       fromActivation: firstActivation,
+      maxDays: carryOver ? undefined : payload.ownerMayExtend === true ? 366 : (pkg.duration || 30) + 1,
     });
     const expiryDate = quote.newExpiry;
 
@@ -3708,7 +3781,7 @@ if (!unpaid && data.username && data.password) {
           // otherwise the same balance could be spent repeatedly. Runs AFTER the
           // reseller charge outcome so a duplicate never reaches the wallet, and
           // INSIDE this tx so a failure rolls the deduction back.
-          if (mode === 'BALANCE') {
+          if (mode === 'BALANCE' && total > 0) {
             const deduct = await this.accounting.deductBalance(subscriberId, total, actKey, 'RENEWAL', payload.actorId, tx);
             if (deduct.alreadyDeducted) {
               throw new ConflictException(

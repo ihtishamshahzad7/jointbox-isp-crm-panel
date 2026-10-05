@@ -73,6 +73,16 @@ export class NetworkService {
     const take = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
     const offset = (page - 1) * take;
     const q = `${opts.q ?? ''}`.trim() || undefined;
+    /**
+     * Below the platform, the page and the total must be of the caller's OWN
+     * sessions: paging the whole server and filtering afterwards showed a
+     * dealer near-empty pages and the installation-wide online count.
+     */
+    if (actor && !this.scope.isAdmin(actor.role)) {
+      const all = await this.radiusSync.getActiveSessions(nasIp, { q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []);
+      const mine = await this.enrichSessions(all, actor);
+      return { items: mine.slice(offset, offset + take), total: mine.length, page, pageSize: take };
+    }
     const [total, rawRows] = await Promise.all([
       this.radiusSync.countActiveSessions(nasIp, q),
       this.radiusSync.getActiveSessions(nasIp, { limit: take, offset, q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []),

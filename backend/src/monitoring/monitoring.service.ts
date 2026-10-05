@@ -6,6 +6,7 @@ import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { DiagnosticsService } from './diagnostics.service';
+import { assertDestination } from '../security/outbound-guard';
 
 /**
  * Network monitoring — continuously pings the hosts each account adds, keeps a
@@ -175,6 +176,7 @@ export class MonitoringService {
     const host = String(data.host || '').trim();
     if (!host) throw new BadRequestException('A host (IP or hostname) is required.');
     if (!/^[a-zA-Z0-9._:-]{1,255}$/.test(host)) throw new BadRequestException('That host looks invalid — use an IP or hostname.');
+    await assertDestination(host, 'OPERATOR_NETWORK');
     return this.prisma.monitorTarget.create({
       data: {
         name: String(data.name || host).trim().slice(0, 120),
@@ -282,7 +284,12 @@ export class MonitoringService {
     await this.assertOwns(id, actor);
     const patch: any = {};
     if (data.name !== undefined) patch.name = String(data.name).trim().slice(0, 120);
-    if (data.host !== undefined) patch.host = String(data.host).trim().slice(0, 255);
+    if (data.host !== undefined) {
+      const host = String(data.host).trim();
+      if (!/^[a-zA-Z0-9._:-]{1,255}$/.test(host)) throw new BadRequestException('That host looks invalid — use an IP or hostname.');
+      await assertDestination(host, 'OPERATOR_NETWORK');
+      patch.host = host;
+    }
     if (data.groupName !== undefined) patch.groupName = data.groupName ? String(data.groupName).trim().slice(0, 80) : null;
     if (data.enabled !== undefined) patch.enabled = !!data.enabled;
     if (data.intervalSec !== undefined) patch.intervalSec = Math.min(Math.max(Number(data.intervalSec) || 30, 10), 3600);
@@ -363,6 +370,18 @@ export class MonitoringService {
   private async probe(t: { host: string; checkType?: string | null; port?: number | null; path?: string | null }):
     Promise<{ up: boolean; ms: number | null; loss: number; status?: number | null; detail?: string | null }> {
     const type = (t.checkType || 'ICMP').toUpperCase();
+    /**
+     * Monitors may reach the operator's network (RFC1918 / CGNAT routers) but
+     * never the server itself, link-local or the cloud metadata address — a
+     * "monitor" on 127.0.0.1:6379 or 169.254.169.254 turned the panel into a
+     * port scanner for its own internals. Checked at every probe, so a name
+     * that later resolves somewhere else (DNS rebinding) is caught too.
+     */
+    try {
+      await assertDestination(t.host, 'OPERATOR_NETWORK');
+    } catch (e: any) {
+      return { up: false, ms: null, loss: 100, status: null, detail: e?.message || 'destination not allowed' };
+    }
     if (type === 'ICMP') return this.ping(t.host);
 
     const port = t.port ?? MonitoringService.DEFAULT_PORT[type] ?? 0;
@@ -438,7 +457,7 @@ export class MonitoringService {
     // and log a durable record.
     if (wasUp !== null && wasUp !== res.up) {
       this.events.broadcast('monitor', {
-        id: t.id, name: t.name, host: t.host, ownerId: t.ownerId,
+        id: t.id, name: t.name, host: t.host, ownerId: t.ownerId, ownerUserId: t.ownerId,
         isUp: res.up, at: now.toISOString(),
       });
       await this.prisma.systemLog.create({

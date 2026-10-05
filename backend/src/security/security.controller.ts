@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Request, UseGuards } from '@nestjs/common';
 import { SecurityService } from './security.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from './permissions.guard';
@@ -63,18 +63,29 @@ export class SecurityController {
     return this.security.twoFactorStatus(req.user.sub);
   }
 
+  /**
+   * 2FA belongs to the person, not to whoever is switched into the account:
+   * an operator "acting as" a dealer must not reset the dealer's 2FA.
+   */
+  private assertOwnSession(req: any) {
+    if (req?.user?.imp) throw new ForbiddenException('Two-factor settings can only be changed by the account itself, not while switched into it.');
+  }
+
   @Post('2fa/enroll')
-  enroll(@Request() req: any) {
-    return this.security.enrollTwoFactor(req.user.sub);
+  enroll(@Request() req: any, @Body() body: { code?: string }) {
+    this.assertOwnSession(req);
+    return this.security.enrollTwoFactor(req.user.sub, body?.code || '');
   }
 
   @Post('2fa/confirm')
   confirm(@Request() req: any, @Body() body: { code: string }) {
+    this.assertOwnSession(req);
     return this.security.confirmTwoFactor(req.user.sub, body.code || '');
   }
 
   @Post('2fa/disable')
   disable(@Request() req: any, @Body() body: { code: string }) {
+    this.assertOwnSession(req);
     return this.security.disableTwoFactor(req.user.sub, body.code || '');
   }
 

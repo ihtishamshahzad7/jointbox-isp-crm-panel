@@ -218,15 +218,31 @@ export class GatewayService {
   // ─────────────────────────────────────────────────────────────
   // SUCCESS / FAIL handling (idempotent)
   // ─────────────────────────────────────────────────────────────
-  async handleSuccess(idempotencyKey: string, gatewayRef?: string, payload?: string) {
+  /**
+   * Settle a transaction. Callers must have PROVEN the payment first — a
+   * signed webhook, or a server-side check with the provider. Redirect URLs
+   * prove nothing: the customer can open /gateway/callback/stripe?result=success
+   * themselves, and that used to mark the invoice PAID, extend the service and
+   * pay commission with no money moved.
+   *
+   * `gateway` must match the transaction's own gateway, so one provider's
+   * proof cannot settle another provider's (or the sandbox's) transaction.
+   * The claim is a conditional update, so two deliveries cannot both settle.
+   */
+  async handleSuccess(idempotencyKey: string, gatewayRef?: string, payload?: string, gateway?: string) {
     const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey } });
     if (!tx) throw new NotFoundException('Transaction not found');
+    if (gateway && tx.gateway !== gateway) {
+      this.logger.warn(`Settlement for ${idempotencyKey} came from ${gateway}, but it is a ${tx.gateway} transaction. Ignored.`);
+      return { ok: false };
+    }
     if (tx.status === 'SUCCESS') return { ok: true, already: true }; // idempotent replay
 
-    await this.prisma.gatewayTransaction.update({
-      where: { id: tx.id },
-      data: { status: 'SUCCESS', gatewayRef: gatewayRef || null, payload: payload?.slice(0, 4000) || null },
+    const claim = await this.prisma.gatewayTransaction.updateMany({
+      where: { id: tx.id, status: { not: 'SUCCESS' } },
+      data: { status: 'SUCCESS', gatewayRef: gatewayRef || tx.gatewayRef || null, payload: payload?.slice(0, 4000) || null },
     });
+    if (claim.count === 0) return { ok: true, already: true };
 
     // 1. record payment (posts ledger + PAYMENT_RECEIVED notification via InvoicesService)
     await this.invoices.recordPayment(tx.invoiceId, {
@@ -438,8 +454,14 @@ export class GatewayService {
     });
     const data: any = await res.json().catch(() => ({}));
     if (res.ok && data?.status === 'COMPLETED') {
-      await this.handleSuccess(key, data.id, JSON.stringify(data).slice(0, 4000));
-      return true;
+      const unit = data?.purchase_units?.[0]?.payments?.captures?.[0]?.amount;
+      if (unit?.value != null && Math.abs(Number(unit.value) - Number(tx.amount)) > 0.01) {
+        this.logger.error(`PayPal amount mismatch on ${key}: captured ${unit.value}, expected ${tx.amount}. Not settling.`);
+        await this.handleFailure(key, 'paypal-amount-mismatch');
+        return false;
+      }
+      const r = await this.handleSuccess(key, data.id, JSON.stringify(data).slice(0, 4000), 'PAYPAL');
+      return r.ok;
     }
     await this.handleFailure(key, data?.message || 'paypal-not-completed');
     return false;
@@ -558,15 +580,83 @@ export class GatewayService {
       return false;
     }
 
-    await this.handleSuccess(key, paid.reference || key, JSON.stringify(paid).slice(0, 4000));
-    return true;
+    const r = await this.handleSuccess(key, paid.reference || key, JSON.stringify(paid).slice(0, 4000), 'PAYSTACK');
+    return r.ok;
+  }
+
+  /**
+   * JazzCash response hash: HMAC-SHA256 (key = integrity salt) of the salt
+   * followed by every non-empty pp_* value, keys sorted alphabetically,
+   * joined with '&'. Compared case-insensitively.
+   */
+  verifyJazzcashHash(body: any): boolean {
+    const salt = process.env.JAZZCASH_INTEGERITY_SALT || '';
+    const given = String(body?.pp_SecureHash ?? body?.PP_SECUREHASH ?? '');
+    if (!salt || !given) return false;
+    const keys = Object.keys(body || {})
+      .filter((k) => /^pp_/i.test(k) && k.toLowerCase() !== 'pp_securehash')
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    const values = keys.map((k) => String(body[k] ?? '')).filter((v) => v !== '');
+    const expected = createHmac('sha256', salt).update([salt, ...values].join('&')).digest('hex');
+    return GatewayService.digestsMatch(expected.toLowerCase(), given.toLowerCase());
+  }
+
+  /**
+   * Stripe redirect: ask Stripe whether the Checkout Session was paid, for
+   * the right amount and currency, instead of trusting ?result=success.
+   */
+  async stripeVerify(key: string): Promise<boolean> {
+    const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+    if (!tx || tx.gateway !== 'STRIPE' || !tx.gatewayRef || !process.env.STRIPE_SECRET_KEY) return false;
+    if (tx.status === 'SUCCESS') return true;
+    const res = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(tx.gatewayRef)}`, {
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+    }).catch(() => null);
+    const s: any = res ? await res.json().catch(() => ({})) : {};
+    if (!res?.ok || s?.payment_status !== 'paid') return false; // not paid (yet) — the webhook may still settle it
+    if (s.client_reference_id && s.client_reference_id !== key) return false;
+    if (s.amount_total != null && Number(s.amount_total) !== Math.round(tx.amount * 100)) {
+      this.logger.error(`Stripe amount mismatch on ${key}: ${s.amount_total} vs ${Math.round(tx.amount * 100)}. Not settling.`);
+      return false;
+    }
+    if (s.currency && String(s.currency).toUpperCase() !== String(tx.currency).toUpperCase()) return false;
+    const r = await this.handleSuccess(key, s.payment_intent || s.id, undefined, 'STRIPE');
+    return r.ok;
+  }
+
+  /**
+   * SSLCommerz: the success redirect carries a val_id that must be confirmed
+   * with SSLCommerz's validation API (status VALID/VALIDATED, our tran_id,
+   * our amount) before anything settles.
+   */
+  async sslczVerify(key: string, valId: string): Promise<boolean> {
+    const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+    if (!tx || tx.gateway !== 'SSLCOMMERZ' || !valId) return false;
+    if (tx.status === 'SUCCESS') return true;
+    const sandbox = process.env.SSLCZ_SANDBOX !== '0';
+    const base = sandbox ? 'https://sandbox.sslcommerz.com' : 'https://securepay.sslcommerz.com';
+    const q = new URLSearchParams({
+      val_id: valId, store_id: process.env.SSLCZ_STORE_ID || '', store_passwd: process.env.SSLCZ_STORE_PASS || '', format: 'json',
+    });
+    const res = await fetch(`${base}/validator/api/validationserverAPI.php?${q.toString()}`).catch(() => null);
+    const v: any = res ? await res.json().catch(() => ({})) : {};
+    if (!res?.ok || !['VALID', 'VALIDATED'].includes(String(v?.status))) return false;
+    if (v.tran_id && v.tran_id !== key) return false;
+    if (v.amount != null && Math.abs(Number(v.amount) - tx.amount) > 0.01) {
+      this.logger.error(`SSLCommerz amount mismatch on ${key}: ${v.amount} vs ${tx.amount}. Not settling.`);
+      return false;
+    }
+    if (v.currency && String(v.currency).toUpperCase() !== String(tx.currency).toUpperCase()) return false;
+    const r = await this.handleSuccess(key, v.bank_tran_id || valId, JSON.stringify(v).slice(0, 4000), 'SSLCOMMERZ');
+    return r.ok;
   }
 
   /** Verify Razorpay's payment signature (HMAC-SHA256 of order_id|payment_id). */
   verifyRazorpaySignature(orderId: string, paymentId: string, signature: string): boolean {
     const secret = process.env.RAZORPAY_KEY_SECRET || '';
+    if (!secret || !orderId || !paymentId || !signature) return false;
     const expected = createHmac('sha256', secret).update(`${orderId}|${paymentId}`).digest('hex');
-    return expected === signature;
+    return GatewayService.digestsMatch(expected, String(signature));
   }
 
   /**
@@ -696,7 +786,8 @@ export class GatewayService {
       return { ok: false, reason: 'currency-mismatch' };
     }
 
-    await this.handleSuccess(key, opts.reference || key, opts.payload);
+    const settled = await this.handleSuccess(key, opts.reference || key, opts.payload, gateway);
+    if (!settled.ok) return { ok: false, reason: 'gateway-mismatch' };
     this.logger.log(`${gateway} webhook settled transaction ${key}`);
     return { ok: true };
   }
@@ -747,6 +838,12 @@ export class GatewayService {
   }
 
   async bkashExecute(key: string, paymentID: string) {
+    const own = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+    // The paymentID in the redirect must be the one bKash issued for THIS
+    // transaction — otherwise one completed payment could settle another.
+    if (!own || own.gateway !== 'BKASH' || !own.gatewayRef || own.gatewayRef !== paymentID) {
+      return { ok: false };
+    }
     const base = process.env.BKASH_BASE_URL || 'https://tokenized.sandbox.bka.sh/v1.2.0-beta';
     const token = await this.bkashToken();
     const res = await fetch(`${base}/tokenized/checkout/execute`, {
@@ -756,7 +853,11 @@ export class GatewayService {
     });
     const data: any = await res.json();
     if (data?.transactionStatus === 'Completed') {
-      return this.handleSuccess(key, data.trxID, JSON.stringify(data));
+      if (data.amount != null && Math.abs(Number(data.amount) - Number(own.amount)) > 0.01) {
+        this.logger.error(`bKash amount mismatch on ${key}: paid ${data.amount}, expected ${own.amount}. Not settling.`);
+        return this.handleFailure(key, 'bkash-amount-mismatch');
+      }
+      return this.handleSuccess(key, data.trxID, JSON.stringify(data), 'BKASH');
     }
     return this.handleFailure(key, data?.statusMessage || 'bkash-failed');
   }
@@ -880,9 +981,29 @@ export class GatewayService {
   /** JazzCash callback — POST from JazzCash after payment. */
   async jazzcashHandle(key: string, body: any): Promise<{ ok: boolean }> {
     // JazzCash POSTs back to our return URL with payment details.
-    // pp_ResponseCode = '000' means success.
+    // pp_ResponseCode = '000' means success — but only when the response is
+    // signed with our integrity salt and is about THIS transaction. Anyone can
+    // send pp_ResponseCode=000 to this URL.
     if (body?.pp_ResponseCode === '000') {
-      return this.handleSuccess(key, body.pp_TxnRefNo || body.pp_TXNREFNO, JSON.stringify(body));
+      const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+      if (!tx || tx.gateway !== 'JAZZCASH') return { ok: false };
+      if (!this.verifyJazzcashHash(body)) {
+        this.logger.warn(`JazzCash response for ${key} failed its integrity hash. Not settling.`);
+        return { ok: false };
+      }
+      const ref = String(body.pp_TxnRefNo ?? body.pp_TXNREFNO ?? '');
+      if (ref && ref !== key) return { ok: false };
+      const amt = body.pp_Amount ?? body.pp_AMOUNT;
+      if (amt != null) {
+        const n = Number(amt);
+        const okAmount = Math.abs(n - tx.amount) < 0.01 || Math.round(n) === Math.round(tx.amount * 100);
+        if (!okAmount) {
+          this.logger.error(`JazzCash amount mismatch on ${key}: ${amt} vs ${tx.amount}. Not settling.`);
+          await this.handleFailure(key, 'jazzcash-amount-mismatch');
+          return { ok: false };
+        }
+      }
+      return this.handleSuccess(key, ref || key, JSON.stringify(body), 'JAZZCASH');
     }
     await this.handleFailure(key, body?.pp_ResponseCode || 'jazzcash-failed');
     return { ok: true };
@@ -938,9 +1059,17 @@ export class GatewayService {
   }
 
   /** Easypaisa callback — user redirected back after payment. */
-  async epHandle(key: string, result: string): Promise<{ ok: boolean }> {
+  async epHandle(key: string, result: string): Promise<{ ok: boolean; pending?: boolean }> {
     if (result === 'success') {
-      return this.handleSuccess(key, `easypaisa-${Date.now()}`);
+      // Easypaisa's redirect carries no signature, so it cannot settle the
+      // invoice by itself (anyone can open this URL). The transaction stays
+      // open for a verified confirmation, or for staff to record the payment
+      // after checking the Easypaisa merchant portal.
+      const tx = await this.prisma.gatewayTransaction.findUnique({ where: { idempotencyKey: key } });
+      if (tx && tx.gateway === 'EASYPAISA' && tx.status === 'INITIATED') {
+        await this.prisma.gatewayTransaction.update({ where: { id: tx.id }, data: { payload: 'customer-returned:awaiting-confirmation' } });
+      }
+      return { ok: false, pending: true };
     }
     await this.handleFailure(key, result || 'easypaisa-cancelled');
     return { ok: true };

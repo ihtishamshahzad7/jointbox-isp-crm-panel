@@ -352,6 +352,25 @@ export class VouchersService {
    * a legacy card with no creator — is "not found", checked BEFORE the PIN so
    * the endpoint cannot be used to test PINs on other companies' cards.
    */
+  /**
+   * A card's PIN is six digits. With unlimited tries, someone who saw a
+   * card's printed code could walk the PIN space and take its value. Five
+   * wrong PINs lock that card for an hour (per server process).
+   */
+  private readonly pinFails = new Map<number, { n: number; until: number }>();
+  private assertPinNotLocked(voucherId: number) {
+    const r = this.pinFails.get(voucherId);
+    if (r && r.n >= 5 && r.until > Date.now()) {
+      throw new BadRequestException('Too many wrong PINs for this card. Try again later.');
+    }
+  }
+  private pinFailed(voucherId: number) {
+    const r = this.pinFails.get(voucherId);
+    const n = (r && r.until > Date.now() ? r.n : 0) + 1;
+    this.pinFails.set(voucherId, { n, until: Date.now() + 3_600_000 });
+    if (this.pinFails.size > 20_000) this.pinFails.clear();
+  }
+
   private async assertVoucherInCompany(actor: Actor, voucher: { createdBy: number | null }) {
     if (this.scope.isPlatformOwner(actor)) return;
     const root = await this.scope.rootId(actor);
@@ -392,7 +411,9 @@ export class VouchersService {
       if (mine == null || theirs == null || mine !== theirs) throw new NotFoundException('Voucher not found');
     }
 
+    this.assertPinNotLocked(voucher.id);
     if (voucher.pin !== pin) {
+      this.pinFailed(voucher.id);
       throw new BadRequestException('Invalid PIN');
     }
     
@@ -518,7 +539,8 @@ export class VouchersService {
     // Deliberately identical outcomes: unknown code, wrong PIN, already used,
     // expired. A caller learns only "no".
     if (!voucher) throw refuse();
-    if (voucher.pin !== cleanPin) throw refuse();
+    this.assertPinNotLocked(voucher.id);
+    if (voucher.pin !== cleanPin) { this.pinFailed(voucher.id); throw refuse(); }
     if (voucher.status !== 'UNUSED') throw refuse();
     if (voucher.expireDate && new Date() > voucher.expireDate) {
       await this.prisma.voucher

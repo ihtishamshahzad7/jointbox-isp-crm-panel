@@ -106,6 +106,7 @@ export default function PortalPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("paid") === "1") setPaidBanner(t("Payment received — your service has been renewed."));
     if (params.get("paid") === "0") setPaidBanner(t("Payment was cancelled or failed."));
+    if (params.get("paid") === "pending") setPaidBanner(t("Payment submitted — it will show here as soon as the payment provider confirms it."));
     const saved = localStorage.getItem("portal_token");
     if (saved) {
       setToken(saved);
@@ -155,6 +156,8 @@ export default function PortalPage() {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.message || t("Password changed."));
+      // Older sessions end with the old password; keep this one going.
+      if (data?.token) { localStorage.setItem("portal_token", data.token); setToken(data.token); }
       setPwForm({ currentPassword: "", newPassword: "" });
       setNote({ text: data.note || t("Password changed."), ok: true });
     } catch (e: any) {

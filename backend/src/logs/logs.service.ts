@@ -2,7 +2,7 @@ import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
-import { terminateInfo } from '../common/radius-terminate';
+import { terminateInfo, endedInfo, fieldsOf } from '../common/radius-terminate';
 
 @Injectable()
 export class LogsService {
@@ -66,13 +66,24 @@ export class LogsService {
     return this.scope.descendantIds(rootId);
   }
 
+  /**
+   * One account's logs (?forUser=) — only an account inside the caller's own
+   * tree. The id was used as given, so any account could read the login
+   * history (emails, IPs) and audit trail of another company or the platform.
+   */
+  private async idsFor(actor: Actor, forUser?: number): Promise<number[] | null> {
+    if (!forUser) return this.subtreeIds(actor);
+    if (!this.scope.isAdmin(actor?.role)) await this.scope.assertUser(actor, Number(forUser));
+    return [Number(forUser)];
+  }
+
   // ── Login Logs ────────────────────────────────────────────────
 
   async getLoginLogs(
     actor: Actor,
     opts: { limit?: number; offset?: number; forUser?: number } = {},
   ) {
-    const ids = opts.forUser ? [opts.forUser] : await this.subtreeIds(actor);
+    const ids = await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
 
@@ -101,7 +112,7 @@ export class LogsService {
     actor: Actor,
     opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean } = {},
   ) {
-    const ids = opts.forUser ? [opts.forUser] : await this.subtreeIds(actor);
+    const ids = await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
     // Optional action filter: an explicit comma list, or the financial preset.
@@ -418,7 +429,7 @@ export class LogsService {
   // ── Web Sessions ──────────────────────────────────────────────
 
   async getSessions(actor: Actor, opts: { forUser?: number } = {}) {
-    const ids = opts.forUser ? [opts.forUser] : await this.subtreeIds(actor);
+    const ids = await this.idsFor(actor, opts.forUser);
     const where: any = { isActive: true };
     if (ids) where.userId = { in: ids };
 
@@ -461,7 +472,13 @@ export class LogsService {
       const _rad = await this.scope.radiusWhere(actor);
       if (Object.keys(_rad).length) where.AND = [...(where.AND ?? []), _rad];
     }
-    if (opts.username) where.username = opts.username;
+    // A username filter narrows the caller's own list — it must never replace
+    // it, or any operator could read another company's customer by name.
+    if (opts.username) {
+      const own: string[] | undefined = where.username?.in;
+      if (own && !own.includes(opts.username)) return { items: [], summary: [], total: 0 };
+      where.username = opts.username;
+    }
     // Time window: sessions that STARTED within the last N hours.
     if (opts.sinceHours && opts.sinceHours > 0) {
       where.acctstarttime = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
@@ -476,7 +493,7 @@ export class LogsService {
     const MB = 1024 * 1024;
     let items = rows.map((r) => {
       const online = r.acctstoptime == null;
-      const info = terminateInfo(online ? null : r.acctterminatecause);
+      const info = online ? terminateInfo(null) : endedInfo(r.acctterminatecause);
       return {
         id: r.radacctid,
         username: r.username,
@@ -490,10 +507,10 @@ export class LogsService {
         downloadMB: r.acctoutputoctets != null ? Math.round(Number(r.acctoutputoctets) / MB) : null,
         uploadMB: r.acctinputoctets != null ? Math.round(Number(r.acctinputoctets) / MB) : null,
         online,
+        nasPortId: r.nasportid,
+        nasPortType: r.nasporttype,
         // The star of this view — the mapped RFC 2866 termination cause.
-        terminateCode: info.code,
-        terminateLabel: info.label,
-        terminateDescription: info.description,
+        ...fieldsOf(info),
       };
     });
 
@@ -735,9 +752,7 @@ export class LogsService {
     } = {},
   ) {
     const limit = opts.limit ?? 100;
-    const ids = opts.forUser
-      ? [opts.forUser]
-      : await this.subtreeIds(actor);
+    const ids = await this.idsFor(actor, opts.forUser);
 
     const loginWhere: any = {};
     if (ids) loginWhere.userId = { in: ids };

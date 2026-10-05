@@ -8,9 +8,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { NetworkModule } from '../network/network.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { ProrationService } from './proration.service';
+import { OrganizationModule } from '../organization/organization.module';
 
 @Module({
-  imports: [PrismaModule, AccountingModule, NasModule, NotificationsModule, NetworkModule, IntegrationsModule],
+  imports: [PrismaModule, AccountingModule, NasModule, NotificationsModule, NetworkModule, IntegrationsModule, OrganizationModule],
   controllers: [BillingController],
   providers: [BillingService, ProrationService],
   exports: [ProrationService],
