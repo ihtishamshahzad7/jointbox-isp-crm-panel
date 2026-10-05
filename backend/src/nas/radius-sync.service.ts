@@ -870,7 +870,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       const result = await this.pgClient.query(
-        'SELECT id, nasname, shortname, secret, type, description FROM radius_nas_clients ORDER BY id',
+        'SELECT id, nasname, shortname, type, description FROM radius_nas_clients ORDER BY id',
       );
       return result.rows;
     } catch (error: any) {
@@ -883,7 +883,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
     this.ensureConnected();
     try {
       const result = await this.pgClient.query(
-        'SELECT id, nasname, shortname, secret, type, description FROM radius_nas_clients WHERE nasname = $1',
+        'SELECT id, nasname, shortname, type, description FROM radius_nas_clients WHERE nasname = $1',
         [nasIp],
       );
       return result.rows[0] || null;
