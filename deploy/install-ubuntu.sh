@@ -129,7 +129,11 @@ if [[ -n "$RADDIR" ]]; then
   # c) enable sql in the default site (authorize + accounting + post-auth + session)
   SITE="$RADDIR/sites-available/default"
   [[ -f "$SITE" ]] && sed -i 's/^\s*#\?\s*-sql/\t\tsql/; ' "$SITE" 2>/dev/null || true
-  # d) permissions + restart
+  # d) move NAS client secrets out of the app-owned `nas` table.
+  if [[ -f "$APP_DIR/backend/scripts/provision-radius-client-store.sh" ]]; then
+    bash "$APP_DIR/backend/scripts/provision-radius-client-store.sh"
+  fi
+  # permissions + restart
   chown -R freerad:freerad "$RADDIR" 2>/dev/null || true
   systemctl enable freeradius 2>/dev/null || true
   systemctl restart freeradius 2>/dev/null || \
@@ -138,6 +142,10 @@ if [[ -n "$RADDIR" ]]; then
 else
   echo "==> FreeRADIUS config dir not found — skipping (install freeradius manually if needed)."
 fi
+
+# The helper may have changed RADIUS_DATABASE_URL to the dedicated role.
+# Restart the backend once so the running process picks up that credential.
+pm2 restart jointbox-backend --update-env >/dev/null 2>&1 || true
 
 # ── 10. Nginx reverse proxy (port 80 → frontend + /api → backend) ─
 cat > /etc/nginx/sites-available/jointbox <<'NGINX'

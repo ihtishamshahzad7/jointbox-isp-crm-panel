@@ -396,6 +396,15 @@ if ! sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.
   err "Inspect $DB_LOG and the database before re-running."
   exit 1
 fi
+
+# Provision the protected FreeRADIUS client store after migrations have created
+# the NAS/RADIUS tables. The helper creates a dedicated DB role, copies existing
+# NAS clients, and changes FreeRADIUS to read only that protected store.
+if [ -f "$APP_DIR/backend/scripts/provision-radius-client-store.sh" ]; then
+  step "Provision protected FreeRADIUS NAS client store"
+  bash "$APP_DIR/backend/scripts/provision-radius-client-store.sh"
+  ok "RADIUS client secrets isolated from the app-owned NAS table"
+fi
 # `... >/dev/null 2>&1 && ok "Backend built"` was the bug that made a broken
 # install look clean: on failure the && simply did not fire, so NEITHER a tick
 # nor a warning was printed and the step vanished from the output entirely.
