@@ -531,7 +531,7 @@ export class NasService implements OnModuleInit {
     } catch (error: any) {
       this.logger.warn(`NAS saved, but FreeRADIUS reload failed: ${error.message}`);
     }
-    return nas;
+    return sanitizeNas(nas);
   }
 
   async update(id: number, data: {
@@ -607,14 +607,9 @@ export class NasService implements OnModuleInit {
         data.secret !== undefined && !isMask(data.secret) ? data.secret : decField(this.secrets, existingNas.secret),
         updateData.description ?? existingNas.description,
       );
-      try {
-        await this.radiusSync.reloadFreeradius();
-        this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
-      } catch (error: any) {
-        this.logger.warn(`NAS updated, but FreeRADIUS reload failed: ${error.message}`);
-      }
+      this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
     }
-    return updatedNas;
+    return sanitizeNas(updatedNas);
   }
 
   /**
@@ -712,7 +707,7 @@ export class NasService implements OnModuleInit {
         return deletedNas;
       });
 
-      return result;
+      return sanitizeNas(result as any);
 
     } catch (error) {
       if (error instanceof NotFoundException) {
@@ -1064,7 +1059,7 @@ export class NasService implements OnModuleInit {
         radiusCount: radiusNas.length,
         prismaCount: prismaNas.length,
         radiusNas,
-        prismaNas,
+        prismaNas: sanitizeNasList(prismaNas),
       };
     } catch (error: any) {
       this.logger.error(`Debug failed: ${error.message}`);
