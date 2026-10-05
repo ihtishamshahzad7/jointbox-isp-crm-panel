@@ -77,9 +77,7 @@ INSERT INTO public.radius_nas_clients (nasname, shortname, type, ports, secret, 
 SELECT nasname, shortname, COALESCE(type, 'other'), ports, secret, server, description
 FROM public.nas
 WHERE secret IS NOT NULL AND btrim(secret) <> ''
-ON CONFLICT (nasname) DO UPDATE SET shortname=EXCLUDED.shortname, type=EXCLUDED.type,
-ports=EXCLUDED.ports, secret=EXCLUDED.secret, server=EXCLUDED.server,
-description=EXCLUDED.description, updated_at=NOW();
+ON CONFLICT (nasname) DO NOTHING;
 SQL
 
 python3 - "$ENV_FILE" "$DB_HOST" "$DB_PORT" "$DB_NAME" "$RADIUS_USER" "$RADIUS_DB_PASSWORD" <<'PY'
