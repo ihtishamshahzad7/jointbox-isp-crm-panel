@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession } from './radius-coa';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { SecretsService } from '../common/secrets.service';
+import { decField } from '../nas/nas-credentials';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,6 +35,7 @@ export class CoaService {
   constructor(
     private prisma: PrismaService,
     private mikrotik: MikrotikSyncService,
+    private secrets: SecretsService,
   ) {}
 
   /**
