@@ -7,6 +7,7 @@ import { TunnelService } from './tunnel.service';
 import { TunnelController } from './tunnel.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CommonModule } from '../common/common.module';
+import { RadiusClientVaultService } from './radius-client-vault.service';
 
 @Module({
   // CommonModule provides ScopeService for NAS ownership / assignment scoping.
@@ -20,13 +21,14 @@ import { CommonModule } from '../common/common.module';
   controllers: [TunnelController, NasController],
   providers: [
     NasService, 
-    RadiusSyncService, 
+    RadiusSyncService,
+    RadiusClientVaultService,
     MikrotikSyncService,
     // WireGuard management tunnels — how the panel reaches a router behind CGNAT.
     TunnelService,
   ],
   // MikrotikSyncService is exported so IpPoolModule can read live pools
   // straight off the router when reconciling.
-  exports: [NasService, RadiusSyncService, MikrotikSyncService, TunnelService],
+  exports: [NasService, RadiusSyncService, RadiusClientVaultService, MikrotikSyncService, TunnelService],
 })
 export class NasModule {}
