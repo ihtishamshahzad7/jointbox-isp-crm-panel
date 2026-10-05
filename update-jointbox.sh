@@ -90,7 +90,7 @@ log "Applying database migrations..."
 
 # Provision the dedicated RADIUS DB role/client store before the backend starts.
 # This keeps NAS shared secrets out of the app-owned `nas` table as plaintext.
-if [[ -x backend/scripts/provision-radius-client-store.sh ]]; then
+if [[ -f backend/scripts/provision-radius-client-store.sh ]]; then
   log "Provisioning protected FreeRADIUS NAS client store..."
   bash backend/scripts/provision-radius-client-store.sh
 fi
