@@ -108,6 +108,10 @@ chown -R freerad:freerad "$RAD" 2>/dev/null || true
 if freeradius -XC >/dev/null 2>&1 || radiusd -XC >/dev/null 2>&1; then
   echo "Protected FreeRADIUS NAS client store provisioned."
 else
-  echo "FreeRADIUS configuration validation failed; previous SQL config was backed up." >&2
+  echo "FreeRADIUS configuration validation failed; restoring previous SQL config." >&2
+  if [ -f "$SQL.bak.jointbox-radius-vault" ]; then
+    cp -a "$SQL.bak.jointbox-radius-vault" "$SQL"
+    chown freerad:freerad "$SQL" 2>/dev/null || true
+  fi
   exit 1
 fi
