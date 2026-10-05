@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { fileUrl } from "../components/image-upload";
 import ImageUpload from "../components/image-upload";
 import Avatar from "../components/avatar";
+import { CrownBadge } from "../components/crown";
 import API_BASE from "../components/api";
 
 const API = API_BASE;
@@ -80,6 +81,7 @@ export default function MyProfilePage() {
         {/* Avatar with a hover "change" affordance. */}
         <div style={{ position: "relative", flex: "none" }}>
           <Avatar name={p.name} photoUrl={p.photoUrl} size={56} />
+          {p.role === "SUPER_ADMIN" && <CrownBadge size={56} />}
           <button
             onClick={() => setEditingPhoto((v) => !v)}
             title="Change profile picture"

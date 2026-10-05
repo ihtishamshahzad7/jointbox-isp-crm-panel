@@ -10,6 +10,7 @@ import { silent } from './silent';
 import { Icons } from './icons';
 import API_BASE from "./api";
 import NotificationBell from './notification-bell';
+import { CrownBadge } from './crown';
 import { ThemeToggle } from './theme';
 import BottomNav from './bottom-nav';
 import Avatar from './avatar';
@@ -565,13 +566,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     let last = 0;
     const onClick = (e: MouseEvent) => {
       const btn = (e.target as HTMLElement)?.closest?.('button');
-      if (!btn || (btn as HTMLButtonElement).disabled) return;
+      if (!btn || (btn as HTMLButtonElement).disabled || btn.hasAttribute('data-no-ripple')) return;
       const now = Date.now();
       if (now - last < 80) return;
       last = now;
 
+      // Clip only while the ripple runs, then give the button back its own
+      // overflow — leaving it hidden for good cut off anything drawn outside
+      // the button afterwards (badges, the super admin's crown).
       const cs = getComputedStyle(btn);
       if (cs.position === 'static') btn.style.position = 'relative';
+      const running = Number(btn.dataset.ripples || 0);
+      if (!running) btn.dataset.prevOverflow = btn.style.overflow || '';
+      btn.dataset.ripples = String(running + 1);
       if (cs.overflow !== 'hidden') btn.style.overflow = 'hidden';
 
       const rect = btn.getBoundingClientRect();
@@ -582,7 +589,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       r.style.left = `${e.clientX - rect.left - size / 2}px`;
       r.style.top = `${e.clientY - rect.top - size / 2}px`;
       btn.appendChild(r);
-      setTimeout(() => r.remove(), 600);
+      setTimeout(() => {
+        r.remove();
+        const left = Number(btn.dataset.ripples || 1) - 1;
+        if (left > 0) { btn.dataset.ripples = String(left); return; }
+        btn.style.overflow = btn.dataset.prevOverflow || '';
+        delete btn.dataset.ripples;
+        delete btn.dataset.prevOverflow;
+      }, 600);
     };
 
     document.addEventListener('click', onClick);
@@ -946,6 +960,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <button
                 type="button"
                 className={`acct-trigger ${accountOpen ? 'open' : ''}`}
+                data-no-ripple
                 onClick={() => { setAccountOpen((p) => !p); setSwitchOpen(false); setNoticeOpen(false); }}
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
@@ -956,6 +971,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     ? <Avatar name={user?.name} photoUrl={user.photoUrl} size={30} />
                     : getInitials(user?.name)}
                   <span className="acct-dot" aria-hidden />
+                  {user?.role === 'SUPER_ADMIN' && <CrownBadge size={32} />}
                 </span>
                 <span className="acct-meta">
                   <b>{user?.name || t('Account')}</b>
@@ -977,6 +993,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                         {user?.photoUrl
                           ? <Avatar name={user?.name} photoUrl={user.photoUrl} size={38} />
                           : getInitials(user?.name)}
+                        {user?.role === 'SUPER_ADMIN' && <CrownBadge size={42} />}
                       </span>
                       <span className="acct-id">
                         <b>{user?.name || 'Loading…'}</b>
