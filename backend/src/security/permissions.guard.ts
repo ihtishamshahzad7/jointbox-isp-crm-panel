@@ -11,23 +11,20 @@ import { permissionForRoute } from './route-permissions';
  *   resource = first URL segment ("subscribers", "accounting", …)
  *   action   = GET → read, anything else → write
  *
- * Rules: SUPER_ADMIN bypasses. A role with no RolePermission rows is
- * unrestricted (nothing breaks until you configure the matrix). Once a role
- * has rows, it needs `<resource>.<action>`, `<resource>.*`, or `*` to pass.
+ * Rules: SUPER_ADMIN bypasses. Every other operator role is FAIL-CLOSED:
+ * it needs `<resource>.<action>`, `<resource>.*`, or `*` to pass.
+ *
+ * A fresh installation is bootstrapped with the reviewed role presets before
+ * HTTP starts, so fail-closed never means "fresh install is unusable".
  */
 /**
  * Resources only an ISP-level account may ever WRITE, regardless of the
  * RolePermission matrix.
  *
- * This exists because the matrix fails OPEN: a role with no rows is treated as
- * unrestricted. On a fresh deployment that table is empty, so until someone
- * discovers and configures it, every reseller can write everything — including
- * `DELETE /packages/:id`, which removes a package the whole downline sells.
- * "Nothing breaks until you configure it" is a reasonable default for reporting
- * screens; it is not a reasonable default for the catalogue and the platform
- * config, where one call by one dealer damages every account above and below.
- *
- * A floor cannot be switched off by leaving a table empty.
+ * This floor remains defence-in-depth even when the role matrix is configured.
+ * It prevents a reseller/dealer from writing installation-level catalogue and
+ * platform configuration even if a future role preset accidentally grants a
+ * broad resource permission.
  */
 const ISP_ONLY_WRITE = new Set([
   'packages',   // the catalogue every tier resells
@@ -132,7 +129,15 @@ export class PermissionsGuard implements CanActivate {
       const rows = await this.prisma.rolePermission.findMany({ where: { role }, select: { permission: true } });
       return rows.map((r) => r.permission);
     });
-    if (!perms.length) return true; // unconfigured role = unrestricted (deny-list still applied above)
+    // FAIL CLOSED. Empty RolePermission state is not an authorization grant.
+    // The startup bootstrap creates the reviewed defaults on a fresh install;
+    // if the table is later cleared or a new role is introduced without a
+    // reviewed preset, that role must lose access rather than inherit it.
+    if (!perms.length) {
+      throw new ForbiddenException(
+        'No permissions are configured for this role. Ask the platform owner to configure it.',
+      );
+    }
 
     if (perms.includes('*') || perms.includes(`${resource}.*`) || perms.includes(needed)) return true;
     // Granular keys saved into the role matrix (e.g. a preset loaded for
