@@ -923,13 +923,16 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
 
   // ─────────────────────────────────────────────────────────────
   /** Mirror the app-owned NAS list into the protected FreeRADIUS client store. */
-  async syncNasClient(nasIp: string, nasName: string, secret: string, description?: string | null): Promise<void> {
+  async syncNasClient(nasIp: string, nasName: string, secret: string, description?: string | null, previousNasIp?: string | null): Promise<void> {
     this.ensureConnected();
+    if (previousNasIp && previousNasIp !== nasIp) {
+      await this.pgClient.query('DELETE FROM radius_nas_clients WHERE nasname = $1', [previousNasIp]);
+    }
     await this.pgClient.query(`INSERT INTO radius_nas_clients (nasname, shortname, type, secret, description)
       VALUES ($1, $2, 'other', $3, $4)
       ON CONFLICT (nasname) DO UPDATE SET shortname=EXCLUDED.shortname, secret=EXCLUDED.secret,
       description=EXCLUDED.description, type=EXCLUDED.type`,
-      [nasIp, nasName, secret, description ?? \`Auto-synced from CRM: ${nasName}\`]);
+      [nasIp, nasName, secret, description ?? `Auto-synced from CRM: ${nasName}`]);
     await this.reloadFreeradius();
   }
 
