@@ -23,8 +23,9 @@ import { SecretsService } from '../common/secrets.service';
  *     indifferent to whether it is ciphertext.
  *     Backfill existing plaintext rows with tools/encrypt-nas-passwords.js.
  *
- * Values already stored in plaintext keep working: decrypt() returns the input
- * unchanged when it is not an encrypted payload, so no data migration is needed.
+ * Values already stored in plaintext keep working during the deployment window:
+ * decrypt() returns the input unchanged for legacy rows, after which NasService
+ * converges them into encrypted storage and synchronizes the protected RADIUS store.
  */
 
 /** Fields that must never be returned to the browser in plaintext. */
