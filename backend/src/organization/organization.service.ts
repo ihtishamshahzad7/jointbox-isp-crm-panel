@@ -66,10 +66,17 @@ export class OrganizationService {
 
   /** Deployment display currency — see OrganizationController.currency. */
   async displayCurrency(): Promise<{ currency: string | null; currencySymbol: string | null }> {
-    const isp = await this.prisma.isp.findFirst({
-      orderBy: { id: 'asc' },
-      select: { currency: true, currencySymbol: true },
-    });
+    // Same source as CurrencyService.billingCurrency: the platform's row first.
+    const isp =
+      (await this.prisma.isp.findFirst({
+        where: { ownerId: null },
+        orderBy: { id: 'asc' },
+        select: { currency: true, currencySymbol: true },
+      })) ??
+      (await this.prisma.isp.findFirst({
+        orderBy: { id: 'asc' },
+        select: { currency: true, currencySymbol: true },
+      }));
     return {
       currency: isp?.currency ?? null,
       currencySymbol: isp?.currencySymbol || isp?.currency || null,
@@ -531,9 +538,9 @@ export class OrganizationService {
    * different countries, so the symbol shown next to every amount is theirs to
    * choose — it is presentation only and never converts stored values.
    */
-  async setCurrency(actor: Actor, ispId: number, currency: string, currencySymbol: string) {
+  async setCurrency(actor: Actor, _ispId: number, currency: string, currencySymbol: string) {
     if (!this.scope.isAdmin(actor?.role)) {
-      throw new ForbiddenException('Only the ISP owner can change the display currency.');
+      throw new ForbiddenException('The installation currency is set by the platform account.');
     }
     const code = (currency || '').trim().toUpperCase().slice(0, 8);
     const symbol = (currencySymbol || code).trim().slice(0, 8);
@@ -559,11 +566,13 @@ export class OrganizationService {
       where: { currency: { notIn: ['', code] } },
     }).catch(() => [] as any[]);
 
-    const updated = await this.prisma.isp.update({
-      where: { id: Number(ispId) },
-      data: { currency: code, currencySymbol: symbol },
-      select: { id: true, name: true, currency: true, currencySymbol: true },
-    });
+    // Always the platform's own row (ownerId NULL) — never a company's brand,
+    // whatever id was sent. Created on first use on a brand-new server.
+    const select = { id: true, name: true, currency: true, currencySymbol: true };
+    const platformRow = await this.prisma.isp.findFirst({ where: { ownerId: null }, orderBy: { id: 'asc' }, select: { id: true } });
+    const updated = platformRow
+      ? await this.prisma.isp.update({ where: { id: platformRow.id }, data: { currency: code, currencySymbol: symbol }, select })
+      : await this.prisma.isp.create({ data: { ownerId: null, name: 'Installation', currency: code, currencySymbol: symbol }, select });
 
     // The write path caches this; without the drop, invoices raised in the
     // next minute would still be stamped with the old code.

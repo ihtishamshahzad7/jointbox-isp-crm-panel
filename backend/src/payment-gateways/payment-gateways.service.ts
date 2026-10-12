@@ -437,7 +437,8 @@ export class PaymentGatewaysService {
     this.scope.assertPlatformOwner(actor);
     const g = await this.prisma.paymentGateway.findUnique({ where: { id } });
     if (!g) throw new NotFoundException(`Gateway ${id} not found`);
-    return this.prisma.paymentGateway.update({ where: { id }, data: { isActive: !g.isActive } });
+    const updated = await this.prisma.paymentGateway.update({ where: { id }, data: { isActive: !g.isActive } });
+    return PaymentGatewaysService.masked(updated); // never send the merchant secrets back
   }
 
   async adminTransactions(gatewayId: number, query: any, actor: any) {

@@ -63,12 +63,14 @@ export class NetworkController {
    * this endpoint lets an operator force it on demand.
    *
    * Platform owner only: the sweep is installation-wide — it cuts every
-   * company's duplicate logins and returns their usernames.
+   * company's duplicate logins. It answers with counts; the usernames are the
+   * companies' customers and stay in each company's own logs.
    */
   @Post('duplicate-sessions/sweep')
   async sweepDuplicates(@Req() req: any) {
     this.scope.assertPlatformOwner(req.user);
-    return this.coa.disconnectDuplicateSessions();
+    const r = await this.coa.disconnectDuplicateSessions();
+    return { offenders: r.offenders, sessionsCut: r.sessionsCut };
   }
 
   /** Live bandwidth change via RADIUS CoA (vendor-agnostic). */

@@ -349,7 +349,11 @@ export class NotificationsService implements OnModuleInit {
 
   async getLatestNotice(actor?: Actor) {
     const where: any = {};
-    if (!this.scope.isAdmin(actor?.role)) {
+    if (actor?.role === 'SUPER_ADMIN') {
+      // The platform's banner: its own notices and system ones — never the
+      // bulk SMS a company sent its customers.
+      where.OR = [{ createdBy: this.scope.actorId(actor) }, { createdBy: null }];
+    } else if (!this.scope.isAdmin(actor?.role)) {
       const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
       where.OR = [{ createdBy: { in: ids } }, { createdBy: null }];
     }

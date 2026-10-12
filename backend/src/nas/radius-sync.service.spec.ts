@@ -24,7 +24,7 @@ describe('RadiusSyncService.syncSubscriberProfile — addressing attributes', ()
 
   function makeService() {
     const pg: any = { query: jest.fn().mockResolvedValue({ rows: [] }) };
-    const svc = new RadiusSyncService({} as any);
+    const svc = new RadiusSyncService({} as any, {} as any);
     (svc as any).connected = true;
     (svc as any).pgClient = pg;
     return { pg, svc };

@@ -19,12 +19,8 @@ import { existsSync, mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { PrismaExceptionFilter } from './common/prisma-exception.filter';
-<<<<<<< HEAD
-import { ensurePlatformAccount } from './common/platform-account';
+import { ensureInstallationCurrency, ensurePlatformAccount, ensurePlatformLogin, PLATFORM_DEFAULT_EMAIL } from './common/platform-account';
 import { SecurityService } from './security/security.service';
-=======
-import { ensurePlatformAccount, ensurePlatformLogin, PLATFORM_DEFAULT_EMAIL } from './common/platform-account';
->>>>>>> 40430ad (Super admin login superadmin@jointbox.com; company hint and sign-in switch; stale sessions signed out; console only for super admin)
 
 // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
 // BigInt. JSON.stringify throws on BigInt, so ANY endpoint returning them —
@@ -99,6 +95,8 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
     // The platform login is superadmin@jointbox.com / admin123 until its owner
     // picks their own password (see platform-account.ts).
     await ensurePlatformLogin(prisma, console);
+    // The money currency is the platform's setting, not the first company's.
+    await ensureInstallationCurrency(prisma, console);
 
     /**
      * EXISTING INSTALLS STILL ON THE PUBLISHED DEFAULT.

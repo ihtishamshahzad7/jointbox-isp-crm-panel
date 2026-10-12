@@ -560,12 +560,22 @@ export class LogsService {
 
   // ── RADIUS Diagnostics ────────────────────────────────────────
 
+  /**
+   * RADIUS health. A company checks its OWN routers, sessions and logins (as
+   * the top account always could); the platform account checks the whole
+   * server and gets numbers only — no customer, MAC, IP or router name.
+   */
   async getRadiusDiagnostics(actor: Actor) {
-    if (!this.scope.isAdmin(actor?.role)) {
+    if (!this.scope.isOwner(actor?.role)) {
       throw new ForbiddenException(
         'Only ISP-level accounts can view RADIUS diagnostics.',
       );
     }
+    const platform = this.scope.isAdmin(actor?.role);
+    const ids = platform ? null : await this.scope.descendantIds(await this.scope.rootId(actor));
+    const own = ids ? (ids.length ? ids : [-1]) : null;
+    const userScope: any = own ? { userId: { in: own } } : {};
+    const nasScope: any = own ? { nas: { ownerId: { in: own } } } : {};
 
     const checks: any[] = [];
     const summary = { failures: 0, warnings: 0, ok: 0 };
@@ -588,7 +598,7 @@ export class LogsService {
 
     // 1. Recent login failures
     const recentFails = await this.prisma.loginLog.count({
-      where: { status: 'FAILED', createdAt: { gte: fiveMinAgo } },
+      where: { status: 'FAILED', createdAt: { gte: fiveMinAgo }, ...userScope },
     });
     if (recentFails > 10) {
       addCheck('login-failures', 'Login failures', 'FAIL',
@@ -604,7 +614,7 @@ export class LogsService {
 
     // 2. Recent network errors
     const recentErrors = await this.prisma.networkLog.count({
-      where: { severity: 'ERROR', loggedAt: { gte: fiveMinAgo } },
+      where: { severity: 'ERROR', loggedAt: { gte: fiveMinAgo }, ...nasScope },
     });
     if (recentErrors > 5) {
       addCheck('network-errors', 'Network errors', 'FAIL',
@@ -621,7 +631,7 @@ export class LogsService {
     let staleSessions: any[] = [];
     try {
       staleSessions = await this.prisma.pppoeSession.findMany({
-        where: { isActive: true, lastSeenAt: { lt: thirtyMinAgo } },
+        where: { isActive: true, lastSeenAt: { lt: thirtyMinAgo }, ...nasScope },
         take: 50,
         orderBy: { lastSeenAt: 'asc' },
         select: {
@@ -652,7 +662,9 @@ export class LogsService {
     }
 
     // 4. NAS count
-    const nasCount = await this.prisma.nas.count({ where: { isActive: true } });
+    const nasCount = await this.prisma.nas.count({
+      where: { isActive: true, ...(own ? { ownerId: { in: own } } : {}) },
+    });
     addCheck('nas-count', 'Active NAS devices', 'OK',
       `${nasCount} NAS device(s) registered`);
 
@@ -660,7 +672,7 @@ export class LogsService {
     let activePppoe = 0;
     try {
       activePppoe = await this.prisma.pppoeSession.count({
-        where: { isActive: true },
+        where: { isActive: true, ...nasScope },
       });
     } catch (e) {}
     addCheck('active-sessions', 'Active PPPoE sessions', 'OK',
@@ -668,6 +680,7 @@ export class LogsService {
 
     // 6. Last network log
     const lastNetworkLog = await this.prisma.networkLog.findFirst({
+      where: nasScope,
       orderBy: { loggedAt: 'desc' },
       select: {
         loggedAt: true,
@@ -687,7 +700,9 @@ export class LogsService {
           `${minsSince} minutes since last event`);
       } else {
         addCheck('last-log', 'Last network event', 'OK',
-          `${minsSince} minute(s) ago from ${lastNetworkLog.nas?.nasname}`);
+          platform || !lastNetworkLog.nas?.nasname
+            ? `${minsSince} minute(s) ago`
+            : `${minsSince} minute(s) ago from ${lastNetworkLog.nas.nasname}`);
       }
     } else {
       addCheck('last-log', 'Last network event', 'WARN',
@@ -697,7 +712,8 @@ export class LogsService {
     return {
       summary,
       checks,
-      staleSessions: staleSessions.map((s: any) => ({
+      // The platform account gets the count (in `checks`), never the customers.
+      staleSessions: platform ? [] : staleSessions.map((s: any) => ({
         username: s.username,
         nasipaddress: s.nas?.nasIp ?? '',
         nasname: s.nas?.nasname ?? '',
@@ -711,15 +727,22 @@ export class LogsService {
   }
 
   async closeStaleSessions(actor: Actor) {
-    if (!this.scope.isAdmin(actor?.role)) {
+    if (!this.scope.isOwner(actor?.role)) {
       throw new ForbiddenException(
         'Only ISP-level accounts can close stale sessions.',
       );
     }
+    // A company closes stale sessions on its own routers only.
+    const ids = this.scope.isAdmin(actor?.role)
+      ? null
+      : await this.scope.descendantIds(await this.scope.rootId(actor));
     try {
       const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
       const stale = await this.prisma.pppoeSession.findMany({
-        where: { isActive: true, lastSeenAt: { lt: thirtyMinAgo } },
+        where: {
+          isActive: true, lastSeenAt: { lt: thirtyMinAgo },
+          ...(ids ? { nas: { ownerId: { in: ids.length ? ids : [-1] } } } : {}),
+        },
       });
 
       let closed = 0;
@@ -896,21 +919,30 @@ export class LogsService {
       this.prisma.networkLog.count({
         where: { ...netWhere, loggedAt: { gte: since } },
       }),
-      this.prisma.systemLog.count({ where: { createdAt: { gte: since } } }),
+      // Server log volume is the platform's; a company sees its own counts only.
+      ids ? Promise.resolve(0) : this.prisma.systemLog.count({ where: { createdAt: { gte: since } } }),
       this.prisma.loginLog.count({
         where: { ...where, status: 'FAILED', createdAt: { gte: since } },
       }),
       this.prisma.networkLog.count({
         where: { ...netWhere, severity: 'ERROR', loggedAt: { gte: since } },
       }),
-      this.prisma.sessionLog.count({ where: { isActive: true } }),
-      this.prisma.$queryRaw<Array<{ hour: string; count: bigint }>>`
-        SELECT to_char("createdAt", 'YYYY-MM-DD HH24') AS hour,
-               COUNT(*)::int AS count
-        FROM "ActivityLog"
-        WHERE "createdAt" >= ${since}
-        GROUP BY hour
-        ORDER BY hour ASC`,
+      this.prisma.sessionLog.count({ where: { isActive: true, ...(ids ? { userId: { in: ids } } : {}) } }),
+      ids
+        ? this.prisma.$queryRaw<Array<{ hour: string; count: bigint }>>`
+            SELECT to_char("createdAt", 'YYYY-MM-DD HH24') AS hour,
+                   COUNT(*)::int AS count
+            FROM "ActivityLog"
+            WHERE "createdAt" >= ${since} AND "userId" = ANY(${ids.length ? ids : [-1]}::int[])
+            GROUP BY hour
+            ORDER BY hour ASC`
+        : this.prisma.$queryRaw<Array<{ hour: string; count: bigint }>>`
+            SELECT to_char("createdAt", 'YYYY-MM-DD HH24') AS hour,
+                   COUNT(*)::int AS count
+            FROM "ActivityLog"
+            WHERE "createdAt" >= ${since}
+            GROUP BY hour
+            ORDER BY hour ASC`,
     ]);
 
     const hourly = (hourlyRaw || []).map((r: any) => ({

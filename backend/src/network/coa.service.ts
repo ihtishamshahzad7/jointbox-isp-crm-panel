@@ -389,11 +389,12 @@ export class CoaService {
 
     // Push it live via CoA if we have a session + secret.
     let live = false;
-    if (session && sub.nas?.nasIp && sub.nas.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null) {
+    const coaSecret = sub.nas?.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null;
+    if (session && sub.nas?.nasIp && coaSecret) {
       const res = await sendCoa({
         host: sub.nas.nasIp,
         port: coaPort(sub.nas.incomingPort),
-        secret: sub.nas.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null,
+        secret: coaSecret,
         code: RadiusCode.CoaRequest,
         attributes: [...sessionAttributes(session), mikrotikRateLimit(rate)],
       });

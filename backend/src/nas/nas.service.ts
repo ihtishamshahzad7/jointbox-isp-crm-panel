@@ -22,6 +22,9 @@ export class NasService implements OnModuleInit {
     private secrets: SecretsService,
     // Plan capacity. Decided on the licence server, obeyed here.
     private licenceCapacity: LicenceCapacityService,
+    // Writes the FreeRADIUS clients file from the encrypted secrets. It was
+    // called below but never injected, so the backend did not compile.
+    private radiusVault: RadiusClientVaultService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -1042,21 +1045,33 @@ export class NasService implements OnModuleInit {
   }
 
   // ── Debug helper ────────────────────────────────────────────
+  /**
+   * FreeRADIUS client check for the platform account. Routers reach
+   * FreeRADIUS through the generated clients file, built only from routers
+   * whose RADIUS secret is in the encrypted vault — an active router without
+   * one is skipped there and every login through it is refused. Answers with
+   * counts and router ids only: no secrets, names or addresses (those belong
+   * to the companies that own the routers).
+   */
   async debugRadiusSync() {
     try {
-      const [radiusNas, prismaNas] = await Promise.all([
-        this.radiusSync.getAllNasFromRadius(),
-        this.prisma.nas.findMany(),
-      ]);
+      const rows = await this.prisma.nas.findMany({
+        select: { id: true, nasIp: true, isActive: true, radiusSecretEnc: true, secret: true },
+      });
+      const active = rows.filter((n: any) => n.isActive && n.nasIp);
+      const missingSecret = active.filter((n: any) => !n.radiusSecretEnc).map((n: any) => n.id);
+      const legacyPlaintext = rows.filter((n: any) => !!n.secret).length;
       return {
         success: true,
-        radiusCount: radiusNas.length,
-        prismaCount: prismaNas.length,
-        radiusNas,
-        prismaNas: sanitizeNasList(prismaNas),      };
+        routers: rows.length,
+        activeRouters: active.length,
+        inSync: !missingSecret.length && !legacyPlaintext,
+        missingSecret,            // active router ids FreeRADIUS will refuse (no vault secret)
+        legacyPlaintext,          // rows still holding a plaintext secret (encrypted at next start)
+      };
     } catch (error: any) {
       this.logger.error(`Debug failed: ${error.message}`);
-      return { success: false, error: error.message };
+      return { success: false, error: String(error?.message || 'failed').slice(0, 200) };
     }
   }
 }

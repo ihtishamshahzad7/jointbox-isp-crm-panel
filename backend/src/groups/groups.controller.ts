@@ -85,6 +85,25 @@ export class GroupsController {
     return this.groups.removeMember(+id, +userId, req.user);
   }
 
+  // Declared before the ':id/…' routes, which otherwise take "visibility" as
+  // a group id and these helpers can never be reached.
+  // ─── VISIBILITY HELPERS ───────────────────────────────────────────────
+
+  /**
+   * Returns the effective set of NAS ids the actor is allowed to see, taking
+   * group membership into account. Useful for the front-end to render
+   * "Available in your groups" badges without multiple round-trips.
+   */
+  @Get('visibility/nas')
+  visibleNas(@Req() req: any) {
+    return this.groups.visibleNasFor(req.user);
+  }
+
+  @Get('visibility/packages')
+  visiblePackages(@Req() req: any) {
+    return this.groups.visiblePackagesFor(req.user);
+  }
+
   // ─── RESOURCE BINDINGS ────────────────────────────────────────────────
 
   @Get(':id/nas')
@@ -117,20 +136,4 @@ export class GroupsController {
     return this.groups.unbindPackage(+id, +pkgId, req.user);
   }
 
-  // ─── VISIBILITY HELPERS ───────────────────────────────────────────────
-
-  /**
-   * Returns the effective set of NAS ids the actor is allowed to see, taking
-   * group membership into account. Useful for the front-end to render
-   * "Available in your groups" badges without multiple round-trips.
-   */
-  @Get('visibility/nas')
-  visibleNas(@Req() req: any) {
-    return this.groups.visibleNasFor(req.user);
-  }
-
-  @Get('visibility/packages')
-  visiblePackages(@Req() req: any) {
-    return this.groups.visiblePackagesFor(req.user);
-  }
 }

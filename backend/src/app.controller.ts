@@ -663,6 +663,11 @@ export class AppController {
     @Body() body: { questionId: string; status: ChecklistStatus },
     @Req() req: any,
   ) {
+    // One file on the server, shared by every company — so only the platform
+    // account may change it.
+    if (req?.user?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('The capability checklist is kept by the platform account.');
+    }
     if (!body?.questionId || !body?.status || !CHECKLIST_STATUS.includes(body.status)) {
       return { ok: false, message: 'questionId and a valid status are required.' };
     }

@@ -99,7 +99,7 @@ describe('NAS tenancy — session list on a shared router', () => {
     };
     const radiusSync: any = { getActiveSessions: jest.fn().mockResolvedValue(rows) };
     const scope = makeScope();
-    const svc = new NasService(prisma, {} as any, radiusSync, scope as any, {} as any, {} as any);
+    const svc = new NasService(prisma, {} as any, radiusSync, scope as any, {} as any, {} as any, { syncClients: async () => undefined } as any);
     return { prisma, scope, svc };
   }
 

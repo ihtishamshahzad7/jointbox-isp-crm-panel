@@ -327,3 +327,46 @@ export async function ensurePlatformLogin(
   );
   return { email, changed: true };
 }
+
+/**
+ * THE INSTALLATION'S CURRENCY BELONGS TO THE PLATFORM, NOT TO A COMPANY.
+ *
+ * Money is stamped with the currency of "the ISP record" — which used to mean
+ * the lowest-id Isp row. Isp rows are now each company's own brands, so the
+ * first company to create one set the currency for every company, and a
+ * company deleting its brand could change (or blank) it for all of them.
+ *
+ * The installation currency now lives on a platform row (Isp.ownerId NULL,
+ * which no company can edit or delete). On an upgraded server the legacy row
+ * already is one. If none exists yet but a company row does, a platform row is
+ * created carrying that same currency, so nothing anyone sees changes today and
+ * no later company edit can move it. A brand-new server with no Isp row at all
+ * is left alone: the platform account sets the currency (Settings), and money
+ * is refused until it does — never a guessed default.
+ */
+export async function ensureInstallationCurrency(
+  prisma: any,
+  log: { warn: (m: string) => void },
+): Promise<boolean> {
+  try {
+    const platformRow = await prisma.isp.findFirst({ where: { ownerId: null }, select: { id: true } });
+    if (platformRow) return false;
+    const first = await prisma.isp.findFirst({
+      orderBy: { id: 'asc' },
+      select: { currency: true, currencySymbol: true },
+    });
+    if (!first) return false;
+    await prisma.isp.create({
+      data: {
+        ownerId: null,
+        name: 'Installation',
+        currency: first.currency,
+        currencySymbol: first.currencySymbol || first.currency,
+      },
+    });
+    log.warn(`💱 Installation currency pinned to ${first.currency} (platform setting — companies can no longer change it).`);
+    return true;
+  } catch {
+    return false; // table not there yet on a first db:push — next boot does it
+  }
+}

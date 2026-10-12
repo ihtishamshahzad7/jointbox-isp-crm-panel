@@ -429,8 +429,27 @@ export class SecurityService {
   }
 
   /** The child's current allow/deny map. Missing key => allowed (inherits role). */
+  /**
+   * The platform account reaches the platform's own logins and each company's
+   * top account — never a franchise, dealer or staff member inside a company
+   * (that is the company's business; it signs in as the company to help).
+   */
+  private platformReachWhere(): any {
+    return { OR: [{ role: 'SUPER_ADMIN' }, { role: 'ADMIN', parent: { role: 'SUPER_ADMIN' } }] };
+  }
+
+  private async assertPlatformReach(actor: Actor, userId: number) {
+    if (!this.scope.isPlatformOwner(actor)) return;
+    const hit = await this.prisma.user.findFirst({
+      where: { AND: [{ id: Number(userId) }, this.platformReachWhere()] },
+      select: { id: true },
+    });
+    if (!hit) throw new NotFoundException('Account not found');
+  }
+
   async getChildPermissions(actor: Actor, childUserId: number) {
     await this.scope.assertUser(actor, childUserId); // must be in your subtree
+    await this.assertPlatformReach(actor, childUserId);
     const rows = await this.prisma.userPermission.findMany({ where: { userId: childUserId } });
     const map: Record<string, boolean> = {};
     for (const r of rows) map[r.permission] = r.allowed;
@@ -440,6 +459,7 @@ export class SecurityService {
   /** Set the child's permissions. `denied` = list of keys to block; everything else allowed. */
   async setChildPermissions(actor: Actor, childUserId: number, denied: string[]) {
     await this.scope.assertUserWritable(actor, childUserId);
+    await this.assertPlatformReach(actor, childUserId);
     // assertUser() admits the caller's own id (a subtree includes its root), so
     // without this an account could clear a deny its PARENT placed on it.
     // These keys are the parent's to set, never the account's own.
@@ -623,6 +643,8 @@ export class SecurityService {
         isActive: true,
         expiresAt: { gt: new Date() },
         ...(visible ? { userId: { in: visible } } : {}),
+        // Platform account: platform logins and company top accounts only.
+        ...(this.scope.isPlatformOwner(actor) ? { user: this.platformReachWhere() } : {}),
       },
       include: { user: { select: { name: true, email: true, role: true } } },
       orderBy: { lastActiveAt: 'desc' },
@@ -636,11 +658,16 @@ export class SecurityService {
    * see; anything else is "not found" so session ids cannot be probed.
    */
   async killSession(sessionId: string, byUserId: number | undefined, actor: Actor) {
+    const row = await this.prisma.sessionLog.findUnique({ where: { sessionId }, select: { userId: true } });
+    if (!row) throw new NotFoundException('Session not found');
     if (!this.scope.isPlatformOwner(actor)) {
-      const row = await this.prisma.sessionLog.findUnique({ where: { sessionId }, select: { userId: true } });
-      if (!row || !(await this.scope.canAccessUser(actor, row.userId))) {
+      if (!(await this.scope.canAccessUser(actor, row.userId))) {
         throw new NotFoundException('Session not found');
       }
+    } else {
+      await this.assertPlatformReach(actor, row.userId).catch(() => {
+        throw new NotFoundException('Session not found');
+      });
     }
     const ended = await this.prisma.sessionLog.update({
       where: { sessionId },

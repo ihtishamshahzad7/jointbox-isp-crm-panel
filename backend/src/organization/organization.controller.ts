@@ -283,7 +283,20 @@ export class OrganizationController {
   reverseTopup(@Body() body: { reference: string; reason?: string }, @Request() req: any) {
     return this.org.reverseWalletTopup(req.user, body?.reference, body?.reason);
   }
-  /** Display currency for this deployment (PKR / INR / BDT / USD …). */
+  /**
+   * The installation's money currency (PKR / INR / BDT / USD …) — platform
+   * account only, set from Settings. Stored on the platform's own row; no
+   * company brand decides it.
+   */
+  @Put('currency')
+  setInstallationCurrency(
+    @Body() body: { currency: string; currencySymbol?: string },
+    @Request() req: any,
+  ) {
+    return this.org.setCurrency(req.user, 0, body?.currency, body?.currencySymbol || body?.currency);
+  }
+
+  /** Older form of the same call; the id is ignored (always the platform row). */
   @Put('isps/:id/currency')
   setCurrency(
     @Param('id') id: string,

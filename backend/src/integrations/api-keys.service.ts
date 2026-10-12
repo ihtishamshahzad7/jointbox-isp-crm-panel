@@ -78,9 +78,8 @@ export class ApiKeysService {
   async revoke(id: number, actor?: Actor) {
     const key = await this.prisma.apiKey.findUnique({ where: { id } });
     if (!key) throw new NotFoundException(`API key ${id} not found`);
-    if (actor && !this.scope.isAdmin(actor.role) && key.ownerId) {
-      await this.scope.assertUser(actor, key.ownerId);
-    }
+    // An ownerless key is the installation's — no company may revoke it.
+    if (actor) await this.scope.assertOwnerInScope(actor, key.ownerId, `API key ${id}`);
     await this.prisma.apiKey.update({ where: { id }, data: { isActive: false } });
     return { revoked: true, id };
   }

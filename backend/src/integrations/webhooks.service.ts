@@ -153,9 +153,10 @@ export class WebhooksService {
   private async assertOwned(id: number, actor?: Actor) {
     const hook = await this.prisma.webhook.findUnique({ where: { id } });
     if (!hook) throw new NotFoundException(`Webhook ${id} not found`);
-    if (actor && !this.scope.isAdmin(actor.role) && hook.ownerId) {
-      await this.scope.assertUser(actor, hook.ownerId);
-    }
+    // A hook with no owner predates per-company hooks: it belongs to the
+    // installation, so no company may repoint it, delete it or read its
+    // deliveries. Outside your account reads as "not found", never "forbidden".
+    if (actor) await this.scope.assertOwnerInScope(actor, hook.ownerId, `Webhook ${id}`);
     return hook;
   }
 

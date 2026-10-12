@@ -51,7 +51,7 @@ describe('RadiusSyncService.bulkSyncSubscribers', () => {
       },
     };
 
-    const svc: any = new RadiusSyncService(prisma);
+    const svc: any = new RadiusSyncService(prisma, {} as any);
     svc.ensureConnected = jest.fn();
 
     let inFlight = 0;

@@ -206,6 +206,13 @@ export class PublicApiController {
     return this.invoices.findAll(req.user);
   }
 
+  // Before 'invoices/:id', which otherwise answers for the word "stats".
+  @Get('invoices/stats')
+  @RequireScope('read')
+  invoiceStats(@Req() req: any) {
+    return this.invoices.getStats(req.user);
+  }
+
   @Get('invoices/:id')
   @RequireScope('read')
   getInvoice(@Param('id') id: string, @Req() req: any) {
@@ -224,12 +231,6 @@ export class PublicApiController {
   async createInvoice(@Body() body: any, @Req() req: any) {
     await this.scope.assertViaSubscriber(req.user, body?.subscriberId, 'Subscriber');
     return this.invoices.create(body, req.user);
-  }
-
-  @Get('invoices/stats')
-  @RequireScope('read')
-  invoiceStats(@Req() req: any) {
-    return this.invoices.getStats(req.user);
   }
 
   @Get('invoices/:id/pdf')

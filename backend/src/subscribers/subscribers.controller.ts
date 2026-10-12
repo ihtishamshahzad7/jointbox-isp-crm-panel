@@ -36,11 +36,26 @@ export class SubscribersController {
     }
   }
 
-  /** Run the reminder + auto-suspend sweep now instead of waiting for 07:10. ISP only. */
+  /**
+   * Installation-wide maintenance. These sweeps take no company: they read and
+   * change every company's customers, wallets and RADIUS rows at once, and they
+   * already run on their own every night. So only the platform account may run
+   * them on demand, and it gets numbers back, never a company's customers.
+   */
+  private assertPlatform(req: any) {
+    if (req?.user?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('This runs across every company on the server, so only the platform account can start it. It also runs on its own every night.');
+    }
+  }
+
+  /** Run the reminder + auto-suspend sweep now instead of waiting for 07:10. Platform only. */
   @Post('lifecycle/run')
-  runLifecycle(@Req() req: any) {
-    this.assertIsp(req);
-    return this.lifecycle.runNow();
+  async runLifecycle(@Req() req: any) {
+    this.assertPlatform(req);
+    const r: any = await this.lifecycle.runNow();
+    return r && typeof r === 'object'
+      ? Object.fromEntries(Object.entries(r).filter(([, v]) => typeof v === 'number' || typeof v === 'boolean'))
+      : { done: true };
   }
 
   /** Put a subscriber on billing hold (dispute) — pauses auto-suspension. */
@@ -55,32 +70,47 @@ export class SubscribersController {
     return this.subscribersService.setHold(+id, false, undefined, req.user);
   }
 
-  /** Wallet-vs-ledger drift report (money integrity). ISP only. */
+  /** Wallet-vs-ledger drift report (money integrity). Platform only — counts, no names. */
   @Get('integrity/wallets')
-  reconcileWallets(@Req() req: any) {
-    this.assertIsp(req);
-    return this.integrity.reconcileWallets();
+  async reconcileWallets(@Req() req: any) {
+    this.assertPlatform(req);
+    const r = await this.integrity.reconcileWallets();
+    return {
+      checked: r.checked, driftCount: r.driftCount, tolerance: r.tolerance,
+      accounts: r.accounts.map((a: any) => ({ userId: a.userId, role: a.role, difference: a.difference, txnCount: a.txnCount })),
+    };
   }
 
-  /** RADIUS-vs-billing drift: inactive subscribers still online. `?apply=false` = dry run. ISP only. */
+  /** RADIUS-vs-billing drift: inactive subscribers still online. `?apply=false` = dry run. Platform only. */
   @Get('integrity/radius')
-  reconcileRadius(@Req() req: any, @Query('apply') apply?: string) {
-    this.assertIsp(req);
-    return this.integrity.reconcileRadiusState(apply !== 'false');
+  async reconcileRadius(@Req() req: any, @Query('apply') apply?: string) {
+    this.assertPlatform(req);
+    const r = await this.integrity.reconcileRadiusState(apply !== 'false');
+    return { checked: r.checked, online: r.online, drift: r.drift, cut: r.cut };
   }
 
-  /** Auto-heal: re-push credentials for ACTIVE subscribers missing from RADIUS. `?apply=false` = dry run. ISP only. */
+  /** Auto-heal: re-push credentials for ACTIVE subscribers missing from RADIUS. `?apply=false` = dry run. Platform only. */
   @Get('integrity/radius-heal')
   healRadius(@Req() req: any, @Query('apply') apply?: string) {
-    this.assertIsp(req);
+    this.assertPlatform(req);
     return this.integrity.healActiveCredentials(apply !== 'false');
   }
 
-  /** Sync online state with the routers: close ghost sessions the router no longer has. `?apply=false` = dry run. ISP only. */
+  /**
+   * Sync online state with the routers: close ghost sessions the router no
+   * longer has. `?apply=false` = dry run. A company syncs its OWN routers
+   * (those its accounts own); the platform account syncs every router and
+   * gets counts only.
+   */
   @Get('integrity/sessions')
-  reconcileSessions(@Req() req: any, @Query('apply') apply?: string) {
+  async reconcileSessions(@Req() req: any, @Query('apply') apply?: string) {
     this.assertIsp(req);
-    return this.integrity.reconcileSessionsWithRouter(apply !== 'false');
+    if (req.user.role === 'SUPER_ADMIN') {
+      const r = await this.integrity.reconcileSessionsWithRouter(apply !== 'false');
+      return { checked: r.checked, routers: r.routers, skipped: r.skipped, closed: r.closed };
+    }
+    const ids = await this.scope.descendantIds(await this.scope.rootId(req.user));
+    return this.integrity.reconcileSessionsWithRouter(apply !== 'false', { ownerId: { in: ids.length ? ids : [-1] } });
   }
 
   // ========== BASIC CRUD ENDPOINTS ==========
@@ -401,6 +431,51 @@ export class SubscribersController {
     return this.subscribersService.getSyncJobStatus(jobId);
   }
 
+  // Test RADIUS database connection — server internals, platform owner only.
+  // Declared before @Get(':id'): after it, ':id' swallowed the path and the
+  // check could never be reached.
+  @Get('test-radius-connection')
+  async testRadiusConnection(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.subscribersService.testRadiusConnection();
+  }
+
+  // Before @Get(':id') — after it, ':id' took "missing-from-radius" as an id.
+  // Get all subscribers that are missing from RADIUS
+  @Get('missing-from-radius')
+  async getMissingFromRadius(@Req() req: any) {
+    // findAll() without pagination params always returns the full array.
+    // Scoped by the caller (subscriberWhere): only their own subscribers.
+    const allSubscribers = (await this.subscribersService.findAll(undefined, req.user)) as Array<any>;
+
+    const missing: Array<{
+      id: number;
+      username: string;
+      fullName: string;
+      status: string;
+    }> = [];
+    
+    for (const sub of allSubscribers) {
+      if (sub.username) {
+        const exists = await this.subscribersService.checkRadiusStatus(sub.username);
+        if (!exists.existsInRadius) {
+          missing.push({
+            id: sub.id,
+            username: sub.username,
+            fullName: sub.fullName,
+            status: sub.status,
+          });
+        }
+      }
+    }
+    
+    return {
+      total: allSubscribers.length,
+      missing: missing.length,
+      subscribers: missing,
+    };
+  }
+
   // ========== RADIUS PROFILE ROUTES (must come before @Get(':id')) ==========
 
   // Every :username route below checks the username belongs to one of the
@@ -537,13 +612,6 @@ export class SubscribersController {
     return this.subscribersService.checkRadiusStatus(username);
   }
 
-  // Test RADIUS database connection — server internals, platform owner only.
-  @Get('test-radius-connection')
-  async testRadiusConnection(@Req() req: any) {
-    this.scope.assertPlatformOwner(req.user);
-    return this.subscribersService.testRadiusConnection();
-  }
-
   // Find subscriber by username (not ID)
   @Get('username/:username')
   async findByUsername(@Param('username') username: string, @Req() req: any) {
@@ -592,41 +660,6 @@ export class SubscribersController {
     await this.scope.assertSubscriberUsername(req.user, username);
     await this.subscribersService.radiusSync.removeSubscriberFromRadius(username);
     return { message: `Subscriber ${username} removed from RADIUS` };
-  }
-
-  // Get all subscribers that are missing from RADIUS
-  @Get('missing-from-radius')
-  async getMissingFromRadius(@Req() req: any) {
-    // findAll() without pagination params always returns the full array.
-    // Scoped by the caller (subscriberWhere): only their own subscribers.
-    const allSubscribers = (await this.subscribersService.findAll(undefined, req.user)) as Array<any>;
-
-    const missing: Array<{
-      id: number;
-      username: string;
-      fullName: string;
-      status: string;
-    }> = [];
-    
-    for (const sub of allSubscribers) {
-      if (sub.username) {
-        const exists = await this.subscribersService.checkRadiusStatus(sub.username);
-        if (!exists.existsInRadius) {
-          missing.push({
-            id: sub.id,
-            username: sub.username,
-            fullName: sub.fullName,
-            status: sub.status,
-          });
-        }
-      }
-    }
-    
-    return {
-      total: allSubscribers.length,
-      missing: missing.length,
-      subscribers: missing,
-    };
   }
 
   // Fix: Re-sync a subscriber with correct password format (full profile)

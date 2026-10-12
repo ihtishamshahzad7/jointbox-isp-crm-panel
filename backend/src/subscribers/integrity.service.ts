@@ -40,7 +40,12 @@ export class IntegrityService implements OnModuleInit {
     private subscribers: SubscribersService,
   ) {}
 
-  /** Expose the full reconcile as a background job the ISP can run on demand. */
+  /**
+   * Expose the full reconcile as a background job the platform account can run
+   * on demand (Background Jobs). It acts on the whole installation, so its
+   * stored result is a server-level summary — counts and whether the books
+   * balance — never a company's customers, accounts or money totals.
+   */
   onModuleInit() {
     this.jobs.register('integrity.reconcile', async (payload, update) => {
       const apply = payload?.apply !== false;
@@ -56,8 +61,35 @@ export class IntegrityService implements OnModuleInit {
       await update(4, 5);
       const sessions = await this.reconcileSessionsWithRouter(apply);
       await update(5, 5);
-      return { trialBalance, wallets, radius, radiusHeal, radiusPurge, sessions };
+      return IntegrityService.platformSummary({ trialBalance, wallets, radius, radiusHeal, radiusPurge, sessions }, apply);
     });
+  }
+
+  /**
+   * What the platform account may see of a reconcile: numbers only. Names,
+   * usernames, balances and router names belong to the companies.
+   */
+  static platformSummary(r: any, apply = true) {
+    const tb = r?.trialBalance || {};
+    return {
+      applied: apply,
+      books: {
+        balanced: tb.balanced ?? null,
+        currencies: Array.isArray(tb.currencies)
+          ? tb.currencies.map((c: any) => ({ currency: c.currency, balanced: !!c.balanced, difference: c.difference }))
+          : [],
+      },
+      walletDrift: Number(r?.wallets?.driftCount ?? 0),
+      inactiveOnline: Number(r?.radius?.drift ?? 0),
+      inactiveCut: Number(r?.radius?.cut ?? 0),
+      credentialsMissing: Number(r?.radiusHeal?.missing ?? 0),
+      credentialsRestored: Number(r?.radiusHeal?.healed ?? 0),
+      inactiveCredentialsFound: Number(r?.radiusPurge?.found ?? 0),
+      inactiveCredentialsRemoved: Number(r?.radiusPurge?.purged ?? 0),
+      routersChecked: Number(r?.sessions?.routers ?? 0),
+      routersSkipped: Number(r?.sessions?.skipped ?? 0),
+      ghostSessionsClosed: Number(r?.sessions?.closed ?? 0),
+    };
   }
 
   /**
@@ -141,8 +173,9 @@ export class IntegrityService implements OnModuleInit {
       await this.prisma.systemLog.create({
         data: {
           level: 'WARN', source: 'integrity',
+          // System logs are the platform's: account ids and differences, no names.
           message: `Wallet-vs-ledger drift on ${drift.length} account(s): ` +
-            drift.slice(0, 10).map((d) => `#${d.userId} ${d.name} Δ${d.difference}`).join(', '),
+            drift.slice(0, 10).map((d) => `#${d.userId} Δ${d.difference}`).join(', '),
         },
       }).catch(() => null);
     }
@@ -184,8 +217,10 @@ export class IntegrityService implements OnModuleInit {
       await this.prisma.systemLog.create({
         data: {
           level: 'WARN', source: 'integrity',
-          message: `RADIUS/billing drift: ${leaking.length} inactive subscriber(s) online: ` +
-            leaking.slice(0, 15).map((s) => `${s.username}(${s.status})`).join(', '),
+          // Counts only — customer usernames belong to their company, and the
+          // system log is read by the platform account.
+          message: `RADIUS/billing drift: ${leaking.length} inactive subscriber(s) online` +
+            `${apply ? `, cut ${cut}` : ' (dry run)'}`,
         },
       }).catch(() => null);
     }
@@ -236,7 +271,7 @@ export class IntegrityService implements OnModuleInit {
         data: {
           level: 'WARN', source: 'integrity',
           message: `RADIUS credential drift: ${missing.length} active subscriber(s) had no radcheck entry` +
-            `${apply ? `, restored ${healed}` : ''}: ` + missing.slice(0, 15).map((s) => s.username).join(', '),
+            `${apply ? `, restored ${healed}` : ''}`,
         },
       }).catch(() => null);
     }
@@ -275,8 +310,7 @@ export class IntegrityService implements OnModuleInit {
       await this.prisma.systemLog.create({
         data: {
           level: 'WARN', source: 'integrity',
-          message: `Activation enforcement: removed credentials from ${purged} non-active subscriber(s): ` +
-            stragglers.slice(0, 15).map((s) => `${s.username}(${s.status})`).join(', '),
+          message: `Activation enforcement: removed credentials from ${purged} of ${stragglers.length} non-active subscriber(s)`,
         },
       }).catch(() => null);
     }
@@ -295,9 +329,11 @@ export class IntegrityService implements OnModuleInit {
    * SAFETY: if a router is unreachable we SKIP it entirely and touch none of
    * its sessions — an unreachable router must never be read as "everyone off".
    */
-  async reconcileSessionsWithRouter(apply = true) {
+  async reconcileSessionsWithRouter(apply = true, nasScope: any = {}) {
+    // nasScope narrows the run to one company's routers when a company asks
+    // (Network → Sync sessions); the nightly and platform runs pass nothing.
     const nases = await this.prisma.nas.findMany({
-      where: { isActive: true, nasIp: { not: null }, apiUsername: { not: null } },
+      where: { AND: [{ isActive: true, nasIp: { not: null }, apiUsername: { not: null } }, nasScope || {}] },
       select: { nasname: true, nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
     });
 

@@ -61,6 +61,7 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['*', 'jobs'],
   ['*', 'jobs/*'],
   ['*', 'security/*'],
+  ['*', 'features/reseller-capability-checklist'],
   // gateway credentials, not the payments taken through them
   ['*', 'payment-gateways/admin'],
   ['*', 'payment-gateways/admin/:id'],
@@ -71,6 +72,7 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   // the nightly billing jobs, run now for the whole installation
   ['POST', 'billing/run/:type'],
   ['PUT', 'organization/isps/:id/currency'],
+  ['PUT', 'organization/currency'],
 
   // ── defaults every company starts from (companies add their own) ──
   ['*', 'communication/templates'],
@@ -90,6 +92,12 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
 
   // ── server maintenance (acts on the installation, shows no customer) ──
   ['POST', 'subscribers/repair-links'],
+  // installation-wide sweeps (they run nightly anyway); answers are counts only
+  ['POST', 'subscribers/lifecycle/run'],
+  ['GET', 'subscribers/integrity/wallets'],
+  ['GET', 'subscribers/integrity/radius'],
+  ['GET', 'subscribers/integrity/radius-heal'],
+  ['GET', 'subscribers/integrity/sessions'],
   ['GET', 'subscribers/test-radius-connection'],
   ['GET', 'nas/debug/radius-sync'],
   ['GET', 'nas/diagnostics/accounting'],

@@ -50,6 +50,10 @@ export class BillingExtService {
   async upsertProRatedForPackage(pkgId: number, body: any, actor: any) {
     const pkg = await this.prisma.package.findUnique({ where: { id: pkgId } });
     if (!pkg) throw new NotFoundException(`Package ${pkgId} not found`);
+    // Changing a package's setup fee or minimum charge is the package OWNER's
+    // call: a reseller the package is assigned to, or another company, gets
+    // "not found" rather than rewriting someone else's price list.
+    if (actor) await this.scope.assertOwnerInScope(actor, pkg.ownerId, `Package ${pkgId}`);
     return this.prisma.proRatedBilling.upsert({
       where: { packageId: pkgId },
       update: {
@@ -169,6 +173,7 @@ export class BillingExtService {
   }
 
   async upsertSubscriberBilling(subId: number, body: any, actor: any) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subId);
     const sub = await this.prisma.subscriber.findUnique({ where: { id: subId } });
     if (!sub) throw new NotFoundException(`Subscriber ${subId} not found`);
     return this.prisma.subscriberBilling.upsert({
@@ -227,6 +232,7 @@ export class BillingExtService {
   }
 
   async topUp(subId: number, body: any, actor: any) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subId);
     if (!body?.amount) throw new BadRequestException('amount is required');
     return this.applyBalance(subId, {
       type: 'TOPUP',
@@ -240,6 +246,7 @@ export class BillingExtService {
   }
 
   async adjust(subId: number, body: any, actor: any) {
+    if (actor) await this.scope.assertSubscriberVisible(actor, subId);
     if (!body?.amount) throw new BadRequestException('amount is required (positive=credit, negative=debit)');
     return this.applyBalance(subId, {
       type: 'ADJUSTMENT',
@@ -349,6 +356,9 @@ export class BillingExtService {
       include: { payments: true, items: true },
     });
     if (!original) throw new NotFoundException(`Invoice ${invoiceId} not found`);
+    // Only an invoice of the caller's own customer — checked before any detail
+    // about the invoice (cancelled, already reversed) is revealed.
+    if (actor) await this.scope.assertViaSubscriber(actor, (original as any).subscriberId, `Invoice ${invoiceId}`);
     if (original.status === 'CANCELLED') {
       throw new BadRequestException('Invoice is already cancelled');
     }

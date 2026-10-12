@@ -6,6 +6,7 @@ import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
 import { isPlatformSession } from "../components/platform";
+import PlatformServer from "./platform-server";
 
 const API = API_BASE;
 
@@ -173,25 +174,8 @@ export default function SettingsPage() {
         { label: "Role", value: user?.role || "Administrator" },
       ]
     },
-    ...(isPlatformOwner ? [{
-      title: "System Information",
-      icon: "⚙️",
-      fields: [
-        { label: "Version", value: "JointBox-ISP v2.0.0" },
-        { label: "Build Date", value: new Date().toLocaleDateString() },
-        { label: "API Endpoint", value: API },
-        { label: "Environment", value: "Production" },
-      ]
-    },
-    {
-      title: "System Status",
-      icon: "📊",
-      fields: [
-        { label: "Server Status", value: "🟢 Online" },
-        { label: "Database Status", value: "🟢 Connected" },
-        { label: "RADIUS Service", value: "🟢 Running" },
-      ]
-    }] : []),
+    // The platform's live server health, currency and maintenance are in
+    // <PlatformServer /> above this grid (real checks, not fixed labels).
     ...(isPlatformOwner ? [] : [{
       title: "Payment Gateways",
       icon: "💳",
@@ -232,7 +216,6 @@ export default function SettingsPage() {
     // backend, so every account keeps them.
     ...(isPlatformOwner
       ? [
-          { label: "Clear System Cache", icon: "🗑️", color: t.red, bg: "#450a0a", action: () => alert("Cache cleared successfully!") },
           {
             label: backupRunning ? "Backing up…" : "Backup Database",
             icon: "💾",
@@ -269,7 +252,8 @@ export default function SettingsPage() {
 
         {/* ── CONTENT ── */}
         <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
-          
+          {isPlatformOwner && <PlatformServer />}
+
           {/* Settings Cards Grid */}
           <div style={{ 
             display: "grid", 

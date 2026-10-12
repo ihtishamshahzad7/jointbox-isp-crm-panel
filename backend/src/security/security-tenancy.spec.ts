@@ -103,11 +103,12 @@ describe('security: sessions are scoped to the caller\'s subtree', () => {
     expect(where.isActive).toBe(true);
   });
 
-  it('lists every session for the platform owner', async () => {
+  it('lists platform logins and company accounts for the platform owner — never a dealer\'s', async () => {
     const { prisma, ctl } = make();
     await ctl.sessions({ user: OWNER });
     const where = prisma.sessionLog.findMany.mock.calls[0][0].where;
     expect(where).not.toHaveProperty('userId');
+    expect(where.user).toEqual({ OR: [{ role: 'SUPER_ADMIN' }, { role: 'ADMIN', parent: { role: 'SUPER_ADMIN' } }] });
   });
 
   it('answers "not found" when another company kills a session it does not own', async () => {
@@ -116,12 +117,27 @@ describe('security: sessions are scoped to the caller\'s subtree', () => {
     expect(prisma.sessionLog.update).not.toHaveBeenCalled();
   });
 
-  it('lets the owning company and the platform owner kill it', async () => {
+  it('lets the owning company kill it; the platform owner only a company account\'s session', async () => {
     const a = make();
     await expect(a.ctl.kill('sess-of-11', { user: COMPANY_A })).resolves.toEqual({ killed: true });
+    // 11 is a dealer inside company A — company business, not the platform's.
     const o = make();
-    await expect(o.ctl.kill('sess-of-11', { user: OWNER })).resolves.toEqual({ killed: true });
-    expect(o.prisma.sessionLog.findUnique).not.toHaveBeenCalled(); // owner path unchanged
+    o.prisma.user = { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn().mockResolvedValue({}) };
+    await expect(o.ctl.kill('sess-of-11', { user: OWNER })).rejects.toBeInstanceOf(NotFoundException);
+    expect(o.prisma.sessionLog.update).not.toHaveBeenCalled();
+    // 10 is company A's own account — the platform may sign it out.
+    const p = make();
+    p.prisma.sessionLog.findUnique.mockResolvedValue({ userId: 10 });
+    p.prisma.user = { findFirst: jest.fn().mockResolvedValue({ id: 10 }), update: jest.fn().mockResolvedValue({}) };
+    await expect(p.ctl.kill('sess-of-10', { user: OWNER })).resolves.toEqual({ killed: true });
+  });
+
+  it('keeps a dealer\'s permissions away from the platform owner', async () => {
+    const { prisma, ctl } = make();
+    prisma.user = { findFirst: jest.fn().mockResolvedValue(null) };
+    prisma.userPermission.findMany = jest.fn().mockResolvedValue([]);
+    await expect(ctl.getChildPerms('11', { user: OWNER })).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.userPermission.findMany).not.toHaveBeenCalled();
   });
 });
 

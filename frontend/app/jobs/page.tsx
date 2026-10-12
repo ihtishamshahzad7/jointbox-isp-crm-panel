@@ -104,6 +104,18 @@ export default function JobsPage() {
                 <div style={{ fontWeight: 600 }}>{j.label || j.type}</div>
                 <div style={{ fontSize: 11, color: "var(--muted)" }}>#{j.id} · {j.type}</div>
                 {j.error && <div style={{ fontSize: 11, color: "#ef4444", marginTop: 2 }}>{j.error}</div>}
+                {j.status === "DONE" && j.type === "integrity.reconcile" && j.result && (
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3, lineHeight: 1.5 }}>
+                    {[
+                      j.result.books?.balanced === false ? "Books do NOT balance" : j.result.books?.balanced ? "Books balance" : null,
+                      `${j.result.walletDrift ?? 0} wallet drift`,
+                      `${j.result.inactiveCut ?? 0} inactive cut`,
+                      `${j.result.credentialsRestored ?? 0} logins restored`,
+                      `${j.result.inactiveCredentialsRemoved ?? 0} logins removed`,
+                      `${j.result.ghostSessionsClosed ?? 0} ghost sessions closed`,
+                    ].filter(Boolean).join(" · ")}
+                  </div>
+                )}
               </div>
               <div>
                 <span style={{ background: s.bg, color: s.color, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 600 }}>{s.label}</span>

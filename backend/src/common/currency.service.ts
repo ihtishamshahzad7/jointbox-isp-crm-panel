@@ -73,9 +73,16 @@ export class CurrencyService {
       return code;
     }
 
-    const isp = await this.prisma.isp
-      .findFirst({ orderBy: { id: 'asc' }, select: { currency: true } })
-      .catch(() => null);
+    // The platform's row (ownerId NULL) first — a company's own ISP brand must
+    // never decide the currency for every company on the server. The lowest-id
+    // row remains the fallback for a server that has not been pinned yet.
+    const isp =
+      (await this.prisma.isp
+        .findFirst({ where: { ownerId: null }, orderBy: { id: 'asc' }, select: { currency: true } })
+        .catch(() => null)) ??
+      (await this.prisma.isp
+        .findFirst({ orderBy: { id: 'asc' }, select: { currency: true } })
+        .catch(() => null));
 
     const raw = (isp?.currency || '').trim();
     if (raw) {
