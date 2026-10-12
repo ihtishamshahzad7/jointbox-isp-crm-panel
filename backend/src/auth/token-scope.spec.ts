@@ -126,12 +126,12 @@ describe('security: portal tokens are not operator tokens', () => {
  */
 describe('security: account status is enforced on every request', () => {
   const prismaFor = (
-    u: { isActive?: boolean; mustChangePassword?: boolean } | null = {},
+    u: { isActive?: boolean; mustChangePassword?: boolean; role?: string } | null = {},
     chainActive = true,
   ) => ({
     user: {
       findUnique: async () =>
-        u ? { isActive: u.isActive ?? true, mustChangePassword: u.mustChangePassword ?? false } : null,
+        u ? { isActive: u.isActive ?? true, mustChangePassword: u.mustChangePassword ?? false, role: u.role } : null,
     },
     $queryRaw: async () => [{ ok: chainActive }],
   }) as any;
@@ -173,6 +173,16 @@ describe('security: account status is enforced on every request', () => {
       expect(user).toMatchObject({ sub: 11, mustChangePassword: true });
     },
   );
+
+  it('signs out a token whose role no longer matches the account (old top login now a company)', async () => {
+    await expect(strategy(prismaFor({ role: 'ADMIN' })).validate(req('/companies'), { ...op, role: 'SUPER_ADMIN' }))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('keeps a token whose role still matches', async () => {
+    const user = await strategy(prismaFor({ role: 'ADMIN' })).validate(req(), op);
+    expect(user).toMatchObject({ sub: 11, role: 'ADMIN' });
+  });
 
   it('does not let a look-alike path through the change-password allowance', async () => {
     await expect(

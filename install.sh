@@ -291,8 +291,12 @@ JWT_SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
 # Kept separate from JWT_SECRET so rotating login tokens never makes saved
 # alert credentials undecryptable. Do not change this once secrets are saved.
 SECRETS_KEY="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
-# Default web login created automatically on first boot. Change the password
-# after logging in. (The backend refuses to start without ADMIN_PASSWORD set.)
+# Two web logins are created on first boot; both passwords must be changed at
+# the first sign-in. (The backend refuses to start without ADMIN_PASSWORD set.)
+#   super admin (platform: companies, licence, server)
+PLATFORM_ADMIN_EMAIL=superadmin@jointbox.com
+PLATFORM_ADMIN_PASSWORD=admin123
+#   the first ISP company (subscribers, routers, franchises, billing)
 ADMIN_EMAIL=admin@jointbox.com
 ADMIN_PASSWORD=admin123
 # Sessions re-authenticate against the panel on this interval (see docs).
@@ -566,7 +570,9 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
 
   Panel      http://$SERVER_IP:$WEB_PORT
   API        http://$SERVER_IP:$API_PORT
-  Login      admin@jointbox.com / admin123   ${Y}← change this immediately${N}
+  Super admin  superadmin@jointbox.com / admin123   ${Y}← companies, licence, server${N}
+  Company      admin@jointbox.com / admin123        ${Y}← subscribers, routers, billing${N}
+               ${Y}Both ask for a new password at the first sign-in.${N}
 
   Database   $DB_NAME
   DB user    $DB_USER

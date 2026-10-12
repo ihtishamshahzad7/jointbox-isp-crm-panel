@@ -71,6 +71,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (Number(payload?.tv ?? 0) !== Number(status.tokenVersion ?? 0)) {
       throw new UnauthorizedException('This session has been signed out. Sign in again.');
     }
+    // The menus are drawn from the role inside the token. When the account's
+    // role changed after it was issued — the original top login becoming its
+    // company's ADMIN when the platform account was split off — the screen
+    // would show one account's menu while the API enforced another's. Start a
+    // fresh session instead.
+    if (payload?.role && status.role && String(payload.role) !== String(status.role)) {
+      throw new UnauthorizedException('Your account was changed. Sign in again.');
+    }
     // An "act as" session lives only as long as the operator who opened it:
     // a suspended (or deleted) operator's switched-in session stops too.
     if (payload.imp?.by) {

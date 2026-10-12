@@ -10,8 +10,9 @@
  *
  *   node scripts/reset-platform-password.js --email superadmin@yourdomain
  *       Asks for a new password twice (typing is hidden), saves it, unlocks
- *       the account, signs out every open session and makes the panel ask
- *       for a fresh password at the next sign-in.
+ *       the account and signs out every open session. The password you type
+ *       is final: the panel will not ask for another one, and the boot-time
+ *       default (superadmin@jointbox.com / admin123) never overwrites it.
  *
  * The password is never printed, never logged and never taken from the
  * command line (that would leave it in the shell history and in `ps`).
@@ -116,11 +117,13 @@ function askHidden(question) {
       data: {
         password: await bcrypt.hash(pw, 10),
         isActive: true,
-        mustChangePassword: true,
+        // A password the operator chose — boot only resets a platform login
+        // still waiting for its first change, so this must be cleared.
+        mustChangePassword: false,
         tokenVersion: { increment: 1 },
       },
     });
-    console.log(`Done. Sign in as ${user.email} with the new password; the panel will ask you to choose your own.`);
+    console.log(`Done. Sign in as ${user.email} with the new password.`);
     console.log('Every session that was open on this account has been signed out.');
     console.log('If sign-in still says "too many attempts", restart the backend (pm2 restart all) to clear the lock.');
   } catch (e) {

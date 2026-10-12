@@ -33,6 +33,14 @@ export default function LoginPage() {
     if (localStorage.getItem("token")) router.push(isPlatformSession() ? PLATFORM_HOME : "/dashboard");
   }, [router]);
 
+  // "Sign in as super admin" from a company lands here with the email filled in.
+  useEffect(() => {
+    try {
+      const e = new URLSearchParams(window.location.search).get("email");
+      if (e) setEmail(e);
+    } catch { /* no query */ }
+  }, []);
+
   useEffect(() => {
     fetch(`${API_BASE}/demo/public`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { enabled: false }))

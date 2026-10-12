@@ -19,8 +19,12 @@ import { existsSync, mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { PrismaExceptionFilter } from './common/prisma-exception.filter';
+<<<<<<< HEAD
 import { ensurePlatformAccount } from './common/platform-account';
 import { SecurityService } from './security/security.service';
+=======
+import { ensurePlatformAccount, ensurePlatformLogin, PLATFORM_DEFAULT_EMAIL } from './common/platform-account';
+>>>>>>> 40430ad (Super admin login superadmin@jointbox.com; company hint and sign-in switch; stale sessions signed out; console only for super admin)
 
 // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
 // BigInt. JSON.stringify throws on BigInt, so ANY endpoint returning them —
@@ -39,27 +43,45 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
     const userCount = await prisma.user.count();
 
     if (userCount === 0) {
-      const email = process.env.ADMIN_EMAIL || 'admin@jointbox.com';
-      const password = process.env.ADMIN_PASSWORD || 'admin123';
-      await prisma.user.create({
+      /**
+       * A new installation gets TWO logins, exactly as an upgraded one has:
+       *   superadmin@jointbox.com — the platform (companies, licence, server)
+       *   ADMIN_EMAIL (admin@jointbox.com) — the first ISP company, which runs
+       *     subscribers, routers, franchises, packages and accounting as before.
+       * Both passwords are installer defaults, so both must be changed at the
+       * first sign-in: every route except change-password answers 403 until
+       * then. Neither password is printed — the operator set them in .env.
+       */
+      const platformPassword = process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
+      const platform = await prisma.user.create({
         data: {
-          name: 'Super Admin',
-          email,
-          password: await bcrypt.hash(password, 10),
+          name: 'Platform Owner',
+          email: PLATFORM_DEFAULT_EMAIL,
+          password: await bcrypt.hash(platformPassword, 10),
           role: 'SUPER_ADMIN',
           isActive: true,
-          // The first-boot password comes from install.sh, so it is known to
-          // anyone who has read install.sh. The panel refuses to be operated
-          // on it: every route except change-password answers 403 until the
-          // owner picks their own.
           mustChangePassword: true,
         },
+        select: { id: true },
       });
-      // The password is NOT printed. It used to be, in full, into the PM2 log —
-      // which is world-readable to anyone with shell access and is shipped
-      // into support bundles. The operator already knows it: it is the
-      // ADMIN_PASSWORD they set in .env.
-      console.log(`👤 First-boot: default admin created → ${email} (password: ADMIN_PASSWORD from .env; must be changed at first login)`);
+      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+      if (email !== PLATFORM_DEFAULT_EMAIL) {
+        await prisma.user.create({
+          data: {
+            name: 'My ISP',
+            email,
+            password: await bcrypt.hash(process.env.ADMIN_PASSWORD || 'admin123', 10),
+            role: 'ADMIN',
+            parentId: platform.id,
+            isActive: true,
+            mustChangePassword: true,
+          },
+        });
+      }
+      console.log(`👑 First-boot: super admin login → ${PLATFORM_DEFAULT_EMAIL} (password: PLATFORM_ADMIN_PASSWORD, default admin123; must be changed at first login)`);
+      if (email !== PLATFORM_DEFAULT_EMAIL) {
+        console.log(`👤 First-boot: company login → ${email} (password: ADMIN_PASSWORD from .env; must be changed at first login)`);
+      }
       return;
     }
 
@@ -74,6 +96,9 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
      * See common/platform-account.ts.
      */
     await ensurePlatformAccount(prisma, console);
+    // The platform login is superadmin@jointbox.com / admin123 until its owner
+    // picks their own password (see platform-account.ts).
+    await ensurePlatformLogin(prisma, console);
 
     /**
      * EXISTING INSTALLS STILL ON THE PUBLISHED DEFAULT.

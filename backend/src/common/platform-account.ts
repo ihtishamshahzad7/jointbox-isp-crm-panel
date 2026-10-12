@@ -20,6 +20,16 @@
  *    are given to the company, so nothing disappears from its screens.
  */
 
+import * as bcrypt from 'bcrypt';
+
+/**
+ * The platform login every installation ships with. Known, like any
+ * installer default — which is why the panel refuses to be used on it: the
+ * first sign-in must choose a new password (mustChangePassword).
+ */
+export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@jointbox.com').trim().toLowerCase();
+const PLATFORM_DEFAULT_PASSWORD = () => process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
+
 const DOWNLINE_ROLES = [
   'RESELLER',
   'SUB_RESELLER',
@@ -63,13 +73,14 @@ export async function runsBusiness(prisma: any, id: number): Promise<boolean> {
   return orphanSubs + orphanNas > 0;
 }
 
-/** superadmin@<same domain>, or a numbered variant if that is taken. */
+/** superadmin@jointbox.com, else superadmin@<same domain>, else a numbered variant. */
 export async function platformEmailFor(
   prisma: any,
   from: Acct,
 ): Promise<string> {
   const domain = String(from.email || '').split('@')[1] || 'jointbox.local';
   const candidates = [
+    PLATFORM_DEFAULT_EMAIL,
     `superadmin@${domain}`,
     `superadmin+${from.id}@${domain}`,
     `superadmin+${Date.now()}@${domain}`,
@@ -106,9 +117,9 @@ async function createPlatformAccount(prisma: any, from: Acct) {
     data: {
       name: 'Platform Owner',
       email,
-      // The same bcrypt hash: whoever knows the company login's password can
-      // open the platform login once, and must then choose a new one.
-      password: from.password,
+      // The installation default (admin123 unless PLATFORM_ADMIN_PASSWORD is
+      // set). The first sign-in must choose a new one.
+      password: await bcrypt.hash(PLATFORM_DEFAULT_PASSWORD(), 10),
       role: 'SUPER_ADMIN',
       isActive: true,
       mustChangePassword: true,
@@ -268,4 +279,51 @@ async function splitInside(
     };
   }
   return result;
+}
+
+/**
+ * THE PLATFORM LOGIN IS superadmin@jointbox.com — AND admin123 UNTIL ITS OWNER
+ * CHOOSES THEIR OWN PASSWORD.
+ *
+ *  • Email: the platform account always signs in as superadmin@jointbox.com
+ *    (PLATFORM_ADMIN_EMAIL), whenever that address is free. Changing it does
+ *    not sign anyone out — the session belongs to the account, not the email.
+ *  • Password: only a platform account still waiting for its first password
+ *    change (mustChangePassword) is put on the default. Once the owner signs
+ *    in and picks a password the flag clears, and a password somebody chose is
+ *    never overwritten. Every open session is signed out when it is reset.
+ */
+export async function ensurePlatformLogin(
+  prisma: any,
+  log: { warn: (m: string) => void },
+): Promise<{ email: string; changed: boolean } | null> {
+  const sa = await prisma.user.findFirst({
+    where: { role: 'SUPER_ADMIN', isDemo: false, isActive: true },
+    orderBy: { id: 'asc' },
+    select: { id: true, email: true, password: true, mustChangePassword: true },
+  });
+  if (!sa) return null;
+
+  const data: any = {};
+  if (String(sa.email).toLowerCase() !== PLATFORM_DEFAULT_EMAIL) {
+    const taken = await prisma.user.findUnique({ where: { email: PLATFORM_DEFAULT_EMAIL }, select: { id: true } });
+    if (!taken) data.email = PLATFORM_DEFAULT_EMAIL;
+  }
+  if (sa.mustChangePassword) {
+    const onDefault = !!sa.password && (await bcrypt.compare(PLATFORM_DEFAULT_PASSWORD(), sa.password).catch(() => false));
+    if (!onDefault) {
+      data.password = await bcrypt.hash(PLATFORM_DEFAULT_PASSWORD(), 10);
+      data.tokenVersion = { increment: 1 };
+    }
+  }
+  if (!Object.keys(data).length) return { email: sa.email, changed: false };
+
+  await prisma.user.update({ where: { id: sa.id }, data });
+  const email = data.email || sa.email;
+  log.warn(
+    data.password
+      ? `👑 Super admin login: ${email} — default password (PLATFORM_ADMIN_PASSWORD or admin123); it must be changed at first sign-in.`
+      : `👑 Super admin login is now ${email} (was ${sa.email}); its password is unchanged.`,
+  );
+  return { email, changed: true };
 }

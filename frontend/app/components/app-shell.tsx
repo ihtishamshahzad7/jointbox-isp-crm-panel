@@ -363,6 +363,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // Children render once the role is known, so the platform account never
   // mounts (and fires requests from) a business page before being redirected.
   const [roleReady, setRoleReady] = useState(false);
+  // The original company's pointer to the super admin login (see auth/platform-hint).
+  const [platformHint, setPlatformHint] = useState<{ platformEmail: string | null; firstSignIn?: boolean } | null>(null);
+  const [hintHidden, setHintHidden] = useState(true);
   const roleRefreshStarted = useRef(false);
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [switchQuery, setSwitchQuery] = useState('');
@@ -477,6 +480,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setImp(payload?.imp ?? null);
     setMyRole(payload?.role ?? null);
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    if (payload?.role === 'ADMIN' && !payload?.imp) {
+      fetch(`${API}/auth/platform-hint`, { headers })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d?.platformEmail) return;
+          setPlatformHint(d);
+          try { setHintHidden(localStorage.getItem(`jb-platform-hint:${payload.sub}`) === '1'); } catch { setHintHidden(false); }
+        })
+        .catch(() => {});
+    }
     // Approval badge: how many refunds/expenses are waiting on the ISP owner.
     // Approvals live inside a company; the platform account has none.
     if (payload?.role === 'ADMIN') {
@@ -815,7 +828,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="nav-section">
-          {(myRole === 'SUPER_ADMIN' ? platformMenuGroups : menuGroups).map((group) => {
+          {/* Nothing until the role is known: the business menu must never
+              flash up for the super admin while the page loads. */}
+          {roleReady && (myRole === 'SUPER_ADMIN' ? platformMenuGroups : menuGroups).map((group) => {
             // ISP-only items (Server Console) are hidden for everyone else.
             const items = group.items.filter((it: any) => !it.ispOnly || myRole === 'SUPER_ADMIN');
             if (items.length === 0) return null;
@@ -1030,6 +1045,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       <ThemeToggle compact />
                     </div>
 
+                    {platformHint?.platformEmail && (
+                      <button type="button" role="menuitem" className="acct-row"
+                        onClick={() => { setAccountOpen(false); localStorage.removeItem('token'); clearMediaToken(); window.location.assign(`/login?email=${encodeURIComponent(platformHint.platformEmail!)}`); }}>
+                        <svg width="15" height="15" viewBox="0 0 24 19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+                          <path d="M2.2 15.2 1 4.6l6.1 4.9L12 1.4l4.9 8.1L23 4.6l-1.2 10.6Z" />
+                        </svg>
+                        <span>Sign in as super admin</span>
+                      </button>
+                    )}
+
                     {latestNotice && (
                       <button type="button" role="menuitem" className="acct-row"
                         onClick={() => { setAccountOpen(false); setNoticeOpen(true); }}>
@@ -1229,6 +1254,26 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="app-shell-page-inner">
             {/* Renders nothing unless there are static IP charges to chase. */}
             {roleReady && myRole !== 'SUPER_ADMIN' && <StaticIpBanner />}
+            {platformHint?.platformEmail && !hintHidden && (
+              <div className="platform-note" role="note">
+                <span className="platform-note-icon" aria-hidden>👑</span>
+                <div className="platform-note-text">
+                  <b>This login is your company</b> — subscribers, routers, franchises, packages and accounting work here exactly as before.
+                  To add other ISP companies, or manage the licence and the server, sign in as the super admin:{' '}
+                  <code>{platformHint.platformEmail}</code>
+                  {platformHint.firstSignIn ? <> (first password <code>admin123</code> — you will choose a new one).</> : '.'}
+                </div>
+                <div className="platform-note-actions">
+                  <button type="button" onClick={() => { localStorage.removeItem('token'); clearMediaToken(); window.location.assign(`/login?email=${encodeURIComponent(platformHint.platformEmail!)}`); }}>
+                    Sign in as super admin
+                  </button>
+                  <button type="button" className="ghost" onClick={() => {
+                    setHintHidden(true);
+                    try { const sub = decodeToken()?.sub; localStorage.setItem(`jb-platform-hint:${sub}`, '1'); } catch { /* private mode */ }
+                  }}>Got it</button>
+                </div>
+              </div>
+            )}
             {/* Renders nothing on an ACTIVE licence, which is the normal case. */}
             <LicenceBanner />
             <div key={mediaKey} style={{ display: 'contents' }}>{roleReady && !platformBlocked ? children : null}</div>

@@ -63,6 +63,13 @@ export class AuthController {
     return this.authService.login(email, password, ip, userAgent, code);
   }
 
+  /** For the original company only: the platform (super admin) login. */
+  @Get('platform-hint')
+  @UseGuards(JwtAuthGuard)
+  platformHint(@Req() req: any) {
+    return this.authService.platformHint(Number(req.user?.sub ?? req.user?.id), !!req.user?.imp);
+  }
+
   @Get('profile')
   @UseGuards(JwtAuthGuard)
   async getProfile(@Req() req: any) {

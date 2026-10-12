@@ -423,6 +423,24 @@ export class AuthService {
     return { token, user: safe, impersonating: false };
   }
 
+  /**
+   * "Where is the super admin?" — for the company that was running this
+   * server before the platform login existed (it predates the platform
+   * account and sits directly under it). Every other company gets nothing:
+   * a tenant has no business knowing the platform login.
+   */
+  async platformHint(userId: number, impersonated: boolean) {
+    if (impersonated) return { platformEmail: null };
+    const me = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, role: true, parentId: true } });
+    if (!me || me.role !== 'ADMIN' || !me.parentId) return { platformEmail: null };
+    const parent = await this.prisma.user.findUnique({
+      where: { id: me.parentId },
+      select: { id: true, role: true, email: true, mustChangePassword: true, isActive: true },
+    });
+    if (!parent || parent.role !== 'SUPER_ADMIN' || !parent.isActive || parent.id < me.id) return { platformEmail: null };
+    return { platformEmail: parent.email, firstSignIn: !!parent.mustChangePassword };
+  }
+
   async getProfile(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

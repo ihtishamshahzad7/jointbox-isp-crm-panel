@@ -1,4 +1,5 @@
-import { ensurePlatformAccount } from './platform-account';
+import * as bcrypt from 'bcrypt';
+import { ensurePlatformAccount, ensurePlatformLogin } from './platform-account';
 
 /**
  * Boot-time separation of the platform account from the business it used to
@@ -69,10 +70,12 @@ describe('platform account at boot', () => {
       },
     );
     const r = await ensurePlatformAccount(p, quiet);
-    expect(r).toEqual({ action: 'split', platformEmail: 'superadmin@isp.pk', companyEmail: 'owner@isp.pk' });
+    expect(r).toEqual({ action: 'split', platformEmail: 'superadmin@jointbox.com', companyEmail: 'owner@isp.pk' });
 
-    const platform = p.user.rows.find((u: any) => u.email === 'superadmin@isp.pk');
-    expect(platform).toMatchObject({ role: 'SUPER_ADMIN', password: 'HASH', mustChangePassword: true });
+    const platform = p.user.rows.find((u: any) => u.email === 'superadmin@jointbox.com');
+    expect(platform).toMatchObject({ role: 'SUPER_ADMIN', mustChangePassword: true });
+    // The installation default, never the company's own password.
+    expect(await bcrypt.compare('admin123', platform.password)).toBe(true);
     // Same login, same data — now the company's ADMIN, under the platform.
     expect(p.user.rows.find((u: any) => u.id === 1)).toMatchObject({ role: 'ADMIN', parentId: platform.id });
     // Its dealer stays inside the company; the OTHER company moves up.
@@ -120,7 +123,7 @@ describe('platform account at boot', () => {
   it('no SUPER_ADMIN, owner ran as ADMIN with a business: keeps it, platform login created above', async () => {
     const p = db([{ id: 4, email: 'boss@net.pk', role: 'ADMIN' }], { nas: [{ id: 1, ownerId: 4 }] });
     const r = await ensurePlatformAccount(p, quiet);
-    expect(r).toMatchObject({ action: 'split', platformEmail: 'superadmin@net.pk' });
+    expect(r).toMatchObject({ action: 'split', platformEmail: 'superadmin@jointbox.com' });
     const platform = p.user.rows.find((u: any) => u.role === 'SUPER_ADMIN');
     expect(p.user.rows.find((u: any) => u.id === 4)).toMatchObject({ role: 'ADMIN', parentId: platform.id });
   });
@@ -132,13 +135,19 @@ describe('platform account at boot', () => {
     expect(p.user.rows[0].role).toBe('SUPER_ADMIN');
   });
 
-  it('picks a free address when superadmin@ is taken', async () => {
+  it('picks a free address when superadmin@jointbox.com is taken', async () => {
     const p = db([
       { id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN' },
-      { id: 2, email: 'superadmin@isp.pk', role: 'ADMIN', parentId: 1 },
+      { id: 2, email: 'superadmin@jointbox.com', role: 'ADMIN', parentId: 1 },
     ], { subscriber: [{ id: 50, userId: 1 }] });
-    const r: any = await ensurePlatformAccount(p, quiet);
-    expect(r.platformEmail).toBe('superadmin+1@isp.pk');
+    expect(((await ensurePlatformAccount(p, quiet)) as any).platformEmail).toBe('superadmin@isp.pk');
+
+    const q = db([
+      { id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN' },
+      { id: 2, email: 'superadmin@jointbox.com', role: 'ADMIN', parentId: 1 },
+      { id: 3, email: 'superadmin@isp.pk', role: 'ADMIN', parentId: 1 },
+    ], { subscriber: [{ id: 50, userId: 1 }] });
+    expect(((await ensurePlatformAccount(q, quiet)) as any).platformEmail).toBe('superadmin+1@isp.pk');
   });
 
   it('holds an advisory lock so parallel workers cannot split twice', async () => {
@@ -147,5 +156,41 @@ describe('platform account at boot', () => {
     p.$transaction = async (fn: any) => fn({ ...p, $executeRawUnsafe: exec });
     await ensurePlatformAccount(p, quiet);
     expect(exec).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'));
+  });
+});
+
+describe('platform login defaults', () => {
+  it('a platform login still waiting for its first password change becomes superadmin@jointbox.com / admin123', async () => {
+    const p = db([{ id: 9, email: 'superadmin@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: true, password: await bcrypt.hash('company-pass1', 4), tokenVersion: 0 }]);
+    const r = await ensurePlatformLogin(p, quiet);
+    expect(r).toEqual({ email: 'superadmin@jointbox.com', changed: true });
+    const sa = p.user.rows[0];
+    expect(sa.email).toBe('superadmin@jointbox.com');
+    expect(await bcrypt.compare('admin123', sa.password)).toBe(true);
+    expect(sa.tokenVersion).toEqual({ increment: 1 });
+  });
+
+  it('moves a chosen login to superadmin@jointbox.com but never touches its password', async () => {
+    const hash = await bcrypt.hash('Chosen#2026', 4);
+    const p = db([{ id: 9, email: 'boss@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: false, password: hash, tokenVersion: 3 }]);
+    expect(await ensurePlatformLogin(p, quiet)).toEqual({ email: 'superadmin@jointbox.com', changed: true });
+    expect(p.user.rows[0]).toMatchObject({ email: 'superadmin@jointbox.com', password: hash, tokenVersion: 3 });
+    // Second boot: nothing left to do.
+    expect(await ensurePlatformLogin(p, quiet)).toEqual({ email: 'superadmin@jointbox.com', changed: false });
+  });
+
+  it('keeps its address when superadmin@jointbox.com belongs to someone else, and still resets the password', async () => {
+    const p = db([
+      { id: 9, email: 'superadmin@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: true },
+      { id: 10, email: 'superadmin@jointbox.com', role: 'ADMIN', parentId: 9 },
+    ]);
+    const r = await ensurePlatformLogin(p, quiet);
+    expect(r?.email).toBe('superadmin@isp.pk');
+    expect(await bcrypt.compare('admin123', p.user.rows[0].password)).toBe(true);
+  });
+
+  it('is a no-op once it is on the defaults', async () => {
+    const p = db([{ id: 9, email: 'superadmin@jointbox.com', role: 'SUPER_ADMIN', mustChangePassword: true, password: await bcrypt.hash('admin123', 4) }]);
+    expect(await ensurePlatformLogin(p, quiet)).toEqual({ email: 'superadmin@jointbox.com', changed: false });
   });
 });
