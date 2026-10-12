@@ -33,6 +33,7 @@ describe('platform boundary: what the platform account can reach', () => {
     const MAINTENANCE = new Set([
       'POST subscribers/repair-links', 'GET subscribers/test-radius-connection',
       'GET nas/debug/radius-sync', 'GET nas/diagnostics/accounting',
+      'GET nas/radius/vault', 'POST nas/radius/vault/sync',
       'POST nas/tunnels/reconcile', 'POST nas/tunnels/refresh',
       'POST subscribers/lifecycle/run', 'GET subscribers/integrity/wallets',
       'GET subscribers/integrity/radius', 'GET subscribers/integrity/radius-heal',

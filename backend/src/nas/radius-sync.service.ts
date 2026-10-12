@@ -1112,36 +1112,10 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
   // PRIVATE: Reload FreeRADIUS after NAS changes
   // ─────────────────────────────────────────────────────────────
   async reloadFreeradius(): Promise<void> {
-    // IMPORTANT: FreeRADIUS loads its SQL client list (the `nas` table) only at
-    // *startup*. A `reload`/HUP does NOT re-read clients, so a newly added router
-    // would keep getting "RADIUS timeout" until a manual restart. We therefore do
-    // a full `restart` here — this is only triggered on rare NAS add/edit/delete,
-    // never on subscriber changes (those are read from SQL per-request), so it is
-    // safe and does not disrupt live PPP sessions on the routers.
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-
-    // pm2 runs this backend as root, so plain systemctl works; fall back to sudo
-    // for non-root setups (install.sh grants NOPASSWD for this exact command).
-    await this.radiusVault.syncClients();
-
-    const cmds = [
-      'systemctl restart freeradius 2>&1',
-      'sudo -n systemctl restart freeradius 2>&1',
-      'systemctl restart freeradius.service 2>&1',
-    ];
-    for (const cmd of cmds) {
-      try {
-        await execAsync(cmd);
-        this.logger.log('✅ FreeRADIUS restarted — SQL clients (routers) reloaded');
-        return;
-      } catch {
-        /* try the next form */
-      }
-    }
-    this.logger.warn(
-      '⚠️ Could not restart FreeRADIUS automatically. Run "systemctl restart freeradius" on the server so the new/updated router is loaded.',
-    );
+    // One path for every caller: the vault renders the client file, has
+    // FreeRADIUS check it, restarts it, and rolls back if anything fails.
+    // (A plain restart here used to hide every one of those failures.)
+    const r = await this.radiusVault.apply('reload');
+    if (!r.ok) this.logger.warn(`FreeRADIUS not updated: ${r.message}`);
   }
 }

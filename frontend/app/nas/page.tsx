@@ -89,6 +89,8 @@ interface RadiusClient {
   service: string; address: string; secret: string;
   authPort: string; acctPort: string; timeout: string; disabled: string;
 }
+/** What the backend did to FreeRADIUS after a router change (never contains a secret). */
+interface RadiusSyncResult { ok: boolean; message: string; mode?: string; changed?: boolean; restarted?: boolean; clients?: number }
 interface ApiServiceInfo { enabled: boolean; port: string; tlsPort: string; disabled: string; }
 interface IpAddress { address: string; network: string; interface: string; disabled: string; }
 
@@ -493,6 +495,21 @@ export default function NasPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewDetail, fetchDetails, fetchSessions]);
 
+  /**
+   * The server says whether FreeRADIUS actually took the change. A router
+   * that is saved here but unknown to FreeRADIUS answers every login with a
+   * timeout — so a failure is shown, not just logged.
+   */
+  const reportRadiusSync = (r: RadiusSyncResult | null | undefined, label: string) => {
+    if (!r) return;
+    if (r.ok) {
+      addLog('info', `FreeRADIUS: ${r.message}`);
+    } else {
+      addLog('error', `FreeRADIUS was NOT updated for ${label}: ${r.message}`);
+      if (typeof window !== 'undefined') window.alert(`Saved, but FreeRADIUS was not updated:\n\n${r.message}`);
+    }
+  };
+
   // ── Save NAS ───────────────────────────────────────────────────────
   const saveNas = async () => {
     if (!form.nasName.trim()) { addLog('error', 'NAS Name is required'); return; }
@@ -528,6 +545,8 @@ export default function NasPage() {
       const res = await fetch(url, { method, headers, body: JSON.stringify(body) });
       if (res.ok) {
         addLog('info', `NAS "${form.nasName}" ${editItem ? 'updated' : 'created'} — apiPort=${form.apiPort}`);
+        const saved: { radiusSync?: RadiusSyncResult } | null = await res.json().catch(() => null);
+        reportRadiusSync(saved?.radiusSync, form.nasName);
         setShowForm(false); setEditItem(null); resetForm(); await loadData();
       } else {
         const e: any = await res.json().catch(() => ({}));
@@ -546,7 +565,11 @@ export default function NasPage() {
   const deleteNas = async (id: number) => {
     try {
       const res = await fetch(`${API}/nas/${id}`, { method:'DELETE', headers });
-      if (res.ok) { addLog('info', `NAS #${id} deleted`); await loadData(); }
+      if (res.ok) {
+        addLog('info', `NAS #${id} deleted`);
+        reportRadiusSync((await res.json().catch(() => null))?.radiusSync, `NAS #${id}`);
+        await loadData();
+      }
       else addLog('error', `Delete failed for NAS #${id}`);
     } catch (e: any) { addLog('error', `Delete error: ${e.message}`); }
     setDeleteConfirm(null);
@@ -586,7 +609,10 @@ export default function NasPage() {
   const toggleNas = async (id: number) => {
     try {
       const res = await fetch(`${API}/nas/${id}/toggle`, { method:'PATCH', headers });
-      if (res.ok) await loadData();
+      if (res.ok) {
+        reportRadiusSync((await res.json().catch(() => null))?.radiusSync, `NAS #${id}`);
+        await loadData();
+      }
       else addLog('error', `Toggle failed for NAS #${id}`);
     } catch (e: any) { addLog('error', `Toggle error: ${e.message}`); }
   };
@@ -782,7 +808,7 @@ export default function NasPage() {
             {showImport && (
               <ImportWizard
                 onClose={() => setShowImport(false)}
-                onDone={() => { loadData(); }}
+                onDone={(r: { radiusSync?: RadiusSyncResult } | null) => { reportRadiusSync(r?.radiusSync, "the imported routers"); loadData(); }}
                 config={{
                   title: "Import NAS / Routers",
                   endpoint: "/nas/import",

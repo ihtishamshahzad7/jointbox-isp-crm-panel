@@ -45,7 +45,7 @@ export function RadiusTab() {
         </Panel>
       </div>
 
-      <Panel title={`RADIUS clients on the router${clients.length ? ` (${clients.length})` : ""}`} sub="As reported by /radius/print — secret shown masked, always">
+      <Panel title={`RADIUS clients on the router${clients.length ? ` (${clients.length})` : ""}`} sub="As reported by /radius/print. The secret is compared with the panel's, never shown — a different one makes every login on this router time out.">
         {clients.length === 0 ? (
           <EmptyState title="No RADIUS client rows synced" hint="The router's /radius/print result is part of the API sync; check the RouterOS API health." />
         ) : (
@@ -59,7 +59,9 @@ export function RadiusTab() {
                   <tr key={i}>
                     <td className="nd-mono">{show(c.service)}</td>
                     <td className="nd-mono">{show(c.address)}</td>
-                    <td className="nd-mono">{c.secret ? "••••••••" : "—"}</td>
+                    <td className="nd-mono" title="Compared with the secret saved in the panel — the router's copy is never shown">
+                      {!c.secret ? "—" : c.secretMatchesPanel === true ? "matches panel" : c.secretMatchesPanel === false ? "DIFFERENT from panel" : "••••••••"}
+                    </td>
                     <td className="nd-mono">{show(c.authPort)} : {show(c.acctPort)}</td>
                     <td className="num">{show(c.timeout)}</td>
                     <td>{String(c.disabled ?? "").toLowerCase() === "true" ? "disabled" : "active"}</td>

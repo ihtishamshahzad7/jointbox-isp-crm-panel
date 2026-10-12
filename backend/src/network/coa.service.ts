@@ -54,13 +54,29 @@ export class CoaService {
   private readonly unkillable = new Map<string, { retryAfter: number; failures: number }>();
   private static readonly RETRY_BACKOFF_MS = 30 * 60_000; // 30 minutes
 
+  /**
+   * The router's RADIUS shared secret for a CoA / Disconnect packet: the vault
+   * copy (decrypted here, in memory only), else the legacy plaintext column on
+   * a server not yet switched to the vault. Every CoA path goes through this —
+   * one path left reading only the plaintext column stopped working the moment
+   * that column was cleared.
+   */
+  private nasSecret(nas: { radiusSecretEnc?: string | null; secret?: string | null } | null | undefined): string | null {
+    if (!nas) return null;
+    if (nas.radiusSecretEnc) {
+      const plain = this.secrets.decryptValue(nas.radiusSecretEnc);
+      if (plain != null) return plain;
+    }
+    return nas.secret || null;
+  }
+
   /** Look up the subscriber's current live session + its NAS (with CoA creds). */
   private async resolve(subscriberId: number) {
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
       select: {
         id: true, username: true, nasId: true,
-        nas: { select: { nasIp: true, nasIdentifier: true, radiusSecretEnc: true, incomingPort: true, apiPort: true, apiUsername: true, apiPassword: true } },
+        nas: { select: { nasIp: true, nasIdentifier: true, radiusSecretEnc: true, secret: true, incomingPort: true, apiPort: true, apiUsername: true, apiPassword: true } },
       },
     });
     if (!sub?.username) return null;
@@ -97,7 +113,7 @@ export class CoaService {
     if (!session) return { success: false, message: 'No active session to disconnect' };
 
     // 1) Standard RADIUS Disconnect-Request — vendor-agnostic.
-    const secret = sub.nas.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null;
+    const secret = this.nasSecret(sub.nas);
     if (secret) {
       const res = await sendCoa({
         host: sub.nas.nasIp,
@@ -228,7 +244,7 @@ export class CoaService {
         if (nas === undefined) {
           nas = await this.prisma.nas.findFirst({
             where: { nasIp: s.nasipaddress as string },
-            select: { secret: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
+            select: { secret: true, radiusSecretEnc: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
           });
           nasCreds.set(s.nasipaddress, nas);
         }
@@ -240,11 +256,12 @@ export class CoaService {
           callingStationId: s.callingstationid,
           nasIdentifier: nas?.nasIdentifier,
         };
-        if (nas?.secret) {
+        const nasSecret = this.nasSecret(nas);
+        if (nas && nasSecret) {
           const res = await sendCoa({
             host: s.nasipaddress,
             port: coaPort(nas.incomingPort),
-            secret: nas.secret,
+            secret: nasSecret,
             code: RadiusCode.DisconnectRequest,
             attributes: sessionAttributes(session),
           }).catch(() => ({ ok: false } as any));
@@ -389,7 +406,7 @@ export class CoaService {
 
     // Push it live via CoA if we have a session + secret.
     let live = false;
-    const coaSecret = sub.nas?.radiusSecretEnc ? this.secrets.decryptValue(sub.nas.radiusSecretEnc) : null;
+    const coaSecret = this.nasSecret(sub.nas);
     if (session && sub.nas?.nasIp && coaSecret) {
       const res = await sendCoa({
         host: sub.nas.nasIp,
@@ -419,14 +436,15 @@ export class CoaService {
   async testCoa(nasId: number): Promise<{ reachable: boolean; message: string }> {
     const nas = await this.prisma.nas.findUnique({
       where: { id: nasId },
-      select: { nasIp: true, secret: true, incomingPort: true, nasIdentifier: true },
+      select: { nasIp: true, secret: true, radiusSecretEnc: true, incomingPort: true, nasIdentifier: true },
     });
     if (!nas?.nasIp) return { reachable: false, message: 'NAS has no IP address' };
-    if (!nas.secret) return { reachable: false, message: 'Set the RADIUS shared secret first' };
+    const testSecret = this.nasSecret(nas);
+    if (!testSecret) return { reachable: false, message: 'Set the RADIUS shared secret first' };
     const res = await sendCoa({
       host: nas.nasIp,
       port: coaPort(nas.incomingPort),
-      secret: nas.secret,
+      secret: testSecret,
       code: RadiusCode.DisconnectRequest,
       attributes: sessionAttributes({ acctSessionId: 'jointbox-coa-test', nasIdentifier: nas.nasIdentifier, nasIp: nas.nasIp }),
       timeoutMs: 4000,
@@ -445,14 +463,15 @@ export class CoaService {
     if (!session) return { ok: false, method: 'none', message: 'No active session' };
     const nas = await this.prisma.nas.findFirst({
       where: { nasIp: session.nasIp as string },
-      select: { secret: true, incomingPort: true, nasIdentifier: true },
+      select: { secret: true, radiusSecretEnc: true, incomingPort: true, nasIdentifier: true },
     });
-    if (!nas?.secret) return { ok: false, method: 'none', message: 'NAS has no shared secret configured' };
+    const byNameSecret = this.nasSecret(nas);
+    if (!nas || !byNameSecret) return { ok: false, method: 'none', message: 'NAS has no shared secret configured' };
     if (nas.nasIdentifier) session.nasIdentifier = nas.nasIdentifier;
     const res = await sendCoa({
       host: session.nasIp as string,
       port: coaPort(nas.incomingPort),
-      secret: nas.secret,
+      secret: byNameSecret,
       code: RadiusCode.DisconnectRequest,
       attributes: sessionAttributes(session),
     });
@@ -478,7 +497,7 @@ export class CoaService {
       if (nas === undefined) {
         nas = await this.prisma.nas.findFirst({
           where: { nasIp: s.nasipaddress as string },
-          select: { secret: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
+          select: { secret: true, radiusSecretEnc: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
         });
         nasCreds.set(s.nasipaddress, nas);
       }
@@ -490,11 +509,12 @@ export class CoaService {
         callingStationId: s.callingstationid,
         nasIdentifier: nas?.nasIdentifier,
       };
-      if (nas?.secret) {
+      const nasSecret = this.nasSecret(nas);
+      if (nas && nasSecret) {
         const res = await sendCoa({
           host: s.nasipaddress,
           port: coaPort(nas.incomingPort),
-          secret: nas.secret,
+          secret: nasSecret,
           code: RadiusCode.DisconnectRequest,
           attributes: sessionAttributes(session),
         }).catch(() => ({ ok: false } as any));

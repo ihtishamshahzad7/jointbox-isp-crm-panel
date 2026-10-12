@@ -67,18 +67,33 @@ function Row({ label, value, tone, note }: { label: string; value: string; tone:
 const CHECKS = [
   {
     id: "sync",
-    label: "Router secrets for FreeRADIUS",
-    help: "Every active router needs its RADIUS secret in the encrypted vault, or FreeRADIUS refuses every login through it.",
+    label: "Routers known to FreeRADIUS",
+    help: "Rebuilds FreeRADIUS's router list from the encrypted vault, checks it, and restarts FreeRADIUS only if it changed. A router missing from the list gets no answer to any login.",
     run: async () => {
-      const { ok, body } = await getJson("/nas/debug/radius-sync");
-      if (!ok || !body?.success) return { tone: "bad" as Tone, text: body?.error || body?.message || "Could not check." };
-      const miss = body.missingSecret?.length || 0;
-      const plain = body.legacyPlaintext || 0;
-      if (!miss && !plain) return { tone: "ok" as Tone, text: `All ${body.activeRouters} active router(s) have an encrypted secret.` };
-      const parts = [];
-      if (miss) parts.push(`${miss} active router(s) have no secret — the owning company must re-enter it on the router page`);
-      if (plain) parts.push(`${plain} still stored in plain text — restart the backend to encrypt them`);
-      return { tone: "warn" as Tone, text: parts.join("; ") + "." };
+      const sync = await getJson("/nas/radius/vault/sync", { method: "POST" });
+      const { ok, body } = await getJson("/nas/radius/vault");
+      if (!ok || !body) return { tone: "bad" as Tone, text: body?.message || "Could not check." };
+      if (!body.freeradiusOnThisServer) return { tone: "idle" as Tone, text: "FreeRADIUS is not installed on this server." };
+      const r = body.routers || {};
+      const bad: string[] = [];
+      const warn: string[] = [];
+      if (body.running === false) bad.push("FreeRADIUS is not running — no customer can sign in (check: journalctl -u freeradius -n 50)");
+      if (body.brokenWildcardInclude) bad.push("clients.conf has \"$INCLUDE clients.d/*.conf\", which stops FreeRADIUS starting — run the update again");
+      if (sync.body && sync.body.ok === false) bad.push(sync.body.message || "FreeRADIUS was not updated");
+      if (r.undecryptable) bad.push(`${r.undecryptable} router secret(s) cannot be decrypted — SECRETS_KEY in backend/.env changed`);
+      if (body.mode === "file" && body.file?.exists && body.file.groupReadable === false) bad.push(`the router file is not readable by FreeRADIUS (mode ${body.file.mode})`);
+      if (body.file?.exists && body.file.worldReadable) bad.push(`the router file can be read by every user on the server (mode ${body.file.mode}) — it should be 640`);
+      if (body.mode === "file" && body.file?.exists && body.file.matchesDatabase === false && !body.syncing) warn.push("FreeRADIUS's router list differs from the panel — it is re-synced automatically within 5 minutes");
+      if (body.mode !== "file") warn.push("FreeRADIUS still reads router secrets from the database in plain text — run the update script once to switch it to the encrypted file");
+      const skipped: { id: number; reason: string }[] = Array.isArray(r.skipped) ? r.skipped : [];
+      if (skipped.length) warn.push(`${skipped.length} active router(s) left out: ${skipped.slice(0, 3).map((x) => `#${x.id} ${x.reason}`).join("; ")}${skipped.length > 3 ? "…" : ""}`);
+      const inFile = body.file?.clients ?? 0;
+      const summary = body.mode === "file"
+        ? `${inFile} of ${r.active ?? 0} active router(s) in FreeRADIUS's list.`
+        : `${r.active ?? 0} active router(s); ${r.encrypted ?? 0} with an encrypted secret.`;
+      if (bad.length) return { tone: "bad" as Tone, text: `${bad.join("; ")}. ${summary}` };
+      if (warn.length) return { tone: "warn" as Tone, text: `${warn.join("; ")}. ${summary}` };
+      return { tone: "ok" as Tone, text: `${summary}${sync.body?.restarted ? " FreeRADIUS restarted with the new list." : ""}` };
     },
   },
   {

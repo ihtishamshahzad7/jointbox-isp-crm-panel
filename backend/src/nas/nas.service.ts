@@ -8,6 +8,7 @@ import { RadiusSyncService } from './radius-sync.service';
 import { SecretsService } from '../common/secrets.service';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credentials';
+import { nasIpProblem, secretProblem } from './radius-clients-render';
 import { RadiusClientVaultService } from './radius-client-vault.service';
 import { assertCompanyCanAdd } from '../common/company-plan';
 
@@ -85,11 +86,10 @@ export class NasService implements OnModuleInit {
 
   /** Reject placeholders/hostnames early with a message the GUI can show. */
   private assertValidNasIp(ip?: string) {
-    if (!ip || !this.isIpv4(ip.trim())) {
-      throw new BadRequestException(
-        `"${ip ?? ''}" is not a valid IPv4 address. Enter the router's IP as seen by the RADIUS server (e.g. 192.168.1.127) — no name, no placeholder, no subnet mask.`,
-      );
-    }
+    // Same rule the FreeRADIUS client file applies — a router saved with an
+    // address the file would leave out is a router FreeRADIUS never answers.
+    const problem = nasIpProblem(ip);
+    if (problem) throw new BadRequestException(problem);
   }
 
   async findAll(query: any, actor?: any) {
@@ -396,7 +396,11 @@ export class NasService implements OnModuleInit {
     return map[raw?.toUpperCase() ?? ''] ?? NasType.MIKROTIK;
   }
 
-  /** Bulk import routers/NAS from a file. Each row loops through create(). */
+  /**
+   * Bulk import routers/NAS from a file. Each row loops through create(), but
+   * FreeRADIUS is synced ONCE at the end — one check and one restart for the
+   * whole file instead of one restart per router.
+   */
   async importMany(rows: any[], actor?: any) {
     let success = 0, failed = 0;
     const errors: Array<{ index: number; name?: string; error: string }> = [];
@@ -416,14 +420,15 @@ export class NasService implements OnModuleInit {
           description: r.description,
           nasIdentifier: r.nasIdentifier,
           deviceType: r.deviceType,
-        }, actor);
+        }, actor, { deferRadiusSync: true });
         success++;
       } catch (e: any) {
         failed++;
         errors.push({ index: i, name: r.nasName || r.nasIp, error: e?.message || 'Import failed' });
       }
     }
-    return { total: rows.length, success, failed, errors };
+    const radiusSync = success ? await this.radiusVault.apply('nas-import') : undefined;
+    return { total: rows.length, success, failed, errors, radiusSync };
   }
 
   async create(data: {
@@ -437,7 +442,7 @@ export class NasService implements OnModuleInit {
     apiEnabled?: boolean; apiPollSec?: number;
     snmpEnabled?: boolean; snmpPort?: number; snmpCommunity?: string; snmpVersion?: string; snmpPollSec?: number;
     syslogEnabled?: boolean; syslogPort?: number;
-  }, actor?: any) {
+  }, actor?: any, opts: { deferRadiusSync?: boolean } = {}) {
     // Self-registration is permission-gated (see assertMayAddNas).
     await this.assertMayAddNas(actor);
 
@@ -448,6 +453,10 @@ export class NasService implements OnModuleInit {
     // and is almost impossible to spot in a GUI field.
     data.secret = (data.secret ?? '').trim();
     if (!data.secret) throw new BadRequestException('RADIUS secret is required and cannot be blank.');
+    // FreeRADIUS reads the secret from a config file: it must be something
+    // that file can hold exactly (and that fits the legacy column).
+    const secretIssue = secretProblem(data.secret);
+    if (secretIssue) throw new BadRequestException(secretIssue);
 
     const existing = await this.prisma.nas.findFirst({ where: { nasIp: data.nasIp } });
     if (existing) {
@@ -476,7 +485,10 @@ export class NasService implements OnModuleInit {
         // The human-friendly name lives in `shortname`.
         nasname:      data.nasIp,
         shortname:    data.shortname ?? data.nasName,
-        secret:       null,
+        // Encrypted always. The plaintext copy is kept only while this server's
+        // FreeRADIUS still reads routers from the database (not yet switched to
+        // the vault file); the vault clears it once the file is the source.
+        secret:       this.radiusVault.mode() === 'file' ? null : data.secret,
         radiusSecretEnc: this.secrets.encryptValue(data.secret),
         apiPort:      data.apiPort      ?? 8728,
         incomingPort: data.incomingPort ?? 3799,
@@ -506,18 +518,17 @@ export class NasService implements OnModuleInit {
       },
     });
 
-    // The row above IS the FreeRADIUS client — there is nothing extra to insert.
-    // (Previously this also called addNasToRadius(), which INSERTed a second row
-    // into the same `nas` table and made every NAS appear twice.) FreeRADIUS
-    // only loads clients at startup, so just ask it to reload.
-    try {
-      await this.radiusVault.syncClients();
-      await this.radiusSync.reloadFreeradius();
-      this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered as a FreeRADIUS client`);
-    } catch (error: any) {
-      this.logger.warn(`NAS saved, but FreeRADIUS reload failed: ${error.message}`);
-    }
-    return nas;
+    // The row above is the router's single record. FreeRADIUS learns about it
+    // from the vault (the generated clients file, or — on a server not yet
+    // switched — this table), and only at start-up, so the vault re-renders,
+    // checks and restarts it. (An old addNasToRadius() INSERT made every NAS
+    // appear twice; it is gone.)
+    // Tell the screen whether FreeRADIUS actually took the router — a saved
+    // router that FreeRADIUS does not know is exactly a "RADIUS timeout".
+    if (opts.deferRadiusSync) return sanitizeNas(nas);
+    const radiusSync = await this.radiusVault.apply('nas-create');
+    if (radiusSync.ok) this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered with FreeRADIUS`);
+    return { ...sanitizeNas(nas), radiusSync };
   }
 
   async update(id: number, data: {
@@ -542,21 +553,36 @@ export class NasService implements OnModuleInit {
       this.assertValidNasIp(data.nasIp);
       updateData.nasIp   = data.nasIp.trim();
       updateData.nasname = data.nasIp.trim();
+      // Two routers on one address: FreeRADIUS can only know one of them, so
+      // this one would silently stop authenticating.
+      if (updateData.nasIp !== existingNas.nasIp) {
+        const clash = await this.prisma.nas.findFirst({
+          where: { nasIp: updateData.nasIp, NOT: { id } },
+          select: { id: true, shortname: true, nasname: true },
+        });
+        if (clash) {
+          throw new ConflictException(
+            `Another router already uses ${updateData.nasIp} ("${clash.shortname || clash.nasname}"). Each router needs its own address.`,
+          );
+        }
+      }
     }
-    if (data.secret !== undefined) {
+    if (data.secret !== undefined && !isMask(data.secret)) {
       const s = data.secret.trim();
       if (!s) throw new BadRequestException('RADIUS secret cannot be blank.');
+      const secretIssue = secretProblem(s);
+      if (secretIssue) throw new BadRequestException(secretIssue);
       data.secret = s;
     }
     // The friendly name is stored in `shortname`, never in `nasname`.
     if (data.nasName !== undefined)     updateData.shortname    = data.nasName;
     if (data.shortname !== undefined)   updateData.shortname    = data.shortname;
     // Masked values are the form echoing back what we sent it — never save them
-    // over the real credential. (RADIUS `secret` stays plaintext at rest because
-    // FreeRADIUS reads this table directly; it is masked in responses only.)
+    // over the real credential. The RADIUS secret is stored encrypted; the
+    // plaintext column is kept only until FreeRADIUS reads the vault file.
     if (data.secret !== undefined && !isMask(data.secret)) {
       updateData.radiusSecretEnc = this.secrets.encryptValue(data.secret);
-      updateData.secret = null;
+      updateData.secret = this.radiusVault.mode() === 'file' ? null : data.secret;
     }
     if (data.apiPort !== undefined)     updateData.apiPort      = data.apiPort;
     if (data.incomingPort !== undefined) updateData.incomingPort = data.incomingPort;
@@ -585,24 +611,20 @@ export class NasService implements OnModuleInit {
 
     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
 
-    const ipChanged     = data.nasIp   && data.nasIp   !== existingNas.nasIp;
+    const ipChanged     = data.nasIp   && data.nasIp.trim() !== existingNas.nasIp;
     const secretChanged = data.secret !== undefined && !isMask(data.secret);
-    const nameChanged   = data.nasName && data.nasName !== existingNas.nasname;
+    const nameChanged   = (data.nasName && data.nasName !== existingNas.shortname) || (data.shortname && data.shortname !== existingNas.shortname);
+    const activeChanged = data.isActive !== undefined && data.isActive !== existingNas.isActive;
 
     // The updated row IS the FreeRADIUS client, so no delete/re-insert is needed
     // (that pair is what produced duplicate NAS entries). FreeRADIUS caches its
     // client list at startup, so a reload is required for changes to take effect
     // — especially a changed IP or shared secret.
-    if (ipChanged || secretChanged || nameChanged) {
-      try {
-        await this.radiusVault.syncClients();
-        await this.radiusSync.reloadFreeradius();
-        this.logger.log(`✅ NAS "${updatedNas.shortname}" (${updatedNas.nasIp}) updated; FreeRADIUS reloaded`);
-      } catch (error: any) {
-        this.logger.warn(`NAS updated, but FreeRADIUS reload failed: ${error.message}`);
-      }
+    if (ipChanged || secretChanged || nameChanged || activeChanged) {
+      const radiusSync = await this.radiusVault.apply('nas-update');
+      return { ...sanitizeNas(updatedNas), radiusSync };
     }
-    return updatedNas;
+    return sanitizeNas(updatedNas);
   }
 
   /**
@@ -694,13 +716,9 @@ export class NasService implements OnModuleInit {
         return deletedNas;
       });
 
-      try {
-        await this.radiusVault.syncClients();
-        await this.radiusSync.reloadFreeradius();
-      } catch (error: any) {
-        this.logger.warn(`NAS deleted, but FreeRADIUS vault reload failed: ${error.message}`);
-      }
-      return result;
+      // The router leaves FreeRADIUS's client list too.
+      const radiusSync = await this.radiusVault.apply('nas-delete');
+      return { ...sanitizeNas(result), radiusSync };
 
     } catch (error) {
       if (error instanceof NotFoundException) {
@@ -733,13 +751,9 @@ export class NasService implements OnModuleInit {
     const nas = await this.prisma.nas.findUnique({ where: { id } });
     if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
     const updated = await this.prisma.nas.update({ where: { id }, data: { isActive: !nas.isActive } });
-    try {
-      await this.radiusVault.syncClients();
-      await this.radiusSync.reloadFreeradius();
-    } catch (error: any) {
-      this.logger.warn(`NAS status changed, but FreeRADIUS vault reload failed: ${error.message}`);
-    }
-    return updated;
+    // Disabled = out of FreeRADIUS's client list; enabled = back in.
+    const radiusSync = await this.radiusVault.apply('nas-toggle');
+    return { ...sanitizeNas(updated), radiusSync };
   }
 
   /**
@@ -911,11 +925,26 @@ export class NasService implements OnModuleInit {
     const apiPort = nas.apiPort ?? 8728;
     this.logger.log(`Syncing details for ${nas.nasname} (${nas.nasIp})`);
     try {
-      return await this.mikrotikSync.syncDetails(
+      const details: any = await this.mikrotikSync.syncDetails(
         nas.nasIp, apiPort,
         nas.apiUsername,   // string — checked above
         nas.apiPassword,
       );
+      /**
+       * The router's own RADIUS entries carry its copy of the shared secret.
+       * It never goes to the browser; instead each entry says whether it
+       * MATCHES the panel's secret — a mismatch is the classic cause of every
+       * login on that router timing out.
+       */
+      const panelSecret = this.radiusVault.secretOf(nas);
+      if (Array.isArray(details?.radiusClients)) {
+        details.radiusClients = details.radiusClients.map((c: any) => ({
+          ...c,
+          secret: c?.secret ? '••••••••' : '',
+          secretMatchesPanel: panelSecret != null && c?.secret != null && c.secret !== '' ? c.secret === panelSecret : null,
+        }));
+      }
+      return details;
     } catch (e: any) {
       // An unreachable or refusing router is not a server fault — say which
       // router and why, instead of a bare 500.

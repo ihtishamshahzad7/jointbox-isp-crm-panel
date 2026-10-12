@@ -51,7 +51,8 @@ describe('NAS tenancy — per-router diagnostics', () => {
     svc.debugRadiusSync = jest.fn().mockResolvedValue('dump');
     svc.accountingHealth = jest.fn().mockResolvedValue('health');
     const scope = makeScope();
-    return { svc, scope, ctl: new NasController(svc as any, scope as any) };
+    const vault: any = { status: jest.fn().mockResolvedValue('status'), apply: jest.fn().mockResolvedValue({ ok: true }) };
+    return { svc, scope, vault, ctl: new NasController(svc as any, scope as any, vault) };
   }
 
   it.each(routes)('%s: another company gets NotFound and the router is never touched', async (route, method) => {

@@ -101,6 +101,8 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['GET', 'subscribers/integrity/sessions'],
   ['GET', 'subscribers/test-radius-connection'],
   ['GET', 'nas/debug/radius-sync'],
+  ['GET', 'nas/radius/vault'],
+  ['POST', 'nas/radius/vault/sync'],
   ['GET', 'nas/diagnostics/accounting'],
   ['POST', 'nas/tunnels/reconcile'],
   ['POST', 'nas/tunnels/refresh'],

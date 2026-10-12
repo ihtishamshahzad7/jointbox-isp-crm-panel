@@ -6,6 +6,7 @@ import { NasService } from './nas.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
+import { RadiusClientVaultService } from './radius-client-vault.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('nas')
@@ -13,7 +14,28 @@ export class NasController {
   constructor(
     private readonly nasService: NasService,
     private readonly scope: ScopeService,
+    private readonly radiusVault: RadiusClientVaultService,
   ) {}
+
+  /**
+   * FreeRADIUS client vault: where FreeRADIUS takes router secrets from on
+   * this server, whether the generated file is in place and readable, how many
+   * routers are in it, what was left out and why, and the last sync result.
+   * Server state, counts and router ids only — no secret, no address book.
+   * Platform account only.
+   */
+  @Get('radius/vault')
+  vaultStatus(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.radiusVault.status();
+  }
+
+  /** Re-render, check and (if changed) restart FreeRADIUS now. Platform account only. */
+  @Post('radius/vault/sync')
+  vaultSync(@Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.radiusVault.apply('manual');
+  }
 
   // ── CRUD ────────────────────────────────────────────────────
   @Get()

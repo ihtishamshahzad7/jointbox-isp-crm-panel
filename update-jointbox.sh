@@ -114,6 +114,29 @@ JSON
 
 write_status "running" "Build completed; reloading Jointbox services"
 
+# Stored secrets (router RADIUS secrets, credentials) are encrypted with
+# SECRETS_KEY, or with JWT_SECRET when SECRETS_KEY was never set. Pin that same
+# value as SECRETS_KEY so changing JWT_SECRET later (e.g. to log everyone out)
+# can never make the saved secrets unreadable. The key itself does not change;
+# the pin is undone if the stored secrets would not decrypt with it.
+ENV_FILE="backend/.env"
+if [[ -f "$ENV_FILE" ]] && ! grep -qE '^[[:space:]]*SECRETS_KEY=' "$ENV_FILE" && grep -qE '^JWT_SECRET=' "$ENV_FILE"; then
+  KEYPIN_BAK="${ENV_FILE}.bak-keypin-$(date +%Y%m%d-%H%M%S)"
+  cp -a "$ENV_FILE" "$KEYPIN_BAK"
+  {
+    printf '\n# Encrypts stored secrets (router RADIUS secrets, credentials). Same value the\n'
+    printf '# app has always used; pinned so a JWT_SECRET change cannot break them.\n'
+    printf '# Never change or remove this line.\n'
+    sed -n 's/^JWT_SECRET=/SECRETS_KEY=/p' "$ENV_FILE" | head -n 1
+  } >> "$ENV_FILE"
+  if (cd backend && node scripts/radius-clients.js keycheck >/dev/null 2>&1); then
+    log "SECRETS_KEY pinned in backend/.env (same key as before; backup: ${KEYPIN_BAK})."
+  else
+    cp -a "$KEYPIN_BAK" "$ENV_FILE"
+    log "NOTE: SECRETS_KEY not pinned — some stored router secrets do not decrypt with the current key (see the router check in Settings)."
+  fi
+fi
+
 if command -v pm2 >/dev/null 2>&1; then
   if [[ -f ecosystem.config.js ]]; then
     log "Reloading Jointbox PM2 applications..."
@@ -167,6 +190,17 @@ done
 if [[ "$FRONTEND_OK" != "1" ]]; then
   show_logs jointbox-frontend
   fail "$LINENO"
+fi
+
+# Routers (NAS) → FreeRADIUS from the encrypted vault. Never fails the update:
+# on any problem the script puts FreeRADIUS's previous configuration back.
+if [[ -f backend/scripts/radius-vault-cutover.sh ]]; then
+  log "Checking FreeRADIUS router list (encrypted vault)..."
+  if bash backend/scripts/radius-vault-cutover.sh; then
+    log "FreeRADIUS router list is up to date."
+  else
+    log "WARNING: FreeRADIUS router list was not switched; FreeRADIUS keeps its previous configuration. See the [radius-vault] lines above."
+  fi
 fi
 
 write_status "success" "Deployment completed successfully"

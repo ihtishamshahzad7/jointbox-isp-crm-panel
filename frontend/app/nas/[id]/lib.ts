@@ -121,6 +121,8 @@ export interface RadiusClient {
   acctPort: string;
   timeout: string;
   disabled: string;
+  /** Router's RADIUS secret vs the panel's (the secret itself is never sent). null = could not compare. */
+  secretMatchesPanel?: boolean | null;
 }
 export interface ApiServiceInfo {
   enabled: boolean;

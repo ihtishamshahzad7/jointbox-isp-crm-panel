@@ -57,6 +57,13 @@ export function sanitizeNas<T extends Record<string, any>>(nas: T): T {
       out[`has${f.charAt(0).toUpperCase()}${f.slice(1)}`] = had;
     }
   }
+  // The RADIUS secret lives in the vault (radiusSecretEnc) once the plaintext
+  // column is cleared. The form edits `secret`, so show it as set — an empty
+  // box there made every later save fail with "secret cannot be blank".
+  if (out.hasRadiusSecretEnc && !out.hasSecret && 'secret' in out) {
+    out.secret = MASK;
+    out.hasSecret = true;
+  }
   return out as T;
 }
 
