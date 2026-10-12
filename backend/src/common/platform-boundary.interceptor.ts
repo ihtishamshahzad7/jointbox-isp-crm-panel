@@ -52,6 +52,7 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['PATCH', 'users/:id/toggle'],
   ['DELETE', 'users/:id'],
   ['POST', 'users/:id/purge'],
+  ['PUT', 'users/companies/:id/plan'],
 
   // ── the installation ──
   ['*', 'licence/*'],

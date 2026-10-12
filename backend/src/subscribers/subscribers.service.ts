@@ -22,6 +22,7 @@ import {
 import { parseCursor, buildCursorPage } from '../common/pagination';
 import { terminateInfo } from '../common/radius-terminate';
 import { CurrencyService } from '../common/currency.service';
+import { assertCompanyCanAdd } from '../common/company-plan';
 
 @Injectable()
 export class SubscribersService implements OnModuleInit {
@@ -1621,6 +1622,8 @@ export class SubscribersService implements OnModuleInit {
      * costs nothing and leaves nothing half-done.
      */
     await this.licenceCapacity.assertCanAddSubscriber();
+    // ...and the company's own subscriber cap (Plan & limits).
+    await assertCompanyCanAdd(this.prisma, this.scope, actor, 'subscribers');
 
     await this.assertRefsInScope(actor, data);
     /**
@@ -4131,6 +4134,23 @@ if (!unpaid && data.username && data.password) {
 
     // ── Pass 2: write ───────────────────────────────────────────
     let created = 0, updated = 0, failed = 0;
+    /**
+     * A FILE IS NOT A WAY AROUND BILLING.
+     *
+     * Only the company itself may bring its existing customer book across as
+     * it stands (status, expiry, balance, quota, discount). For anyone else an
+     * import is data entry: an existing customer's billed fields are left as
+     * they are (they change through Activate/Renew), and a new customer gets
+     * at most the one cycle that is charged for it.
+     */
+    const importerIsOwner = !actor || this.scope.isOwner(actor.role);
+    const cycleDaysByPackage = new Map<number, number>();
+    // The whole file's new customers against the company cap, up front: half
+    // an import stopped at the limit is worse than a clear refusal.
+    {
+      const newRows = prepared.filter((p: any) => !existingByName.has(p.username)).length;
+      await assertCompanyCanAdd(this.prisma, this.scope, actor, 'subscribers', newRows);
+    }
     for (const p of prepared) {
       const { r, username, password, expiry, line } = p;
       try {
@@ -4191,6 +4211,32 @@ if (!unpaid && data.username && data.password) {
 
         await this.assertRefsInScope(actor, data);
         const found = existingByName.get(username);
+        if (!importerIsOwner) {
+          delete data.balance;
+          delete settings.quotaUsed;
+          delete settings.usedSession;
+          delete settings.discountType;
+          delete settings.discountValue;
+          if (found) {
+            delete data.status;
+            delete data.packageId;
+            delete settings.expiryDate;
+            delete settings.quota;
+            delete settings.totalSession;
+          } else if (data.packageId) {
+            let days = cycleDaysByPackage.get(data.packageId);
+            if (days == null) {
+              const pk = await this.prisma.package.findUnique({ where: { id: data.packageId }, select: { duration: true } });
+              days = Math.max(1, Number(pk?.duration) || 30);
+              cycleDaysByPackage.set(data.packageId, days);
+            }
+            const max = Date.now() + days * 86_400_000;
+            const given = settings.expiryDate ? new Date(settings.expiryDate).getTime() : NaN;
+            settings.expiryDate = new Date(Number.isFinite(given) && given <= max ? given : max);
+          } else {
+            delete settings.expiryDate;
+          }
+        }
         if (found) {
           await this.prisma.subscriber.update({ where: { id: found.id }, data });
           await this.prisma.serviceSettings.upsert({

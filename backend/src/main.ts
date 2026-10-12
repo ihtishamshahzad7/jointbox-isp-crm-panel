@@ -161,7 +161,7 @@ async function bootstrap() {
   const security = app.get(SecurityService);
   const seededRolePermissions = await security.ensureDefaultRolePermissions();
   if (seededRolePermissions) {
-    console.log('🔐 RBAC: seeded explicit default permissions for ADMIN/SALES/RESELLER/SUB_RESELLER/RETAILER.');
+    console.log('🔐 RBAC: gave the reviewed default permissions to every role that had none.');
   }
 
   // Keep the published demo login working (created once, password kept in step

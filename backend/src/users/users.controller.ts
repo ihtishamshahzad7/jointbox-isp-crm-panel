@@ -44,6 +44,18 @@ export class UsersController {
     return this.usersService.myProfile(req.user);
   }
 
+  /** The caller's company plan and what it uses (company admin and its staff). */
+  @Get('me/plan')
+  myPlan(@Req() req: any) {
+    return this.usersService.myCompanyPlan(req.user);
+  }
+
+  /** Platform account: one company's caps and end date (Companies → Plan & limits). */
+  @Put('companies/:id/plan')
+  setCompanyPlan(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    return this.usersService.setCompanyPlan(req.user, +id, body);
+  }
+
   /**
    * Update the fields a person is allowed to change on their OWN account.
    *

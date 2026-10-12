@@ -3,7 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { TokenBlacklistService } from './token-blacklist.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { accountStatus, PASSWORD_CHANGE_ALLOWED } from './account-status';
+import { accountStatus, PASSWORD_CHANGE_ALLOWED, PLAN_ENDED_MESSAGE } from './account-status';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -65,6 +65,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!status) throw new UnauthorizedException('Account not found');
     if (!payload.imp && !status.active) {
       throw new UnauthorizedException('This account is suspended. Contact your provider.');
+    }
+    if (!payload.imp && status.planEnded) {
+      throw new UnauthorizedException(PLAN_ENDED_MESSAGE);
     }
     // Signed out everywhere (password changed or reset since this token was
     // issued). Tokens from before this check carry no version = 0.

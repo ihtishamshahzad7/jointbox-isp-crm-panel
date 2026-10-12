@@ -703,6 +703,20 @@ export class OrganizationService {
         if (t?.parentId !== this.scope.actorId(actor)) {
           throw new ForbiddenException('You can only set the credit limit of accounts directly below you.');
         }
+        /**
+         * NO MORE CREDIT THAN YOU WERE GIVEN. A franchise extending its dealer
+         * an overdraft is lending the company's money: the dealer activates
+         * customers on credit while the franchise's own wallet never moves.
+         * So a franchise or dealer can pass on at most the credit limit its
+         * own parent gave it. The company itself is not capped.
+         */
+        const me = await this.prisma.user.findUnique({ where: { id: this.scope.actorId(actor) }, select: { creditLimit: true } });
+        const own = Number(me?.creditLimit) || 0;
+        if (value > own) {
+          throw new ForbiddenException(
+            `You can give at most ${own.toLocaleString()} of credit — the limit your own account was given. Ask the account above you to raise yours first.`,
+          );
+        }
       }
     }
     const before = await this.prisma.user.findUnique({ where: { id: targetUserId }, select: { name: true, creditLimit: true } });

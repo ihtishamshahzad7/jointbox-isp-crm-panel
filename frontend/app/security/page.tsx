@@ -443,7 +443,7 @@ export default function SecurityPage() {
                       )}
                     </div>
                   )}
-                  <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>Untick an action below to block this account from doing it. Ticked = allowed.</div>
+                  <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>{isOwner ? "Untick an action to switch it off for this company \u2014 its admin and everyone under it. Ticked = allowed." : "Untick an action below to block this account \u2014 and everyone under it \u2014 from doing it. Ticked = allowed."}</div>
                 </>
               );
             })()}

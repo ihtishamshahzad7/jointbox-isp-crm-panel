@@ -46,7 +46,22 @@ interface Company {
   staff: number;
   subscribers: number;
   nas: number;
+  plan?: Plan | null;
 }
+
+/** What the platform allows this company. null in a field = no limit. */
+interface Plan {
+  maxSubscribers: number | null;
+  maxNas: number | null;
+  maxAccounts: number | null;
+  expiresAt: string | null;
+  note: string | null;
+}
+
+const accountsOf = (c: Company) => c.franchises + c.dealers + c.retailers + c.staff;
+const planEnded = (p?: Plan | null) => !!p?.expiresAt && new Date(p.expiresAt).getTime() < Date.now();
+const ofCap = (used: number, cap?: number | null) => (cap == null ? used.toLocaleString() : `${used.toLocaleString()} / ${cap.toLocaleString()}`);
+const nearCap = (used: number, cap?: number | null) => cap != null && cap > 0 && used / cap >= 0.9;
 
 function token(): string {
   try {
@@ -76,6 +91,7 @@ export default function Companies() {
   const [busy, setBusy] = React.useState<number | null>(null);
   const [adding, setAdding] = React.useState(false);
   const [editing, setEditing] = React.useState<Company | null>(null);
+  const [limits, setLimits] = React.useState<Company | null>(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -155,6 +171,15 @@ export default function Companies() {
       {error && <div style={ERR}>{error}</div>}
 
       {adding && <NewCompany onDone={() => { setAdding(false); void load(); }} onError={setError} />}
+      {limits && (
+        <PlanEditor
+          key={`plan-${limits.id}`}
+          company={limits}
+          onDone={() => { setLimits(null); void load(); }}
+          onCancel={() => setLimits(null)}
+          onError={setError}
+        />
+      )}
       {editing && (
         <EditCompany
           key={editing.id}
@@ -179,7 +204,7 @@ export default function Companies() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr>
-                {["Company", "Subscribers", "Routers", "Franchises", "Dealers", "Retailers", "Since", ""].map((h, i) => (
+                {["Company", "Subscribers", "Routers", "Sub-accounts", "Franchises", "Dealers", "Since", ""].map((h, i) => (
                   <th key={h} style={{ ...TH, textAlign: i === 0 || i === 7 ? "left" : "right" }}>{h}</th>
                 ))}
               </tr>
@@ -191,17 +216,19 @@ export default function Companies() {
                     <div style={{ fontWeight: 700 }}>
                       {c.name}
                       {!c.isActive && <span style={PILL}>suspended</span>}
+                      {c.isActive && planEnded(c.plan) && <span style={PILL}>plan ended</span>}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>
                       {c.email}
                       {c.city ? ` · ${c.city}` : ""}
+                      {c.plan?.expiresAt && !planEnded(c.plan) ? ` · plan ends ${new Date(c.plan.expiresAt).toLocaleDateString()}` : ""}
                     </div>
                   </td>
-                  <td style={NUM}>{c.subscribers.toLocaleString()}</td>
-                  <td style={NUM}>{c.nas.toLocaleString()}</td>
+                  <td style={{ ...NUM, color: nearCap(c.subscribers, c.plan?.maxSubscribers) ? "#b45309" : undefined }}>{ofCap(c.subscribers, c.plan?.maxSubscribers)}</td>
+                  <td style={{ ...NUM, color: nearCap(c.nas, c.plan?.maxNas) ? "#b45309" : undefined }}>{ofCap(c.nas, c.plan?.maxNas)}</td>
+                  <td style={{ ...NUM, color: nearCap(accountsOf(c), c.plan?.maxAccounts) ? "#b45309" : undefined }}>{ofCap(accountsOf(c), c.plan?.maxAccounts)}</td>
                   <td style={NUM}>{c.franchises}</td>
                   <td style={NUM}>{c.dealers}</td>
-                  <td style={NUM}>{c.retailers}</td>
                   <td style={NUM}>{new Date(c.createdAt).toLocaleDateString()}</td>
                   <td style={{ ...TD, whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", gap: 6 }}>
@@ -209,6 +236,9 @@ export default function Companies() {
                         Sign in
                       </button>
                       <button onClick={() => setEditing(c)} disabled={busy === c.id} style={GHOST}>Edit</button>
+                      <button onClick={() => { setEditing(null); setLimits(c); }} disabled={busy === c.id} style={GHOST} title="Caps on subscribers, routers and sub-accounts, and an end date">
+                        Limits
+                      </button>
                       <button onClick={() => toggle(c)} disabled={busy === c.id} style={GHOST}>
                         {busy === c.id ? "…" : c.isActive ? "Suspend" : "Reactivate"}
                       </button>
@@ -246,7 +276,7 @@ function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: stri
 
   return (
     <form onSubmit={submit} style={CARD}>
-      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4 }}>New ISP company</div>
+      <div style={{ fontWeight: 800, color: "var(--text)", fontSize: 14, marginBottom: 4 }}>New ISP company</div>
       <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 12px", lineHeight: 1.6 }}>
         This creates the company's owner account. Everything they build —
         franchises, dealers, retailers, subscribers, routers — hangs beneath it
@@ -296,7 +326,7 @@ function EditCompany({ company, onDone, onCancel, onError }: {
 
   return (
     <form onSubmit={submit} style={CARD}>
-      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 10 }}>Edit {company.name}</div>
+      <div style={{ fontWeight: 800, color: "var(--text)", fontSize: 14, marginBottom: 10 }}>Edit {company.name}</div>
       <div style={GRID}>
         <F label="Company name" v={f.name} on={set("name")} />
         <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" />
@@ -307,6 +337,74 @@ function EditCompany({ company, onDone, onCancel, onError }: {
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
           {busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" onClick={onCancel} style={GHOST}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Plan & limits for one company. Empty = no limit. Past the end date the
+ * company and everyone under it are signed out until it is moved (their
+ * customers stay online — FreeRADIUS does not ask the panel).
+ */
+function PlanEditor({ company, onDone, onCancel, onError }: {
+  company: Company; onDone: () => void; onCancel: () => void; onError: (m: string) => void;
+}) {
+  const p = company.plan;
+  const str = (v: number | null | undefined) => (v == null ? "" : String(v));
+  const [f, setF] = React.useState({
+    maxSubscribers: str(p?.maxSubscribers), maxNas: str(p?.maxNas), maxAccounts: str(p?.maxAccounts),
+    expiresAt: p?.expiresAt ? new Date(p.expiresAt).toISOString().slice(0, 10) : "", note: p?.note || "",
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+  const bad = (v: string) => v.trim() !== "" && !/^\d+$/.test(v.trim());
+  const ready = !bad(f.maxSubscribers) && !bad(f.maxNas) && !bad(f.maxAccounts);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ready || busy) return;
+    if (f.expiresAt && new Date(`${f.expiresAt}T23:59:59`).getTime() < Date.now() &&
+        !window.confirm(`That date has passed: ${company.name} and everyone under it will be signed out now. Continue?`)) return;
+    setBusy(true);
+    try {
+      const num = (v: string) => (v.trim() === "" ? null : Number(v.trim()));
+      await api(`/users/companies/${company.id}/plan`, {
+        method: "PUT",
+        body: JSON.stringify({
+          maxSubscribers: num(f.maxSubscribers), maxNas: num(f.maxNas), maxAccounts: num(f.maxAccounts),
+          // End of the chosen day, local time.
+          expiresAt: f.expiresAt ? new Date(`${f.expiresAt}T23:59:59`).toISOString() : null,
+          note: f.note.trim() || null,
+        }),
+      });
+      onDone();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} style={CARD}>
+      <div style={{ fontWeight: 800, color: "var(--text)", fontSize: 14, marginBottom: 4 }}>Limits for {company.name}</div>
+      <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 10, lineHeight: 1.55, maxWidth: 640 }}>
+        Leave a box empty for no limit. At a limit the company cannot add more until you raise it. After the end
+        date the company and everyone under it are signed out; their customers stay online.
+      </div>
+      <div style={GRID}>
+        <F label={`Subscribers (now ${company.subscribers.toLocaleString()})`} v={f.maxSubscribers} on={set("maxSubscribers")} hint="Maximum customers" />
+        <F label={`Routers (now ${company.nas})`} v={f.maxNas} on={set("maxNas")} hint="Maximum NAS / routers" />
+        <F label={`Sub-accounts (now ${accountsOf(company)})`} v={f.maxAccounts} on={set("maxAccounts")} hint="Franchises, dealers, retailers and staff" />
+        <F label="Plan ends" v={f.expiresAt} on={set("expiresAt")} type="date" hint="Empty = never" />
+        <F label="Note (only you see it)" v={f.note} on={set("note")} hint="e.g. Gold plan, paid to Dec" />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
+          {busy ? "Saving…" : "Save limits"}
         </button>
         <button type="button" onClick={onCancel} style={GHOST}>Cancel</button>
       </div>

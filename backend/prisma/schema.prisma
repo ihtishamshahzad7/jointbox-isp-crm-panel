@@ -2584,6 +2584,23 @@ model CompanyPeriodLock {
 
 /// A company's own refund / expense approval thresholds. The FinanceSettings
 /// singleton stays as the default for a company that has not set its own.
+/// What the platform account allows one ISP company (keyed by its top
+/// account). NULL in a column = no limit. Set from Companies → Plan & limits.
+/// Past expiresAt the company and everyone under it stop, like a suspension.
+model CompanyPlan {
+  companyId      Int       @id
+  maxSubscribers Int?
+  maxNas         Int?
+  /// Franchises, dealers, retailers, staff and auditors under the company.
+  maxAccounts    Int?
+  expiresAt      DateTime?
+  note           String?   @db.VarChar(300)
+  updatedById    Int?
+  updatedAt      DateTime  @updatedAt
+
+  @@map("company_plan")
+}
+
 model CompanyFinanceSettings {
   companyId                Int      @id
   refundApprovalThreshold  Float    @default(0)

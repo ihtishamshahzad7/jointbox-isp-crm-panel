@@ -29,14 +29,20 @@ export class AuthController {
   // was never checked here.
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   async impersonate(@Param('userId') userId: string, @Req() req: any) {
-    return this.authService.impersonate(req.user, +userId);
+    return this.authService.impersonate(req.user, +userId, {
+      ip: String(req.ip || req.socket?.remoteAddress || '') || null,
+      userAgent: String(req.headers?.['user-agent'] || '').slice(0, 300) || null,
+    });
   }
 
   @Post('impersonate-stop')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   async stopImpersonation(@Req() req: any) {
-    return this.authService.stopImpersonation(req.user);
+    return this.authService.stopImpersonation(req.user, {
+      ip: String(req.ip || req.socket?.remoteAddress || '') || null,
+      userAgent: String(req.headers?.['user-agent'] || '').slice(0, 300) || null,
+    });
   }
 
   @Post('login')
@@ -133,6 +139,9 @@ export class AuthController {
     // The demo login is shared by every visitor; one of them changing its
     // password locked everyone else out.
     if (req.user?.isDemo) throw new ForbiddenException('The demo account password cannot be changed.');
+    // A password belongs to the person, not to whoever is switched into the
+    // account (the platform supporting a company, a parent acting as a dealer).
+    if (req.user?.imp) throw new ForbiddenException('You are signed in as another account. Its password can only be changed by its owner.');
     const old = req.headers.authorization?.replace('Bearer ', '');
     const result = await this.authService.changeOwnPassword(
       Number(req.user.sub),

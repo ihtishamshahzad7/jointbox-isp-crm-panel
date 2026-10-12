@@ -44,6 +44,50 @@ export class PermissionsGuard implements CanActivate {
     private cache: CacheService,
   ) {}
 
+  /** This account and every account above it, up to (not including) the platform. */
+  private async chainIds(userId: number): Promise<number[]> {
+    if (typeof (this.prisma as any).$queryRaw !== 'function') return [userId];
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ id: number }>>`
+        WITH RECURSIVE up AS (
+          SELECT id, "parentId", role, 0 AS depth FROM "User" WHERE id = ${userId}
+          UNION ALL
+          SELECT p.id, p."parentId", p.role, up.depth + 1 FROM "User" p JOIN up ON p.id = up."parentId"
+          WHERE up.depth < 20
+        )
+        SELECT id FROM up WHERE role <> 'SUPER_ADMIN'`;
+      const ids = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+      return ids.length ? ids : [userId];
+    } catch {
+      return [userId];
+    }
+  }
+
+  /**
+   * A SWITCHED-IN SESSION ("act as", or the platform signed in as a company)
+   * may work inside the account, but must not leave a way back in behind it:
+   * no API keys, no passwords set, no accounts wiped — and the platform may
+   * not create new logins inside a company. Switch back to your own account
+   * (or ask the account's owner) to do these.
+   */
+  static refuseLastingAccessWhileActingAs(req: any): void {
+    const path = String(req.originalUrl || req.url || '').split('?')[0].replace(/\/+$/, '');
+    const m = String(req.method || '').toUpperCase();
+    const body = req.body || {};
+    const byPlatform = req.user?.imp?.byRole === 'SUPER_ADMIN';
+    let what: string | null = null;
+    if (m === 'POST' && /\/integrations\/api-keys$/.test(path)) what = 'create an API key';
+    else if (m === 'POST' && /\/users\/\d+\/purge$/.test(path)) what = 'wipe an account';
+    else if ((m === 'PUT' || m === 'PATCH') && /\/users\/\d+$/.test(path) && typeof body.password === 'string' && body.password !== '') what = 'set a password';
+    else if (byPlatform && m === 'POST' && /\/users$/.test(path)) what = 'create a login inside this company';
+    if (what) {
+      throw new ForbiddenException(
+        `You are signed in as another account, so you cannot ${what} from here. ` +
+        (byPlatform ? 'Ask the company to do it from its own login.' : 'Switch back to your own account to do it.'),
+      );
+    }
+  }
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest();
     /**
@@ -65,6 +109,7 @@ export class PermissionsGuard implements CanActivate {
     if (!role) {
       throw new ForbiddenException('This account is not an operator account.');
     }
+    if (req.user.imp) PermissionsGuard.refuseLastingAccessWhileActingAs(req);
     if (role === 'SUPER_ADMIN') return true;
 
     const requestPath = (req.url || '').split('?')[0] || String(req.route?.path || '');
@@ -101,11 +146,20 @@ export class PermissionsGuard implements CanActivate {
     if (userId) {
       // Short TTL so a permission change a parent just saved takes effect
       // quickly; setChildPermissions also busts this key on save.
+      /**
+       * INHERITED. A block set on an account applies to everyone under it —
+       * its dealers, retailers and staff. It used to bind the one account it
+       * was set on, so a franchise blocked from exporting customers could hire
+       * a staff member (who has no rows of its own) and export through it. A
+       * block the platform sets on a company switches the feature off for the
+       * whole company.
+       */
       const denied = await this.cache.wrap<string[]>(`uperm:${userId}`, 15, async () => {
+        const chain = await this.chainIds(Number(userId));
         const rows = await this.prisma.userPermission.findMany({
-          where: { userId, allowed: false }, select: { permission: true },
+          where: { userId: { in: chain }, allowed: false }, select: { permission: true },
         });
-        return rows.map((r) => r.permission);
+        return [...new Set(rows.map((r) => r.permission))];
       });
       const denySet = new Set(denied);
       // Check three things, so a denial bites no matter how it was keyed:

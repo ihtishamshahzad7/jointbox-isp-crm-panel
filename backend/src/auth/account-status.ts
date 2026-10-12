@@ -24,7 +24,20 @@ import { PrismaService } from '../prisma/prisma.service';
 const TTL_MS = 30_000;
 
 /** `role` is the account's CURRENT role — a role change applies within the cache TTL, not at token expiry. */
-type Status = { active: boolean; mustChangePassword: boolean; role?: string; isDemo?: boolean; tokenVersion?: number; at: number };
+type Status = {
+  active: boolean;
+  mustChangePassword: boolean;
+  role?: string;
+  isDemo?: boolean;
+  tokenVersion?: number;
+  /** The company's plan with the platform has ended (company_plan.expiresAt). */
+  planEnded?: boolean;
+  at: number;
+};
+
+/** Shown when a company's time on the platform has run out. */
+export const PLAN_ENDED_MESSAGE =
+  "Your company's access to this panel has ended. Contact the platform owner to renew it.";
 const cache = new Map<number, Status>();
 
 export async function accountStatus(
@@ -70,8 +83,37 @@ export async function accountStatus(
     chainActive = rows[0]?.ok !== false;
   }
 
+  /**
+   * THE COMPANY'S PLAN END DATE, set by the platform account (Companies →
+   * Plan & limits). Past it, the company and everyone under it stop, just
+   * like a suspension, but with a message that says why. A separate query
+   * on purpose: on a server where the table does not exist yet the answer
+   * is simply "not ended" — never a lock-out.
+   */
+  let planEnded = false;
+  if (chainActive && u.role !== 'SUPER_ADMIN') {
+    try {
+      const rows = await prisma.$queryRaw<Array<{ ended: boolean | null }>>`
+        WITH RECURSIVE up AS (
+          SELECT id, "parentId", 0 AS depth FROM "User" WHERE id = ${userId}
+          UNION ALL
+          SELECT p.id, p."parentId", up.depth + 1 FROM "User" p JOIN up ON p.id = up."parentId"
+          WHERE up.depth < 20 AND p.role <> 'SUPER_ADMIN'
+        )
+        SELECT EXISTS (
+          SELECT 1 FROM company_plan cp
+          WHERE cp."companyId" IN (SELECT id FROM up)
+            AND cp."expiresAt" IS NOT NULL AND cp."expiresAt" < NOW()
+        ) AS ended`;
+      planEnded = rows[0]?.ended === true;
+    } catch {
+      planEnded = false;
+    }
+  }
+
   const s: Status = {
     active: chainActive,
+    planEnded,
     mustChangePassword: u.mustChangePassword === true,
     role: (u as any).role ? String((u as any).role) : undefined,
     isDemo: (u as any).isDemo === true,

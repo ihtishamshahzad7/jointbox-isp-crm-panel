@@ -10,6 +10,7 @@ import { invalidateAllAccountStatus, invalidateAccountStatus } from '../auth/acc
 import * as bcrypt from 'bcrypt';
 import { validatePassword } from '../security/security.service';
 import { ScopeService, Actor } from '../common/scope.service';
+import { assertCompanyCanAdd, planFor, savePlan, usageFor } from '../common/company-plan';
 
 /**
  * Ceiling on the un-paginated user list. Large enough that no realistic
@@ -775,6 +776,12 @@ export class UsersService {
       GROUP BY t.root`;
 
     const byRoot = new Map(rows.map((r) => [Number(r.root), r]));
+    // Each company's caps and end date (Plan & limits). Empty on a server
+    // where the table is not migrated yet.
+    const planRows: any[] = await Promise.resolve()
+      .then(() => (this.prisma as any).companyPlan?.findMany?.({ where: { companyId: { in: companies.map((c) => c.id) } } }) ?? [])
+      .catch(() => []);
+    const planById = new Map<number, any>((planRows || []).map((p: any) => [Number(p.companyId), p]));
     return companies.map((c) => {
       const r = byRoot.get(c.id);
       const n = (v: bigint | undefined) => Number(v ?? 0);
@@ -786,8 +793,38 @@ export class UsersService {
         staff:       n(r?.staff),
         subscribers: n(r?.subscribers),
         nas:         n(r?.nas),
+        plan:        planById.get(c.id) ?? null,
       };
     });
+  }
+
+  /** Platform account: set a company's caps and end date. */
+  async setCompanyPlan(actor: Actor, companyId: number, body: any) {
+    if (actor?.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Company plans are set by the platform account.');
+    }
+    const actorId = this.scope.actorId(actor);
+    const plan = await savePlan(this.prisma, actorId, companyId, body);
+    // An end date (or a lifted one) applies on the next request, not in 30s.
+    invalidateAllAccountStatus();
+    const usage = await usageFor(this.prisma, companyId);
+    const fmt = (v: number | null) => (v == null ? 'no limit' : String(v));
+    await this.prisma.activityLog.create({
+      data: {
+        userId: actorId, action: 'COMPANY_PLAN', entity: 'User', entityId: companyId,
+        details: `Plan set: subscribers ${fmt(plan.maxSubscribers)}, routers ${fmt(plan.maxNas)}, ` +
+          `sub-accounts ${fmt(plan.maxAccounts)}, ends ${plan.expiresAt ? new Date(plan.expiresAt).toISOString().slice(0, 10) : 'never'}`,
+      },
+    }).catch(() => null);
+    return { plan, usage };
+  }
+
+  /** The caller's own company plan — for the company's top level only. */
+  async myCompanyPlan(actor: Actor) {
+    const company = await this.scope.companyRootId(this.scope.actorId(actor));
+    if (company == null || (await this.scope.rootId(actor)) !== company) return { plan: null, usage: null };
+    const plan = await planFor(this.prisma, company);
+    return { plan, usage: await usageFor(this.prisma, company) };
   }
 
   /**
@@ -946,6 +983,12 @@ export class UsersService {
       this.assertRoleAllowedUnder(data.role, parent.role);
     }
 
+    // The company's sub-account cap (Plan & limits). A new company created by
+    // the platform account is not counted against anyone.
+    if (actor && actor.role !== 'SUPER_ADMIN') {
+      await assertCompanyCanAdd(this.prisma, this.scope, actor, 'accounts');
+    }
+
     // Phase 4A: password policy
     const policyError = validatePassword(data.password);
     if (policyError) throw new BadRequestException(policyError);
@@ -1025,6 +1068,11 @@ export class UsersService {
     if (actor) await this.scope.assertUserWritable(actor, id);
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
+    // A login email is how someone signs in: not changed from a switched-in
+    // session (the platform supporting a company, a parent acting as a dealer).
+    if ((actor as any)?.imp && typeof data?.email === 'string' && data.email.trim().toLowerCase() !== String(user.email || '').toLowerCase()) {
+      throw new ForbiddenException('You are signed in as another account, so you cannot change a login email from here. Switch back to your own account to do it.');
+    }
 
     /**
      * ONLY THE FIELDS THIS FORM EDITS. The body was spread straight into the

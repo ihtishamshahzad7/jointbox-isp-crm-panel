@@ -4,7 +4,17 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { invalidateAccountStatus, PUBLISHED_DEFAULT_PASSWORD } from './account-status';
+import { accountStatus, invalidateAccountStatus, PLAN_ENDED_MESSAGE, PUBLISHED_DEFAULT_PASSWORD } from './account-status';
+
+/**
+ * How long a switched-in session ("act as", or the platform signed in as a
+ * company) may last in total, counted from when it was opened. Refreshing the
+ * token no longer extends it past this.
+ */
+const ACT_AS_MAX_MS = 8 * 3600_000;
+const PLATFORM_SUPPORT_MAX_MS = 4 * 3600_000;
+const actAsLimitMs = (byRole?: string) => (byRole === 'SUPER_ADMIN' ? PLATFORM_SUPPORT_MAX_MS : ACT_AS_MAX_MS);
+type RequestMeta = { ip?: string | null; userAgent?: string | null };
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
@@ -152,6 +162,21 @@ export class AuthService {
         failReason: 'Account suspended',
       });
       throw new UnauthorizedException('This account is suspended. Contact your provider.');
+    }
+    // The account above it suspended, or the company's plan with the platform
+    // ended: refuse the sign-in itself rather than every request after it.
+    const chain = await accountStatus(this.prisma, user.id).catch(() => null);
+    if (chain && (!chain.active || chain.planEnded)) {
+      const ended = !!chain.planEnded && chain.active;
+      await this.logsService.createLoginLog({
+        userId: user.id,
+        email,
+        ipAddress: ip || 'Unknown',
+        userAgent: userAgent || 'Unknown',
+        status: 'FAILED',
+        failReason: ended ? 'Company plan ended' : 'Account above is suspended',
+      });
+      throw new UnauthorizedException(ended ? PLAN_ENDED_MESSAGE : 'This account is suspended. Contact your provider.');
     }
     console.log('✅ Password valid for:', email);
 
@@ -313,6 +338,7 @@ export class AuthService {
        * target instead of the operator who was really at the keyboard. The
        * operator who started it must still be active, too.
        */
+      let actAsSecondsLeft = 0;
       if (decoded?.imp?.by) {
         const by = await this.prisma.user.findUnique({
           where: { id: Number(decoded.imp.by) },
@@ -321,11 +347,19 @@ export class AuthService {
         if (!by || by.isActive === false) {
           throw new UnauthorizedException('The operator who started this session is no longer active.');
         }
-        payload.imp = decoded.imp;
+        // A switched-in session ends at its time limit, however often it is
+        // refreshed. Sessions opened before the limit existed start counting now.
+        const startedAt = Number(decoded.imp.at) || Date.now();
+        const left = actAsLimitMs(decoded.imp.byRole) - (Date.now() - startedAt);
+        if (left <= 0) {
+          throw new UnauthorizedException('This switched-in session has ended. Switch in again if you still need it.');
+        }
+        actAsSecondsLeft = Math.max(60, Math.floor(left / 1000));
+        payload.imp = { ...decoded.imp, at: startedAt };
       }
 
       const newToken = this.jwtService.sign(payload, {
-        expiresIn: decoded?.imp?.by ? '1d' : '7d',
+        expiresIn: actAsSecondsLeft ? actAsSecondsLeft : '7d',
       });
 
       return { token: newToken };
@@ -340,7 +374,16 @@ export class AuthService {
   // The issued token carries `imp.by` so the session can switch back and
   // every action is auditable back to the real operator.
   // ─────────────────────────────────────────────────────────────
-  async impersonate(actor: any, targetUserId: number) {
+  /** Audit rows that must never fail the action they describe. */
+  private async logQuietly(args: { data: any[] }): Promise<void> {
+    try {
+      await (this.prisma.activityLog as any).createMany(args);
+    } catch {
+      /* logging is best-effort */
+    }
+  }
+
+  async impersonate(actor: any, targetUserId: number, meta: RequestMeta = {}) {
     /**
      * Only into accounts strictly BELOW the caller. Staff and auditors do not
      * switch accounts at all: a staff member's scope is its owner's, so the
@@ -368,21 +411,43 @@ export class AuthService {
       throw new ForbiddenException('Sign in as the company first, then switch to its staff or resellers from inside it.');
     }
 
-    // The real operator is the ORIGINAL root (preserved across nested switches).
+    // The real operator is the ORIGINAL root (preserved across nested switches),
+    // and so is the moment the switched-in session began (its time limit).
     const rootBy = actor?.imp?.by ?? actor?.sub;
     const rootName = actor?.imp?.byName ?? actor?.name;
     const rootRole = actor?.imp?.byRole ?? actor?.role;
+    const startedAt = Number(actor?.imp?.at) || Date.now();
+    const leftMs = actAsLimitMs(rootRole) - (Date.now() - startedAt);
+    if (leftMs <= 0) throw new UnauthorizedException('This switched-in session has ended. Switch back and start again.');
 
-    // Audit trail
-    await this.prisma.activityLog.create({
-      data: {
-        userId: rootBy,
-        action: 'IMPERSONATE',
-        entity: 'User',
-        entityId: target.id,
-        details: `${rootName} (${rootRole}) switched into ${target.name} (${target.role})`,
-      },
-    }).catch(() => null);
+    /**
+     * Two audit rows: one in the operator's own log, and one in the log of the
+     * account being entered — so a company can see when the platform (or a
+     * parent) signed in to it, from where, and for how long.
+     */
+    const who = rootRole === 'SUPER_ADMIN' ? `Platform support (${rootName})` : `${rootName} (${rootRole})`;
+    await this.logQuietly({
+      data: [
+        {
+          userId: rootBy,
+          action: 'IMPERSONATE',
+          entity: 'User',
+          entityId: target.id,
+          details: `${rootName} (${rootRole}) switched into ${target.name} (${target.role})`,
+          ipAddress: meta.ip ?? null,
+          userAgent: meta.userAgent ?? null,
+        },
+        {
+          userId: target.id,
+          action: rootRole === 'SUPER_ADMIN' ? 'PLATFORM_SUPPORT_SIGNIN' : 'SIGNED_IN_AS',
+          entity: 'User',
+          entityId: target.id,
+          details: `${who} signed in to this account`,
+          ipAddress: meta.ip ?? null,
+          userAgent: meta.userAgent ?? null,
+        },
+      ],
+    });
 
     const token = this.jwtService.sign(
       {
@@ -390,12 +455,12 @@ export class AuthService {
         email: target.email,
         role: target.role,
         name: target.name,
-        imp: { by: rootBy, byName: rootName, byRole: rootRole },
+        imp: { by: rootBy, byName: rootName, byRole: rootRole, at: startedAt },
         isDemo: (target as any).isDemo === true,
         tv: Number((target as any).tokenVersion ?? 0),
         jti: randomUUID(),
       },
-      { expiresIn: '1d' },
+      { expiresIn: Math.max(60, Math.floor(leftMs / 1000)) },
     );
 
     const user = AuthService.safeUser(target);
@@ -403,12 +468,23 @@ export class AuthService {
   }
 
   /** Return to the original operator's account. */
-  async stopImpersonation(actor: any) {
+  async stopImpersonation(actor: any, meta: RequestMeta = {}) {
     const backTo = actor?.imp?.by;
     if (!backTo) throw new UnauthorizedException('Not currently switched into another account');
 
     const user = await this.prisma.user.findUnique({ where: { id: backTo } });
     if (!user) throw new UnauthorizedException('Original account not found');
+
+    // Close the session in both logs, with how long it lasted.
+    const mins = actor?.imp?.at ? Math.max(1, Math.round((Date.now() - Number(actor.imp.at)) / 60000)) : null;
+    const who = actor?.imp?.byRole === 'SUPER_ADMIN' ? `Platform support (${actor?.imp?.byName})` : `${actor?.imp?.byName} (${actor?.imp?.byRole})`;
+    const took = mins ? ` after ${mins} min` : '';
+    await this.logQuietly({
+      data: [
+        { userId: Number(backTo), action: 'IMPERSONATE_END', entity: 'User', entityId: Number(actor?.sub), details: `Switched back from account #${actor?.sub}${took}`, ipAddress: meta.ip ?? null, userAgent: meta.userAgent ?? null },
+        { userId: Number(actor?.sub), action: 'SIGNED_OUT_AS', entity: 'User', entityId: Number(actor?.sub), details: `${who} left this account${took}`, ipAddress: meta.ip ?? null, userAgent: meta.userAgent ?? null },
+      ],
+    });
 
     const token = this.jwtService.sign(
       {

@@ -40,26 +40,50 @@ export class AuditInterceptor implements NestInterceptor {
 
   private readonly skipPrefixes = ['auth', 'logs', 'insights', 'gateway/callback', 'gateway/sandbox', 'portal/login'];
 
+  /**
+   * Reads that take data OUT of the panel in bulk — a customer list as CSV, a
+   * report download. They change nothing, so they used to leave no trace at
+   * all; "who exported our whole customer list" is exactly the question an
+   * owner asks after a dealer leaves.
+   */
+  private static readonly EXPORT_READ = /(^|\/)(export|exports|download|csv)(\/|$)|\.(csv|xlsx)$/i;
+
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const req = context.switchToHttp().getRequest();
     const method: string = req.method;
-    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next.handle();
+    if (method === 'HEAD' || method === 'OPTIONS') return next.handle();
 
-    const path: string = (req.route?.path || req.url || '').split('?')[0].replace(/^\/+/, '');
-    if (this.skipPrefixes.some((p) => path.startsWith(p))) return next.handle();
+    /**
+     * The REAL path, not the route pattern. `req.route.path` is the pattern
+     * ("/subscribers/:id"), so the record id was never found and the granular
+     * action names (which match real paths) never matched either: a deleted
+     * customer was logged as "DELETE subscribers" with no id at all.
+     */
+    const realPath: string = String(req.originalUrl || req.url || '').split('?')[0].replace(/^\/+/, '');
+    const path: string = realPath || String(req.route?.path || '').replace(/^\/+/, '');
+    const isExportRead = method === 'GET' && AuditInterceptor.EXPORT_READ.test(path);
+    if (method === 'GET' && !isExportRead) return next.handle();
+    if (path.startsWith('auth')) return next.handle();
+    if (!isExportRead && this.skipPrefixes.some((p) => path.startsWith(p))) return next.handle();
 
     const segments = path.split('/').filter(Boolean);
     const entity = segments[0] || 'unknown';
-    // id = first numeric path segment, if any
-    const idSeg = segments.find((s) => /^\d+$/.test(s));
+    // The record: a route parameter named like an id (":id", ":subscriberId"…),
+    // else the first numeric path segment.
+    const params: Record<string, string> = req.params || {};
+    const idParam = Object.entries(params).find(([k, v]) => /id$/i.test(k) && /^\d+$/.test(String(v)));
+    const idSeg = idParam ? String(idParam[1]) : segments.find((s) => /^\d+$/.test(s));
     const entityId = idSeg ? Number(idSeg) : undefined;
     // Name the SPECIFIC critical action when we know it (subscribers.disconnect,
     // users.topup, users.transferSubscribers…), so the audit trail reads as the
     // exact click a permission controls — not just a generic CREATE/UPDATE.
-    const granular = permissionForRoute(method, '/' + path);
-    const action = granular
-      ? granular.toUpperCase()
-      : ({ POST: 'CREATE', PUT: 'UPDATE', PATCH: 'UPDATE', DELETE: 'DELETE' }[method] || method);
+    const granular = isExportRead ? null : permissionForRoute(method, '/' + path);
+    // POST export routes (export/run, export/panel) are downloads too.
+    const action = isExportRead || (AuditInterceptor.EXPORT_READ.test(path) && !granular)
+      ? 'EXPORT'
+      : granular
+        ? granular.toUpperCase()
+        : ({ POST: 'CREATE', PUT: 'UPDATE', PATCH: 'UPDATE', DELETE: 'DELETE' }[method] || method);
     const userId = req.user?.sub ?? req.user?.id;
     // Record impersonation: when someone is "acting as" a child, the audit must
     // show who really did it, not just the account it was done under.
@@ -73,7 +97,11 @@ export class AuditInterceptor implements NestInterceptor {
     // short, safe detail from body (no passwords/secrets)
     let detail: string | undefined;
     try {
-      if (req.body && typeof req.body === 'object') {
+      if (isExportRead) {
+        // What was exported: the filters (never values that look like secrets).
+        const q = redactForAudit({ ...(req.query || {}) });
+        if (q && Object.keys(q).length) detail = JSON.stringify(q).slice(0, 300);
+      } else if (req.body && typeof req.body === 'object') {
         detail = JSON.stringify(redactForAudit(req.body)).slice(0, 300);
       }
     } catch {

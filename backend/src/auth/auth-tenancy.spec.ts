@@ -86,11 +86,21 @@ describe('auth: refreshing an "act as" session keeps it one', () => {
     return { s: new AuthService(prisma, jwtService, {} as any, {} as any, {} as any), signed };
   }
 
-  it('keeps the imp claim and the 1-day lifetime', async () => {
+  it('keeps the imp claim, counting down from when the session was opened', async () => {
     const { s, signed } = svc();
-    await s.refreshToken(JSON.stringify({ sub: 20, imp: { by: 1, byName: 'Owner', byRole: 'SUPER_ADMIN' } }));
-    expect(signed[0].p.imp).toEqual({ by: 1, byName: 'Owner', byRole: 'SUPER_ADMIN' });
-    expect(signed[0].o.expiresIn).toBe('1d');
+    const at = Date.now() - 3600_000; // opened an hour ago
+    await s.refreshToken(JSON.stringify({ sub: 20, imp: { by: 1, byName: 'Owner', byRole: 'SUPER_ADMIN', at } }));
+    expect(signed[0].p.imp).toEqual({ by: 1, byName: 'Owner', byRole: 'SUPER_ADMIN', at });
+    // platform support lasts 4 hours in total: about 3 left, never a fresh day
+    expect(signed[0].o.expiresIn).toBeGreaterThan(3 * 3600 - 60);
+    expect(signed[0].o.expiresIn).toBeLessThanOrEqual(3 * 3600);
+  });
+
+  it('ends a switched-in session at its time limit, however often it is refreshed', async () => {
+    const { s } = svc();
+    const at = Date.now() - 5 * 3600_000;
+    await expect(s.refreshToken(JSON.stringify({ sub: 20, imp: { by: 1, byRole: 'SUPER_ADMIN', at } })))
+      .rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('an ordinary session refreshes to 7 days with no imp', async () => {

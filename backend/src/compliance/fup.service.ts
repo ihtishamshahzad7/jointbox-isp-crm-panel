@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -152,6 +152,15 @@ export class FupService {
    * Grant extra GB for the current cycle (a quota top-up). Lifts enforcement
    * immediately if the customer is now back under their (raised) cap.
    */
+  /** The company account itself, or its own staff — not a franchise, dealer or retailer. */
+  private async isCompanyTopLevel(actor: Actor): Promise<boolean> {
+    const role = (actor as any)?.role;
+    if (this.scope.isAdmin(role) || role === 'ADMIN') return true;
+    if (role !== 'SALES') return false;
+    const root = await this.scope.rootId(actor);
+    return (await this.scope.companyRootId(root)) === root;
+  }
+
   async extendQuota(subscriberId: number, addGb: number, actor?: Actor) {
     if (actor) await this.scope.assertSubscriber(actor, subscriberId);
     const gb = Number(addGb);
@@ -163,6 +172,25 @@ export class FupService {
     if (!sub) throw new NotFoundException('Subscriber not found.');
 
     const current = (sub.serviceSettings as any)?.bonusQuotaGb ?? 0;
+
+    /**
+     * FREE DATA HAS A CEILING BELOW THE COMPANY. Extra GB is given away at no
+     * charge, so a franchise, dealer or retailer may add at most one package
+     * quota's worth in total (10 GB when the package has no quota). The
+     * company's own top level is not capped. Renewing resets the bonus.
+     */
+    if (actor && !(await this.isCompanyTopLevel(actor))) {
+      const before = await this.usageFor(subscriberId).catch(() => null);
+      const baseQuota = before?.quotaGb ? Math.max(0, Number(before.quotaGb) - Number(current)) : 0;
+      const ceiling = baseQuota > 0 ? baseQuota : 10;
+      if (current + gb > ceiling) {
+        const room = Math.max(0, Math.round((ceiling - current) * 100) / 100);
+        throw new ForbiddenException(
+          `You can add at most ${ceiling} GB of free data to this customer (${room} GB left). Ask your company for more.`,
+        );
+      }
+    }
+
     await this.prisma.serviceSettings.upsert({
       where: { subscriberId },
       update: { bonusQuotaGb: current + gb },

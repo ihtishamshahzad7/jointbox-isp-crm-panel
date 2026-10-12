@@ -26,6 +26,8 @@ export default function SettingsPage() {
   const [pwSaving, setPwSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [gateways, setGateways] = useState<{ gateway: string; enabled: boolean; label: string }[]>([]);
+  // The company's own plan with the platform (caps and end date), when set.
+  const [myPlan, setMyPlan] = useState<{ plan: any; usage: any } | null>(null);
   const [backupStatus, setBackupStatus] = useState<any>(null);
   const [backupRunning, setBackupRunning] = useState(false);
 
@@ -76,6 +78,10 @@ export default function SettingsPage() {
           if (Array.isArray(data)) setGateways(data);
           else if (data?.data) setGateways(data.data);
         })
+        .catch(() => {});
+      fetch(`${API}/users/me/plan`, { headers })
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => { if (data?.plan) setMyPlan(data); })
         .catch(() => {});
     }
 
@@ -185,6 +191,22 @@ export default function SettingsPage() {
             value: g.enabled ? "🟢 Configured" : "🔴 Not Configured",
           }))
         : [{ label: "No gateways loaded", value: "—" }],
+    }]),
+    // Only when the platform has set limits for this company.
+    ...(isPlatformOwner || !myPlan?.plan ? [] : [{
+      title: "Your Plan",
+      icon: "📦",
+      fields: [
+        ["Subscribers", myPlan.usage?.subscribers, myPlan.plan.maxSubscribers],
+        ["Routers", myPlan.usage?.nas, myPlan.plan.maxNas],
+        ["Sub-accounts", myPlan.usage?.accounts, myPlan.plan.maxAccounts],
+      ].map(([label, used, cap]: any[]) => ({
+        label,
+        value: cap == null ? `${Number(used || 0).toLocaleString()} (no limit)` : `${Number(used || 0).toLocaleString()} of ${Number(cap).toLocaleString()}${Number(used || 0) >= Number(cap) ? " — limit reached" : ""}`,
+      })).concat([{
+        label: "Plan ends",
+        value: myPlan.plan.expiresAt ? new Date(myPlan.plan.expiresAt).toLocaleDateString() : "Never",
+      }]),
     }]),
     ...(!isPlatformOwner ? [] : [{
       title: "Database Backups",

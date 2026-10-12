@@ -1,4 +1,4 @@
-import { Logger, Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Logger, Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentMethod } from '@prisma/client';
 import { AccountingService } from '../accounting/accounting.service';
@@ -395,16 +395,52 @@ export class PaymentsService {
     return payment;
   }
 
+  /**
+   * EDITING OR DELETING RECORDED MONEY IS THE COMPANY'S CALL.
+   *
+   * Anyone who could see a payment could change its amount (to anything —
+   * negative included), backdate it into a closed month, or delete it
+   * outright, all outside the refund approval flow. A franchise, dealer,
+   * retailer or their staff now asks for a refund instead; the company's own
+   * top level (its admin, or that admin's staff) can still correct a typo.
+   */
+  private async assertCompanyMayCorrect(actor: Actor): Promise<void> {
+    const role = (actor as any)?.role;
+    if (this.scope.isAdmin(role) || role === 'ADMIN') return;
+    if (role === 'SALES') {
+      // Staff of the company itself (not of a franchise or dealer).
+      const root = await this.scope.rootId(actor);
+      if ((await this.scope.companyRootId(root)) === root) return;
+    }
+    throw new ForbiddenException(
+      'Only your company administrator can edit or delete a recorded payment. Request a refund instead.',
+    );
+  }
+
   async update(id: number, data: any, actor?: Actor) {
     const existing = await this.prisma.payment.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException(`Payment with ID ${id} not found`);
     if (actor) {
       await this.assertPaymentVisible(actor, existing);
+      await this.assertCompanyMayCorrect(actor);
       // The subscriber is not editable here today, but a body that names one
       // must never be a way to point this money at another company's customer.
       if (data?.subscriberId != null && Number(data.subscriberId) !== existing.subscriberId) {
         await this.scope.assertViaSubscriber(actor, data.subscriberId, 'Subscriber');
       }
+    }
+
+    if (data.amount !== undefined) {
+      const amt = Number(data.amount);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        throw new BadRequestException('The amount must be more than zero. To give money back, record a refund.');
+      }
+      data = { ...data, amount: Math.round(amt * 100) / 100 };
+    }
+    // A correction must not move money into (or out of) a closed month.
+    await this.accounting.assertPeriodOpen(existing.paymentDate, { subscriberId: existing.subscriberId ?? null });
+    if (data.paymentDate !== undefined) {
+      await this.accounting.assertPeriodOpen(data.paymentDate, { subscriberId: existing.subscriberId ?? null });
     }
 
     const updateData: any = {};
@@ -455,7 +491,11 @@ export class PaymentsService {
   async remove(id: number, actor?: Actor) {
     const payment = await this.prisma.payment.findUnique({ where: { id } });
     if (!payment) throw new NotFoundException(`Payment with ID ${id} not found`);
-    if (actor) await this.assertPaymentVisible(actor, payment);
+    if (actor) {
+      await this.assertPaymentVisible(actor, payment);
+      await this.assertCompanyMayCorrect(actor);
+    }
+    await this.accounting.assertPeriodOpen(payment.paymentDate, { subscriberId: payment.subscriberId ?? null });
 
     // Removing a payment must UNDO its effects, not just drop the row:
     //   1) the invoice it paid must go back to PARTIAL/UNPAID,

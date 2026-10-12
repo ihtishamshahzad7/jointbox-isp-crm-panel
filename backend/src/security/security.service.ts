@@ -519,20 +519,32 @@ export class SecurityService {
    * matrix in PermissionsGuard and therefore needs no row.
    */
   async ensureDefaultRolePermissions(): Promise<boolean> {
-    const count = await this.prisma.rolePermission.count();
-    if (count > 0) return false;
-
-    const rows: Array<{ role: string; permission: string }> = [
-      { role: 'ADMIN', permission: '*' },
-      ...Object.entries(PERMISSION_PRESETS).flatMap(([role, permissions]) =>
-        permissions.map((permission) => ({ role, permission })),
-      ),
-    ];
+    /**
+     * FILL GAPS, NEVER OVERWRITE. Seeding only when the WHOLE table was empty
+     * left a server that had configured one role (say, Dealer) with every
+     * other role at zero rows — and with the matrix now fail-closed, that
+     * locked the company admins and auditors out of everything. So each role
+     * that has no rows at all gets its reviewed default; a role someone has
+     * configured is left exactly as it is.
+     *
+     *   ADMIN   → '*'  (the company owner)
+     *   AUDITOR → '*'  (the AUDITOR floor in PermissionsGuard still refuses
+     *                   every write, so this means "read everything in scope")
+     */
+    const configured = new Set(
+      (await this.prisma.rolePermission.findMany({ select: { role: true }, distinct: ['role'] as any }))
+        .map((r: any) => String(r.role)),
+    );
+    const defaults: Record<string, string[]> = { ADMIN: ['*'], AUDITOR: ['*'], ...PERMISSION_PRESETS };
+    const rows: Array<{ role: string; permission: string }> = Object.entries(defaults)
+      .filter(([role]) => !configured.has(role))
+      .flatMap(([role, permissions]) => permissions.map((permission) => ({ role, permission })));
+    if (!rows.length) return false;
 
     // Multiple PM2 workers can boot at the same time. skipDuplicates makes the
     // bootstrap idempotent even when they all observe the empty table together.
     await this.prisma.rolePermission.createMany({ data: rows, skipDuplicates: true });
-    for (const role of ['ADMIN', ...Object.keys(PERMISSION_PRESETS)]) {
+    for (const role of new Set(rows.map((r) => r.role))) {
       await this.cache.del(`rbac:${role}`);
     }
     return true;

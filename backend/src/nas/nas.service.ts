@@ -9,6 +9,7 @@ import { SecretsService } from '../common/secrets.service';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credentials';
 import { RadiusClientVaultService } from './radius-client-vault.service';
+import { assertCompanyCanAdd } from '../common/company-plan';
 
 @Injectable()
 export class NasService implements OnModuleInit {
@@ -464,6 +465,8 @@ export class NasService implements OnModuleInit {
      * fact — rather than being sold an upgrade they do not need.
      */
     await this.licenceCapacity.assertCanAddNas();
+    // ...and the company's own router cap (Plan & limits).
+    await assertCompanyCanAdd(this.prisma, this.scope, actor, 'nas');
 
     const nas = await this.prisma.nas.create({
       data: {

@@ -8,6 +8,7 @@ import { RadiusSyncService } from '../nas/radius-sync.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { FupService } from '../compliance/fup.service';
 import { CurrencyService } from '../common/currency.service';
+import { assertOwnerCompanyCanAdd } from '../common/company-plan';
 
 /**
  * Phase 3 subscriber self-service portal API.
@@ -394,6 +395,9 @@ export class PortalService {
 
     // Which business does this customer belong to? See resolveSignupOwner().
     const ownerId = await this.resolveSignupOwner(pkg.ownerId ?? null);
+    // The owning company's subscriber cap (Plan & limits) applies to online
+    // sign-ups too.
+    await assertOwnerCompanyCanAdd(this.prisma, ownerId ?? null, 'subscribers');
 
     // Create the subscriber
     const sub = await this.prisma.subscriber.create({

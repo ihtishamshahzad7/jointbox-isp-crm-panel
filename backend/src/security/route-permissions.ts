@@ -26,6 +26,8 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'PATCH',  test: /^\/subscribers\/bulk-service-settings\b/,   key: 'subscribers.massSettings' },
   { method: 'POST',   test: /^\/subscribers\/import(\/|$)/,              key: 'subscribers.import' },
   { method: 'POST',   test: /^\/subscribers\/export(\/|$)/,              key: 'subscribers.export' },
+  // The plain CSV download is a GET — an "Export" untick never reached it.
+  { method: 'GET',    test: /^\/subscribers\/export(\/|$)/,              key: 'subscribers.export' },
   { method: 'POST',   test: /^\/subscribers\/bulk-transfer\b/,          key: 'users.transferSubscribers' },
   { method: 'POST',   test: /^\/subscribers\/\d+\/transfer\b/,           key: 'users.transferSubscribers' },
   { method: 'POST',   test: /^\/subscribers\/activate-renewal\b/,        key: 'subscribers.activation' },
