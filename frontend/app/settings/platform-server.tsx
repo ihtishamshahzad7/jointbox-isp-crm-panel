@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import API_BASE from "../components/api";
 import s from "./platform-server.module.css";
+import RadiusRouters from "../components/radius-routers";
 
 type Health = {
   build?: string;
@@ -85,6 +86,7 @@ const CHECKS = [
       if (body.file?.exists && body.file.worldReadable) bad.push(`the router file can be read by every user on the server (mode ${body.file.mode}) — it should be 640`);
       if (body.mode === "file" && body.file?.exists && body.file.matchesDatabase === false && !body.syncing) warn.push("FreeRADIUS's router list differs from the panel — it is re-synced automatically within 5 minutes");
       if (body.mode !== "file") warn.push("FreeRADIUS still reads router secrets from the database in plain text — run the update script once to switch it to the encrypted file");
+      if (body.mode === "file" && body.file?.loadedByFreeradius === false && !body.syncing) bad.push("the router file changed after FreeRADIUS started, so the running FreeRADIUS does not have it yet");
       const skipped: { id: number; reason: string }[] = Array.isArray(r.skipped) ? r.skipped : [];
       if (skipped.length) warn.push(`${skipped.length} active router(s) left out: ${skipped.slice(0, 3).map((x) => `#${x.id} ${x.reason}`).join("; ")}${skipped.length > 3 ? "…" : ""}`);
       const inFile = body.file?.clients ?? 0;
@@ -292,6 +294,10 @@ export default function PlatformServer() {
             );
           })}
         </div>
+      </div>
+
+      <div className={s.wide}>
+        <RadiusRouters platform />
       </div>
     </section>
   );

@@ -103,6 +103,8 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['GET', 'nas/debug/radius-sync'],
   ['GET', 'nas/radius/vault'],
   ['POST', 'nas/radius/vault/sync'],
+  ['GET', 'nas/radius/vault/routers'],
+  ['POST', 'nas/radius/vault/retire-plaintext'],
   ['GET', 'nas/diagnostics/accounting'],
   ['POST', 'nas/tunnels/reconcile'],
   ['POST', 'nas/tunnels/refresh'],

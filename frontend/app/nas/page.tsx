@@ -115,6 +115,7 @@ const isAdminRole = (role?: string) => role === 'ADMIN' || role === 'SUPER_ADMIN
 // ─── SVG Icons ──────────────────────────────────────────────────────
 import { Icons as SharedIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import RadiusRouters from "../components/radius-routers";
 import Portal from "../components/portal";
 
 /** NAS-specific diagnostics icons not in the shared set. */
@@ -988,6 +989,11 @@ export default function NasPage() {
           </div>
           </Expandable>
         </div>
+      </div>
+
+      {/* Is each of my routers actually in FreeRADIUS's list? (scoped by the backend) */}
+      <div style={{ marginTop: 16 }}>
+        <RadiusRouters />
       </div>
 
       {/* ══════════════════════════════════════

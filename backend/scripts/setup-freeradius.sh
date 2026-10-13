@@ -241,6 +241,11 @@ systemctl restart freeradius
 sleep 2
 if systemctl is-active --quiet freeradius; then
   ok "FreeRADIUS is running"
+  # Start of the proof window: legacy plaintext router secrets are kept until
+  # FreeRADIUS has accepted accounting from each router through the file.
+  if [ -f "$APP_BACKEND/dist/nas/radius-host.js" ]; then
+    (cd "$APP_BACKEND" && node scripts/radius-clients.js mark-cutover >/dev/null 2>&1) && ok "Vault cutover time recorded"
+  fi
 else
   err "Service failed to start:"; journalctl -u freeradius -n 15 --no-pager | sed 's/^/      /'; exit 1
 fi

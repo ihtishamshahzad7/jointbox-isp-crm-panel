@@ -392,8 +392,8 @@ sudo -u postgres psql -d "$DB_NAME" -qc "REASSIGN OWNED BY postgres TO $DB_USER;
 #
 # What this block did before, in order: caught a migration failure and printed
 # it as a WARNING; continued to the next step; found the schema missing
-# (because the migration had failed); and ran `prisma db push
-# --accept-data-loss` to "fix" it. That flag means exactly what it says. A
+# (because the migration had failed); and ran `prisma db push` with the
+# accept-data-loss flag to "fix" it. That flag means exactly what it says. A
 # migration that refused to run BECAUSE it would destroy data was followed,
 # automatically and unattended, by a command explicitly authorised to destroy
 # it — on a database holding subscriber billing, invoices and payments.

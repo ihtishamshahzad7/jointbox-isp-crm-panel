@@ -1,0 +1,33 @@
+/* FreeRADIUS routers panel — shared by Settings (platform) and the NAS page (company). */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; display: grid; gap: 12px; min-width: 0; }
+.head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 3px; }
+.title { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.action { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2, var(--surface)); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.action:hover:not(:disabled) { border-color: var(--accent); }
+.action:disabled { opacity: .6; cursor: default; }
+.action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.ok .dot { background: #16a34a; }
+.warn .dot { background: #d97706; }
+.bad .dot { background: #dc2626; }
+.message { margin: 0; font-size: 12px; line-height: 1.5; }
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.table th { text-align: left; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.state { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; white-space: nowrap; }
+.reason { display: block; font-size: 11.5px; margin-top: 2px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.empty { font-size: 12px; }
+
+/* The app's global stylesheet paints unclassed text dark inside .main; every
+   element here takes its colour from the theme tokens instead. */
+.panel, .panel .title, .panel .action, .panel .chip, .panel .table td, .panel .state { color: var(--text); }
+.panel .eyebrow, .panel .table th, .panel .reason, .panel .empty, .panel .muted { color: var(--muted); }
+.panel .okText { color: #16a34a; }
+.panel .warnText { color: #d97706; }
+.panel .badText { color: #dc2626; }

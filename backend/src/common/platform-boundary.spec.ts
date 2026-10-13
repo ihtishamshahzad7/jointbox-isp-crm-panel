@@ -34,6 +34,7 @@ describe('platform boundary: what the platform account can reach', () => {
       'POST subscribers/repair-links', 'GET subscribers/test-radius-connection',
       'GET nas/debug/radius-sync', 'GET nas/diagnostics/accounting',
       'GET nas/radius/vault', 'POST nas/radius/vault/sync',
+      'GET nas/radius/vault/routers', 'POST nas/radius/vault/retire-plaintext',
       'POST nas/tunnels/reconcile', 'POST nas/tunnels/refresh',
       'POST subscribers/lifecycle/run', 'GET subscribers/integrity/wallets',
       'GET subscribers/integrity/radius', 'GET subscribers/integrity/radius-heal',

@@ -5,7 +5,7 @@ import {
 import { NasService } from './nas.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
-import { ScopeService } from '../common/scope.service';
+import { ScopeService, type Actor } from '../common/scope.service';
 import { RadiusClientVaultService } from './radius-client-vault.service';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -25,16 +25,68 @@ export class NasController {
    * Platform account only.
    */
   @Get('radius/vault')
-  vaultStatus(@Req() req: any) {
+  vaultStatus(@Req() req: { user: Actor }) {
     this.scope.assertPlatformOwner(req.user);
     return this.radiusVault.status();
   }
 
   /** Re-render, check and (if changed) restart FreeRADIUS now. Platform account only. */
   @Post('radius/vault/sync')
-  vaultSync(@Req() req: any) {
+  vaultSync(@Req() req: { user: Actor }) {
     this.scope.assertPlatformOwner(req.user);
     return this.radiusVault.apply('manual');
+  }
+
+  /**
+   * Router by router: in FreeRADIUS's list or left out (and why), legacy
+   * plaintext still kept, last accounting FreeRADIUS accepted from it.
+   *
+   *   • platform account — every router on the server, by id and address only
+   *     (the server's RADIUS clients; no company names);
+   *   • a company — only the routers it can see, plus whether the server's
+   *     FreeRADIUS sync is healthy. Another company's routers, ids or errors
+   *     never appear.
+   */
+  @Get('radius/vault/routers')
+  async vaultRouters(@Req() req: { user: Actor }) {
+    const platform = this.scope.isPlatformOwner(req.user);
+    const where: Record<string, unknown> = platform
+      ? {}
+      : ((await this.scope.nasWhere(req.user)) as Record<string, unknown>);
+    const routers = await this.radiusVault.routerReport(where);
+    const st = await this.radiusVault.status();
+    const healthy = st.freeradiusOnThisServer
+      ? st.running !== false && (st.last ? st.last.ok : true)
+      : null;
+    // The installation's error text can name other companies' routers: only
+    // the platform account gets it; a company gets the remedy.
+    const companyError =
+      'FreeRADIUS could not be updated on the server. Your routers keep working with the last good list; the platform administrator has been notified.';
+    return {
+      mode: st.mode,
+      freeradiusRunning: st.running,
+      syncHealthy: healthy,
+      lastOkAt: st.lastOkAt,
+      lastError:
+        st.last && !st.last.ok
+          ? platform
+            ? st.last.message
+            : companyError
+          : null,
+      routers: platform ? routers.map((r) => ({ ...r, name: null })) : routers,
+    };
+  }
+
+  /**
+   * Retire legacy plaintext router secrets kept since the switch to the vault
+   * file. By default only routers FreeRADIUS has accepted accounting from
+   * since the switch; `{ all: true }` after the operator has tested logins.
+   * Platform account only.
+   */
+  @Post('radius/vault/retire-plaintext')
+  vaultRetire(@Body() body: { all?: boolean }, @Req() req: { user: Actor }) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.radiusVault.retireProvenPlaintext({ all: body?.all === true });
   }
 
   // ── CRUD ────────────────────────────────────────────────────

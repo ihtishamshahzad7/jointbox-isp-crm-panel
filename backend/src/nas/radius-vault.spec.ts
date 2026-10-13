@@ -174,6 +174,8 @@ describe('the vault keeps FreeRADIUS working', () => {
     process.env.FREERADIUS_STATUS_CMD = 'true';
     process.env.FREERADIUS_CHECK_CMD = 'true';
     process.env.JOINTBOX_RADIUS_LOCK = join(root, 'radius.lock');
+    process.env.JOINTBOX_RADIUS_STATE = join(root, 'state.json');
+    process.env.FREERADIUS_PID_CMD = 'false'; // "not running": no load-time comparison
     delete process.env.FREERADIUS_CLIENTS_FILE;
     delete process.env.RADIUS_CLIENTS_MODE;
     return { root, file: join(root, 'clients.d', 'jointbox-nas.conf') };
@@ -186,6 +188,7 @@ describe('the vault keeps FreeRADIUS working', () => {
           rows.filter((r) => {
             if (!where) return true;
             if (where.isActive === true && !r.isActive) return false;
+            if (where.isActive === false && r.isActive) return false;
             if (where.radiusSecretEnc === null && r.radiusSecretEnc)
               return false;
             if (where.radiusSecretEnc?.not === null && !r.radiusSecretEnc)
@@ -207,11 +210,13 @@ describe('the vault keeps FreeRADIUS working', () => {
         ),
       },
       systemLog: { create: jest.fn().mockResolvedValue({}) },
+      // radacct: no accounting seen unless a test says otherwise
+      $queryRaw: jest.fn().mockResolvedValue([{ seen: null }]),
     };
     return prisma;
   }
 
-  it('file mode: writes 0640, restarts, then clears the plaintext copy', async () => {
+  it('file mode: writes 0640 and restarts — and KEEPS the legacy plaintext until the router is proven', async () => {
     const { file } = server('file');
     const rows = [
       {
@@ -223,7 +228,8 @@ describe('the vault keeps FreeRADIUS working', () => {
         radiusSecretEnc: null,
       },
     ];
-    const v = new RadiusClientVaultService(prismaWith(rows), secrets);
+    const prisma = prismaWith(rows);
+    const v = new RadiusClientVaultService(prisma, secrets);
     const r = await v.apply('nas-create');
     expect(r).toMatchObject({
       ok: true,
@@ -234,8 +240,81 @@ describe('the vault keeps FreeRADIUS working', () => {
     });
     expect(readFileSync(file, 'utf8')).toContain("secret = 'abc123'");
     expect((statSync(file).mode & 0o777).toString(8)).toBe('640');
-    expect(rows[0].secret).toBeNull(); // plaintext gone
     expect(dec(rows[0].radiusSecretEnc as any)).toBe('abc123');
+    // no accounting from the router through the file yet → plaintext kept
+    expect(rows[0].secret).toBe('abc123');
+    const kept = await v.retireProvenPlaintext();
+    expect(kept.retired).toBe(0);
+    expect(kept.kept[0].reason).toMatch(/no accounting/);
+    // FreeRADIUS accepted accounting from 10.9.0.1 after the cutover → retired
+    prisma.$queryRaw.mockResolvedValue([{ seen: new Date(Date.now() + 1000) }]);
+    expect((await v.retireProvenPlaintext()).retired).toBe(1);
+    expect(rows[0].secret).toBeNull();
+    // the cutover time and the last good sync are on record for every worker
+    const state = JSON.parse(
+      readFileSync(process.env.JOINTBOX_RADIUS_STATE!, 'utf8'),
+    );
+    expect(state.cutoverAt).toBeTruthy();
+    expect(state.lastOkAt).toBeTruthy();
+    expect(JSON.stringify(state)).not.toContain('abc123');
+  });
+
+  it('the operator can retire every copy that round-trips, never one that does not', async () => {
+    server('file');
+    const rows: any[] = [
+      {
+        id: 1,
+        nasIp: '10.9.0.1',
+        isActive: true,
+        secret: 'same',
+        radiusSecretEnc: enc('same'),
+      },
+      {
+        id: 2,
+        nasIp: '10.9.0.2',
+        isActive: true,
+        secret: 'old',
+        radiusSecretEnc: enc('new'),
+      },
+    ];
+    const v = new RadiusClientVaultService(prismaWith(rows), secrets);
+    const r = await v.retireProvenPlaintext({ all: true });
+    expect(r.retired).toBe(1);
+    expect(rows[0].secret).toBeNull();
+    expect(rows[1].secret).toBe('old');
+    expect(r.kept).toEqual([
+      { id: 2, reason: expect.stringMatching(/differs/) },
+    ]);
+  });
+
+  it('a current file the running FreeRADIUS has not loaded is not reported as synchronised', async () => {
+    const { file, root } = server('file');
+    const count = join(root, 'restarts');
+    process.env.FREERADIUS_RESTART_CMD = `echo x >> ${count}`;
+    const rows: any[] = [
+      {
+        id: 1,
+        nasIp: '10.9.0.1',
+        isActive: true,
+        secret: null,
+        radiusSecretEnc: enc('abc'),
+      },
+    ];
+    const v = new RadiusClientVaultService(prismaWith(rows), secrets);
+    await v.apply('x');
+    // FreeRADIUS "started" one minute before the file was written
+    process.env.FREERADIUS_PID_CMD = `echo ${process.pid}`;
+    const realStat = statSync(file).mtimeMs;
+    const spy = jest
+      .spyOn(require('./radius-host'), 'freeradiusStartedAt')
+      .mockResolvedValue(realStat - 60_000);
+    expect(await v.needsSync()).toBe(true);
+    const r = await v.apply('y');
+    expect(r).toMatchObject({ ok: true, changed: false, restarted: true });
+    expect(r.message).toMatch(/restarted to load/);
+    spy.mockResolvedValue(Date.now() + 5000);
+    expect(await v.needsSync()).toBe(false);
+    spy.mockRestore();
   });
 
   it('file mode: a config FreeRADIUS rejects is rolled back and reported', async () => {
@@ -449,6 +528,36 @@ describe('the vault keeps FreeRADIUS working', () => {
     expect((await v.apply('startup')).ok).toBe(false);
     expect(await v.needsSync()).toBe(false); // reported, not retried every 5 minutes
   });
+
+  it('sql mode: a disabled router is withheld from FreeRADIUS (it loads every row with a secret) and comes back when enabled', async () => {
+    server('sql');
+    const rows: any[] = [
+      {
+        id: 1,
+        nasIp: '10.9.0.1',
+        isActive: false,
+        secret: 'off-now',
+        radiusSecretEnc: enc('off-now'),
+      },
+      {
+        id: 2,
+        nasIp: '10.9.0.2',
+        isActive: true,
+        secret: null,
+        radiusSecretEnc: enc('on-now'),
+      },
+    ];
+    const v = new RadiusClientVaultService(prismaWith(rows), secrets);
+    expect(await v.needsSync()).toBe(true);
+    const r = await v.apply('nas-toggle');
+    expect(r.ok).toBe(true);
+    expect(rows[0].secret).toBeNull(); // FreeRADIUS skips a client with no secret
+    expect(rows[1].secret).toBe('on-now');
+    rows[0].isActive = true;
+    await v.apply('nas-toggle');
+    expect(rows[0].secret).toBe('off-now');
+    expect(await v.needsSync()).toBe(false);
+  });
 });
 
 describe('router addresses the panel accepts', () => {
@@ -528,5 +637,59 @@ describe('one FreeRADIUS writer per machine', () => {
       /still running/,
     );
     expect(readFileSync(lock, 'utf8')).toContain(String(process.ppid)); // not ours to remove
+  });
+});
+
+describe('checking FreeRADIUS really loads the vault routers', () => {
+  // FreeRADIUS -XC prints every client it loads, secrets masked.
+  const out = [
+    ' client localhost {',
+    ' \tipaddr = 127.0.0.1',
+    ' }',
+    ' client jointbox-nas-6 {',
+    ' \tipaddr = 192.0.2.2',
+    ' \tsecret = <<< secret >>>',
+    ' }',
+    ' client jointbox-nas-9 {',
+    ' \tipaddr = 192.0.2.9',
+    ' }',
+  ].join('\n');
+
+  it('reads router id and address from the debug check', () => {
+    const loaded = host.routersLoaded(out);
+    expect([...loaded.entries()]).toEqual([
+      [6, '192.0.2.2'],
+      [9, '192.0.2.9'],
+    ]);
+  });
+
+  it('passes only when exactly the expected routers load, each on its address', () => {
+    const loaded = host.routersLoaded(out);
+    expect(
+      host.loadedMismatch(loaded, [
+        { id: 6, ip: '192.0.2.2' },
+        { id: 9, ip: '192.0.2.9' },
+      ]),
+    ).toBeNull();
+    expect(host.loadedMismatch(loaded, [{ id: 6, ip: '192.0.2.2' }])).toMatch(
+      /unexpected router\(s\) #9/,
+    );
+    expect(
+      host.loadedMismatch(loaded, [
+        { id: 6, ip: '192.0.2.2' },
+        { id: 9, ip: '192.0.2.9' },
+        { id: 12, ip: '192.0.2.12' },
+      ]),
+    ).toMatch(/would not load router\(s\) #12 .*\$INCLUDE/);
+    expect(
+      host.loadedMismatch(loaded, [
+        { id: 6, ip: '192.0.2.2' },
+        { id: 9, ip: '192.0.2.99' },
+      ]),
+    ).toMatch(/#9 with a different address/);
+    // no include line at all: nothing loads
+    expect(
+      host.loadedMismatch(new Map(), [{ id: 6, ip: '192.0.2.2' }]),
+    ).toMatch(/would not load/);
   });
 });

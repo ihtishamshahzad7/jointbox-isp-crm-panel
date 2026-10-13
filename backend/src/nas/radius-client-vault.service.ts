@@ -19,6 +19,7 @@ import {
   secretProblem,
   staticClientIps,
   VaultNasRow,
+  normaliseIp,
 } from './radius-clients-render';
 import * as host from './radius-host';
 
@@ -194,7 +195,7 @@ export class RadiusClientVaultService
   async restorePlaintextForSql(): Promise<number> {
     if (this.mode() !== 'sql') return 0;
     const rows = await this.prisma.nas.findMany({
-      where: { secret: null, radiusSecretEnc: { not: null } },
+      where: { isActive: true, secret: null, radiusSecretEnc: { not: null } },
       select: { id: true, radiusSecretEnc: true },
     });
     let n = 0;
@@ -218,13 +219,19 @@ export class RadiusClientVaultService
   }
 
   /**
-   * File mode only: drop plaintext secrets whose encrypted copy decrypts to
-   * exactly the same value. Anything that does not round-trip is left alone.
+   * SQL mode only: FreeRADIUS's client query loads EVERY row of the nas table
+   * that has a secret — a router disabled in the panel included. Its plaintext
+   * is withheld (the encrypted copy stays) so FreeRADIUS skips it, and
+   * restorePlaintextForSql() puts it back when the router is enabled again.
    */
-  async clearPlaintext(): Promise<number> {
-    if (this.mode() !== 'file') return 0;
+  async withholdInactiveForSql(): Promise<number> {
+    if (this.mode() !== 'sql') return 0;
     const rows = await this.prisma.nas.findMany({
-      where: { secret: { not: null }, radiusSecretEnc: { not: null } },
+      where: {
+        isActive: false,
+        secret: { not: null },
+        radiusSecretEnc: { not: null },
+      },
       select: { id: true, secret: true, radiusSecretEnc: true },
     });
     let n = 0;
@@ -242,9 +249,99 @@ export class RadiusClientVaultService
     }
     if (n)
       this.logger.log(
-        `Cleared ${n} plaintext router secret(s) — FreeRADIUS now reads them from the vault file`,
+        `Withheld ${n} disabled router(s) from FreeRADIUS's SQL client list`,
       );
     return n;
+  }
+
+  /**
+   * Has FreeRADIUS accepted accounting from this router address since `since`?
+   * Accounting-Request packets are signed with the router's shared secret and
+   * FreeRADIUS drops any that do not verify, so a radacct row written after
+   * the cutover proves the secret FreeRADIUS now takes from the vault file is
+   * the one the router uses.
+   */
+  async seenSince(ip: string, since: Date): Promise<Date | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ seen: Date | null }>>`
+        SELECT max(greatest(acctstarttime, acctupdatetime, acctstoptime)) AS seen
+        FROM radacct
+        WHERE nasipaddress = ${ip}::inet
+          AND (acctstarttime > ${since}
+               OR acctstoptime > ${since}
+               OR (acctstoptime IS NULL AND acctupdatetime > ${since}))`;
+      const seen = rows?.[0]?.seen;
+      return seen ? new Date(seen) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * File mode only: retire LEGACY plaintext copies — the ones kept from before
+   * the cutover — router by router, and only once that router is proven to work
+   * through the vault file (seenSince the cutover). `all` retires every copy
+   * whose encrypted twin decrypts to the same value, for an operator who has
+   * tested logins by hand. A copy that does not round-trip is never touched.
+   *
+   * Reversible while the key is kept: if FreeRADIUS is ever switched back to
+   * reading routers from SQL, restorePlaintextForSql() rebuilds the column
+   * from the encrypted copies.
+   */
+  async retireProvenPlaintext(
+    opts: { all?: boolean } = {},
+  ): Promise<{ retired: number; kept: Array<{ id: number; reason: string }> }> {
+    const kept: Array<{ id: number; reason: string }> = [];
+    if (this.mode() !== 'file') return { retired: 0, kept };
+    const rows = await this.prisma.nas.findMany({
+      where: { secret: { not: null }, radiusSecretEnc: { not: null } },
+      select: { id: true, nasIp: true, secret: true, radiusSecretEnc: true },
+    });
+    if (!rows.length) return { retired: 0, kept };
+    const cutoverAt = host.readState().cutoverAt;
+    const since = cutoverAt ? new Date(cutoverAt) : null;
+    let retired = 0;
+    for (const row of rows) {
+      const same =
+        !!row.radiusSecretEnc &&
+        this.secrets.decryptValue(row.radiusSecretEnc) === row.secret;
+      if (!same) {
+        kept.push({
+          id: row.id,
+          reason:
+            'encrypted copy differs from the plaintext — re-save the secret on the router page',
+        });
+        continue;
+      }
+      let proven = !!opts.all;
+      if (!proven && since && row.nasIp)
+        proven = !!(await this.seenSince(row.nasIp, since));
+      if (!proven) {
+        kept.push({
+          id: row.id,
+          reason: 'no accounting from this router through the vault file yet',
+        });
+        continue;
+      }
+      await this.prisma.nas.update({
+        where: { id: row.id },
+        data: { secret: null },
+      });
+      retired++;
+    }
+    if (retired) {
+      this.logger.log(
+        `Retired ${retired} legacy plaintext router secret(s)${opts.all ? ' (operator confirmed)' : ' — proven by accounting through the vault file'}`,
+      );
+    }
+    host.writeState({
+      retired: {
+        at: new Date().toISOString(),
+        count: retired,
+        kept: kept.length,
+      },
+    });
+    return { retired, kept };
   }
 
   // ── the file ─────────────────────────────────────────────────────
@@ -313,6 +410,20 @@ export class RadiusClientVaultService
         .finally(() => dh.close());
   }
 
+  /** True when the router file changed after the running FreeRADIUS started. */
+  private async fileNewerThanFreeradius(file: string): Promise<boolean> {
+    let mtime: number;
+    try {
+      mtime = statSync(file).mtimeMs;
+    } catch {
+      return false;
+    }
+    const started = await host.freeradiusStartedAt();
+    // Not running / cannot tell: nothing to compare (the restart path handles
+    // a stopped FreeRADIUS). 2s of slack for clock granularity.
+    return started != null && mtime > started + 2000;
+  }
+
   // ── the one entry point ──────────────────────────────────────────
 
   /**
@@ -366,6 +477,7 @@ export class RadiusClientVaultService
     const out = { ...r, at: new Date().toISOString() };
     this.last = out;
     this.lastRetry = !out.ok && retry;
+    host.writeState(out.ok ? { last: out, lastOkAt: out.at } : { last: out });
     // The same failure repeated by the periodic re-check is logged once an hour.
     const repeat =
       this.lastLogged?.message === out.message &&
@@ -408,7 +520,9 @@ export class RadiusClientVaultService
       // ready for the switch (only where its directory already exists) and
       // restart so changed routers are re-read from the database.
       if (mode === 'sql') {
-        const restored = await this.restorePlaintextForSql();
+        const restored =
+          (await this.restorePlaintextForSql()) +
+          (await this.withholdInactiveForSql());
         if (file && existsSync(dirname(file)) && !r.undecryptable.length) {
           const before = this.readText(file);
           if (before !== r.content) await this.writeClientFile(file, r.content);
@@ -477,8 +591,8 @@ export class RadiusClientVaultService
       }
 
       const before = this.readText(file);
-      if (before === r.content) {
-        await this.clearPlaintext();
+      if (before === r.content && !(await this.fileNewerThanFreeradius(file))) {
+        await this.retireProvenPlaintext();
         return this.done({
           ...base,
           ok: true,
@@ -486,14 +600,19 @@ export class RadiusClientVaultService
         });
       }
 
-      await this.writeClientFile(file, r.content);
-      base.changed = true;
+      // A current file that the RUNNING FreeRADIUS has not loaded yet (written
+      // but never restarted after) is stale in effect: check and restart.
+      if (before !== r.content) {
+        await this.writeClientFile(file, r.content);
+        base.changed = true;
+      }
       const restore = async () => {
+        if (!base.changed) return;
         if (before == null) await unlink(file).catch(() => undefined);
         else await this.writeClientFile(file, before);
       };
 
-      const check = await host.validateConfig();
+      const check = await host.validateConfig(r.clients);
       if (!check.ok) {
         await restore();
         return this.done({
@@ -513,11 +632,13 @@ export class RadiusClientVaultService
         });
       }
       base.restarted = true;
-      await this.clearPlaintext();
+      if (!host.readState().cutoverAt)
+        host.writeState({ cutoverAt: new Date().toISOString() });
+      await this.retireProvenPlaintext();
       return this.done({
         ...base,
         ok: true,
-        message: `FreeRADIUS reloaded with ${r.clients.length} router(s).`,
+        message: `FreeRADIUS ${base.changed ? 'reloaded' : 'restarted to load the current list'} with ${r.clients.length} router(s).`,
       });
     } catch (e: unknown) {
       return this.done({
@@ -541,23 +662,42 @@ export class RadiusClientVaultService
     this.modeCache = null;
     if (this.mode() === 'sql') {
       if (!this.radDir()) return false;
-      const missing = await this.prisma.nas.count({
-        where: { isActive: true, secret: null, radiusSecretEnc: { not: null } },
-      });
-      return missing > 0;
+      const [missing, inactiveLoaded] = await Promise.all([
+        this.prisma.nas.count({
+          where: {
+            isActive: true,
+            secret: null,
+            radiusSecretEnc: { not: null },
+          },
+        }),
+        this.prisma.nas.count({
+          where: {
+            isActive: false,
+            secret: { not: null },
+            radiusSecretEnc: { not: null },
+          },
+        }),
+      ]);
+      return missing + inactiveLoaded > 0;
     }
     const file = this.filePath;
     if (!file) return false;
     const r = await this.render();
     if (r.undecryptable.length) return false; // nothing a re-sync can fix; already reported
-    return this.readText(file) !== r.content;
+    return (
+      this.readText(file) !== r.content ||
+      (await this.fileNewerThanFreeradius(file))
+    );
   }
 
   /** Periodic check (primary instance only): re-sync when needed. */
   async recheck(): Promise<VaultResult | null> {
     if (this.running) return null;
     try {
-      if (!(await this.needsSync())) return null;
+      if (!(await this.needsSync())) {
+        await this.retireProvenPlaintext();
+        return null;
+      }
     } catch {
       return null;
     }
@@ -602,8 +742,10 @@ export class RadiusClientVaultService
       worldReadable?: boolean;
       clients?: number;
       matchesDatabase?: boolean;
+      loadedByFreeradius?: boolean | null;
     } = { exists: false };
     const r = await this.render().catch(() => null);
+    const startedAt = dir ? await host.freeradiusStartedAt() : null;
     if (file && existsSync(file)) {
       const st = statSync(file);
       let radGid: number | null = null;
@@ -621,6 +763,8 @@ export class RadiusClientVaultService
         worldReadable: !!(st.mode & 0o004),
         clients: (text.match(/^client jointbox-nas-/gm) || []).length,
         matchesDatabase: r ? text === r.content : undefined,
+        loadedByFreeradius:
+          startedAt == null ? null : st.mtimeMs <= startedAt + 2000,
       };
     }
     const [active, plaintext, encrypted, running] = await Promise.all([
@@ -629,9 +773,11 @@ export class RadiusClientVaultService
       this.prisma.nas.count({ where: { radiusSecretEnc: { not: null } } }),
       dir ? host.isRunning(1) : Promise.resolve(null),
     ]);
+    const state = host.readState();
     return {
       freeradiusOnThisServer: !!dir,
       running,
+      freeradiusStartedAt: startedAt ? new Date(startedAt).toISOString() : null,
       mode: this.mode(),
       file: { path: file, ...fileInfo },
       includeConfigured:
@@ -644,14 +790,96 @@ export class RadiusClientVaultService
       routers: {
         active,
         encrypted,
+        /** Legacy plaintext copies still kept (retired per router once proven). */
         plaintext,
         inFile: r?.clients.length ?? null,
         skipped: r?.skipped ?? [],
         undecryptable: r?.undecryptable.length ?? 0,
       },
       syncing: !!this.running,
-      last: this.last,
+      // This worker's last result, else the last one any worker recorded.
+      last: this.last ?? state.last ?? null,
+      lastOkAt: state.lastOkAt ?? null,
+      cutoverAt: state.cutoverAt ?? null,
+      rolledBackAt: state.rolledBackAt ?? null,
+      retired: state.retired ?? null,
       includeLine: VAULT_INCLUDE_LINE,
     };
+  }
+
+  /**
+   * One line per router: is it in FreeRADIUS's list, why not, is a legacy
+   * plaintext copy still kept, and when FreeRADIUS last accepted accounting
+   * from it. `where` scopes the routers (a company sees only its own). Never
+   * contains a secret.
+   */
+  async routerReport(where: Record<string, unknown>) {
+    const rows = await this.prisma.nas.findMany({
+      where,
+      select: {
+        id: true,
+        nasIp: true,
+        shortname: true,
+        isActive: true,
+        secret: true,
+        radiusSecretEnc: true,
+      },
+      orderBy: { id: 'asc' },
+    });
+    const r = await this.render().catch(() => null);
+    const inFile = new Set((r?.clients ?? []).map((c) => c.id));
+    const skipped = new Map((r?.skipped ?? []).map((x) => [x.id, x.reason]));
+    const ips = rows
+      .map((x) => x.nasIp)
+      .filter((x): x is string => !!x && !!normaliseIp(x));
+    const seen = new Map<string, { last: Date | null; online: number }>();
+    if (ips.length) {
+      try {
+        const acct = await this.prisma.$queryRaw<
+          Array<{ ip: string; last: Date | null; online: bigint | number }>
+        >`
+          SELECT host(nasipaddress) AS ip,
+                 max(greatest(acctstarttime, acctupdatetime, acctstoptime)) AS last,
+                 count(*) FILTER (WHERE acctstoptime IS NULL) AS online
+          FROM radacct
+          WHERE nasipaddress = ANY(${ips}::inet[])
+            AND (acctstoptime IS NULL
+                 OR acctstoptime > now() - interval '1 day'
+                 OR acctstarttime > now() - interval '1 day')
+          GROUP BY 1`;
+        for (const a of acct)
+          seen.set(a.ip, {
+            last: a.last ? new Date(a.last) : null,
+            online: Number(a.online),
+          });
+      } catch {
+        /* accounting table unavailable: leave unknown */
+      }
+    }
+    const mode = this.mode();
+    return rows.map((x) => {
+      const ip = x.nasIp ? normaliseIp(x.nasIp) : null;
+      const acct = ip ? seen.get(ip) : undefined;
+      const state = !x.isActive
+        ? 'disabled'
+        : inFile.has(x.id)
+          ? 'in-freeradius'
+          : 'left-out';
+      return {
+        id: x.id,
+        name: x.shortname || null,
+        ip: x.nasIp,
+        active: x.isActive,
+        state,
+        reason:
+          state === 'left-out'
+            ? skipped.get(x.id) || 'not in the router list'
+            : null,
+        hasSecret: !!(x.radiusSecretEnc || x.secret),
+        legacyPlaintextKept: mode === 'file' && !!x.secret,
+        lastAccountingAt: acct?.last ? acct.last.toISOString() : null,
+        onlineSessions: acct?.online ?? 0,
+      };
+    });
   }
 }

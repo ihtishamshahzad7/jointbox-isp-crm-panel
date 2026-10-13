@@ -146,3 +146,57 @@ describe('NAS tenancy — tunnel maintenance', () => {
     expect(tunnels.reconcile).toHaveBeenCalled();
   });
 });
+
+describe('NAS tenancy — FreeRADIUS router status', () => {
+  function make(lastOk = false) {
+    const scope = makeScope() as any;
+    scope.nasWhere = jest.fn(async (a: any) => ({ ownerId: { in: [a.sub] } }));
+    const vault: any = {
+      status: jest.fn().mockResolvedValue({
+        freeradiusOnThisServer: true,
+        running: true,
+        mode: 'file',
+        lastOkAt: '2026-10-12T10:00:00.000Z',
+        last: lastOk ? { ok: true, message: 'ok' } : { ok: false, message: 'router #200 secret cannot be decrypted' },
+      }),
+      routerReport: jest.fn(async (where: any) =>
+        [
+          { id: 100, name: 'A core', ip: '10.0.0.1', state: 'in-freeradius' },
+          { id: 200, name: 'B core', ip: '10.0.0.2', state: 'left-out' },
+        ].filter((r) => !where.ownerId || where.ownerId.in.includes(NAS_OWNER[r.id])),
+      ),
+      apply: jest.fn(),
+      retireProvenPlaintext: jest.fn().mockResolvedValue({ retired: 0, kept: [] }),
+    };
+    return { vault, scope, ctl: new NasController({} as any, scope, vault) };
+  }
+
+  it('a company sees only its own routers, and never another company\'s error text', async () => {
+    const { ctl, scope } = make();
+    const r: any = await ctl.vaultRouters({ user: ISP_A });
+    expect(scope.nasWhere).toHaveBeenCalledWith(ISP_A);
+    expect(r.routers.map((x: any) => x.id)).toEqual([100]);
+    expect(r.syncHealthy).toBe(false);
+    expect(r.lastError).not.toMatch(/#200/);
+  });
+
+  it('the platform sees every router by id and address, without company names', async () => {
+    const { ctl } = make();
+    const r: any = await ctl.vaultRouters({ user: OWNER });
+    expect(r.routers.map((x: any) => x.id)).toEqual([100, 200]);
+    expect(r.routers.every((x: any) => x.name === null)).toBe(true);
+    expect(r.lastError).toMatch(/#200/);
+  });
+
+  it('only the platform can retire plaintext copies or force a sync', async () => {
+    const { ctl, vault } = make(true);
+    expect(() => ctl.vaultRetire({ all: true }, { user: ISP_A })).toThrow(ForbiddenException);
+    expect(() => ctl.vaultSync({ user: ISP_A })).toThrow(ForbiddenException);
+    expect(() => ctl.vaultStatus({ user: ISP_A })).toThrow(ForbiddenException);
+    expect(vault.retireProvenPlaintext).not.toHaveBeenCalled();
+    await ctl.vaultRetire({ all: true }, { user: OWNER });
+    expect(vault.retireProvenPlaintext).toHaveBeenCalledWith({ all: true });
+    await ctl.vaultRetire({ all: 'yes' as any }, { user: OWNER });
+    expect(vault.retireProvenPlaintext).toHaveBeenLastCalledWith({ all: false });
+  });
+});

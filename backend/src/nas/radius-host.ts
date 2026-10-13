@@ -12,10 +12,22 @@
  *   JOINTBOX_RADIUS_LOCK    path of the host-wide lock file
  */
 import { execFile } from 'child_process';
-import { accessSync, constants, existsSync, readFileSync } from 'fs';
+import {
+  accessSync,
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeSync,
+} from 'fs';
 import { open, readFile, stat, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 export type RunResult = { ok: boolean; out: string };
 
@@ -104,11 +116,75 @@ export function hideSecrets(line: string): string {
  * AS THE SERVICE USER. A root-only check passes files the service then
  * cannot read, and FreeRADIUS fails to start.
  */
-export async function validateConfig(): Promise<{
-  ok: boolean;
-  error?: string;
-  out: string;
-}> {
+/**
+ * The vault routers FreeRADIUS's debug check shows it would load: router id →
+ * the address it would match the router on. (FreeRADIUS prints secrets in
+ * this output as <<< secret >>>; nothing here keeps or logs the output.)
+ */
+export function routersLoaded(checkOutput: string): Map<number, string | null> {
+  const out = new Map<number, string | null>();
+  let current: number | null = null;
+  for (const line of checkOutput.split('\n')) {
+    const open = /^\s*client jointbox-nas-(\d+) \{/.exec(line);
+    if (open) {
+      current = Number(open[1]);
+      out.set(current, null);
+      continue;
+    }
+    if (current == null) continue;
+    const ip = /^\s*ip(?:v4|v6)?addr\s*=\s*(\S+)/.exec(line);
+    if (ip) {
+      out.set(current, ip[1].replace(/^"|"$/g, ''));
+      current = null;
+    } else if (/^\s*\}/.test(line)) current = null;
+  }
+  return out;
+}
+
+/** Compare what FreeRADIUS would load with the routers the file is meant to hold. */
+export function loadedMismatch(
+  loaded: Map<number, string | null>,
+  expected: Array<{ id: number; ip: string }>,
+): string | null {
+  const missing = expected
+    .filter((e) => !loaded.has(e.id))
+    .map((e) => `#${e.id}`);
+  const wrongIp = expected
+    .filter((e) => loaded.has(e.id) && loaded.get(e.id) !== e.ip)
+    .map((e) => `#${e.id}`);
+  const extra = [...loaded.keys()]
+    .filter((id) => !expected.some((e) => e.id === id))
+    .map((id) => `#${id}`);
+  if (!missing.length && !wrongIp.length && !extra.length) return null;
+  const parts: string[] = [];
+  if (missing.length)
+    parts.push(
+      `would not load router(s) ${missing.slice(0, 8).join(', ')} — is "$INCLUDE clients.d/jointbox-nas.conf" in clients.conf?`,
+    );
+  if (wrongIp.length)
+    parts.push(
+      `would load router(s) ${wrongIp.slice(0, 8).join(', ')} with a different address`,
+    );
+  if (extra.length)
+    parts.push(
+      `would also load unexpected router(s) ${extra.slice(0, 8).join(', ')}`,
+    );
+  return `FreeRADIUS ${parts.join('; ')}.`;
+}
+
+/**
+ * FreeRADIUS's own config check, run the way systemd's ExecStartPre runs it:
+ * AS THE SERVICE USER. A root-only check passes files the service then
+ * cannot read, and FreeRADIUS fails to start.
+ *
+ * With `expected`, the check also confirms FreeRADIUS would load exactly
+ * those routers, each on its address: a file that is valid but not in effect
+ * (include line missing, a different file included) fails here instead of
+ * passing. The raw check output is never returned — it is configuration.
+ */
+export async function validateConfig(
+  expected?: Array<{ id: number; ip: string }>,
+): Promise<{ ok: boolean; error?: string; loaded?: number }> {
   const custom = (process.env.FREERADIUS_CHECK_CMD || '').trim();
   let res: RunResult;
   if (custom) {
@@ -122,23 +198,28 @@ export async function validateConfig(): Promise<{
       process.getuid() === 0 &&
       existsSync('/usr/sbin/runuser');
     res = asUser
-      ? await run('/usr/sbin/runuser', [
-          '-u',
-          serviceUser(dir),
-          '--',
-          bin,
-          ...dArgs,
-          '-Cx',
-          '-lstdout',
-        ])
-      : await run(bin, [...dArgs, '-XC']);
+      ? await run(
+          '/usr/sbin/runuser',
+          ['-u', serviceUser(dir), '--', bin, ...dArgs, '-XC'],
+          60_000,
+        )
+      : await run(bin, [...dArgs, '-XC'], 60_000);
   }
-  if (res.ok) return { ok: true, out: res.out };
-  return {
-    ok: false,
-    error: checkErrors(res.out) || 'FreeRADIUS rejected its configuration.',
-    out: res.out,
-  };
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: checkErrors(res.out) || 'FreeRADIUS rejected its configuration.',
+    };
+  }
+  // A custom check command (tests, non-standard hosts) may not print the
+  // client list; only the real debug check is held to it.
+  if (expected && (!custom || /client jointbox-nas-\d+ \{/.test(res.out))) {
+    const loaded = routersLoaded(res.out);
+    const wrong = loadedMismatch(loaded, expected);
+    if (wrong) return { ok: false, error: wrong, loaded: loaded.size };
+    return { ok: true, loaded: loaded.size };
+  }
+  return { ok: true };
 }
 
 export async function isRunning(tries = 8): Promise<boolean> {
@@ -364,4 +445,124 @@ export function unredactConfig(
     lines[x.index] = `${x.m[1]}${x.m[2]}${x.m[3]}${orig}`;
   }
   return { ok: true, text: lines.join('\n') };
+}
+
+// ── persisted sync state (shared by every worker and the cutover script) ───
+//
+// Secret-free: times, counts, router ids, messages. Root-only (0600).
+
+export interface VaultState {
+  /** When FreeRADIUS first ran on the router file (the cutover). */
+  cutoverAt?: string;
+  /** Last sync that left FreeRADIUS in line with the panel. */
+  lastOkAt?: string;
+  /** The last sync result, whatever its outcome. */
+  last?: {
+    ok: boolean;
+    mode: string;
+    changed: boolean;
+    restarted: boolean;
+    clients: number;
+    message: string;
+    at: string;
+    skipped?: Array<{ id: number; ip: string | null; reason: string }>;
+  };
+  /** Last retirement of legacy plaintext copies. */
+  retired?: { at: string; count: number; kept: number };
+  /** When FreeRADIUS was last switched back to reading routers from SQL. */
+  rolledBackAt?: string;
+}
+
+export function statePath(): string {
+  const env = (process.env.JOINTBOX_RADIUS_STATE || '').trim();
+  if (env) return env;
+  const dir = '/var/lib/jointbox';
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    accessSync(dir, constants.W_OK);
+    return join(dir, 'radius-vault.json');
+  } catch {
+    return join(tmpdir(), 'jointbox-radius-vault.json');
+  }
+}
+
+export function readState(): VaultState {
+  try {
+    const v = JSON.parse(readFileSync(statePath(), 'utf8')) as unknown;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Merge `patch` into the state file, atomically. Never throws. */
+export function writeState(patch: Partial<VaultState>): VaultState {
+  const path = statePath();
+  const next = { ...readState(), ...patch };
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+    const fd = openSync(tmp, 'wx', 0o600);
+    try {
+      writeSync(fd, `${JSON.stringify(next, null, 2)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+  } catch {
+    /* state is a convenience for the status screen; never fail a sync on it */
+  }
+  return next;
+}
+
+/**
+ * When the running FreeRADIUS process started (epoch ms), or null when it is
+ * not running or cannot be told. Used to tell "the router file is current"
+ * apart from "FreeRADIUS has actually loaded it": clients are only read at
+ * start-up, so a file newer than the process is NOT yet in effect.
+ */
+export async function freeradiusStartedAt(): Promise<number | null> {
+  const custom = (process.env.FREERADIUS_PID_CMD || '').trim();
+  let pid = 0;
+  const viaCustom = custom ? await runShell(custom) : null;
+  if (viaCustom?.ok) pid = Number(viaCustom.out.trim().split(/\s+/)[0]) || 0;
+  if (!pid && !custom) {
+    const sd = await run('systemctl', [
+      'show',
+      '-p',
+      'MainPID',
+      '--value',
+      'freeradius',
+    ]);
+    if (sd.ok) pid = Number(sd.out.trim()) || 0;
+  }
+  if (!pid && !custom) {
+    // the oldest process running as the FreeRADIUS user — not a
+    // `freeradius -X` someone started by hand as root
+    const pg = await run('pgrep', [
+      '-o',
+      '-u',
+      serviceUser(),
+      '-x',
+      'freeradius',
+    ]);
+    if (pg.ok) pid = Number(pg.out.trim().split(/\s+/)[0]) || 0;
+  }
+  if (!pid) return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // field 22 (starttime, clock ticks since boot) — after the ")" that ends the name
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const ticks = Number(fields[19]);
+    const btime = Number(
+      /^btime\s+(\d+)/m.exec(readFileSync('/proc/stat', 'utf8'))?.[1],
+    );
+    const hz = Number((await run('getconf', ['CLK_TCK'])).out.trim()) || 100;
+    if (!Number.isFinite(ticks) || !Number.isFinite(btime)) return null;
+    return btime * 1000 + Math.floor((ticks * 1000) / hz);
+  } catch {
+    return null;
+  }
 }

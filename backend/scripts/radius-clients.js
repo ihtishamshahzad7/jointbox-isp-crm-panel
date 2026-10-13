@@ -12,9 +12,25 @@
  *       Exit 3 — and write nothing — if any active router's secret cannot be
  *       decrypted (SECRETS_KEY changed).
  *
- *   node scripts/radius-clients.js finalize
- *       After FreeRADIUS reads the file: clear plaintext secrets whose
- *       encrypted copy decrypts to exactly the same value.
+ *   node scripts/radius-clients.js mark-cutover
+ *       Record that FreeRADIUS now reads routers from the file (the start of
+ *       the proof window below). Kept if already recorded.
+ *
+ *   node scripts/radius-clients.js finalize [--all]
+ *       Retire LEGACY plaintext secrets. Default: only routers FreeRADIUS has
+ *       accepted accounting from since the cutover (that proves the router's
+ *       secret in the file is right). --all: every copy whose encrypted twin
+ *       decrypts to exactly the same value — after logins were tested by hand.
+ *
+ *   node scripts/radius-clients.js restore-plaintext
+ *       For a rollback to SQL clients: give every ACTIVE router whose
+ *       plaintext column is empty its secret back from the vault (FreeRADIUS
+ *       reads that column when read_clients = yes). Disabled routers stay
+ *       withheld. Prints counts only.
+ *
+ *   node scripts/radius-clients.js mark-rollback
+ *       Record that FreeRADIUS reads routers from SQL again (clears the
+ *       cutover time, so a later switch starts a new proof window).
  *
  *   node scripts/radius-clients.js status
  *       Counts only.
@@ -31,10 +47,11 @@ const fs = require('fs');
 try { require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true }); } catch { /* env already set */ }
 
 const dist = path.join(__dirname, '..', 'dist');
-let render, box;
+let render, box, host;
 try {
   render = require(path.join(dist, 'nas', 'radius-clients-render.js'));
   box = require(path.join(dist, 'common', 'crypto-box.js'));
+  host = require(path.join(dist, 'nas', 'radius-host.js'));
 } catch (e) {
   console.error('The backend is not built (dist/ is missing) — run this after "npm run build".');
   process.exit(2);
@@ -101,22 +118,70 @@ async function main() {
       return;
     }
 
+    if (cmd === 'mark-cutover') {
+      const st = host.readState();
+      const next = st.cutoverAt ? st : host.writeState({ cutoverAt: new Date().toISOString() });
+      out({ ok: true, cutoverAt: next.cutoverAt });
+      return;
+    }
+
     if (cmd === 'finalize') {
+      const all = args.includes('--all');
+      const since = host.readState().cutoverAt ? new Date(host.readState().cutoverAt) : null;
       const rows = await prisma.nas.findMany({
         where: { secret: { not: null }, radiusSecretEnc: { not: null } },
-        select: { id: true, secret: true, radiusSecretEnc: true },
+        select: { id: true, nasIp: true, secret: true, radiusSecretEnc: true },
       });
       let cleared = 0;
-      let kept = 0;
+      const kept = [];
       for (const r of rows) {
-        if (box.decryptSecret(r.radiusSecretEnc) === r.secret) {
-          await prisma.nas.update({ where: { id: r.id }, data: { secret: null } });
-          cleared++;
-        } else {
-          kept++;
+        if (box.decryptSecret(r.radiusSecretEnc) !== r.secret) {
+          kept.push({ id: r.id, reason: 'encrypted copy differs' });
+          continue;
         }
+        let proven = all;
+        if (!proven && since && r.nasIp) {
+          const seen = await prisma.$queryRaw`
+            SELECT 1 AS x FROM radacct
+            WHERE nasipaddress = ${r.nasIp}::inet
+              AND (acctstarttime > ${since} OR acctstoptime > ${since}
+                   OR (acctstoptime IS NULL AND acctupdatetime > ${since}))
+            LIMIT 1`.catch(() => []);
+          proven = seen.length > 0;
+        }
+        if (!proven) {
+          kept.push({ id: r.id, reason: since ? 'no accounting through the vault file yet' : 'no cutover recorded' });
+          continue;
+        }
+        await prisma.nas.update({ where: { id: r.id }, data: { secret: null } });
+        cleared++;
       }
+      host.writeState({ retired: { at: new Date().toISOString(), count: cleared, kept: kept.length } });
       out({ ok: true, cleared, kept });
+      return;
+    }
+
+    if (cmd === 'restore-plaintext') {
+      const rows = await prisma.nas.findMany({
+        where: { isActive: true, secret: null, radiusSecretEnc: { not: null } },
+        select: { id: true, radiusSecretEnc: true },
+      });
+      let restored = 0;
+      const failed = [];
+      for (const r of rows) {
+        const plain = box.decryptSecret(r.radiusSecretEnc);
+        if (plain == null || render.secretProblem(plain)) { failed.push(r.id); continue; }
+        await prisma.nas.update({ where: { id: r.id }, data: { secret: plain } });
+        restored++;
+      }
+      out({ ok: failed.length === 0, restored, undecryptable: failed });
+      if (failed.length) process.exitCode = 3;
+      return;
+    }
+
+    if (cmd === 'mark-rollback') {
+      const next = host.writeState({ cutoverAt: undefined, rolledBackAt: new Date().toISOString() });
+      out({ ok: true, rolledBackAt: next.rolledBackAt });
       return;
     }
 
@@ -141,7 +206,7 @@ async function main() {
       return;
     }
 
-    console.error('usage: radius-clients.js render --out <file> [--clients-conf <path>] [--group-of <dir>] | finalize | keycheck | status');
+    console.error('usage: radius-clients.js render --out <file> [--clients-conf <path>] [--group-of <dir>] | mark-cutover | finalize [--all] | restore-plaintext | mark-rollback | keycheck | status');
     process.exitCode = 1;
   } catch (e) {
     const msg = String((e && e.message) || e).split('\n').map((l) => l.trim()).filter(Boolean).pop() || 'unknown error';
