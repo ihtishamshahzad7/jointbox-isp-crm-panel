@@ -23,6 +23,7 @@ import { parseCursor, buildCursorPage } from '../common/pagination';
 import { terminateInfo } from '../common/radius-terminate';
 import { CurrencyService } from '../common/currency.service';
 import { assertCompanyCanAdd } from '../common/company-plan';
+import { radiusTenancyAllows } from '../nas/radius-tenancy';
 
 @Injectable()
 export class SubscribersService implements OnModuleInit {
@@ -660,7 +661,9 @@ export class SubscribersService implements OnModuleInit {
             select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
           })
         : null;
-      if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+      // RADIUS tenancy: never another company's router or its API login
+      if (nas?.nasIp && nas.apiUsername && nas.apiPassword &&
+          (await radiusTenancyAllows(this.prisma, sub.username, nas.nasIp, this.logger))) {
         await this.mikrotik.removePppSecret(
           nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
         ).catch((e: any) => this.logger.warn(`Transfer: PPP secret removal for ${sub.username} failed: ${e?.message || e}`));
@@ -2541,7 +2544,9 @@ if (!unpaid && data.username && data.password) {
           where: { id: subscriber.nasId },
           select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
         });
-        if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+        // RADIUS tenancy: never another company's router or its API login
+        if (nas?.nasIp && nas.apiUsername && nas.apiPassword &&
+            (await radiusTenancyAllows(this.prisma, subscriber.username, nas.nasIp, this.logger))) {
           console.log(`🔌 Disconnecting ${subscriber.username} from router before deletion...`);
           await this.mikrotik.disconnectPppoeUser(
             nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
@@ -2827,7 +2832,9 @@ if (!unpaid && data.username && data.password) {
           where: { id: subscriber.nasId },
           select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
         });
-        if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+        // RADIUS tenancy: never another company's router or its API login
+        if (nas?.nasIp && nas.apiUsername && nas.apiPassword &&
+            (await radiusTenancyAllows(this.prisma, subscriber.username, nas.nasIp, this.logger))) {
           this.logger.log(`🔌 Disconnecting ${subscriber.username} from router before deletion...`);
           await this.mikrotik.disconnectPppoeUser(
             nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, subscriber.username,
@@ -3050,7 +3057,9 @@ if (!unpaid && data.username && data.password) {
           }))?.nasId ?? -1 },
           select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
         });
-        if (nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+        // RADIUS tenancy: never another company's router or its API login
+        if (nas?.nasIp && nas.apiUsername && nas.apiPassword &&
+            (await radiusTenancyAllows(this.prisma, sub.username, nas.nasIp, this.logger))) {
           await this.mikrotik.removePppSecret(
             nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
           );
@@ -4790,6 +4799,10 @@ if (!unpaid && data.username && data.password) {
     username: string,
   ): Promise<{ uploadBytes: number; downloadBytes: number } | null> {
     if (!nasIp) return null;
+    // RADIUS tenancy: never another company's router or its API login. The
+    // address comes from the session row (the router's claim), so it can name
+    // a router the policy refuses this subscriber on.
+    if (!(await radiusTenancyAllows(this.prisma, username, nasIp, this.logger))) return null;
 
     try {
       const nas = await this.prisma.nas.findFirst({

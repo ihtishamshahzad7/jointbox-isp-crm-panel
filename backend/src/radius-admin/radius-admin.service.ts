@@ -7,6 +7,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RadiusClientVaultService } from '../nas/radius-client-vault.service';
 import * as host from '../nas/radius-host';
 import { VAULT_INCLUDE_LINE } from '../nas/radius-clients-render';
+import { tenancyHooks } from '../nas/radius-tenancy-site';
+
+/** Installed and refreshed by scripts/radius-tenancy.sh; not edited here. */
+export const TENANCY_POLICY_FILE = 'policy.d/jointbox-tenancy';
 
 const run = promisify(exec);
 const backupRoot = () => process.env.JOINTBOX_RADIUS_BACKUP_DIR || '/var/backups/jointbox-radius/admin';
@@ -280,6 +284,26 @@ export class RadiusAdminService {
           return { ok: false, restored: false, message: msg, check: msg };
         }
       }
+        // The RADIUS tenancy policy (docs/RADIUS_TENANCY.md) is put in and taken
+        // out by scripts/radius-tenancy.sh, which validates a staged copy and
+        // can roll back. Its file is not edited here, and an edit of a virtual
+        // server must keep the hooks that call it — removing one would quietly
+        // stop the company check for every login through that server.
+        if (relFromRad === TENANCY_POLICY_FILE) {
+          const msg = `${TENANCY_POLICY_FILE} is managed by backend/scripts/radius-tenancy.sh and is not edited here.`;
+          return { ok: false, restored: false, message: msg, check: msg };
+        }
+        const hadHooks = tenancyHooks(current);
+        const keepsHooks = tenancyHooks(next);
+        if (
+          (hadHooks.authorize && !keepsHooks.authorize) ||
+          (hadHooks.accounting && !keepsHooks.accounting)
+        ) {
+          const msg =
+            'This file carries the RADIUS tenancy hooks (jointbox_tenancy); they must stay. ' +
+            'To stop refusing use backend/scripts/radius-tenancy.sh --monitor; to remove the policy, --uninstall.';
+          return { ok: false, restored: false, message: msg, check: msg };
+        }
       if (next === current) return { ok: true, restarted: false, message: 'No changes.', check: 'No changes.' };
 
       const saved = await this.backup(abs, relFromRad);

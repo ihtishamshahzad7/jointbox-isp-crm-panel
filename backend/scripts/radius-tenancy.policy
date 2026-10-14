@@ -1,0 +1,84 @@
+# Managed by Jointbox: backend/scripts/radius-tenancy.sh installs this file as
+# policy.d/jointbox-tenancy. Do not edit it here; it is overwritten.
+# See docs/RADIUS_TENANCY.md.
+#
+# A subscriber may only log in on, and be accounted by, a router of its own
+# company or one explicitly shared into it. The decision and the switch
+# (off | monitor | enforce) are in the database:
+#   public.jointbox_radius_tenancy(kind, username, source address, NAS-IP-Address)
+#
+# The router is identified by the packet's SOURCE address, the address
+# FreeRADIUS matched the client and its secret by. NAS-IP-Address is only the
+# router's claim: it never decides ownership, and a claim naming another
+# company's router is refused.
+#
+# The username is the one the sql module looks radcheck up by
+# (the sql module's sql_user_name), so the policy judges exactly the subscriber
+# whose password is checked.
+
+# authorize, default server: after -sql. Covers PAP, CHAP, MS-CHAP and
+# EAP-MD5 alike, because it runs before an authentication method is chosen.
+# authorize, inner-tunnel: after -sql, for the identity inside an EAP-TTLS /
+# PEAP tunnel (an inner request carries the outer request's source address).
+#
+# An EAP Identity or NAK round verifies no credential (it is always answered
+# with an Access-Challenge) and its name is often a placeholder: "anonymous"
+# outside a TTLS / PEAP tunnel. It is checked as kind 'auth-eap-id': the
+# router, its claim and a name that is a subscriber are judged; a name that is
+# no subscriber is judged on the round that verifies the credential (the EAP
+# method round, or inner-tunnel). EAP-Type is set by the eap module from the
+# packet; a router cannot send it.
+jointbox_tenancy {
+	if (&EAP-Message && ((&EAP-Type == Identity) || (&EAP-Type == NAK))) {
+		update control {
+			&Tmp-String-7 := "%{sql:SELECT public.jointbox_radius_tenancy('auth-eap-id', '${modules.sql.sql_user_name}', '%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}', '%{%{NAS-IPv6-Address}:-%{NAS-IP-Address}}')}"
+		}
+	}
+	else {
+		update control {
+			&Tmp-String-7 := "%{sql:SELECT public.jointbox_radius_tenancy('auth', '${modules.sql.sql_user_name}', '%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}', '%{%{NAS-IPv6-Address}:-%{NAS-IP-Address}}')}"
+		}
+	}
+	if (&control:Tmp-String-7 && ((&control:Tmp-String-7 == 'allow') || (&control:Tmp-String-7 =~ /^monitor:/))) {
+		noop
+	}
+	else {
+		# reject:<reason>, or no answer from the database: refuse (fail closed)
+		update request {
+			&Module-Failure-Message := "jointbox tenancy %{%{control:Tmp-String-7}:-check unavailable}"
+		}
+		# the post-auth log records the router the request really came from,
+		# not the router it named
+		if ("%{Packet-Src-IP-Address}" != "") {
+			update request {
+				&NAS-IP-Address := "%{Packet-Src-IP-Address}"
+			}
+		}
+		reject
+	}
+}
+
+# accounting, default server: before -sql. A refused packet is acknowledged
+# (so the router stops retrying) and nothing is written for it.
+jointbox_tenancy_accounting {
+	if ((&Acct-Status-Type == Accounting-On) || (&Acct-Status-Type == Accounting-Off)) {
+		# closes every open session under the CLAIMED address: allowed only when
+		# the claim is not another company's router and all of those sessions
+		# belong to subscribers the sending router may carry
+		update control {
+			&Tmp-String-7 := "%{sql:SELECT public.jointbox_radius_tenancy_onoff('%{%{NAS-IPv6-Address}:-%{NAS-IP-Address}}', '%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}')}"
+		}
+	}
+	else {
+		update control {
+			&Tmp-String-7 := "%{sql:SELECT public.jointbox_radius_tenancy('acct', '${modules.sql.sql_user_name}', '%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}', '%{%{NAS-IPv6-Address}:-%{NAS-IP-Address}}')}"
+		}
+	}
+	if (!&control:Tmp-String-7 || ((&control:Tmp-String-7 != 'allow') && (&control:Tmp-String-7 !~ /^monitor:/))) {
+		update request {
+			&Module-Failure-Message := "jointbox tenancy %{%{control:Tmp-String-7}:-check unavailable}: accounting not recorded"
+		}
+		ok
+		return
+	}
+}

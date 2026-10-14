@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { terminateInfo, endedInfo, fieldsOf } from '../common/radius-terminate';
+import { radiusTenancyAllows, TENANCY_REFUSED } from '../nas/radius-tenancy';
 
 @Injectable()
 export class LogsService {
@@ -217,6 +218,15 @@ export class LogsService {
     const where: any = {};
     if (userIds) {
       where.nas = { ownerId: { in: userIds } };
+      // A row about ANOTHER company's subscriber on one of our routers — a
+      // cross-company session recorded before the RADIUS tenancy policy was
+      // enforced, or while it only monitors — is that company's data: its
+      // subscriber's name, address and usage. Router events with no
+      // subscriber stay visible.
+      where.OR = [
+        { subscriberId: null },
+        { subscriber: { userId: { in: userIds } } },
+      ];
     }
 
     const [logs, total] = await Promise.all([
@@ -310,6 +320,17 @@ export class LogsService {
 
     if (!subscriber || !subscriber.nas || !subscriber.nas.nasIp || !subscriber.nas.apiUsername || !subscriber.nas.apiPassword) {
       return { lines: [] };
+    }
+    // RADIUS tenancy: never another company's router or its API login
+    if (
+      !(await radiusTenancyAllows(
+        this.prisma,
+        subscriber.username,
+        subscriber.nas.nasIp,
+        this.logger,
+      ))
+    ) {
+      return { lines: [], note: TENANCY_REFUSED };
     }
 
     const rawLines = await this.mikrotik.getRouterLogs(

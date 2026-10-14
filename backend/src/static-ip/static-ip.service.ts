@@ -9,6 +9,7 @@ import { NetworkService } from '../network/network.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+import { radiusTenancyAllows } from '../nas/radius-tenancy';
 import { CurrencyService } from '../common/currency.service';
 
 /**
@@ -496,6 +497,17 @@ export class StaticIpService {
     const nasLabel = nas ? (nas.nasname ?? nas.nasIp ?? null) : null;
 
     const hasApi = !!(nas?.nasIp && nas.apiUsername && nas.apiPassword);
+    // RADIUS tenancy: never another company's router or its API login. A
+    // subscriber assigned to a router the policy refuses them on gets neither
+    // the secret pin nor the verification read (docs/RADIUS_TENANCY.md).
+    const apiAllowed =
+      hasApi &&
+      (await radiusTenancyAllows(
+        this.prisma,
+        username,
+        nas?.nasIp,
+        this.logger,
+      ));
 
     // 1. Make the ROUTER agree with RADIUS about the address.
     //
@@ -506,9 +518,9 @@ export class StaticIpService {
     // address closes that gap — whichever way the session is authorised, the
     // customer gets this IP.
     let pinnedOnRouter = false;
-    if (hasApi) {
+    if (apiAllowed) {
       pinnedOnRouter = await this.mikrotik.setSecretRemoteAddress(
-        // hasApi above guarantees nasIp/apiUsername/apiPassword are set.
+          // apiAllowed above guarantees nasIp/apiUsername/apiPassword are set.
         nas.nasIp!, nas.apiPort ?? 8728, nas.apiUsername!, nas.apiPassword!, username, newIp,
       ).catch(() => false);
     }
@@ -532,7 +544,7 @@ export class StaticIpService {
     //    actually holds now; if they are back online on the old pool address
     //    the operator must be told, not shown a success message.
     let verifiedAddress: string | null = null;
-    if (hasApi && reconnected) {
+    if (apiAllowed && reconnected) {
       await new Promise((r) => setTimeout(r, 4000)); // let them redial
       verifiedAddress = await this.mikrotik.getActiveAddress(
         nas.nasIp!, nas.apiPort ?? 8728, nas.apiUsername!, nas.apiPassword!, username,
@@ -718,7 +730,19 @@ export class StaticIpService {
 
     let disconnectResult: string | null = null;
     try {
-      if (holder?.username && nas?.nasIp && nas.apiUsername && nas.apiPassword) {
+      if (
+        holder?.username &&
+        nas?.nasIp &&
+        nas.apiUsername &&
+        nas.apiPassword &&
+        // RADIUS tenancy: never another company's router or its API login
+        (await radiusTenancyAllows(
+          this.prisma,
+          holder.username,
+          nas.nasIp,
+          this.logger,
+        ))
+      ) {
         // Un-pin the router first. A secret still carrying remote-address =
         // the released IP would keep handing it out no matter what RADIUS says,
         // and the address is now marked AVAILABLE for someone else — two
@@ -1196,7 +1220,19 @@ export class StaticIpService {
 
     const nas = sub?.nas as any;
     let routerIp: string | null | undefined;
-    if (nas?.nasIp && nas.apiUsername && nas.apiPassword && sub?.username) {
+    if (
+      nas?.nasIp &&
+      nas.apiUsername &&
+      nas.apiPassword &&
+      sub?.username &&
+      // RADIUS tenancy: never another company's router or its API login
+      (await radiusTenancyAllows(
+        this.prisma,
+        sub.username,
+        nas.nasIp,
+        this.logger,
+      ))
+    ) {
       routerIp = await this.mikrotik.getActiveAddress(
         nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, sub.username,
       ).catch(() => undefined); // undefined = unreachable, null = offline

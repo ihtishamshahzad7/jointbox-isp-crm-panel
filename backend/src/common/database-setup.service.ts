@@ -29,6 +29,18 @@ import { isPrimaryInstance } from './cluster-util';
 @Injectable()
 export class DatabaseSetupService implements OnModuleInit {
   private readonly logger = new Logger(DatabaseSetupService.name);
+  /**
+   * Where the FreeRADIUS tables really live: '' (public) or 'radius.'.
+   *
+   * scripts/radius-schema-apply.sh moves radacct, radcheck, radreply and
+   * radpostauth into the `radius` schema and leaves same-named VIEWS in
+   * public. An index, a column or a storage parameter cannot be applied to a
+   * view, so on every install that ran the script (every fresh install does)
+   * these statements failed at each boot and the open-session indexes were
+   * never created at all. Resolved at the start of every applyAll().
+   */
+  private rad = '';
+
   /** Re-entrancy guard for archiveOldSessions(). */
   private archiveRunning = false;
 
@@ -50,6 +62,7 @@ export class DatabaseSetupService implements OnModuleInit {
   /** Run every setup step. Returns a summary for the health endpoint. */
   async applyAll() {
     const started = Date.now();
+    this.rad = await this.radiusTablePrefix();
     const results = {
       radiusColumns: await this.ensureRadiusAccountingColumns(),
       nasreload: await this.ensureNasReload(),
@@ -61,7 +74,7 @@ export class DatabaseSetupService implements OnModuleInit {
     };
     const applied = Object.values(results).filter(Boolean).length;
     this.logger.log(
-      `✅ Database setup complete (${applied}/6 groups ok) in ${Date.now() - started}ms`,
+      `✅ Database setup complete (${applied}/${Object.keys(results).length} groups ok) in ${Date.now() - started}ms`,
     );
     return results;
   }
@@ -76,12 +89,41 @@ export class DatabaseSetupService implements OnModuleInit {
         const msg = String(e?.message || e);
         // "already exists" is success, not failure.
         if (!/already exists|duplicate/i.test(msg)) {
-          this.logger.warn(`${label}: ${msg.split('\n')[0]}`);
+          this.logger.warn(`${label}: ${this.reasonOf(e)}`);
           ok = false;
         }
       }
     }
     return ok;
+  }
+
+  /**
+   * The database's own message. A Prisma raw-query error starts with an empty
+   * line; the text is in meta.message / "Message: `...`".
+   */
+  private reasonOf(e: unknown): string {
+    const msg = String((e as { message?: string } | null)?.message || e);
+    const meta = (e as { meta?: { message?: string } } | null)?.meta;
+    return (
+      meta?.message ||
+      /Message: `([^`]*)`/.exec(msg)?.[1] ||
+      msg.split('\n').find((l) => l.trim()) ||
+      msg
+    );
+  }
+
+  /** 'radius.' when the RADIUS tables were moved there, otherwise ''. */
+  private async radiusTablePrefix(): Promise<string> {
+    try {
+      const rows = await this.prisma.$queryRaw<{ moved: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'radius' AND c.relname = 'radacct'
+             AND c.relkind IN ('r', 'p')) AS moved`;
+      return rows[0]?.moved ? 'radius.' : '';
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -91,7 +133,7 @@ export class DatabaseSetupService implements OnModuleInit {
    */
   private ensureRadiusAccountingColumns() {
     return this.run('radacct columns', [
-      `ALTER TABLE radacct
+      `ALTER TABLE ${this.rad}radacct
          ADD COLUMN IF NOT EXISTS acctupdatetime      TIMESTAMP WITH TIME ZONE,
          ADD COLUMN IF NOT EXISTS acctinterval        BIGINT,
          ADD COLUMN IF NOT EXISTS framedipv6address   INET,
@@ -230,23 +272,74 @@ export class DatabaseSetupService implements OnModuleInit {
    * Partial indexes are the important ones: they only cover OPEN sessions, so
    * they stay small no matter how large radacct grows.
    */
-  private ensureIndexes() {
-    return this.run('indexes', [
-      `CREATE INDEX IF NOT EXISTS radacct_open_sessions_idx
-         ON radacct (username, nasipaddress) WHERE acctstoptime IS NULL`,
-      `CREATE INDEX IF NOT EXISTS radacct_open_updated_idx
-         ON radacct (acctupdatetime) WHERE acctstoptime IS NULL`,
-      `CREATE INDEX IF NOT EXISTS radacct_user_time_idx
-         ON radacct (username, acctstarttime DESC)`,
-      `CREATE INDEX IF NOT EXISTS radacct_nas_idx
-         ON radacct (nasipaddress, acctstarttime DESC)`,
-      `CREATE INDEX IF NOT EXISTS radpostauth_user_date_idx
-         ON radpostauth (username, authdate DESC)`,
-      `CREATE INDEX IF NOT EXISTS radpostauth_date_idx
-         ON radpostauth (authdate DESC)`,
+  /**
+   * The RADIUS indexes are built CONCURRENTLY. FreeRADIUS writes radacct and
+   * radpostauth on every login and accounting packet, and a plain CREATE
+   * INDEX blocks those writes until it finishes — minutes on a large table,
+   * which FreeRADIUS experiences as a stalled database. That matters most on
+   * an installation whose tables were moved into `radius` before they had
+   * these indexes: it gets them at its first boot with this version, on
+   * whatever the tables have grown to. An interrupted concurrent build leaves
+   * an INVALID index that IF NOT EXISTS would skip for ever, so it is dropped
+   * and rebuilt.
+   */
+  private async ensureRadiusIndexes(): Promise<boolean> {
+    const schema = this.rad ? 'radius' : 'public';
+    const specs: Array<[string, string]> = [
+      [
+        'radacct_open_sessions_idx',
+        'radacct (username, nasipaddress) WHERE acctstoptime IS NULL',
+      ],
+      [
+        'radacct_open_updated_idx',
+        'radacct (acctupdatetime) WHERE acctstoptime IS NULL',
+      ],
+      ['radacct_user_time_idx', 'radacct (username, acctstarttime DESC)'],
+      ['radacct_nas_idx', 'radacct (nasipaddress, acctstarttime DESC)'],
+      // The archive batch selects closed sessions by stop time.
+      [
+        'radacct_closed_stop_idx',
+        'radacct (acctstoptime) WHERE acctstoptime IS NOT NULL',
+      ],
+      ['radpostauth_user_date_idx', 'radpostauth (username, authdate DESC)'],
+      ['radpostauth_date_idx', 'radpostauth (authdate DESC)'],
       // Read on EVERY authentication — highest-frequency query in the system.
-      `CREATE INDEX IF NOT EXISTS radcheck_username_idx ON radcheck (username)`,
-      `CREATE INDEX IF NOT EXISTS radreply_username_idx ON radreply (username)`,
+      ['radcheck_username_idx', 'radcheck (username)'],
+      ['radreply_username_idx', 'radreply (username)'],
+    ];
+    let ok = true;
+    for (const [name, on] of specs) {
+      try {
+        const invalid: unknown[] = await this.prisma.$queryRawUnsafe(
+          `SELECT 1 FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+             JOIN pg_namespace n ON n.oid = i.relnamespace
+            WHERE i.relname = '${name}' AND n.nspname = '${schema}'
+              AND NOT x.indisvalid`,
+        );
+        if (invalid.length) {
+          this.logger.warn(
+            `${schema}.${name} was left INVALID by an interrupted build — rebuilding`,
+          );
+          await this.prisma.$executeRawUnsafe(
+            `DROP INDEX CONCURRENTLY IF EXISTS ${schema}.${name}`,
+          );
+        }
+        await this.prisma.$executeRawUnsafe(
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON ${this.rad}${on}`,
+        );
+      } catch (e: unknown) {
+        if (!/already exists|duplicate/i.test(this.reasonOf(e))) {
+          this.logger.warn(`indexes: ${this.reasonOf(e)}`);
+          ok = false;
+        }
+      }
+    }
+    return ok;
+  }
+
+  private async ensureIndexes() {
+    const radius = await this.ensureRadiusIndexes();
+    const panel = await this.run('indexes', [
       // Panel hot paths.
       `CREATE INDEX IF NOT EXISTS subscriber_owner_idx    ON "Subscriber" ("userId")`,
       `CREATE INDEX IF NOT EXISTS subscriber_nas_idx      ON "Subscriber" ("nasId")`,
@@ -269,6 +362,7 @@ export class DatabaseSetupService implements OnModuleInit {
       // column rewrites the whole table — a CPU spike at boot on a large base.
       // The pg_trgm GIN indexes above already give fast fuzzy/word search.)
     ]);
+    return radius && panel;
   }
 
   /**
@@ -278,11 +372,11 @@ export class DatabaseSetupService implements OnModuleInit {
    */
   private tuneAutovacuum() {
     return this.run('autovacuum', [
-      `ALTER TABLE radacct SET (
+      `ALTER TABLE ${this.rad}radacct SET (
          autovacuum_vacuum_scale_factor  = 0.02,
          autovacuum_analyze_scale_factor = 0.01,
          autovacuum_vacuum_cost_limit    = 2000)`,
-      `ALTER TABLE radpostauth SET (autovacuum_vacuum_scale_factor = 0.05)`,
+      `ALTER TABLE ${this.rad}radpostauth SET (autovacuum_vacuum_scale_factor = 0.05)`,
     ]);
   }
 
@@ -365,9 +459,8 @@ export class DatabaseSetupService implements OnModuleInit {
       // The batch selector scans by acctstoptime on every iteration. Without a
       // matching index that is a sequential scan of the live table per batch,
       // which makes batching SLOWER overall than the single sweep it replaced.
-      // Partial, because only closed sessions are ever archived.
-      `CREATE INDEX IF NOT EXISTS radacct_closed_stop_idx
-         ON public.radacct (acctstoptime) WHERE acctstoptime IS NOT NULL`,
+      // That partial index (radacct_closed_stop_idx, closed sessions only) is
+      // built with the other RADIUS indexes in ensureRadiusIndexes().
       // Carry over anything already archived under the old public location, so
       // the legacy table can then be dropped without losing history.
       `DO $mig$

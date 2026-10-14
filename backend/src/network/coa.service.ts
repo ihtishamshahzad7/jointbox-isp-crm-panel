@@ -5,6 +5,7 @@ import { sendCoa, sessionAttributes, mikrotikRateLimit, RadiusCode, CoaSession }
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { SecretsService } from '../common/secrets.service';
+import { radiusTenancyAllows, TENANCY_REFUSED } from '../nas/radius-tenancy';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,6 +28,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * `NetworkService.disconnect()` uses, which finds the session by name first
  * and reports whether anything was actually found/removed.
  */
+/** Shown when the RADIUS tenancy policy stops a CoA / disconnect. */
+export const COA_TENANCY_REFUSED = TENANCY_REFUSED;
+
 @Injectable()
 export class CoaService {
   private readonly logger = new Logger(CoaService.name);
@@ -70,6 +74,27 @@ export class CoaService {
     return nas.secret || null;
   }
 
+  /**
+   * RADIUS TENANCY FOR CoA / DISCONNECT.
+   *
+   * The same rule FreeRADIUS applies at login (database function
+   * jointbox_radius_tenancy, kind 'coa'; docs/RADIUS_TENANCY.md): a request
+   * about a subscriber goes only to a router the policy would let that
+   * subscriber log in on. Otherwise one company's router — and its secret or
+   * API login — would be used for another company's subscriber, and that
+   * subscriber's session id and address would be handed to it.
+   *
+   * mode off: always sent. monitor: sent, the would-be refusal is recorded.
+   * enforce: not sent. Check unavailable (no answer from the database): not
+   * sent — fail closed, like FreeRADIUS.
+   */
+  async tenancyAllows(
+    username: string | null | undefined,
+    nasIp: string | null | undefined,
+  ): Promise<boolean> {
+    return radiusTenancyAllows(this.prisma, username, nasIp, this.logger);
+  }
+
   /** Look up the subscriber's current live session + its NAS (with CoA creds). */
   private async resolve(subscriberId: number) {
     const sub = await this.prisma.subscriber.findUnique({
@@ -111,6 +136,9 @@ export class CoaService {
     const { sub, session } = r;
     if (!sub.nas?.nasIp) return { success: false, message: 'No NAS assigned to this subscriber' };
     if (!session) return { success: false, message: 'No active session to disconnect' };
+    if (!(await this.tenancyAllows(sub.username, sub.nas.nasIp))) {
+      return { success: false, message: COA_TENANCY_REFUSED };
+    }
 
     // 1) Standard RADIUS Disconnect-Request — vendor-agnostic.
     const secret = this.nasSecret(sub.nas);
@@ -246,6 +274,9 @@ export class CoaService {
             where: { nasIp: s.nasipaddress as string },
             select: { secret: true, radiusSecretEnc: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
           });
+          // a router outside the subscriber's company gets neither the CoA
+          // nor the API fallback (RADIUS tenancy policy)
+          if (nas && !(await this.tenancyAllows(username, s.nasipaddress))) nas = null;
           nasCreds.set(s.nasipaddress, nas);
         }
         const session: any = {
@@ -407,7 +438,12 @@ export class CoaService {
     // Push it live via CoA if we have a session + secret.
     let live = false;
     const coaSecret = this.nasSecret(sub.nas);
-    if (session && sub.nas?.nasIp && coaSecret) {
+    if (
+      session &&
+      sub.nas?.nasIp &&
+      coaSecret &&
+      (await this.tenancyAllows(sub.username, sub.nas.nasIp))
+    ) {
       const res = await sendCoa({
         host: sub.nas.nasIp,
         port: coaPort(sub.nas.incomingPort),
@@ -467,6 +503,9 @@ export class CoaService {
     });
     const byNameSecret = this.nasSecret(nas);
     if (!nas || !byNameSecret) return { ok: false, method: 'none', message: 'NAS has no shared secret configured' };
+    if (!(await this.tenancyAllows(username, session.nasIp))) {
+      return { ok: false, method: 'none', message: COA_TENANCY_REFUSED };
+    }
     if (nas.nasIdentifier) session.nasIdentifier = nas.nasIdentifier;
     const res = await sendCoa({
       host: session.nasIp as string,
@@ -499,6 +538,9 @@ export class CoaService {
           where: { nasIp: s.nasipaddress as string },
           select: { secret: true, radiusSecretEnc: true, incomingPort: true, nasIdentifier: true, apiPort: true, apiUsername: true, apiPassword: true, nasIp: true },
         });
+        // a router outside the subscriber's company gets neither the CoA nor
+        // the API fallback (RADIUS tenancy policy)
+        if (nas && !(await this.tenancyAllows(username, s.nasipaddress))) nas = null;
         nasCreds.set(s.nasipaddress, nas);
       }
       const session: any = {

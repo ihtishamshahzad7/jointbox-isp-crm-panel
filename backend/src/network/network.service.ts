@@ -225,7 +225,16 @@ export class NetworkService {
     //    dead session looked exactly like a successful kill). "found:false"
     //    means the router already agrees the user is offline — that's a
     //    legitimate success too, just not one where anything was removed.
-    if (!cut && hasApi) {
+    // Same RADIUS tenancy rule as the CoA above: another company's router (and
+    // its API login) is never used for this subscriber — not to remove the
+    // session, and not to verify it below.
+    const apiAllowed = hasApi && (await this.coa.tenancyAllows(username, nas.nasIp));
+    if (hasApi && !apiAllowed) {
+      trail.push(
+        "mikrotik-api: not used (router outside the subscriber's company — RADIUS tenancy policy)",
+      );
+    }
+    if (!cut && apiAllowed) {
       try {
         const r = await this.mikrotik.disconnectPppoeUser(
           nas.nasIp, nas.apiPort ?? 8728, nas.apiUsername, nas.apiPassword, username,
@@ -249,7 +258,7 @@ export class NetworkService {
     //    NAS exposes its API, ask it directly whether the user is still
     //    there, and only accept "disconnected" once the router itself agrees.
     let verified: boolean | null = null; // null = no way to verify (no API creds)
-    if (hasApi && cut) {
+    if (apiAllowed && cut) {
       await sleep(1500);
       try {
         const stillActive = await this.mikrotik.isSessionActive(

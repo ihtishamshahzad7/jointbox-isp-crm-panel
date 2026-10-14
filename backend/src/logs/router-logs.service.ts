@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { mapLimit } from '../common/concurrency';
+import { radiusTenancyAllows } from '../nas/radius-tenancy';
 
 /**
  * RouterLogsService — mirrors each MikroTik's own log into the panel, and
@@ -191,7 +192,18 @@ export class RouterLogsService {
 
     // Fetch on demand as well as on the cron — when somebody is actively
     // looking at a broken connection, two-minute-old data is not good enough.
-    if (sub.nas) await this.collectFromNas(sub.nas).catch(() => 0);
+    // RADIUS tenancy: never another company's router or its API login.
+    if (
+      sub.nas &&
+      (await radiusTenancyAllows(
+        this.prisma,
+        sub.username,
+        sub.nas.nasIp,
+        this.logger,
+      ))
+    ) {
+      await this.collectFromNas(sub.nas).catch(() => 0);
+    }
 
     const lines = await this.prisma.routerLog.findMany({
       where: { username: sub.username },
@@ -215,10 +227,38 @@ export class RouterLogsService {
     if (query.severity && query.severity !== 'ALL') where.severity = query.severity;
     if (query.search) where.message = { contains: String(query.search), mode: 'insensitive' };
 
-    // A reseller sees only routers they own or have been assigned.
+    // A reseller sees every line of the routers it owns. On a router it was
+    // only SHARED (assigned) it sees the lines about its own subscribers —
+    // never the owner's or anyone else's customers (the rule the live
+    // getRouterLogsForNas applies).
     if (actor && !this.scope.isAdmin(actor.role)) {
       const ids = await this.scope.descendantIds(await this.scope.rootId(actor));
-      where.nas = { OR: [{ ownerId: { in: ids } }, { assignments: { some: { userId: { in: ids } } } }] };
+      const shared = { assignments: { some: { userId: { in: ids } } } };
+      const sharedOnly = await this.prisma.nas.count({
+        where: {
+          AND: [
+            shared,
+            { OR: [{ ownerId: null }, { ownerId: { notIn: ids } }] },
+          ],
+        },
+      });
+      const mine = sharedOnly
+        ? (
+            await this.prisma.subscriber.findMany({
+              where: { userId: { in: ids } },
+              select: { username: true },
+            })
+          ).map((s) => s.username)
+        : [];
+      const scoped = {
+        OR: [
+          { nas: { ownerId: { in: ids } } },
+          ...(mine.length
+            ? [{ AND: [{ nas: shared }, { username: { in: mine } }] }]
+            : []),
+        ],
+      };
+      where.AND = [...(where.AND ?? []), scoped];
     }
 
     const take = Math.min(Number(query.limit) || 200, 1000);

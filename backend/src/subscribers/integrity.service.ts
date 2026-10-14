@@ -329,15 +329,19 @@ export class IntegrityService implements OnModuleInit {
    * SAFETY: if a router is unreachable we SKIP it entirely and touch none of
    * its sessions — an unreachable router must never be read as "everyone off".
    */
-  async reconcileSessionsWithRouter(apply = true, nasScope: any = {}) {
+  async reconcileSessionsWithRouter(apply = true, nasScope: any = {}, subscriberOwnerIds?: number[]) {
     // nasScope narrows the run to one company's routers when a company asks
     // (Network → Sync sessions); the nightly and platform runs pass nothing.
+    // subscriberOwnerIds (company runs): only that company's subscribers'
+    // sessions are closed. A row on its router that belongs to another
+    // company's subscriber is left to the platform run — a company never
+    // closes another company's sessions (docs/RADIUS_TENANCY.md).
     const nases = await this.prisma.nas.findMany({
       where: { AND: [{ isActive: true, nasIp: { not: null }, apiUsername: { not: null } }, nasScope || {}] },
       select: { nasname: true, nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
     });
 
-    let closed = 0; let checkedNas = 0; let skippedNas = 0; const details: any[] = [];
+    let closed = 0; let checkedNas = 0; let skippedNas = 0; let notYours = 0; const details: any[] = [];
     for (const nas of nases) {
       const ip = nas.nasIp as string;
       let live: any[];
@@ -359,7 +363,17 @@ export class IntegrityService implements OnModuleInit {
       if (!open.length) continue;
       if (!liveNames.size && open.length) { skippedNas++; checkedNas--; continue; }
 
-      const ghosts = open.filter((r) => !liveNames.has((r.username || '').trim()));
+      let ghosts = open.filter((r) => !liveNames.has((r.username || '').trim()));
+      if (subscriberOwnerIds && ghosts.length) {
+        const own = await this.prisma.subscriber.findMany({
+          where: { username: { in: ghosts.map((g) => g.username) }, userId: { in: subscriberOwnerIds } },
+          select: { username: true },
+        });
+        const ownSet = new Set(own.map((s) => s.username));
+        const before = ghosts.length;
+        ghosts = ghosts.filter((g) => ownSet.has(g.username));
+        notYours += before - ghosts.length;
+      }
       if (apply) {
         for (const g of ghosts) {
           await this.prisma.$executeRaw`
@@ -374,7 +388,10 @@ export class IntegrityService implements OnModuleInit {
     if (closed || skippedNas) {
       this.logger.warn(`Session sync: closed ${closed} ghost session(s) across ${checkedNas} router(s)${skippedNas ? `, skipped ${skippedNas} unreachable` : ''}`);
     }
-    return { checked: 'router-sessions', routers: checkedNas, skipped: skippedNas, closed, details };
+    return {
+      checked: 'router-sessions', routers: checkedNas, skipped: skippedNas, closed, details,
+      ...(subscriberOwnerIds ? { leftForPlatform: notYours } : {}),
+    };
   }
 
   /**

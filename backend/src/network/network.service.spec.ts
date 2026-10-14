@@ -36,7 +36,7 @@ describe('NetworkService.disconnect', () => {
       activityLog: { create: jest.fn().mockResolvedValue({ id: 1 }) },
       ...(overrides.prisma || {}),
     };
-    const coa: any = { disconnectByUsername: jest.fn() };
+    const coa: any = { disconnectByUsername: jest.fn(), tenancyAllows: jest.fn().mockResolvedValue(true) };
     const mikrotik: any = {
       disconnectPppoeUser: jest.fn(),
       isSessionActive: jest.fn(),
@@ -162,6 +162,21 @@ describe('NetworkService.disconnect', () => {
     expect(prisma.activityLog.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ action: 'DISCONNECT_FAILED' }) }),
     );
+  });
+
+  it("RADIUS tenancy: the router API of a router outside the subscriber's company is never used", async () => {
+    const { prisma, coa, mikrotik, service } = makeService();
+    seedLiveSession(prisma);
+    coa.disconnectByUsername.mockResolvedValue({ ok: false, method: 'none', message: 'Not sent: tenancy' });
+    coa.tenancyAllows.mockResolvedValue(false);
+
+    const err: any = await run(service, 'z');
+
+    expect(coa.tenancyAllows).toHaveBeenCalledWith('z', '192.168.88.17');
+    expect(mikrotik.disconnectPppoeUser).not.toHaveBeenCalled();
+    expect(mikrotik.isSessionActive).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled(); // nothing was cut: the row stays open
   });
 
   it('no radacct row AND no NAS API credentials → honest error, nothing written', async () => {

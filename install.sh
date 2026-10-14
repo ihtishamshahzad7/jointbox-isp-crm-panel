@@ -561,6 +561,20 @@ if [ -f "$SCRIPT_DIR/backend/scripts/patch-postauth.sh" ]; then
   DB_NAME="$DB_NAME" bash "$SCRIPT_DIR/backend/scripts/patch-postauth.sh" || warn "post-auth capture patch skipped"
 fi
 
+# RADIUS tenancy policy (docs/RADIUS_TENANCY.md): one company's router never
+# logs in, or records accounting for, another company's subscriber. Every
+# database starts in monitor mode (would-be refusals are counted, nothing is
+# refused); a re-run keeps the stored mode. Enforcing is the operator's
+# decision: radius-tenancy.sh --report, then --enforce. Never fails the
+# install: on any problem FreeRADIUS keeps its previous configuration.
+if [ -f "$APP_DIR/backend/scripts/radius-tenancy.sh" ]; then
+  if bash "$APP_DIR/backend/scripts/radius-tenancy.sh" --install >/tmp/jointbox-radius-tenancy.log 2>&1; then
+    ok "RADIUS tenancy policy in FreeRADIUS (mode: $(sed -n -E 's/.*mode: ([a-z]+).*/\1/p' /tmp/jointbox-radius-tenancy.log | tail -1))"
+  else
+    warn "RADIUS tenancy policy not installed — see /tmp/jointbox-radius-tenancy.log (FreeRADIUS keeps its previous configuration)"
+  fi
+fi
+
 # -----------------------------------------------------------------------------
 step "9/10  Start services and verify"
 systemctl restart freeradius && sleep 2

@@ -203,6 +203,17 @@ if [[ -f backend/scripts/radius-vault-cutover.sh ]]; then
   fi
 fi
 
+# RADIUS tenancy policy: kept current where the operator installed it
+# (radius-tenancy.sh --install). Never installed by an update on its own, and
+# the mode (off / monitor / enforce) is not touched. See docs/RADIUS_TENANCY.md.
+if [[ -f backend/scripts/radius-tenancy.sh ]] && compgen -G "/etc/freeradius/3.0/policy.d/jointbox-tenancy" >/dev/null; then
+  if bash backend/scripts/radius-tenancy.sh --install; then
+    log "FreeRADIUS tenancy policy is up to date."
+  else
+    log "WARNING: FreeRADIUS tenancy policy was not refreshed; FreeRADIUS keeps its previous configuration. See the [radius-tenancy] lines above."
+  fi
+fi
+
 write_status "success" "Deployment completed successfully"
 
 log "============================================================"

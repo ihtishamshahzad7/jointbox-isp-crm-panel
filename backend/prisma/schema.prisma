@@ -1222,6 +1222,39 @@ model NasAssignment {
   @@index([nasId])
 }
 
+/// FreeRADIUS tenancy policy switch (one row, id = 1). Read on every RADIUS
+/// request by jointbox_radius_tenancy(); changed only by
+/// scripts/radius-tenancy.sh. off = no check; monitor = check and record,
+/// never refuse; enforce = refuse what the policy does not allow.
+/// See docs/RADIUS_TENANCY.md.
+model RadiusTenancySetting {
+  id        Int      @id @default(1)
+  mode      String   @default("monitor") @db.VarChar(10)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by") @db.VarChar(120)
+
+  @@map("radius_tenancy_setting")
+}
+
+/// What the tenancy policy did NOT allow: one row per kind / reason /
+/// username / router, counted. No passwords or secrets ever reach it; the
+/// username is left empty when it matches no subscriber.
+model RadiusTenancyEvent {
+  id       BigInt   @id @default(autoincrement())
+  kind     String   @db.VarChar(16)
+  reason   String   @db.VarChar(40)
+  username String   @default("") @db.VarChar(64)
+  nasIp    String   @default("") @map("nas_ip") @db.VarChar(64)
+  mode     String   @db.VarChar(10)
+  count    BigInt   @default(1)
+  firstAt  DateTime @default(now()) @map("first_at")
+  lastAt   DateTime @default(now()) @map("last_at")
+
+  @@unique([kind, reason, username, nasIp])
+  @@index([lastAt])
+  @@map("radius_tenancy_event")
+}
+
 /// Sharing an address pool down the chain.
 ///
 /// Mirrors NasAssignment deliberately: the two travel together in practice.

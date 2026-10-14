@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { RadiusAdminService } from './radius-admin.service';
 import { VAULT_INCLUDE_LINE } from '../nas/radius-clients-render';
+import { addTenancyHooks } from '../nas/radius-tenancy-site';
 
 /**
  * The platform's FreeRADIUS file editor runs as root on the RADIUS server.
@@ -26,8 +27,25 @@ describe('FreeRADIUS admin screen', () => {
 
   function setup() {
     const root = mkdtempSync(join(tmpdir(), 'jbx-radadm-'));
-    for (const d of ['clients.d', 'certs', 'mods-available', 'mods-enabled'])
+    for (const d of [
+      'clients.d',
+      'certs',
+      'mods-available',
+      'mods-enabled',
+      'policy.d',
+      'sites-available',
+    ])
       mkdirSync(join(root, d));
+    writeFileSync(
+      join(root, 'policy.d', 'jointbox-tenancy'),
+      'jointbox_tenancy {\n\tnoop\n}\n',
+    );
+    writeFileSync(
+      join(root, 'sites-available', 'default'),
+      addTenancyHooks(
+        'server default {\nauthorize {\n\t-sql\n\tpap\n}\naccounting {\n\t-sql\n}\n}\n',
+      ).text,
+    );
     writeFileSync(join(root, 'radiusd.conf'), 'user = freerad\n');
     writeFileSync(
       join(root, 'clients.conf'),
@@ -106,6 +124,42 @@ describe('FreeRADIUS admin screen', () => {
     expect(w.ok).toBe(false);
     expect(w.message).toMatch(/must keep the line/);
     expect(readFileSync(join(root, 'clients.conf'), 'utf8')).toBe(before);
+  });
+
+  it('never edits the tenancy policy file and never drops its hooks', async () => {
+    const { root, svc } = setup();
+    const policy = await svc.readFile('policy.d/jointbox-tenancy');
+    const w1: any = await svc.writeFile(
+      'policy.d/jointbox-tenancy',
+      policy.content.replace('noop', 'ok'),
+    );
+    expect(w1.ok).toBe(false);
+    expect(w1.message).toMatch(/radius-tenancy\.sh/);
+    expect(
+      readFileSync(join(root, 'policy.d', 'jointbox-tenancy'), 'utf8'),
+    ).toContain('noop');
+
+    const before = readFileSync(
+      join(root, 'sites-available', 'default'),
+      'utf8',
+    );
+    const site = await svc.readFile('sites-available/default');
+    const w2: any = await svc.writeFile(
+      'sites-available/default',
+      site.content.replace(/\tjointbox_tenancy\n/, ''),
+    );
+    expect(w2.ok).toBe(false);
+    expect(w2.message).toMatch(/tenancy hooks/);
+    expect(readFileSync(join(root, 'sites-available', 'default'), 'utf8')).toBe(
+      before,
+    );
+
+    // other edits of the same file are still possible
+    const w3: any = await svc.writeFile(
+      'sites-available/default',
+      site.content.replace('\tpap', '\tpap\n\t# note'),
+    );
+    expect(w3.ok).toBe(true);
   });
 
   it('puts the previous version back when FreeRADIUS rejects the edit', async () => {

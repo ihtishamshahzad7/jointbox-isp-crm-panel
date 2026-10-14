@@ -1,5 +1,19 @@
+// The RADIUS tenancy decision (docs/RADIUS_TENANCY.md) is a database call;
+// here it is explicit: allowed (the subscriber's router is its company's)
+// unless a test says otherwise.
+jest.mock('../nas/radius-tenancy', () => ({
+  ...jest.requireActual<typeof import('../nas/radius-tenancy')>(
+    '../nas/radius-tenancy',
+  ),
+  radiusTenancyAllows: jest.fn(),
+}));
+
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { StaticIpService } from './static-ip.service';
+import { radiusTenancyAllows } from '../nas/radius-tenancy';
+
+const tenancy = radiusTenancyAllows as jest.Mock;
+beforeEach(() => tenancy.mockReset().mockResolvedValue(true));
 
 /**
  * STATIC IP LIFE-CYCLE (spec tests 3–5: assign / change / remove / online-assign).
@@ -252,6 +266,106 @@ describe('StaticIpService', () => {
     expect(prisma.activityLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ action: 'STATIC_IP_REMOVED', details: expect.stringContaining('192.168.88.151') }),
     }));
+  });
+
+  it("TEST 3f — the subscriber's router is another company's: DB + RADIUS written, the session cut through the guarded path, but no pin and no read with that router's API login", async () => {
+    const { prisma, subscribers, network, mikrotik, service } = makeService();
+    seedOfflineAssign(prisma);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        acctsessionid: 'S1',
+        nasipaddress: '192.168.88.17',
+        framedipaddress: '10.10.10.209',
+      },
+    ]);
+    network.disconnect.mockResolvedValue({
+      disconnected: true,
+      method: 'radius-coa',
+      verified: 'confirmed offline on the router',
+    });
+    tenancy.mockResolvedValue(false);
+
+    const result: any = await service.assign(5, { subscriberId: 2 });
+
+    expect(tenancy).toHaveBeenCalledWith(
+      prisma,
+      'jane',
+      '192.168.88.17',
+      expect.anything(),
+    );
+    expect(subscribers.syncToRadius).toHaveBeenCalledWith(2);
+    expect(network.disconnect).toHaveBeenCalled(); // NetworkService applies its own tenancy check
+    expect(mikrotik.setSecretRemoteAddress).not.toHaveBeenCalled();
+    expect(mikrotik.getActiveAddress).not.toHaveBeenCalled();
+    expect(result.pinnedOnRouter).toBe(false);
+    expect(result.applied).toBeNull(); // never claimed live
+  });
+
+  it("TEST 5b — remove on another company's router: DB + RADIUS → DYNAMIC, but that router's secret is not touched", async () => {
+    const { prisma, subscribers, network, mikrotik, service } = makeService();
+    prisma.staticIp.findUnique.mockResolvedValue({
+      ...IP,
+      subscriberId: 2,
+      status: 'ASSIGNED',
+      assignedAt: new Date(),
+    });
+    prisma.staticIp.update.mockResolvedValue({
+      ...IP,
+      subscriberId: null,
+      status: 'AVAILABLE',
+    });
+    prisma.subscriber.findUnique.mockResolvedValue({
+      id: 2,
+      username: 'jane',
+      nas: {
+        nasname: 'core',
+        nasIp: '192.168.88.17',
+        apiPort: 8728,
+        apiUsername: 'admin',
+        apiPassword: 'secret',
+      },
+    });
+    network.disconnect.mockResolvedValue({
+      disconnected: true,
+      method: 'radius-coa',
+      verified: 'confirmed offline on the router',
+    });
+    tenancy.mockResolvedValue(false);
+
+    await service.release(5, 'Customer moved house', ACTOR);
+
+    expect(prisma.serviceSettings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ ipType: 'DYNAMIC' }),
+      }),
+    );
+    expect(subscribers.syncToRadius).toHaveBeenCalledWith(2);
+    expect(mikrotik.clearSecretRemoteAddress).not.toHaveBeenCalled();
+  });
+
+  it("health check on another company's router reads accounting, never that router's API", async () => {
+    const { prisma, mikrotik, service } = makeService();
+    prisma.subscriber.findUnique.mockResolvedValue({
+      id: 2,
+      username: 'jane',
+      authMethod: 'PPPOE',
+      serviceSettings: { ipType: 'DYNAMIC', ipAddress: null },
+      nas: {
+        nasname: 'core',
+        nasIp: '192.168.88.17',
+        apiPort: 8728,
+        apiUsername: 'admin',
+        apiPassword: 'secret',
+      },
+    });
+    (prisma as any).radReply = { findFirst: jest.fn().mockResolvedValue(null) };
+    prisma.$queryRaw.mockResolvedValue([{ framedipaddress: '10.10.10.209' }]);
+    tenancy.mockResolvedValue(false);
+
+    const h: any = await service.staticIpHealth(2);
+
+    expect(mikrotik.getActiveAddress).not.toHaveBeenCalled();
+    expect(JSON.stringify(h)).toContain('10.10.10.209'); // from radacct
   });
 
   it('remove of an address that is not allocated is a no-op (no RADIUS or router calls)', async () => {

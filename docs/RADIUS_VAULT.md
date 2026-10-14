@@ -275,3 +275,4 @@ behaviour with Message-Authenticator in CoA on your RouterOS version.
 | "Shared secret is incorrect" | MikroTik `/radius` secret | same secret on both sides (re-save on the router page) |
 | Sync failing in Settings | message under the table, `journalctl -u freeradius -n 50` | fix the named file:line, then "Sync" or wait 5 min |
 | `--rollback` exit 6 "no backup" | `/var/backups/jointbox-radius/*/MODE` | restore from your own tarball (§5 Backup) |
+| Login refused with `jointbox tenancy reject:<reason>` in the FreeRADIUS log | `backend/scripts/radius-tenancy.sh --status` | not a vault problem: the RADIUS tenancy policy refused it (router and subscriber of different companies, or a NAS-IP-Address naming another company's router). See `docs/RADIUS_TENANCY.md`; `--monitor` stops refusals instantly. The vault's client sync and FreeRADIUS restarts leave the tenancy hooks in place (verified). |

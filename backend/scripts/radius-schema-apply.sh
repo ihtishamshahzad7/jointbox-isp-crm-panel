@@ -73,11 +73,14 @@ SQL
 
 # Point FreeRADIUS at the separated authentication/accounting objects. Missing
 # config files are tolerated so the CRM can be deployed before FreeRADIUS exists.
+# --follow-symlinks: mods-enabled/sql is a link to mods-available/sql; a plain
+# `sed -i` replaced the link with a copy, after which edits to the real module
+# file (installer, router-vault cutover) silently stopped taking effect.
 for f in \
   /etc/freeradius/3.0/mods-config/sql/main/postgresql/queries.conf \
   /etc/freeradius/3.0/mods-enabled/sql; do
   if [[ -f "$f" ]]; then
-    sed -i \
+    sed -i --follow-symlinks \
       -e 's/^[[:space:]]*authcheck_table[[:space:]]*=.*/    authcheck_table  = "radius.radcheck"/' \
       -e 's/^[[:space:]]*authreply_table[[:space:]]*=.*/    authreply_table   = "radius.radreply"/' \
       -e 's/^[[:space:]]*groupcheck_table[[:space:]]*=.*/    groupcheck_table  = "radius.radgroupcheck"/' \

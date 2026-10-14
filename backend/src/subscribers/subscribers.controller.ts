@@ -110,7 +110,8 @@ export class SubscribersController {
       return { checked: r.checked, routers: r.routers, skipped: r.skipped, closed: r.closed };
     }
     const ids = await this.scope.descendantIds(await this.scope.rootId(req.user));
-    return this.integrity.reconcileSessionsWithRouter(apply !== 'false', { ownerId: { in: ids.length ? ids : [-1] } });
+    const own = ids.length ? ids : [-1];
+    return this.integrity.reconcileSessionsWithRouter(apply !== 'false', { ownerId: { in: own } }, own);
   }
 
   // ========== BASIC CRUD ENDPOINTS ==========

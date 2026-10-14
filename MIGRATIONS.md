@@ -38,17 +38,22 @@ DB without leaving a migration file, which is exactly what caused the drift.
 ./update-jointbox.sh
 ```
 
-That runs `npm run db:deploy` (→ `backend/scripts/db-deploy.sh`), which:
+That runs `npm run db:deploy` (→ `backend/scripts/db-deploy.sh`), which runs
+**`prisma migrate deploy` and nothing else** (plus the RADIUS schema split,
+`scripts/radius-schema-apply.sh`). It applies every committed migration that
+is not yet recorded. A failed migration **stops the deployment** — there is no
+automatic baseline and no `prisma db push` safety net any more (that net ran
+`--accept-data-loss` after a refused migration).
 
-1. **`prisma migrate deploy`** — applies every committed migration, in order.
-   If the server's DB predates migrations (it was first built with `db push`,
-   so its history is empty while tables already exist) the script **baselines**
-   it automatically — marks the existing migrations as applied — then deploys.
-2. **`prisma db push`** (idempotent safety net) — guarantees the live schema
-   matches `schema.prisma` exactly, healing anything that slipped in before it
-   was captured as a migration. A no-op when already in sync.
-
-After it runs, the server DB **always** matches `schema.prisma`. No manual SQL.
+Earlier versions did run `db push` on every deploy, which is why the
+migration chain alone could not build an empty database until
+`20260827235959_fresh_install_baseline` and
+`20261013120000_fresh_install_reconcile` — see
+[docs/MIGRATIONS-FRESH-INSTALL.md](docs/MIGRATIONS-FRESH-INSTALL.md), including
+how to diagnose and recover a server whose deploys stop with `P3009` (for
+example a first install that stopped at
+`20260828000000_outage_intelligence_attribution`) — diagnose before any
+`prisma migrate resolve`.
 
 ---
 
@@ -85,5 +90,5 @@ from migrations alone.
 ## Fresh server from a git clone
 
 `install.sh` runs the same `npm run db:deploy`, so a brand-new Ubuntu box builds
-the database purely from committed migrations + the reconcile safety net — no
-special steps. See the top of `install.sh` for the full one-command bootstrap.
+the database purely from committed migrations — no special steps (PostgreSQL 12
+or newer). See the top of `install.sh` for the full one-command bootstrap.
