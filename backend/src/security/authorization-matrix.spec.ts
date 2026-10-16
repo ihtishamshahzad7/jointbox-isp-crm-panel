@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { buildMatrix, Route } from './authorization-matrix';
+import { buildMatrix, parseController, Route } from './authorization-matrix';
 
 /**
  * "MATHEMATICALLY PROVE TENANT ISOLATION."
@@ -89,6 +89,9 @@ const PUBLIC_SURFACE: Record<string, string> = {
   'GET /portal/packages': 'The price list a prospective customer browses.',
   'POST /portal/login': 'The customer portal front door.',
   'POST /portal/register': 'Customer self-signup.',
+  'POST /auth/login': 'Operator login front door.',
+  'POST /auth/refresh': 'Token refresh; identity is the presented token.',
+  'POST /auth/verify': 'Token verification; identity is the presented token.',
   'GET /payment-gateways/portal/active': 'Which payment methods a customer may choose.',
   'GET /payment-gateways/portal/transaction/:reference': 'Payment status by opaque reference.',
   'POST /payment-gateways/portal/checkout': 'Starts a customer payment.',
@@ -233,5 +236,41 @@ describe('security: the authorization matrix', () => {
   it('the public list has no stale entries', () => {
     const live = new Set(matrix.filter((r) => r.guards.length === 0).map(route));
     expect(Object.keys(PUBLIC_SURFACE).filter((k) => !live.has(k))).toEqual([]);
+  });
+});
+
+describe('security: the authorization matrix parser', () => {
+  // A public route right after a guarded one, as in auth.controller.ts.
+  const LF = [
+    "@Controller('auth')",
+    'export class AuthController {',
+    "  @Get('profile')",
+    '  @UseGuards(JwtAuthGuard)',
+    '  profile(@Req() req: any) {',
+    '    return req.user;',
+    '  }',
+    '',
+    "  @Post('login')",
+    '  login(@Body() body: any) {',
+    '    return body;',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+  const CRLF = LF.replace(/\n/g, '\r\n');
+
+  it('reads a Windows (CRLF) checkout exactly like a Linux (LF) one', () => {
+    expect(parseController('auth/auth.controller.ts', CRLF)).toEqual(
+      parseController('auth/auth.controller.ts', LF),
+    );
+  });
+
+  it("does not lend an earlier handler's guard to the next one, on either line ending", () => {
+    for (const src of [LF, CRLF]) {
+      const login = parseController('auth/auth.controller.ts', src).find(
+        (r) => r.handler === 'login',
+      );
+      expect(login?.guards).toEqual([]);
+    }
   });
 });

@@ -84,7 +84,12 @@ function listControllers(root: string): string[] {
  * reporting a route as NOT actor-aware, so the failure mode is a false
  * finding somebody investigates, never a real one waved through.
  */
-export function parseController(file: string, src: string): Route[] {
+export function parseController(file: string, raw: string): Route[] {
+  // Windows checkouts end lines with CRLF. The decorator-block search below
+  // looks for "\n\n" and "}\n", which a CRLF file never contains, so a
+  // handler then inherited the @UseGuards of every earlier handler in the
+  // class: an unguarded route passed locally and failed only on CI (LF).
+  const src = raw.replace(/\r\n?/g, '\n');
   const controller = (src.match(/export class (\w+)/) || [, path.basename(file)])[1];
   const classDecorators = src.slice(0, src.indexOf('export class'));
   const classGuards = [...classDecorators.matchAll(/@UseGuards\(([^)]*)\)/g)]
