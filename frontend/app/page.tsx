@@ -1,182 +1,235 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import { Logo } from "./components/logo";
+import { NetworkScene } from "./components/landing/network-scene";
+import { LanguagePicker } from "./components/landing/language-picker";
+import s from "./components/landing/landing.module.css";
 import { BRAND } from "../lib/brand";
-import { LANGS, useI18n } from "../lib/i18n";
+import { useI18n } from "../lib/i18n";
 
 /**
- * Landing page — Nova style. Brand name, support contact and hero copy all
- * resolve through lib/brand + lib/i18n, so a white-label deployment can point
- * this page at any company and any language.
+ * Landing page. Brand name, support contact and hero copy all resolve through
+ * lib/brand + lib/i18n, so a white-label deployment can point this page at any
+ * company and any language. Every number in the previews is example data and
+ * is labelled as such on the page.
  */
 
-const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const SUPPORT = BRAND.supportEmail;
 
+function Check() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M5 12.5l4.2 4.2L19 7" />
+    </svg>
+  );
+}
+
+const MODULES = [
+  {
+    title: "RADIUS & MikroTik",
+    body: "PPPoE and hotspot logins, CoA disconnects and per-router sync status, without opening WinBox.",
+    icon: <><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 17h.01M11 17h.01M8 10a5.5 5.5 0 0 1 8 0M5.5 7.5a9 9 0 0 1 13 0" /></>,
+  },
+  {
+    title: "Billing & wallets",
+    body: "Invoices in rupees, prepaid wallets, and top-ups down the franchise → dealer → retailer chain.",
+    icon: <><rect x="3" y="6" width="18" height="13" rx="2.5" /><path d="M3 10h18M16 15h2" /></>,
+  },
+  {
+    title: "Outage intelligence",
+    body: "Session drops grouped by router and area, so you see one dead splitter instead of two hundred calls.",
+    icon: <><path d="M12 3l9 16H3z" /><path d="M12 10v4M12 17h.01" /></>,
+  },
+  {
+    title: "Multi-company",
+    body: "Host many ISPs on one server. Each sees only its own subscribers, routers and money.",
+    icon: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
+  },
+];
+
+/** The 24-hour sessions curve in the preview: y 0–14k → 120–10, x 0–24 h → 34–590. */
+const CURVE = "M34 72 L57 78 L80 86 L103 92 L126 95 L149 93 L172 84 L195 72 L218 63 L241 58 L264 55 L287 52 L310 51 L333 53 L356 52 L379 49 L402 44 L425 37 L448 30 L471 25 L494 22 L517 24 L540 33 L563 46 L590 58";
+
+function tilt(e: React.PointerEvent<HTMLElement>) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width - 0.5;
+  const y = (e.clientY - r.top) / r.height - 0.5;
+  el.style.transform = `rotateY(${(x * 12).toFixed(2)}deg) rotateX(${(-y * 12).toFixed(2)}deg) translateZ(6px)`;
+}
+
 export default function HomePage() {
-  const { t, lang, setLang } = useI18n();
-  const [langOpen, setLangOpen] = useState(false);
+  const { t } = useI18n();
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "#080b12",
-        color: "#fff",
-        overflow: "hidden",
-        position: "relative",
-        fontFamily: "Inter, system-ui, sans-serif",
-      }}
-    >
-      {/* Grid + Nova glows */}
-      <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(140,90,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(140,90,255,0.04) 1px, transparent 1px)", backgroundSize: "40px 40px" }} />
-      <div style={{ position: "absolute", width: 500, height: 500, background: "radial-gradient(circle, rgba(108,60,225,0.16) 0%, transparent 70%)", top: -200, left: -150, filter: "blur(80px)" }} />
-      <div style={{ position: "absolute", width: 420, height: 420, background: "radial-gradient(circle, rgba(242,113,33,0.12) 0%, transparent 70%)", bottom: -150, right: -100, filter: "blur(80px)" }} />
+    <main id="main" className={s.root}>
+      <div className={s.aurora} aria-hidden="true" />
 
-      {/* Navbar */}
-      <nav style={{ width: "100%", padding: "22px 60px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 10 }}>
-        <Logo size={40} withText />
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          {/* Language picker */}
-          <div style={{ position: "relative" }}>
-            <button
-              type="button"
-              onClick={() => setLangOpen((o) => !o)}
-              style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 13, transition: "all 0.2s", display: "inline-flex", alignItems: "center", gap: 8 }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-            >
-              🌐 {LANGS.find((l) => l.code === lang)?.native ?? "English"}
-            </button>
-            {langOpen && (
-              <div style={{ position: "absolute", right: 0, top: 44, zIndex: 50, width: 180,
-                background: "#0f1625", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 6,
-                boxShadow: "0 20px 50px rgba(0,0,0,.5)" }}>
-                {LANGS.map((l) => (
-                  <button
-                    key={l.code}
-                    type="button"
-                    onClick={() => { setLang(l.code); setLangOpen(false); }}
-                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%",
-                      background: lang === l.code ? "rgba(233,64,139,.14)" : "transparent", border: "none", color: "#fff",
-                      borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
-                  >
-                    <span>{l.native}</span>
-                    {lang === l.code && <span style={{ color: "#F9A8D4" }}>✓</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <Link href="/login">
-            <button
-              style={{ padding: "10px 24px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 14, transition: "all 0.2s" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-            >
-              {t("Sign In →")}
-            </button>
+      <div className={s.wrap}>
+        <nav className={s.nav} aria-label="Main">
+          <Link href="/" aria-label={`${BRAND.name} home`} style={{ textDecoration: "none" }}>
+            <Logo size={40} withText />
           </Link>
-        </div>
-      </nav>
+          <div className={s.navLinks}>
+            <a className={`${s.navLink} ${s.hideSm}`} href="#modules">{t("Features")}</a>
+            <a className={`${s.navLink} ${s.hideSm}`} href="/documentation.html" target="_blank" rel="noopener noreferrer">{t("Documentation")}</a>
+            <LanguagePicker />
+            <Link className={`${s.btn} ${s.primary} ${s.small}`} href="/login">{t("Sign In →")}</Link>
+          </div>
+        </nav>
 
-      {/* Hero */}
-      <section style={{ maxWidth: 1300, margin: "0 auto", padding: "60px 40px 80px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 60, flexWrap: "wrap", position: "relative", zIndex: 2 }}>
-        <div style={{ flex: 1, minWidth: 320 }}>
-          <div style={{ fontSize: 13, letterSpacing: "0.15em", marginBottom: 20, textTransform: "uppercase", fontWeight: 700, background: "linear-gradient(90deg,#C4B5FD,#F9A8D4)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-            {t("ISP Management Platform")}
+        <header className={s.hero}>
+          <div>
+            <span className={s.eyebrow}><i aria-hidden="true" />{t("ISP Management Platform")}</span>
+            <h1 className={s.h1}>
+              {t("Run your whole")} <span className={s.lit}>{t("network from one panel")}</span>
+            </h1>
+            <p className={s.lede}>
+              {BRAND.tagline || (
+                <>
+                  {BRAND.name} brings subscriber management, MikroTik and RADIUS integration, billing,
+                  reseller hierarchy, ticketing and real-time network monitoring together in one place.
+                </>
+              )}
+            </p>
+            <div className={s.ctas}>
+              <Link className={`${s.btn} ${s.primary}`} href="/login">{t("Access Dashboard →")}</Link>
+              <a className={s.btn} href="/documentation.html" target="_blank" rel="noopener noreferrer">{t("Documentation")}</a>
+            </div>
+            <ul className={s.proof}>
+              <li><Check />{t("MikroTik + RADIUS control")}</li>
+              <li><Check />{t("Reseller hierarchy & wallets")}</li>
+              <li><Check />{t("Isolated per-account data")}</li>
+              <li><Check />{t("Billing, tickets & reports")}</li>
+            </ul>
           </div>
 
-          <h1 style={{ fontSize: 62, lineHeight: 1.08, fontWeight: 800, marginBottom: 24, letterSpacing: "-0.03em" }}>
-            {t("Run your whole")}
-            <br />
-            {t("network from one panel")}
-          </h1>
+          <NetworkScene
+            variant="hero"
+            className={s.scene}
+            label={t("3D view of a fiber network: a core router feeding six distribution points and the homes behind them, with one sector offline.")}
+          >
+            <div className={`${s.float} ${s.fOnline}`} aria-hidden="true">
+              <div className={s.k}><span className={s.dot} style={{ background: "var(--online)" }} />{t("Online now")}</div>
+              <div className={s.v}>12,480</div>
+              <div className={s.s}><span className={s.up}>▲ 312</span> {t("in the last hour")}</div>
+              <svg viewBox="0 0 180 34" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="jbSpark" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stopColor="#B9A4FF" stopOpacity=".45" />
+                    <stop offset="1" stopColor="#B9A4FF" stopOpacity="0" />
+                  </linearGradient>
+                </defs>
+                <path d="M0 26 L15 24 L30 25 L45 20 L60 22 L75 17 L90 18 L105 13 L120 15 L135 10 L150 11 L165 6 L180 7 L180 34 L0 34 Z" fill="url(#jbSpark)" />
+                <path d="M0 26 L15 24 L30 25 L45 20 L60 22 L75 17 L90 18 L105 13 L120 15 L135 10 L150 11 L165 6 L180 7" fill="none" stroke="#B9A4FF" strokeWidth="1.8" />
+                <circle cx="178" cy="7" r="2.6" fill="#ECE9F8" />
+              </svg>
+            </div>
 
-          <p style={{ fontSize: 15, color: "#94a3b8", lineHeight: 1.7, maxWidth: 600, marginBottom: 32 }}>
-            {BRAND.tagline || (
-              <>
-                {BRAND.name} brings subscriber management, MikroTik and RADIUS integration, billing,
-                reseller hierarchy, ticketing and real-time network monitoring together in one
-                place — built for franchises, dealers and retailers under a single ISP.
-              </>
-            )}
-          </p>
+            <div className={`${s.float} ${s.fRadius}`} aria-hidden="true">
+              <div className={s.k}><span className={s.dot} style={{ background: "var(--lilac)" }} />{t("RADIUS · last minute")}</div>
+              <div className={s.v}>99.98%</div>
+              <div className={s.s}>{t("Access-Accept rate")}</div>
+              <div className={s.row}><span>pppoe user-10482</span><span>Accept</span></div>
+              <div className={s.row}><span>pppoe user-20917</span><span>Accept</span></div>
+              <div className={s.row}><span>CoA · OLT-2</span><span>ACK</span></div>
+            </div>
 
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <Link href="/login">
-              <button
-                style={{ padding: "14px 28px", borderRadius: 12, border: "none", background: NOVA, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", boxShadow: "0 6px 20px rgba(233,64,139,0.35)", transition: "all 0.2s" }}
-                onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 10px 28px rgba(233,64,139,0.45)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 6px 20px rgba(233,64,139,0.35)"; }}
-              >
-                {t("Access Dashboard →")}
-              </button>
-            </Link>
+            <div className={`${s.float} ${s.fOutage}`} aria-hidden="true">
+              <div className={s.k}><span className={s.dot} style={{ background: "var(--down)" }} />{t("Outage detected")}</div>
+              <div className={s.t}>Sector G-11 · OLT-4</div>
+              <div className={s.s}>{t("14 homes offline since 18:02 · splitter suspected")}</div>
+            </div>
 
-            <a
-              href="/documentation.html" target="_blank" rel="noopener noreferrer"
-              style={{ padding: "14px 28px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#fff", fontWeight: 600, fontSize: 14, cursor: "pointer", transition: "all 0.2s", textDecoration: "none", display: "inline-block" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-            >
-              {t("Documentation")}
-            </a>
-          </div>
+            <div className={s.sampleTag}>{t("Panel preview · sample data")}</div>
+          </NetworkScene>
+        </header>
 
-          {/* Stats */}
-          <div style={{ display: "flex", gap: 48, marginTop: 60, flexWrap: "wrap", paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-            {[
-              ["12", t("Core Modules")],
-              ["50+", t("Features")],
-              ["8", t("User Roles")],
-              ["100%", t("Multi-tenant")],
-            ].map(([value, label]) => (
-              <div key={label}>
-                <div style={{ fontSize: 32, fontWeight: 800, background: NOVA, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>{value}</div>
-                <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, letterSpacing: 0.3 }}>{label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Right card — real product surface, no AI */}
-        <div style={{ width: 400, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 24, padding: 28, backdropFilter: "blur(12px)", boxShadow: "0 20px 40px rgba(0,0,0,0.3)" }}>
-          <div style={{ fontSize: 11, marginBottom: 20, letterSpacing: "0.12em", fontWeight: 700, textTransform: "uppercase", background: "linear-gradient(90deg,#C4B5FD,#F9A8D4)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-            {t("At a glance")}
-          </div>
-
+        <div className={s.stats}>
           {[
-            [t("Revenue this month"), "Rs 1,84,200", NOVA],
-            [t("Active subscribers"), "18,249", "#fff"],
-          ].map(([label, value, color]) => (
-            <div key={String(label)} style={{ background: "#0f1625", borderRadius: 16, padding: 18, marginBottom: 14, border: "1px solid rgba(255,255,255,0.05)" }}>
-              <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 8 }}>{label}</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: color === "#fff" ? "#fff" : undefined, background: color !== "#fff" ? color : undefined, WebkitBackgroundClip: color !== "#fff" ? "text" : undefined, WebkitTextFillColor: color !== "#fff" ? "transparent" : undefined }}>{value}</div>
+            ["12", t("Core Modules")],
+            ["50+", t("Features")],
+            ["8", t("User Roles")],
+            ["100%", t("Multi-tenant")],
+          ].map(([value, label]) => (
+            <div key={label} className={s.stat}>
+              <b><span>{value}</span></b>
+              <small>{label}</small>
             </div>
           ))}
+        </div>
 
-          <div style={{ background: "#0f1625", borderRadius: 16, padding: 18, border: "1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 12 }}>{t("Built in")}</div>
-            <div style={{ color: "#6EE7B7", lineHeight: 1.9, fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>
-              ✓ {t("MikroTik + RADIUS control")}<br />
-              ✓ {t("Reseller hierarchy & wallets")}<br />
-              ✓ {t("Isolated per-account data")}<br />
-              ✓ {t("Billing, tickets & reports")}
+        <section id="modules" className={s.section} aria-labelledby="jb-mod-h">
+          <span className={s.label}>{t("Core Modules")}</span>
+          <h2 id="jb-mod-h" className={s.h2}>{t("Everything an ISP runs on, wired together")}</h2>
+          <p className={s.sub}>{t("One account tree from the platform down to the last subscriber: every login, payment and fault lands in the right company's books.")}</p>
+          <div className={s.modules}>
+            {MODULES.map((m) => (
+              <article key={m.title} className={s.mod} onPointerMove={tilt} onPointerLeave={(e) => { e.currentTarget.style.transform = ""; }}>
+                <div className={s.chip}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">{m.icon}</svg>
+                </div>
+                <h3>{t(m.title)}</h3>
+                <p>{t(m.body)}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className={s.section} aria-labelledby="jb-gl-h">
+          <div className={s.glance}>
+            <div>
+              <span className={s.label}>{t("At a glance")}</span>
+              <h2 id="jb-gl-h" className={s.h2}>{t("Your morning check, before the first call")}</h2>
+              <p className={s.sub}>{t("Active subscribers, revenue this month, routers that dropped overnight and the tickets waiting for you, on the first screen after sign-in.")}</p>
+            </div>
+            <div className={s.stage} aria-hidden="true">
+              <div className={s.panel}>
+                <div className={s.panelTop}><i /><i /><i /><span>{BRAND.name.toLowerCase()} · dashboard · {t("sample data")}</span></div>
+                <div className={s.tiles}>
+                  <div className={s.tile}><div className={s.k}>{t("Active subscribers")}</div><div className={s.v}>12,480</div><div className={s.d} style={{ color: "var(--online)" }}>▲ 2.6%</div></div>
+                  <div className={s.tile}><div className={s.k}>{t("Revenue this month")}</div><div className={s.v}>Rs 18.6M</div><div className={s.d} style={{ color: "var(--online)" }}>▲ 4.1%</div></div>
+                  <div className={s.tile}><div className={s.k}>{t("Routers up")}</div><div className={s.v}>46 / 48</div><div className={s.d} style={{ color: "var(--warn)" }}>{t("2 need a look")}</div></div>
+                  <div className={s.tile}><div className={s.k}>{t("Open tickets")}</div><div className={s.v}>23</div><div className={s.d} style={{ color: "var(--muted)" }}>{t("6 overdue")}</div></div>
+                </div>
+                <div className={s.chart}>
+                  <div className={s.k}>{t("Online sessions · last 24 h")}</div>
+                  <svg viewBox="0 0 600 150">
+                    <defs>
+                      <linearGradient id="jbArea" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stopColor="#8B6CFF" stopOpacity=".55" />
+                        <stop offset="1" stopColor="#E9408B" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    <text x="0" y="14">14k</text><text x="4" y="67">7k</text><text x="18" y="123">0</text>
+                    <text x="34" y="142">00:00</text><text x="167" y="142">06:00</text><text x="301" y="142">12:00</text><text x="440" y="142">18:00</text><text x="560" y="142">24:00</text>
+                    <g stroke="rgba(185,164,255,.12)"><line x1="34" y1="10" x2="590" y2="10" /><line x1="34" y1="65" x2="590" y2="65" /><line x1="34" y1="120" x2="590" y2="120" /></g>
+                    <path d={`${CURVE} L590 120 L34 120 Z`} fill="url(#jbArea)" />
+                    <path d={CURVE} fill="none" stroke="#B9A4FF" strokeWidth="2.2" />
+                    <circle cx="494" cy="22" r="4" fill="#ECE9F8" />
+                    <text x="436" y="16" className={s.peak}>peak 12.7k</text>
+                  </svg>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Footer */}
-      <footer style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "30px 20px", borderTop: "1px solid rgba(255,255,255,0.05)", marginTop: 40 }}>
-        <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
-          © {new Date().getFullYear()} <strong style={{ color: "#C4B5FD" }}>{BRAND.name}</strong> · {BRAND.subtitle} ·{" "}
-          {t("Support:")} <a href={`mailto:${SUPPORT}`} style={{ color: "#F9A8D4", textDecoration: "none" }}>{SUPPORT}</a>
-        </p>
-      </footer>
+        <div className={s.ctaBand}>
+          <h2 className={s.h2}>{t("Bring your first router online today")}</h2>
+          <div className={s.ctas}>
+            <Link className={`${s.btn} ${s.primary}`} href="/login">{t("Access Dashboard →")}</Link>
+            <a className={s.btn} href="/documentation.html" target="_blank" rel="noopener noreferrer">{t("Documentation")}</a>
+          </div>
+        </div>
+
+        <footer className={s.footer}>
+          <span>© {new Date().getFullYear()} <strong>{BRAND.name}</strong> · {BRAND.subtitle}</span>
+          <span>{t("Support:")} <a href={`mailto:${SUPPORT}`}>{SUPPORT}</a></span>
+        </footer>
+      </div>
     </main>
   );
 }

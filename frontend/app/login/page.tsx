@@ -5,11 +5,14 @@ import { useRouter } from "next/navigation";
 import { Logo } from "../components/logo";
 import API_BASE from "../components/api";
 import { BRAND } from "../../lib/brand";
-import { LANGS, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
+import Link from "next/link";
+import { NetworkScene } from "../components/landing/network-scene";
+import { LanguagePicker } from "../components/landing/language-picker";
+import s from "../components/landing/landing.module.css";
 import { ensureMediaToken } from "../components/image-upload";
 import { isPlatformSession, PLATFORM_HOME } from "../components/platform";
 
-const NOVA = "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)";
 const SUPPORT = BRAND.supportEmail;
 const getBackendUrl = () => API_BASE;
 
@@ -20,13 +23,12 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [code, setCode] = useState("");
   const [needs2fa, setNeeds2fa] = useState(false);
-  const [langOpen, setLangOpen] = useState(false);
   const [demoCredentials, setDemoCredentials] = useState<{email:string;password:string}|null>(null);
   // The demo button only exists on a server that hosts the sandbox. On a
   // customer's panel it is off, and a button that always fails is worse than
   // no button. Null until the server has answered, so it never flashes in.
   const [demoEnabled, setDemoEnabled] = useState<boolean | null>(null);
-  const { t, setLang, lang } = useI18n();
+  const { t } = useI18n();
   const router = useRouter();
 
   useEffect(() => {
@@ -74,7 +76,7 @@ export default function LoginPage() {
     finally { setLoading(false); }
   };
 
-  const handleKeyPress=(e:React.KeyboardEvent)=>{if(e.key==="Enter"&&!loading)handleLogin();};
+  // Enter submits through the <form> below; a key handler as well would send the login twice.
 
   const handleDemo = async () => {
     setLoading(true);
@@ -102,16 +104,92 @@ export default function LoginPage() {
 
   const copy=async(v:string,label:string)=>{try{await navigator.clipboard.writeText(v);setMessage(`✅ ${label} copied to clipboard`);}catch{setMessage(`${label}: ${v}`);}};
 
-  return <div style={{background:"#080b12",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Segoe UI',system-ui,sans-serif"}}>
-    <div style={{display:"flex",width:900,maxWidth:"100%",minHeight:520,borderRadius:24,overflow:"hidden",border:"1px solid rgba(255,255,255,.08)",boxShadow:"0 25px 50px -12px rgba(0,0,0,.5)"}}>
-      <div style={{flex:1,minWidth:300,background:"linear-gradient(135deg,#0a0f1a,#0d1525,#0a0f1c)",padding:"48px 40px",display:"flex",flexDirection:"column",justifyContent:"space-between"}}><div><div style={{marginBottom:40}}><Logo size={44} withText subtitle={BRAND.subtitle}/></div><h1 style={{fontSize:32,fontWeight:800,lineHeight:1.3,color:"#fff"}}>{t("Command Center")}<br/>{t("for")} <span style={{background:NOVA,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>{BRAND.subtitle}</span></h1><p style={{color:"#94a3b8",lineHeight:1.7,fontSize:13}}>{t("Secure. Fast. Always on.")}<br/>{t("Enterprise-grade infrastructure")}<br/>{t("built for modern ISPs.")}</p></div><div style={{display:"flex",gap:32,borderTop:"1px solid rgba(255,255,255,.06)",paddingTop:20}}>{[["99.9%","Uptime"],["256-bit","Encryption"],["24/7","Support"]].map(x=><div key={x[1]}><b style={{fontSize:20,color:"#E9408B"}}>{x[0]}</b><div style={{fontSize:10,color:"#64748b"}}>{x[1]}</div></div>)}</div></div>
-      <div style={{width:360,background:"#0c0f17",padding:"48px 40px",display:"flex",flexDirection:"column",justifyContent:"center"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><span style={{fontSize:11,color:"#E9408B",letterSpacing:".15em"}}>{t("Secure Access")}</span><div style={{position:"relative"}}><button type="button" onClick={()=>setLangOpen(x=>!x)} style={{background:"transparent",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",borderRadius:8,padding:"5px 10px"}}>🌐 {LANGS.find(l=>l.code===lang)?.native??"English"}</button>{langOpen&&<div style={{position:"absolute",right:0,top:34,zIndex:50,width:180,background:"#0f1625",padding:6,borderRadius:12}}>{LANGS.map(l=><button key={l.code} type="button" onClick={()=>{setLang(l.code);setLangOpen(false)}} style={{display:"block",width:"100%",background:"transparent",border:0,color:"#fff",padding:8,textAlign:"left"}}>{l.native}</button>)}</div>}</div></div><div style={{fontSize:28,fontWeight:800,color:"#fff",marginBottom:8}}>{t("Sign in")}</div><div style={{fontSize:12,color:"#64748b",marginBottom:28}}>{t("Enter your credentials to continue")}</div>
-      <label style={{color:"#94a3b8",fontSize:11,marginBottom:7}}>{t("Email Address")}</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyPress} autoComplete="username" style={{width:"100%",boxSizing:"border-box",background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,padding:"12px 14px",color:"#fff",marginBottom:16}}/>
-      <label style={{color:"#94a3b8",fontSize:11,marginBottom:7}}>{t("Password")}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyPress} autoComplete="current-password" style={{width:"100%",boxSizing:"border-box",background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,padding:"12px 14px",color:"#fff",marginBottom:18}}/>
-      {needs2fa&&<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,""))} onKeyDown={handleKeyPress} placeholder="6-digit authenticator code" style={{width:"100%",boxSizing:"border-box",padding:12,marginBottom:16}}/>}
-      <button type="button" disabled={loading} onClick={handleLogin} style={{width:"100%",padding:13,border:0,borderRadius:10,color:"#fff",fontWeight:700,background:NOVA}}>{loading?t("Signing In..."):t("Sign In →")}</button>
-      {demoEnabled && (<button type="button" disabled={loading} onClick={handleDemo} style={{width:"100%",marginTop:10,padding:11,borderRadius:10,border:"1px solid rgba(233,64,139,.35)",background:"rgba(233,64,139,.06)",color:"#f9a8d4",fontWeight:800,cursor:loading?"wait":"pointer"}}>✦ {loading?"Creating new demo…":"Try a NEW demo account"}</button>)}
-      {demoCredentials&&<div style={{marginTop:16,padding:15,borderRadius:12,background:"rgba(233,64,139,.08)",border:"1px solid rgba(233,64,139,.35)"}}><div style={{fontSize:13,fontWeight:800,color:"#fff",marginBottom:10}}>🎉 NEW Demo Login Credentials</div><div style={{fontSize:10,color:"#94a3b8"}}>LOGIN EMAIL / USERNAME</div><div style={{display:"flex",gap:6,alignItems:"center",marginBottom:9}}><code style={{flex:1,color:"#fff",overflowWrap:"anywhere"}}>{demoCredentials.email}</code><button type="button" onClick={()=>copy(demoCredentials.email,"Email / username")} style={{padding:"4px 8px",borderRadius:6,border:"1px solid rgba(255,255,255,.12)",background:"#151b29",color:"#fff"}}>Copy</button></div><div style={{fontSize:10,color:"#94a3b8"}}>LOGIN PASSWORD</div><div style={{display:"flex",gap:6,alignItems:"center"}}><code style={{flex:1,color:"#fff",overflowWrap:"anywhere"}}>{demoCredentials.password}</code><button type="button" onClick={()=>copy(demoCredentials.password,"Password")} style={{padding:"4px 8px",borderRadius:6,border:"1px solid rgba(255,255,255,.12)",background:"#151b29",color:"#fff"}}>Copy</button></div><button type="button" onClick={handleLogin} style={{marginTop:12,width:"100%",padding:9,borderRadius:8,border:"1px solid rgba(255,255,255,.12)",background:"#151b29",color:"#fff",fontWeight:700}}>Sign in with this demo account</button></div>}
-      {message&&<p style={{textAlign:"center",marginTop:18,color:message.includes("❌")?"#f87171":"#E9408B",fontSize:12,padding:10,borderRadius:8,background:message.includes("❌")?"rgba(248,113,113,.1)":"rgba(233,64,139,.1)"}}>{message}</p>}<div style={{marginTop:20,padding:12,background:"rgba(255,255,255,.03)",borderRadius:8,textAlign:"center",fontSize:10,color:"#64748b"}}>{t("Need help?")} <a href={`mailto:${SUPPORT}`} style={{color:"#F9A8D4"}}>{SUPPORT}</a></div></div>
-    </div></div>;
+  const isError = message.includes("❌");
+
+  return (
+    <main id="main" className={s.root}>
+      <div className={s.aurora} aria-hidden="true" />
+      <div className={`${s.wrap} ${s.loginGrid}`}>
+        <div className={s.loginStory}>
+          <div className={s.loginCopy}>
+            <Link href="/" className={s.back}>← {t("Back to home")}</Link>
+            <div style={{ marginTop: 22 }}><Logo size={44} withText subtitle={BRAND.subtitle} /></div>
+            <h1 className={s.loginH1}>
+              {t("Command Center")} {t("for")} <span className={s.lit}>{BRAND.subtitle}</span>
+            </h1>
+            <p className={s.loginLede}>
+              {t("Secure. Fast. Always on.")} {t("Enterprise-grade infrastructure")} {t("built for modern ISPs.")}
+            </p>
+          </div>
+          <NetworkScene variant="login" className={s.loginScene} label={t("3D view of a healthy fiber network around a core router.")} />
+          <div className={s.loginStats}>
+            {[["99.9%", "Uptime"], ["256-bit", "Encryption"], ["24/7", "Support"]].map(([v, k]) => (
+              <div key={k}><b>{v}</b><small>{t(k)}</small></div>
+            ))}
+          </div>
+        </div>
+
+        <div className={s.card}>
+          <div className={s.cardTop}>
+            <span className={s.label}>{t("Secure Access")}</span>
+            <LanguagePicker />
+          </div>
+          <h2 className={s.cardTitle}>{t("Sign in")}</h2>
+          <p className={s.cardSub}>{t("Enter your credentials to continue")}</p>
+
+          <form method="post" onSubmit={(e) => { e.preventDefault(); if (!loading) void handleLogin(); }} noValidate>
+            <div className={s.field}>
+              <label className={s.fieldLabel} htmlFor="jb-login-email">{t("Email Address")}</label>
+              <input id="jb-login-email" className={s.input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="you@company.com" />
+            </div>
+            <div className={s.field}>
+              <label className={s.fieldLabel} htmlFor="jb-login-password">{t("Password")}</label>
+              <input id="jb-login-password" className={s.input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+            </div>
+            {needs2fa && (
+              <div className={s.field}>
+                <label className={s.fieldLabel} htmlFor="jb-login-code">{t("Authenticator code")}</label>
+                <input id="jb-login-code" className={s.input} inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} placeholder="6-digit authenticator code" autoComplete="one-time-code" />
+              </div>
+            )}
+            <button type="submit" disabled={loading} className={`${s.btn} ${s.primary} ${s.full}`} style={{ marginTop: 6 }}>
+              {loading ? t("Signing In...") : t("Sign In →")}
+            </button>
+          </form>
+
+          {demoEnabled && (
+            <button type="button" disabled={loading} onClick={handleDemo} className={s.demoBtn}>
+              {loading ? "Creating new demo…" : "Try a NEW demo account"}
+            </button>
+          )}
+
+          {demoCredentials && (
+            <div className={s.creds}>
+              <div className={s.credsTitle}>NEW demo login credentials</div>
+              <div className={s.credsKey}>Login email / username</div>
+              <div className={s.credsRow}>
+                <code>{demoCredentials.email}</code>
+                <button type="button" className={s.linkBtn} onClick={() => copy(demoCredentials.email, "Email / username")}>Copy</button>
+              </div>
+              <div className={s.credsKey}>Login password</div>
+              <div className={s.credsRow}>
+                <code>{demoCredentials.password}</code>
+                <button type="button" className={s.linkBtn} onClick={() => copy(demoCredentials.password, "Password")}>Copy</button>
+              </div>
+              <button type="button" className={`${s.btn} ${s.full}`} style={{ padding: 10, fontSize: 14 }} onClick={handleLogin}>Sign in with this demo account</button>
+            </div>
+          )}
+
+          {message && (
+            <p className={`${s.msg} ${isError ? s.msgError : ""}`} role={isError ? "alert" : "status"} data-error={isError ? "" : undefined}>
+              {message}
+            </p>
+          )}
+          <div className={s.help}>
+            {t("Need help?")} <a href={`mailto:${SUPPORT}`}>{SUPPORT}</a>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
 }
