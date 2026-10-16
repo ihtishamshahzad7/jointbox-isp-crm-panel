@@ -285,8 +285,8 @@ function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: stri
       </p>
       <div style={GRID}>
         <F label="Company name" v={f.name} on={set("name")} />
-        <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" />
-        <F label="Password" v={f.password} on={set("password")} type="password" hint="At least 8 characters, with letters and numbers" />
+        <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" autoComplete="off" />
+        <F label="Password" v={f.password} on={set("password")} type="password" autoComplete="new-password" hint="At least 8 characters, with letters and numbers" />
         <F label="Phone" v={f.phone} on={set("phone")} />
         <F label="City" v={f.city} on={set("city")} />
       </div>
@@ -329,10 +329,10 @@ function EditCompany({ company, onDone, onCancel, onError }: {
       <div style={{ fontWeight: 800, color: "var(--text)", fontSize: 14, marginBottom: 10 }}>Edit {company.name}</div>
       <div style={GRID}>
         <F label="Company name" v={f.name} on={set("name")} />
-        <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" />
+        <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" autoComplete="off" />
         <F label="Phone" v={f.phone} on={set("phone")} />
         <F label="City" v={f.city} on={set("city")} />
-        <F label="New password" v={f.password} on={set("password")} type="password" hint="Leave empty to keep the current one" />
+        <F label="New password" v={f.password} on={set("password")} type="password" autoComplete="new-password" hint="Leave empty to keep the current one" />
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
@@ -412,11 +412,17 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
   );
 }
 
-function F({ label, v, on, type = "text", hint }: { label: string; v: string; on: any; type?: string; hint?: string }) {
+/**
+ * These forms set ANOTHER account's login. Without an autocomplete hint the
+ * browser treats "email + password" as the signed-in operator's own login and
+ * fills in the saved platform password: the company was then created (or, on
+ * Edit, silently re-passworded) with a password nobody typed.
+ */
+function F({ label, v, on, type = "text", hint, autoComplete }: { label: string; v: string; on: any; type?: string; hint?: string; autoComplete?: string }) {
   return (
     <div>
       <label style={LBL}>{label}</label>
-      <input type={type} value={v} onChange={on} style={INPUT} />
+      <input type={type} value={v} onChange={on} style={INPUT} autoComplete={autoComplete} />
       {hint && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>{hint}</div>}
     </div>
   );

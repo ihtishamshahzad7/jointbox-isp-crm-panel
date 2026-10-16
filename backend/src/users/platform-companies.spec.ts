@@ -77,6 +77,41 @@ describe('platform account vs the people inside companies', () => {
     expect(data).not.toHaveProperty('parentId');
   });
 
+  it('stores a new company login email the way sign-in looks it up', async () => {
+    // auth.controller trims and lower-cases before findUnique({ email }).
+    const { svc, prisma } = make();
+    await svc.create(
+      {
+        name: 'Q',
+        email: '  Isp1@Gmail.COM ',
+        password: 'Str0ng!Pass#1',
+        role: 'ADMIN',
+      },
+      PLATFORM,
+    );
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email: 'isp1@gmail.com' },
+    });
+    expect(prisma.user.create.mock.calls[0][0].data.email).toBe(
+      'isp1@gmail.com',
+    );
+    await expect(
+      svc.create(
+        { name: 'Q', email: '   ', password: 'Str0ng!Pass#1', role: 'ADMIN' },
+        PLATFORM,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("normalises a company's login email on edit too", async () => {
+    const { svc, prisma } = make();
+    await svc.update(10, { email: ' New@X.PK ' }, PLATFORM);
+    expect(prisma.user.update.mock.calls[0][0].data.email).toBe('new@x.pk');
+    await expect(
+      svc.update(10, { email: ' ' }, PLATFORM),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('a company administrator may purge inside its own company', async () => {
     const { svc, scope } = make();
     await svc.purgeAccount({ sub: 10, role: 'ADMIN' } as any, 11, { dryRun: true }).catch(() => undefined);

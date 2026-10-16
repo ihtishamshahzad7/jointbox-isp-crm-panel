@@ -852,6 +852,11 @@ export class UsersService {
    * and ADMIN creating another ADMIN is refused: a second company inside the
    * first one's subtree would break the isolation this ladder exists for.
    */
+  /** A login email in the one form sign-in looks it up by: trimmed, lower-case. */
+  static loginEmail(email: unknown): string {
+    return typeof email === 'string' ? email.trim().toLowerCase() : '';
+  }
+
   /** What the account edit form may change. */
   private static readonly EDITABLE = new Set([
     'name', 'email', 'password', 'role', 'phone', 'address', 'parentId', 'isActive',
@@ -961,6 +966,11 @@ export class UsersService {
     province?:     string;
     city?:         string;
   }, actor?: Actor) {
+    // Stored exactly the way sign-in looks it up (auth.controller trims and
+    // lower-cases): an account created as "Isp1@Gmail.com " could never sign
+    // in, and its duplicate check missed "isp1@gmail.com".
+    data.email = UsersService.loginEmail(data.email);
+    if (!data.email) throw new BadRequestException('A login email is required.');
     const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
     if (existing) throw new ConflictException(`User with email ${data.email} already exists`);
 
@@ -1163,6 +1173,10 @@ export class UsersService {
       delete (data as any).role;
     }
 
+    if (data.email !== undefined) {
+      data.email = UsersService.loginEmail(data.email);
+      if (!data.email) throw new BadRequestException('A login email is required.');
+    }
     if (data.email && data.email !== user.email) {
       const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
       if (existing) throw new ConflictException(`User with email ${data.email} already exists`);
