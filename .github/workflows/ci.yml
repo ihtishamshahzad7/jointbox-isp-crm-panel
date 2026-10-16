@@ -85,6 +85,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the lint step compares against the previous commit
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -102,8 +104,13 @@ jobs:
       # The repo's own `lint` script passes --fix, which MUTATES files. In CI
       # that would hide the very lint errors it is meant to report, so eslint
       # is invoked directly.
-      - name: lint
-        run: npx eslint "src/**/*.ts"
+      - name: lint (no new errors in changed files)
+        # Old lint debt (~23k errors) kept a full lint red on every push, which
+        # hid new errors. This fails only if a changed file gains errors; see
+        # .github/scripts/lint-changed.sh. Typecheck and tests still cover all.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash ../.github/scripts/lint-changed.sh backend '^src/.*\.ts$'
 
       - name: typecheck
         run: npm run typecheck
@@ -222,14 +229,21 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the lint step compares against the previous commit
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - name: lint
-        run: npm run lint
+      - name: lint (no new errors in changed files)
+        # Old lint debt (~23k errors) kept a full lint red on every push, which
+        # hid new errors. This fails only if a changed file gains errors; see
+        # .github/scripts/lint-changed.sh. Typecheck and tests still cover all.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash ../.github/scripts/lint-changed.sh frontend '\.(ts|tsx|js|jsx|mjs)$'
       - name: typecheck
         run: npm run typecheck
 
