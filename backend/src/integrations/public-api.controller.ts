@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  NotImplementedException,
   Controller, Get, Post, Put, Delete,
   Body, Param, Query, UseGuards, Req, NotFoundException,
 } from '@nestjs/common';
@@ -403,13 +405,16 @@ export class PublicApiController {
   triggerBilling(@Param('type') type: string, @Query('dryRun') dryRun?: string) {
     const validTypes = ['auto-invoice', 'auto-renewal', 'suspension'];
     if (!validTypes.includes(type)) {
-      return { error: `type must be one of: ${validTypes.join(', ')}` };
+      throw new BadRequestException(
+        `type must be one of: ${validTypes.join(', ')}`,
+      );
     }
-    return {
-      message: `Billing run '${type}' triggered via admin panel. Use the /billing/run/:type endpoint with JWT auth for full control.`,
-      type,
-      dryRun: dryRun === 'true',
-      note: 'Execute this from the admin API at POST /billing/run/:type',
-    };
+    // This route never ran anything, yet answered 200 "triggered" — an API
+    // caller could not tell nothing had happened. It now says so: 501, and
+    // where the real (JWT-authenticated, audited) trigger lives.
+    void dryRun;
+    throw new NotImplementedException(
+      `Billing runs are not available through the API-key interface. Use POST /billing/run/${type} with an operator login.`,
+    );
   }
 }

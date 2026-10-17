@@ -24,7 +24,11 @@ function make() {
     refreshToken: jest.fn().mockResolvedValue({ token: 'new' }),
     verifyToken: jest.fn().mockResolvedValue({ valid: true, user: { id: 10 } }),
   } as any;
-  const blacklist = { isBlacklisted: jest.fn((t: string) => t === REVOKED), add: jest.fn() } as any;
+  const blacklist = {
+    isBlacklisted: jest.fn((t: string) => t === REVOKED),
+    isRevoked: jest.fn((t: string) => Promise.resolve(t === REVOKED)),
+    add: jest.fn(() => Promise.resolve()),
+  } as any;
   return { authService, ctl: new AuthController(authService, blacklist) };
 }
 

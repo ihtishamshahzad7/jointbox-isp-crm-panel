@@ -13,7 +13,7 @@ import { CurrencyService } from '../common/currency.service';
  *   STRIPE      — STRIPE_SECRET_KEY (+ STRIPE_WEBHOOK_SECRET for signed webhooks)
  *   BKASH       — BKASH_BASE_URL, BKASH_APP_KEY, BKASH_APP_SECRET, BKASH_USERNAME, BKASH_PASSWORD
  *   SSLCOMMERZ  — SSLCZ_STORE_ID, SSLCZ_STORE_PASS (+ SSLCZ_SANDBOX=1 for test mode)
- *   JAZZCASH    — JAZZCASH_MERCHANT_ID, JAZZCASH_PASSWORD, JAZZCASH_INTEGERITY_SALT (+ JAZZCASH_SANDBOX=0/1)
+ *   JAZZCASH    — JAZZCASH_MERCHANT_ID, JAZZCASH_PASSWORD, JAZZCASH_INTEGRITY_SALT (the old misspelling JAZZCASH_INTEGERITY_SALT still works) (+ JAZZCASH_SANDBOX=0/1)
  *   EASYPAISA   — EASYPAISA_STORE_ID, EASYPAISA_STORE_PASS (+ EASYPAISA_SANDBOX=0/1)
  *   PAYPAL      — PAYPAL_CLIENT_ID, PAYPAL_SECRET (+ PAYPAL_ENV=live)
  *   RAZORPAY    — RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
@@ -590,7 +590,7 @@ export class GatewayService {
    * joined with '&'. Compared case-insensitively.
    */
   verifyJazzcashHash(body: any): boolean {
-    const salt = process.env.JAZZCASH_INTEGERITY_SALT || '';
+    const salt = jazzcashSalt();
     const given = String(body?.pp_SecureHash ?? body?.PP_SECUREHASH ?? '');
     if (!salt || !given) return false;
     const keys = Object.keys(body || {})
@@ -913,7 +913,7 @@ export class GatewayService {
   private async jazzcashCheckout(tx: any, invoice: any): Promise<string> {
     const merchantId = process.env.JAZZCASH_MERCHANT_ID || '';
     const password   = process.env.JAZZCASH_PASSWORD || '';
-    const salt       = process.env.JAZZCASH_INTEGERITY_SALT || '';
+    const salt       = jazzcashSalt();
     const sandbox    = process.env.JAZZCASH_SANDBOX !== '0';
     const base       = sandbox
       ? 'https://sandbox.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/'
@@ -1074,4 +1074,17 @@ export class GatewayService {
     await this.handleFailure(key, result || 'easypaisa-cancelled');
     return { ok: true };
   }
+}
+
+/**
+ * The JazzCash integrity salt. Only the misspelled JAZZCASH_INTEGERITY_SALT
+ * was ever read, so an operator who spelled it correctly had every genuine
+ * payment refused. Both spellings now work; the correct one wins.
+ */
+export function jazzcashSalt(): string {
+  return (
+    process.env.JAZZCASH_INTEGRITY_SALT ||
+    process.env.JAZZCASH_INTEGERITY_SALT ||
+    ''
+  );
 }

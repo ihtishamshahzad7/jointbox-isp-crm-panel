@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GatewayService } from './gateway.service';
+import { GatewayService, jazzcashSalt } from './gateway.service';
 
 /**
  * A redirect URL is not proof of payment. Found on a running panel: a customer
@@ -52,6 +52,19 @@ describe('gateway settlement needs proof', () => {
     body.pp_SecureHash = createHmac('sha256', 'salt123').update(['salt123', ...vals].join('&')).digest('hex').toUpperCase();
     await svc.jazzcashHandle('K', body);
     expect(invoices.recordPayment).toHaveBeenCalled();
+  });
+
+  it('JazzCash: the correctly spelled JAZZCASH_INTEGRITY_SALT is honoured', () => {
+    // Only JAZZCASH_INTEGERITY_SALT was ever read; the correct spelling was
+    // ignored and every genuine payment refused.
+    delete process.env.JAZZCASH_INTEGERITY_SALT;
+    process.env.JAZZCASH_INTEGRITY_SALT = 'salt456';
+    expect(jazzcashSalt()).toBe('salt456');
+    process.env.JAZZCASH_INTEGERITY_SALT = 'old';
+    expect(jazzcashSalt()).toBe('salt456'); // the correct name wins
+    delete process.env.JAZZCASH_INTEGRITY_SALT;
+    expect(jazzcashSalt()).toBe('old'); // the old name still works
+    delete process.env.JAZZCASH_INTEGERITY_SALT;
   });
 
   it('Easypaisa: the success redirect alone settles nothing', async () => {

@@ -198,21 +198,38 @@ export class PaymentGatewaysService {
 
     const success = this.isSuccessStatus(providerKey, body, tx);
     const newStatus = success ? 'SUCCESS' : 'FAILED';
-    const updated = await this.prisma.paymentTransaction.update({
-      where: { id: tx.id },
-      data: {
-        status: newStatus,
-        gatewayRef: body.transactionId || body.pp_TxnRefNo || body.transaction_id || tx.gatewayRef,
-        rawResponse: body,
-        paidAt: success ? new Date() : null,
-        failureReason: success ? null : (body?.failureReason || body?.reason || 'Unknown'),
-      },
-    });
+    const gatewayRef =
+      body.transactionId ||
+      body.pp_TxnRefNo ||
+      body.transaction_id ||
+      tx.gatewayRef;
 
-    if (success && tx.invoiceId) {
-      // Create a Payment row + flip the invoice to PAID. Done in a single
-      // transaction so partial state is impossible.
-      await this.prisma.$transaction(async (db) => {
+    /**
+     * CLAIM THE TRANSACTION ONCE. Gateways routinely deliver the same result
+     * twice at the same moment (the browser redirect and the server IPN). The
+     * status check above reads PENDING for both, so both used to create a
+     * Payment and add the amount to the invoice: one payment, credited twice.
+     * The conditional update below lets exactly one caller move the row out
+     * of a non-final state; the loser does nothing and reports idempotently.
+     * The claim, the Payment and the invoice move commit together, so a crash
+     * half-way leaves the transaction unclaimed rather than claimed-but-unpaid.
+     */
+    const outcome = await this.prisma.$transaction(async (db) => {
+      const claim = await db.paymentTransaction.updateMany({
+        where: { id: tx.id, status: { notIn: ['SUCCESS', 'REFUNDED'] } },
+        data: {
+          status: newStatus,
+          gatewayRef,
+          rawResponse: body,
+          paidAt: success ? new Date() : null,
+          failureReason: success
+            ? null
+            : body?.failureReason || body?.reason || 'Unknown',
+        },
+      });
+      if (claim.count === 0) return { claimed: false as const };
+
+      if (success && tx.invoiceId) {
         const payment = await db.payment.create({
           data: {
             // The gateway settled in a currency it chose; `tx.currency` is the
@@ -221,7 +238,7 @@ export class PaymentGatewaysService {
             // arrived and relabelling it as local money.
             ...(await this.currency.paymentStamp(tx.amount, { paidIn: tx.currency })),
             paymentNo: `PAY-${Date.now()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
-            invoiceId: tx.invoiceId!,
+            invoiceId: tx.invoiceId,
             subscriberId: tx.subscriberId ?? null,
             subscriberName: null,
             amount: tx.amount,
@@ -232,23 +249,37 @@ export class PaymentGatewaysService {
           },
         });
         await db.paymentTransaction.update({ where: { id: tx.id }, data: { paymentId: payment.id } });
-        const inv = await db.invoice.findUnique({ where: { id: tx.invoiceId! } });
-        if (inv) {
-          const newPaid = inv.paidAmount + tx.amount;
-          const newStatus = newPaid >= inv.total - 0.01 ? 'PAID' : 'PARTIAL';
-          await db.invoice.update({
-            where: { id: inv.id },
-            data: {
-              paidAmount: newPaid,
-              dueAmount: Math.max(0, inv.total - newPaid),
-              paidDate: newStatus === 'PAID' ? new Date() : inv.paidDate,
-              status: newStatus,
-            },
-          });
-        }
-      });
-    }
+        // Increment, not read-then-write: a cashier recording a payment on the
+        // same invoice at the same moment must not overwrite this one.
+        const inv = await db.invoice.update({
+          where: { id: tx.invoiceId },
+          data: { paidAmount: { increment: tx.amount } },
+        });
+        const fullyPaid = inv.paidAmount >= inv.total - 0.01;
+        await db.invoice.update({
+          where: { id: inv.id },
+          data: {
+            dueAmount: Math.max(0, inv.total - inv.paidAmount),
+            paidDate: fullyPaid ? new Date() : inv.paidDate,
+            status: fullyPaid ? 'PAID' : 'PARTIAL',
+          },
+        });
+      }
+      return { claimed: true as const };
+    });
 
+    if (!outcome.claimed) {
+      const now = await this.prisma.paymentTransaction.findUnique({
+        where: { id: tx.id },
+        select: { status: true },
+      });
+      return {
+        ok: true,
+        status: now?.status ?? tx.status,
+        transactionId: tx.id,
+      };
+    }
+    const updated = { id: tx.id };
     return { ok: true, status: newStatus, transactionId: updated.id };
   }
 

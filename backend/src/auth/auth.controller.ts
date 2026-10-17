@@ -99,10 +99,10 @@ export class AuthController {
    * The payload is only DECODED here, to refuse; the service still verifies
    * the signature, so a forged claim gains nothing.
    */
-  private refusedToken(token: unknown): string | null {
+  private async refusedToken(token: unknown): Promise<string | null> {
     const t = typeof token === 'string' ? token : '';
     if (!t) return 'Invalid token';
-    if (this.tokenBlacklistService.isBlacklisted(t)) return 'Token revoked';
+    if (await this.tokenBlacklistService.isRevoked(t)) return 'Token revoked';
     let claims: any = null;
     try {
       claims = JSON.parse(Buffer.from(t.split('.')[1] || '', 'base64url').toString('utf8'));
@@ -116,14 +116,14 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() body: { token: string }) {
-    if (this.refusedToken(body?.token)) throw new UnauthorizedException('Invalid refresh token');
+    if (await this.refusedToken(body?.token)) throw new UnauthorizedException('Invalid refresh token');
     return this.authService.refreshToken(body.token);
   }
 
   @Post('verify')
   @HttpCode(HttpStatus.OK)
   async verifyToken(@Body() body: { token: string }) {
-    const refused = this.refusedToken(body?.token);
+    const refused = await this.refusedToken(body?.token);
     if (refused) return { valid: false, message: refused };
     return this.authService.verifyToken(body.token);
   }
@@ -148,7 +148,7 @@ export class AuthController {
       String(body?.currentPassword ?? ''),
       String(body?.newPassword ?? ''),
     );
-    if (old && old !== result.token) this.tokenBlacklistService.add(old);
+    if (old && old !== result.token) await this.tokenBlacklistService.add(old);
     return { message: result.message, token: result.token };
   }
 
@@ -157,7 +157,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: any) {
     const token = req.headers.authorization?.replace('Bearer ', '');
-    if (token) this.tokenBlacklistService.add(token);
+    if (token) await this.tokenBlacklistService.add(token);
     return { message: 'Logged out successfully' };
   }
 }

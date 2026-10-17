@@ -478,12 +478,18 @@ export class NotificationsService implements OnModuleInit {
   private async deliverSms(phone: string, message: string): Promise<string> {
     const url = process.env.SMS_GATEWAY_URL;
     if (!url) {
-      this.logger.log(`[SIMULATED SMS] → ${phone}: ${message.slice(0, 80)}`);
+      // Never the body: welcome and reset messages carry login credentials.
+      this.logger.log(
+        `[SIMULATED SMS] → ${maskRecipient(phone)} (${message.length} chars, no SMS gateway configured)`,
+      );
       return 'SIMULATED';
     }
     const method = (process.env.SMS_GATEWAY_METHOD || 'GET').toUpperCase();
     const finalUrl = url.replace('{phone}', encodeURIComponent(phone)).replace('{message}', encodeURIComponent(message));
-    const init: any = { method };
+    // A gateway that never answers must not pin a queue worker forever; the
+    // timeout becomes a FAILED attempt that BullMQ retries.
+    const timeoutMs = Number(process.env.SMS_GATEWAY_TIMEOUT_MS) || 15000;
+    const init: any = { method, signal: AbortSignal.timeout(timeoutMs) };
     if (method === 'POST') {
       const bodyTpl = process.env.SMS_GATEWAY_BODY || '{"to":"{phone}","message":"{message}"}';
       // JSON-escape what goes into the JSON template (quotes, backslashes,
@@ -499,7 +505,9 @@ export class NotificationsService implements OnModuleInit {
 
   private async deliverEmail(to: string, subject: string, body: string): Promise<string> {
     if (!process.env.SMTP_HOST) {
-      this.logger.log(`[SIMULATED EMAIL] → ${to}: ${subject}`);
+      this.logger.log(
+        `[SIMULATED EMAIL] → ${maskRecipient(to)} (no SMTP configured)`,
+      );
       return 'SIMULATED';
     }
     if (!this.mailer) {
@@ -520,4 +528,12 @@ export class NotificationsService implements OnModuleInit {
     });
     return 'SENT';
   }
+}
+
+/** "+923001234567" → "+92•••••4567", "ali@x.pk" → "a•••@x.pk": enough to trace, not to harvest. */
+export function maskRecipient(r: string): string {
+  const v = String(r || '');
+  const at = v.indexOf('@');
+  if (at > 0) return `${v[0]}•••${v.slice(at)}`;
+  return v.length <= 4 ? '••••' : `${v.slice(0, 3)}•••••${v.slice(-4)}`;
 }

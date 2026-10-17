@@ -45,7 +45,14 @@ describe('security: portal tokens are not operator tokens', () => {
     },
     $queryRaw: async () => [{ ok: chainActive }],
   }) as any;
-  const strategy = (prisma = prismaFor()) => new JwtStrategy({ isBlacklisted: () => false } as any, prisma);
+  const strategy = (prisma = prismaFor()) =>
+    new JwtStrategy(
+      {
+        isBlacklisted: () => false,
+        isRevoked: () => Promise.resolve(false),
+      } as any,
+      prisma,
+    );
   // The status cache is per user id and module-level; each test starts cold.
   beforeEach(() => invalidateAllAccountStatus());
 
@@ -135,7 +142,14 @@ describe('security: account status is enforced on every request', () => {
     },
     $queryRaw: async () => [{ ok: chainActive }],
   }) as any;
-  const strategy = (prisma: any) => new JwtStrategy({ isBlacklisted: () => false } as any, prisma);
+  const strategy = (prisma: any) =>
+    new JwtStrategy(
+      {
+        isBlacklisted: () => false,
+        isRevoked: () => Promise.resolve(false),
+      } as any,
+      prisma,
+    );
   const req = (url = '/subscribers') => ({ headers: {}, originalUrl: url });
   const op = { sub: 11, email: 'a@b.c', role: 'ADMIN', name: 'A' };
 

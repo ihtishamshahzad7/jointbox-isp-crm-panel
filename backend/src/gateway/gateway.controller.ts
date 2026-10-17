@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { createHmac } from 'crypto';
-import { GatewayService } from './gateway.service';
+import { GatewayService, jazzcashSalt } from './gateway.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -341,7 +341,7 @@ button{border:none;border-radius:8px;padding:12px 22px;font-size:15px;font-weigh
 
     const merchantId = process.env.JAZZCASH_MERCHANT_ID || '';
     const password   = process.env.JAZZCASH_PASSWORD || '';
-    const salt       = process.env.JAZZCASH_INTEGERITY_SALT || '';
+    const salt       = jazzcashSalt();
     const sandbox    = process.env.JAZZCASH_SANDBOX !== '0';
     const base       = sandbox
       ? 'https://sandbox.jazzcash.com.pk/CustomerPortal/transactionmanagement/merchantform/'

@@ -54,7 +54,7 @@ const NO_ACTOR_BY_DESIGN: Record<string, string> = {
   'AppController.resellerCapabilityChecklistPayload': 'Static checklist plus its installation-level answers; no tenant data.',
   'GatewayController.available': 'Which payment providers are configured — a constant per installation.',
   'PublicApiController.availableGateways': 'Same, for API keys.',
-  'PublicApiController.triggerBilling': 'Validates the type and returns instructions; performs nothing.',
+  'PublicApiController.triggerBilling': 'Validates the type, then answers 501 with where the real trigger lives; performs nothing.',
   'PublicStatusController.status': 'Public network status page, by design.',
   'PublicStatusController.history': 'Public network status history, by design.',
   'PortalController.gateways': 'Customer portal (PortalGuard identity), payment provider list.',
