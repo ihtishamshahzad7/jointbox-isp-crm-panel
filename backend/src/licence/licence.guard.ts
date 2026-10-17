@@ -160,7 +160,10 @@ export class LicenceGuard implements CanActivate {
     if (isExempt(path)) return true;
 
     const state = this.licence.state;
-    if (!BLOCKING_STATES.has(state)) return true;
+    // Agent missing or never activated past the allowance (48h) blocks too;
+    // inside the allowance those states still write.
+    if (!BLOCKING_STATES.has(state) && !this.licence.noLicenceExpired)
+      return true;
 
     // 402 Payment Required: unambiguous, and distinct from 401/403 so the
     // frontend can show a licence dialog rather than bouncing to login.

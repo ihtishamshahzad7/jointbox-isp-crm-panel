@@ -314,6 +314,20 @@ jbx_ensure_agent() {
     systemctl restart jointbox-licensed 2>/dev/null || true
     sleep 3
   fi
+  # Not activated yet: start the trial. That registers this server on the
+  # licence server (hostname, public IP, MAC, OS, panel version) so it shows
+  # up under Licences, where a real licence can be assigned. One trial per
+  # machine; if it was used before, this just says so.
+  if ! jbx_already_activated && \
+     ! "$AGENT_BIN" -status 2>/dev/null | grep -qE 'State +: (EXPIRED|SUSPENDED|HARDWARE_MISMATCH)'; then
+    if "$AGENT_BIN" -activate trial >/dev/null 2>&1; then
+      ok "Registered with the licence server (trial started)"
+      systemctl restart jointbox-licensed 2>/dev/null || true
+      sleep 2
+    else
+      warn "Not activated. Activate a licence in the panel (Licence page) within 2 days."
+    fi
+  fi
   if systemctl is-active --quiet jointbox-licensed; then
     ok "Licence agent running"
   else

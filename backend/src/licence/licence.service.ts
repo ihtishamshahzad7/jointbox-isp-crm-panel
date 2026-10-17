@@ -1,4 +1,11 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+  Optional,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 import * as net from 'net';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -81,9 +88,23 @@ export interface LicenceUsage {
   at: string;
 }
 
-const SOCKET_PATH = process.env.JBX_LICENCE_SOCKET || '/run/jointbox/licensed.sock';
+const SOCKET_PATH =
+  process.env.JBX_LICENCE_SOCKET || '/run/jointbox/licensed.sock';
 const RUN_DIR = process.env.JBX_RUN_DIR || '/run/jointbox';
 const REFRESH_MS = Number(process.env.JBX_LICENCE_REFRESH_MS || 15 * 60 * 1000);
+/**
+ * How long a panel may run with no working licence — agent missing, stopped,
+ * or installed but never activated — before writes stop. Counted from the
+ * last time the agent reported a valid licence, or from installation when it
+ * never has. 48 hours: long enough to install and activate, short enough
+ * that removing the agent is not a way to run unlicensed.
+ */
+const NO_LICENCE_ALLOWANCE_MS = Number(
+  process.env.JBX_NO_LICENCE_ALLOWANCE_MS || 48 * 3600 * 1000,
+);
+const LAST_GOOD_FILE =
+  process.env.JBX_LICENCE_LAST_GOOD_FILE ||
+  path.join(process.cwd(), '.licence-last-good');
 const QUERY_TIMEOUT_MS = Number(process.env.JBX_LICENCE_TIMEOUT_MS || 3000);
 
 /**
@@ -101,12 +122,23 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
   private current: Entitlement | null = null;
   private timer?: NodeJS.Timeout;
   private lastLoggedState: LicenceState | null = null;
+  /** ms epoch the agent last reported ACTIVE/GRACE (persisted to disk). */
+  private lastGood: number | null = null;
+  /** ms epoch this installation was set up (first database migration). */
+  private installedAt: number | null = null;
+  private bootedAt = Date.now();
+
+  constructor(@Optional() private readonly prisma?: PrismaService) {}
 
   async onModuleInit(): Promise<void> {
     if (licensingDisabled()) {
-      this.log.warn('Licence enforcement is DISABLED (JBX_LICENCE_ENFORCE=false)');
+      this.log.warn(
+        'Licence enforcement is DISABLED (JBX_LICENCE_ENFORCE=false)',
+      );
       return;
     }
+    this.loadLastGood();
+    await this.loadInstalledAt();
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), REFRESH_MS);
     // Never hold the process open on shutdown.
@@ -115,6 +147,63 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy(): void {
     if (this.timer) clearInterval(this.timer);
+  }
+
+  // ── no working licence: allowance, then read-only ─────────────────────
+
+  private loadLastGood(): void {
+    try {
+      const n = Number(fs.readFileSync(LAST_GOOD_FILE, 'utf8').trim());
+      if (Number.isFinite(n) && n > 0 && n <= Date.now()) this.lastGood = n;
+    } catch {
+      /* never had a licence, or the file was removed: count from install */
+    }
+  }
+
+  private markGood(): void {
+    const now = Date.now();
+    const stale = !this.lastGood || now - this.lastGood > 3600 * 1000;
+    this.lastGood = now;
+    if (!stale) return;
+    try {
+      fs.writeFileSync(LAST_GOOD_FILE, String(now));
+    } catch (e) {
+      this.log.warn(
+        `Could not record licence check time: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /** When the first migration ran: deleting a file cannot move this. */
+  private async loadInstalledAt(): Promise<void> {
+    if (!this.prisma) return;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ t: Date | null }>>`
+        SELECT MIN(started_at) AS t FROM _prisma_migrations`;
+      const t = rows?.[0]?.t ? new Date(rows[0].t).getTime() : NaN;
+      if (Number.isFinite(t)) this.installedAt = t;
+    } catch {
+      /* no migrations table (tests): fall back to process start */
+    }
+  }
+
+  /** When the clock for "no working licence" started. */
+  private get noLicenceSince(): number {
+    return this.lastGood ?? this.installedAt ?? this.bootedAt;
+  }
+
+  /** Writes stop at this moment if no licence turns up. null = not counting. */
+  get noLicenceDeadline(): number | null {
+    if (licensingDisabled()) return null;
+    const st = this.current?.state ?? 'UNAVAILABLE';
+    if (st !== 'UNAVAILABLE' && st !== 'UNLICENSED') return null;
+    return this.noLicenceSince + NO_LICENCE_ALLOWANCE_MS;
+  }
+
+  /** Agent missing or never activated for longer than the allowance. */
+  get noLicenceExpired(): boolean {
+    const d = this.noLicenceDeadline;
+    return d !== null && Date.now() >= d;
   }
 
   // ── what the rest of the app asks ──────────────────────────────────────
@@ -137,6 +226,7 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
    */
   get licensed(): boolean {
     if (licensingDisabled()) return true;
+    if (this.noLicenceExpired) return false;
     if (this.current === null) return true;
     return this.current.licensed;
   }
@@ -144,6 +234,7 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
   /** Whether new records may be created. The first rung that actually bites. */
   get writable(): boolean {
     if (licensingDisabled()) return true;
+    if (this.noLicenceExpired) return false;
     if (this.current === null) return true;
     return this.current.writable;
   }
@@ -218,8 +309,13 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       capHard: e?.cap_hard ?? 0,
       features: e?.feat ?? [],
       expiresAt: e?.exp ? new Date(e.exp * 1000).toISOString() : null,
-      graceEndsAt: e?.grace_ends ? new Date(e.grace_ends * 1000).toISOString() : null,
+      graceEndsAt: e?.grace_ends
+        ? new Date(e.grace_ends * 1000).toISOString()
+        : null,
       message: e?.message ?? '',
+      noLicenceDeadline: this.noLicenceDeadline
+        ? new Date(this.noLicenceDeadline).toISOString()
+        : null,
       usage: this.counts,
       banner: this.banner,
     };
@@ -235,19 +331,32 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
     // their licence lapses instead of while there is still time to fix it.
     // Anyone running deliberately without the agent sets JBX_LICENCE_ENFORCE
     // =false and this goes away.
+    if (this.noLicenceExpired) {
+      return {
+        level: 'error',
+        message: e
+          ? 'This panel has not been activated. It is read-only until a licence is activated; subscribers stay online.'
+          : 'The licence agent is not running, so this panel is read-only. Subscribers stay online. Start the agent and activate a licence to continue.',
+      };
+    }
     if (!e) {
       return {
         level: 'warn',
         message:
-          'The licence agent is not running on this server. The panel is unaffected, ' +
-          'but your licence cannot renew until it is restarted.',
+          'The licence agent is not running on this server. Start it and activate a ' +
+          'licence before ' +
+          new Date(this.noLicenceDeadline ?? Date.now()).toUTCString() +
+          ', or adding and changing records will stop.',
       };
     }
 
     if (e.state === 'ACTIVE') return { level: 'none', message: '' };
 
     if (e.state === 'GRACE') {
-      return { level: 'info', message: e.message || 'Your licence is being renewed.' };
+      return {
+        level: 'info',
+        message: e.message || 'Your licence is being renewed.',
+      };
     }
     if (e.state === 'SUSPENDED') {
       return {
@@ -260,13 +369,20 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
     if (e.state === 'TAMPERED') {
       return {
         level: 'error',
-        message: 'Licence verification failed on this server. Please contact support.',
+        message:
+          'Licence verification failed on this server. Please contact support.',
       };
     }
     if (e.state === 'UNAVAILABLE') {
-      return { level: 'warn', message: 'The licence agent is not running on this server.' };
+      return {
+        level: 'warn',
+        message: 'The licence agent is not running on this server.',
+      };
     }
-    return { level: 'error', message: e.message || 'This panel is not licensed.' };
+    return {
+      level: 'error',
+      message: e.message || 'This panel is not licensed.',
+    };
   }
 
   // ── talking to the agent ───────────────────────────────────────────────
@@ -279,17 +395,27 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       const resp = await this.query(nonce);
 
       if (!this.verifySignature(resp, nonce)) {
-        this.log.error('Entitlement signature did not verify — reporting TAMPERED');
-        this.current = { ...resp, state: 'TAMPERED', licensed: false, writable: false };
+        this.log.error(
+          'Entitlement signature did not verify — reporting TAMPERED',
+        );
+        this.current = {
+          ...resp,
+          state: 'TAMPERED',
+          licensed: false,
+          writable: false,
+        };
         this.reportTamper('SOCKET_FORGED');
         return;
       }
 
       if (this.lastLoggedState !== resp.state) {
-        this.log.log(`Licence state: ${resp.state}${resp.message ? ' — ' + resp.message : ''}`);
+        this.log.log(
+          `Licence state: ${resp.state}${resp.message ? ' — ' + resp.message : ''}`,
+        );
         this.lastLoggedState = resp.state;
       }
       this.current = resp;
+      if (resp.state === 'ACTIVE' || resp.state === 'GRACE') this.markGood();
     } catch (err) {
       // Agent not installed, not running, or socket missing. DO NOT downgrade:
       // keep whatever we last verified, and if we have nothing, stay permissive.
@@ -318,7 +444,9 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       sock.setTimeout(QUERY_TIMEOUT_MS);
       sock.on('timeout', () => finish(() => reject(new Error('timed out'))));
       sock.on('error', (e) => finish(() => reject(e)));
-      sock.on('close', () => finish(() => reject(new Error('closed before reply'))));
+      sock.on('close', () =>
+        finish(() => reject(new Error('closed before reply'))),
+      );
       // v:2 asks for the cap policy as well. An agent before 1.1 ignores
       // the field and answers in the v1 layout, which verifySignature also
       // accepts — so the panel and the agent can be upgraded in either order.
@@ -387,10 +515,22 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
       // Wrap the raw 32-byte key in the SPKI DER prefix Node's crypto expects.
       const raw = Buffer.from(r.session_pub, 'hex');
       if (raw.length !== 32) return false;
-      const der = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]);
-      const key = crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+      const der = Buffer.concat([
+        Buffer.from('302a300506032b6570032100', 'hex'),
+        raw,
+      ]);
+      const key = crypto.createPublicKey({
+        key: der,
+        format: 'der',
+        type: 'spki',
+      });
 
-      return crypto.verify(null, Buffer.from(payload), key, Buffer.from(r.sig, 'hex'));
+      return crypto.verify(
+        null,
+        Buffer.from(payload),
+        key,
+        Buffer.from(r.sig, 'hex'),
+      );
     } catch {
       return false;
     }

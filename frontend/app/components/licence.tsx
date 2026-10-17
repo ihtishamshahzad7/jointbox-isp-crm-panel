@@ -66,6 +66,8 @@ export interface LicenceStatus {
   features: string[];
   expiresAt: string | null;
   graceEndsAt: string | null;
+  /** Agent missing or not activated: writes stop at this time. */
+  noLicenceDeadline?: string | null;
   message: string;
   banner: { level: "none" | "info" | "warn" | "error"; message: string };
 }

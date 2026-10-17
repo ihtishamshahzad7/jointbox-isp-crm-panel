@@ -35,3 +35,5 @@ _to_delete/
 # Hostinger licence-server secrets (pepper, DB dumps) -- NEVER commit.
 hostinger-DO-NOT-UPLOAD/
 _LICENCE-SERVER-MOVE-ME-OUT/
+
+backend/.licence-last-good

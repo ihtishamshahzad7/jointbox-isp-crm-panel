@@ -232,9 +232,12 @@ export default function LicencePage() {
 
       {agentDown && (
         <Card tone="warn" title="The licence agent is not running">
-          Nothing is blocked — the panel treats an unreachable agent as licensed
-          on purpose. But your licence cannot renew itself while the agent is
-          down, so it will lapse on its own in a couple of weeks. On the server:
+          {status.writable
+            ? <>Adding and changing records still works until{" "}
+                {status.noLicenceDeadline ? new Date(status.noLicenceDeadline).toLocaleString() : "2 days after installation"}.
+                Start the agent and activate a licence before then. On the server:</>
+            : <>Adding and changing records has stopped because the agent has not
+                been running for 2 days. Subscribers stay online. On the server:</>}
           <pre style={PRE}>
 {`sudo systemctl status jointbox-licensed
 sudo systemctl restart jointbox-licensed
