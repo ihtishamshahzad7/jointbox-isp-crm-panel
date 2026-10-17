@@ -295,6 +295,35 @@ jbx_prompt_and_activate() {
 }
 
 # ---------------------------------------------------------------------------
+# Keep the agent installed and running (called by update-jointbox.sh)
+# ---------------------------------------------------------------------------
+# Servers installed before the agent binary was published on the licence
+# server never got it, and nothing put it back afterwards — the panel then
+# shows "Agent not running" for ever. Every update now repairs that: install
+# the binary and unit if missing, enable the service for boot, start it.
+# Never activates (that needs the operator's key) and never fails the update.
+jbx_ensure_agent() {
+  if [[ ! -x "$AGENT_BIN" || ! -f "$UNIT" ]]; then
+    jbx_install_agent
+  fi
+  [[ -x "$AGENT_BIN" ]] || return 0
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable jointbox-licensed >/dev/null 2>&1 || true
+  if ! systemctl is-active --quiet jointbox-licensed; then
+    systemctl reset-failed jointbox-licensed 2>/dev/null || true
+    systemctl restart jointbox-licensed 2>/dev/null || true
+    sleep 3
+  fi
+  if systemctl is-active --quiet jointbox-licensed; then
+    ok "Licence agent running"
+  else
+    warn "Licence agent did not start. Last log lines:"
+    journalctl -u jointbox-licensed -n 15 --no-pager 2>/dev/null || true
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Entry point when run directly
 # ---------------------------------------------------------------------------
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

@@ -214,6 +214,15 @@ if [[ -f backend/scripts/radius-tenancy.sh ]] && compgen -G "/etc/freeradius/3.0
   fi
 fi
 
+# Licence agent: install it if this server never got it, and make sure it is
+# enabled at boot and running. Never fails the update; never activates.
+if [[ -f scripts/install-licence-agent.sh && $EUID -eq 0 ]]; then
+  log "Checking licence agent..."
+  # shellcheck source=scripts/install-licence-agent.sh
+  ( source scripts/install-licence-agent.sh; APP_DIR="$PWD" jbx_ensure_agent ) || \
+    log "WARNING: licence agent check did not complete; the panel is unaffected."
+fi
+
 write_status "success" "Deployment completed successfully"
 
 log "============================================================"
