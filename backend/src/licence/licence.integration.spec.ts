@@ -123,9 +123,8 @@ describe('LicenceGuard applied globally (integration)', () => {
       expect(res.body.state).toBe('EXPIRED');
     });
 
-    it('reading subscribers still works', async () => {
-      const res = await request(app.getHttpServer()).get('/subscribers').expect(200);
-      expect(res.body.via).toBe('read');
+    it('reading subscribers is locked too (strict)', async () => {
+      await request(app.getHttpServer()).get('/subscribers').expect(402);
     });
 
     // ── the ones that must never break ──────────────────────────────────

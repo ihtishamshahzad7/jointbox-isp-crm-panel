@@ -113,7 +113,13 @@ const QUERY_TIMEOUT_MS = Number(process.env.JBX_LICENCE_TIMEOUT_MS || 3000);
  * hiding it in open source fools nobody and annoys contributors.
  */
 export function licensingDisabled(): boolean {
-  return process.env.JBX_LICENCE_ENFORCE === 'false';
+  // Development only. On a production server (NODE_ENV=production, which
+  // the installer and PM2 config set) this switch is ignored, so editing
+  // .env is not a way to run the panel without a licence.
+  return (
+    process.env.JBX_LICENCE_ENFORCE === 'false' &&
+    process.env.NODE_ENV !== 'production'
+  );
 }
 
 @Injectable()

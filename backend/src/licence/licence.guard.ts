@@ -71,11 +71,6 @@ export const LICENCE_EXEMPT_PREFIXES: readonly string[] = [
   'licence',
   'license',
   'setup',
-
-  // ── Reading is always allowed; these are POSTs that only read ──────────
-  'reports',
-  'analytics',
-  'insights',
 ];
 
 /**
@@ -126,6 +121,19 @@ export function normalisePath(url: string): string {
   return p.replace(/^\/+/, '').replace(/\/+$/, '').toLowerCase();
 }
 
+/** Reads still answered while the panel is locked, so the UI can show the licence screen. */
+const LOCKED_READ_ALLOWED = [
+  'users/me',
+  'users/profile',
+  'organization/branding',
+  'branding',
+];
+
+export function isLockedReadAllowed(path: string): boolean {
+  const p = normalisePath(path);
+  return LOCKED_READ_ALLOWED.some((x) => p === x || p.startsWith(x + '/'));
+}
+
 export function isExempt(path: string): boolean {
   const p = normalisePath(path);
   if (p === '') return true;
@@ -152,18 +160,21 @@ export class LicenceGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const method = String(req?.method || 'GET').toUpperCase();
 
-    // Reads are always allowed. An unlicensed operator must still be able to
-    // see their subscribers, run reports, and work out what to pay.
-    if (READ_METHODS.has(method)) return true;
-
     const path = normalisePath(req?.originalUrl || req?.url || '');
     if (isExempt(path)) return true;
 
     const state = this.licence.state;
     // Agent missing or never activated past the allowance (48h) blocks too;
-    // inside the allowance those states still write.
+    // inside the allowance those states still work normally.
     if (!BLOCKING_STATES.has(state) && !this.licence.noLicenceExpired)
       return true;
+
+    // STRICT: an unlicensed panel is locked, reads included. What stays open
+    // is the exempt list above (sign-in, the licence page, RADIUS sync and
+    // session control, payment callbacks, the subscriber portal) plus the
+    // signed-in user's own profile so the panel can render the licence
+    // screen. FreeRADIUS never calls this API, so subscribers stay online.
+    if (READ_METHODS.has(method) && isLockedReadAllowed(path)) return true;
 
     // 402 Payment Required: unambiguous, and distinct from 401/403 so the
     // frontend can show a licence dialog rather than bouncing to login.
@@ -174,7 +185,7 @@ export class LicenceGuard implements CanActivate {
         state,
         message: this.licence.banner.message || 'This panel is not licensed.',
         detail:
-          'The panel is read-only until the licence is renewed. Subscriber ' +
+          'The panel is locked until a licence is activated. Subscriber ' +
           'authentication, accounting and bandwidth control are unaffected.',
       },
       HttpStatus.PAYMENT_REQUIRED,

@@ -83,7 +83,7 @@ jbx_install_agent() {
       fi
     else
       warn "Licence agent: could not download from $LICENCE_SERVER"
-      warn "  The panel will run unrestricted. Install it later with:"
+      warn "  The panel locks 2 days after installation without it. Install it with:"
       warn "    sudo bash ${APP_DIR:-/opt/jointbox}/scripts/install-licence-agent.sh"
       rm -f "$tmp"; return 0
     fi
@@ -211,7 +211,27 @@ jbx_already_activated() {
   "$AGENT_BIN" -status 2>/dev/null | grep -qE 'State +: (ACTIVE|GRACE)'
 }
 
+# The agent reports the panel version it finds here; without it the licence
+# admin shows "unknown".
+jbx_write_panel_version() {
+  local dir="${APP_DIR:-/opt/jointbox}" v=""
+  v="$(git -C "$dir" describe --tags --always 2>/dev/null || true)"
+  [[ -z "$v" && -f "$dir/backend/package.json" ]] && \
+    v="$(grep -m1 '"version"' "$dir/backend/package.json" | sed -E 's/.*"([^"]+)".*$/\1/')"
+  [[ -n "$v" ]] || return 0
+  install -d -m 0750 /etc/jointbox
+  echo "$v" > /etc/jointbox/panel-version 2>/dev/null || true
+}
+
+# Send the first heartbeat now instead of in ~6 hours, so the licence admin
+# shows this server's usage straight away.
+jbx_first_report() {
+  [[ -x "$AGENT_BIN" ]] || return 0
+  timeout 60 "$AGENT_BIN" -once >/dev/null 2>&1 || true
+}
+
 jbx_activate() {
+  jbx_write_panel_version
   [[ -x "$AGENT_BIN" ]] || return 0
 
   if jbx_already_activated; then
@@ -238,18 +258,21 @@ jbx_activate() {
   # the script, so a plain `read` would silently swallow the rest of the
   # installer — a genuinely nasty failure mode.
   if jbx_have_tty; then
-    jbx_prompt_and_activate && { systemctl restart jointbox-licensed 2>/dev/null || true; return 0; }
+    jbx_prompt_and_activate && { systemctl restart jointbox-licensed 2>/dev/null || true; jbx_first_report; return 0; }
   fi
 
   # --- no key, no terminal: start a trial and carry on --------------------
-  if "$AGENT_BIN" -activate trial >/dev/null 2>&1; then
-    warn "Started a 24-hour trial. Activate with a licence key before it ends:"
-    warn "    sudo jointbox-activate"
+  if "$AGENT_BIN" -activate trial \
+       -company "${JBX_COMPANY:-}" -website "${JBX_WEBSITE:-}" -contact "${JBX_CONTACT:-}" \
+       -email "${JBX_EMAIL:-}" -phone "${JBX_PHONE:-}" >/dev/null 2>&1; then
+    warn "Started a trial. Activate a licence key before it ends (Licence page,"
+    warn "or:  sudo jointbox-activate) — after that the panel is locked."
   else
-    warn "Not activated. The panel will run unrestricted until a licence agent"
-    warn "is activated. Run:  sudo jointbox-activate"
+    warn "Not activated. The panel locks 2 days after installation unless a"
+    warn "licence is activated. Run:  sudo jointbox-activate"
   fi
   systemctl restart jointbox-licensed 2>/dev/null || true
+  jbx_first_report
   return 0
 }
 
@@ -273,6 +296,11 @@ jbx_prompt_and_activate() {
   read -r -p "  Email           : " email   < /dev/tty || true
   read -r -p "  Phone / WhatsApp: " phone   < /dev/tty || true
   echo > /dev/tty
+
+  # Kept for the trial fallback below, so a refused key still registers
+  # this server with the details the operator just typed.
+  JBX_COMPANY="$company"; JBX_WEBSITE="$website"; JBX_CONTACT="$contact"
+  JBX_EMAIL="$email"; JBX_PHONE="$phone"
 
   local target="${key:-trial}"
   if "$AGENT_BIN" -activate "$target" \
@@ -307,6 +335,7 @@ jbx_ensure_agent() {
     jbx_install_agent
   fi
   [[ -x "$AGENT_BIN" ]] || return 0
+  jbx_write_panel_version
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable jointbox-licensed >/dev/null 2>&1 || true
   if ! systemctl is-active --quiet jointbox-licensed; then
@@ -328,6 +357,7 @@ jbx_ensure_agent() {
       warn "Not activated. Activate a licence in the panel (Licence page) within 2 days."
     fi
   fi
+  jbx_first_report
   if systemctl is-active --quiet jointbox-licensed; then
     ok "Licence agent running"
   else

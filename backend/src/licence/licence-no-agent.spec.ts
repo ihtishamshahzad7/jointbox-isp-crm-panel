@@ -63,9 +63,12 @@ describe('licence: no agent / not activated', () => {
     expect(s.banner.level).toBe('error');
   });
 
-  it('reads and RADIUS sync are never refused', () => {
+  it('reads are locked too, but RADIUS sync and sign-in never are', () => {
     const g = new LicenceGuard(svcInstalled(30 * DAY));
-    expect(g.canActivate(ctx('GET', '/subscribers'))).toBe(true);
+    expect(() => g.canActivate(ctx('GET', '/subscribers'))).toThrow(
+      HttpException,
+    );
+    expect(g.canActivate(ctx('POST', '/auth/login'))).toBe(true);
     expect(g.canActivate(ctx('POST', '/radius/sync'))).toBe(true);
   });
 
@@ -95,6 +98,16 @@ describe('licence: no agent / not activated', () => {
     };
     expect(inner(s).noLicenceDeadline).toBeNull();
     expect(s.writable).toBe(true);
+  });
+
+  it('JBX_LICENCE_ENFORCE=false is ignored on a production server', () => {
+    const env = { ...process.env };
+    process.env.JBX_LICENCE_ENFORCE = 'false';
+    process.env.NODE_ENV = 'production';
+    expect(svcInstalled(30 * DAY).writable).toBe(false);
+    process.env.NODE_ENV = 'test';
+    expect(svcInstalled(30 * DAY).writable).toBe(true);
+    process.env = env;
   });
 
   it('records the last valid licence on disk, and reads it back', () => {

@@ -25,7 +25,9 @@ import type { LicenceService, LicenceState } from './licence.service';
 function ctxFor(method: string, url: string): any {
   return {
     getType: () => 'http',
-    switchToHttp: () => ({ getRequest: () => ({ method, url, originalUrl: url }) }),
+    switchToHttp: () => ({
+      getRequest: () => ({ method, url, originalUrl: url }),
+    }),
   };
 }
 
@@ -56,7 +58,12 @@ const BLOCKED_STATES: LicenceState[] = [
   'TAMPERED',
   'SUSPENDED',
 ];
-const ALLOWED_STATES: LicenceState[] = ['ACTIVE', 'GRACE', 'UNLICENSED', 'UNAVAILABLE'];
+const ALLOWED_STATES: LicenceState[] = [
+  'ACTIVE',
+  'GRACE',
+  'UNLICENSED',
+  'UNAVAILABLE',
+];
 
 beforeEach(() => {
   delete process.env.JBX_LICENCE_ENFORCE;
@@ -133,7 +140,11 @@ describe('unauthenticated public surfaces are never blocked', () => {
 describe('the operator can always fix their own licence', () => {
   it.each(ALL_STATES)('licence and setup routes pass in state %s', (state) => {
     const guard = guardIn(state);
-    for (const url of ['/licence/status', '/licence/refresh', '/setup/wizard']) {
+    for (const url of [
+      '/licence/status',
+      '/licence/refresh',
+      '/setup/wizard',
+    ]) {
       expect(() => guard.canActivate(ctxFor('POST', url))).not.toThrow();
     }
   });
@@ -169,7 +180,8 @@ describe('future RADIUS routes cannot slip past the exempt list', () => {
   };
 
   /** Suspicious if the route path mentions any of these. */
-  const NETWORK_WORDS = /(radius|radacct|radcheck|coa|disconnect|bandwidth|live-session)/i;
+  const NETWORK_WORDS =
+    /(radius|radacct|radcheck|coa|disconnect|bandwidth|live-session)/i;
 
   it('every route whose path mentions RADIUS is exempt', () => {
     const offenders: string[] = [];
@@ -181,7 +193,8 @@ describe('future RADIUS routes cannot slip past the exempt list', () => {
       const base = /@Controller\(\s*['"`]([^'"`]*)['"`]/.exec(src)?.[1] ?? '';
 
       // Every method route: @Post('x'), @Get('a/b'), @Patch(), ...
-      const re = /@(Get|Post|Put|Patch|Delete)\(\s*(?:['"`]([^'"`]*)['"`])?\s*\)/g;
+      const re =
+        /@(Get|Post|Put|Patch|Delete)\(\s*(?:['"`]([^'"`]*)['"`])?\s*\)/g;
       let m: RegExpExecArray | null;
       while ((m = re.exec(src)) !== null) {
         const method = m[1].toUpperCase();
@@ -194,7 +207,9 @@ describe('future RADIUS routes cannot slip past the exempt list', () => {
         // Replace :params with a plausible value, as a real request would.
         const concrete = full.replace(/:[A-Za-z0-9_]+/g, '1234');
         if (!isExempt(concrete)) {
-          offenders.push(`${method} /${concrete}   (${path.relative(SRC, file)})`);
+          offenders.push(
+            `${method} /${concrete}   (${path.relative(SRC, file)})`,
+          );
         }
       }
     }
@@ -202,7 +217,7 @@ describe('future RADIUS routes cannot slip past the exempt list', () => {
     if (offenders.length > 0) {
       throw new Error(
         'These RADIUS-touching routes are NOT on the licence guard exempt list.\n' +
-          'Blocking them would silently desync an ISP\'s RADIUS tables.\n' +
+          "Blocking them would silently desync an ISP's RADIUS tables.\n" +
           'Add a prefix or fragment to licence.guard.ts:\n\n  ' +
           offenders.join('\n  ') +
           '\n',
@@ -215,10 +230,16 @@ describe('future RADIUS routes cannot slip past the exempt list', () => {
 // Normal enforcement
 // ───────────────────────────────────────────────────────────────────────────
 
-describe('reads are always allowed', () => {
-  const READS = ['/subscribers', '/invoices', '/payments/123', '/reports/revenue', '/nas'];
+describe('reads: open while licensed, locked when unlicensed (strict)', () => {
+  const READS = [
+    '/subscribers',
+    '/invoices',
+    '/payments/123',
+    '/reports/revenue',
+    '/nas',
+  ];
 
-  it.each(ALL_STATES)('GET passes in state %s', (state) => {
+  it.each(ALLOWED_STATES)('GET passes in state %s', (state) => {
     const guard = guardIn(state);
     for (const url of READS) {
       expect(() => guard.canActivate(ctxFor('GET', url))).not.toThrow();
@@ -226,10 +247,24 @@ describe('reads are always allowed', () => {
     }
   });
 
-  it('an unlicensed operator can still see their data to work out what to pay', () => {
+  it.each(BLOCKED_STATES)(
+    'GET of business data is refused in state %s',
+    (state) => {
+      const guard = guardIn(state);
+      for (const url of READS) {
+        expect(() => guard.canActivate(ctxFor('GET', url))).toThrow(
+          HttpException,
+        );
+      }
+    },
+  );
+
+  it('a locked panel still signs in, shows the licence page and its own user', () => {
     const guard = guardIn('EXPIRED');
-    expect(guard.canActivate(ctxFor('GET', '/subscribers'))).toBe(true);
-    expect(guard.canActivate(ctxFor('GET', '/invoices'))).toBe(true);
+    expect(guard.canActivate(ctxFor('POST', '/auth/login'))).toBe(true);
+    expect(guard.canActivate(ctxFor('GET', '/licence/status'))).toBe(true);
+    expect(guard.canActivate(ctxFor('POST', '/licence/activate'))).toBe(true);
+    expect(guard.canActivate(ctxFor('GET', '/users/me'))).toBe(true);
   });
 });
 
@@ -246,7 +281,9 @@ describe('writes are blocked only in a definitely-unlicensed state', () => {
   it.each(BLOCKED_STATES)('state %s blocks writes', (state) => {
     const guard = guardIn(state);
     for (const [method, url] of WRITES) {
-      expect(() => guard.canActivate(ctxFor(method, url))).toThrow(HttpException);
+      expect(() => guard.canActivate(ctxFor(method, url))).toThrow(
+        HttpException,
+      );
     }
   });
 
@@ -264,18 +301,23 @@ describe('writes are blocked only in a definitely-unlicensed state', () => {
    * member to be classified, once.
    */
   it('every LicenceState is classified as blocking or allowed, exactly once', () => {
-    const src = fs.readFileSync(path.join(__dirname, 'licence.service.ts'), 'utf8');
+    const src = fs.readFileSync(
+      path.join(__dirname, 'licence.service.ts'),
+      'utf8',
+    );
     const union = src.match(/export type LicenceState =([\s\S]*?);/);
     expect(union).not.toBeNull();
-    const declared = [...union![1].matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort();
+    const declared = [...union![1].matchAll(/'([A-Z_]+)'/g)]
+      .map((m) => m[1])
+      .sort();
 
     expect([...ALL_STATES].sort()).toEqual(declared);
     for (const st of declared) {
       const inBlocked = BLOCKED_STATES.includes(st as LicenceState);
       const inAllowed = ALLOWED_STATES.includes(st as LicenceState);
-      expect(`${st}: ${inBlocked !== inAllowed ? 'classified' : 'UNCLASSIFIED or both'}`).toBe(
-        `${st}: classified`,
-      );
+      expect(
+        `${st}: ${inBlocked !== inAllowed ? 'classified' : 'UNCLASSIFIED or both'}`,
+      ).toBe(`${st}: classified`);
     }
   });
 
@@ -343,7 +385,13 @@ describe('path normalisation', () => {
   });
 
   it('ordinary panel routes are not exempt', () => {
-    for (const p of ['subscribers', 'invoices', 'packages', 'users', 'tickets']) {
+    for (const p of [
+      'subscribers',
+      'invoices',
+      'packages',
+      'users',
+      'tickets',
+    ]) {
       expect(isExempt(p)).toBe(false);
     }
   });
@@ -391,10 +439,13 @@ describe('the public API is not a licensing bypass', () => {
     ['DELETE', '/api/v1/subscribers/1234/throttle'],
   ];
 
-  it.each(MUST_PASS)('%s %s still drives the network when expired', (method, url) => {
-    const guard = guardIn('EXPIRED');
-    expect(() => guard.canActivate(ctxFor(method, url))).not.toThrow();
-  });
+  it.each(MUST_PASS)(
+    '%s %s still drives the network when expired',
+    (method, url) => {
+      const guard = guardIn('EXPIRED');
+      expect(() => guard.canActivate(ctxFor(method, url))).not.toThrow();
+    },
+  );
 });
 
 describe('the RADIUS fragment does not over-exempt', () => {
@@ -409,7 +460,9 @@ describe('the RADIUS fragment does not over-exempt', () => {
       '/tickets/1/reply',
       '/vouchers/batch',
     ]) {
-      expect(() => guard.canActivate(ctxFor('POST', url))).toThrow(HttpException);
+      expect(() => guard.canActivate(ctxFor('POST', url))).toThrow(
+        HttpException,
+      );
     }
   });
 });
