@@ -117,9 +117,6 @@ const platformMenuGroups = [
   ]},
   { label: 'Company Defaults', items: [
     { id: 'p-templates', label: 'Message Templates', href: '/communication', Icon: navIcons.Support },
-    { id: 'p-taxes', label: 'Taxes & Fees', href: '/packages/taxes', Icon: navIcons.Payments },
-    { id: 'p-policies', label: 'RADIUS Policies', href: '/packages/policies', Icon: navIcons.NAS },
-    { id: 'p-allocations', label: 'Allocations', href: '/packages/allocations', Icon: navIcons.Pool },
   ]},
   { label: 'Server', items: [
     { id: 'p-settings', label: 'Settings & Backups', href: '/settings', Icon: navIcons.Settings },
@@ -132,7 +129,6 @@ const platformMenuGroups = [
 ];
 const PLATFORM_ROUTE_TO_MENU: Array<[string, string]> = [
   ['/companies', 'companies'], ['/platform-plans', 'plans'], ['/licence', 'licence'], ['/communication', 'p-templates'],
-  ['/packages/taxes', 'p-taxes'], ['/packages/policies', 'p-policies'], ['/packages/allocations', 'p-allocations'],
   ['/settings', 'p-settings'], ['/security', 'p-security'], ['/jobs', 'jobs'], ['/console', 'console'],
   ['/radius-admin', 'radius-admin'], ['/docs', 'docs'],
 ];

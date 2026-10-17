@@ -28,13 +28,12 @@ export class PackagesController {
   }
 
   // ── Taxes / policies / allocations ─────────────────────────────
-  // package_tax, package_policy and package_allocation have NO owner column:
-  // one catalogue serves every company on the installation, and deleting a
-  // row also detaches it from every package's settings. Reading them is
-  // harmless shared config; writing them changes every company's packages,
-  // so writes are platform owner only.
+  // Each company owns its own taxes, RADIUS policies and time allocations,
+  // exactly like its packages. The service scopes every read and write to the
+  // caller's company and refuses the platform account (it manages companies,
+  // not their network setup).
 
-  /** Tax list (platform defaults + the caller's company's own), policies, allocations. */
+  /** Taxes, policies and allocations the caller's company can use on a package. */
   @Get('options')
   getManagementOptions(@Req() req: any): any {
     return this.packagesService.getManagementOptions(req.user);
@@ -63,54 +62,46 @@ export class PackagesController {
     return this.packagesService.deleteTax(+id, req.user);
   }
 
-  /** Tenant-free read: shared RADIUS policy catalogue. */
+  /** The caller's company's RADIUS policies (plus legacy shared ones, read-only). */
   @Get('policies')
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getPolicies(@Req() req: any): any {
-    return this.packagesService.getPolicies();
+    return this.packagesService.getPolicies(req.user);
   }
 
   @Post('policies')
   createPolicy(@Body() body: any, @Req() req: any): any {
-    this.scope.assertPlatformOwner(req.user);
-    return this.packagesService.createPolicy(body);
+    return this.packagesService.createPolicy(body, req.user);
   }
 
   @Put('policies/:id')
   updatePolicy(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
-    this.scope.assertPlatformOwner(req.user);
-    return this.packagesService.updatePolicy(+id, body);
+    return this.packagesService.updatePolicy(+id, body, req.user);
   }
 
   @Delete('policies/:id')
   deletePolicy(@Param('id') id: string, @Req() req: any): any {
-    this.scope.assertPlatformOwner(req.user);
-    return this.packagesService.deletePolicy(+id);
+    return this.packagesService.deletePolicy(+id, req.user);
   }
 
-  /** Tenant-free read: shared time-window allocation catalogue. */
+  /** The caller's company's time allocations (plus legacy shared ones, read-only). */
   @Get('allocations')
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getAllocations(@Req() req: any): any {
-    return this.packagesService.getAllocations();
+    return this.packagesService.getAllocations(req.user);
   }
 
   @Post('allocations')
   createAllocation(@Body() body: any, @Req() req: any): any {
-    this.scope.assertPlatformOwner(req.user);
-    return this.packagesService.createAllocation(body);
+    return this.packagesService.createAllocation(body, req.user);
   }
 
   @Put('allocations/:id')
   updateAllocation(@Param('id') id: string, @Body() body: any, @Req() req: any): any {
-    this.scope.assertPlatformOwner(req.user);
-    return this.packagesService.updateAllocation(+id, body);
+    return this.packagesService.updateAllocation(+id, body, req.user);
   }
 
   @Delete('allocations/:id')
   deleteAllocation(@Param('id') id: string, @Req() req: any): any {
-    this.scope.assertPlatformOwner(req.user);
-    return this.packagesService.deleteAllocation(+id);
+    return this.packagesService.deleteAllocation(+id, req.user);
   }
 
   @Get(':id/subscribers')

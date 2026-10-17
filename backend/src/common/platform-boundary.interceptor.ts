@@ -80,21 +80,9 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['PUT', 'organization/isps/:id/currency'],
   ['PUT', 'organization/currency'],
 
-  // ── defaults every company starts from (companies add their own) ──
+  // ── message templates every company starts from ──
   ['*', 'communication/templates'],
   ['*', 'communication/templates/:id'],
-  ['*', 'packages/taxes'],
-  ['*', 'packages/taxes/:id'],
-  ['*', 'packages/policies'],
-  ['*', 'packages/policies/:id'],
-  ['*', 'packages/allocations'],
-  ['*', 'packages/allocations/:id'],
-  ['*', 'pricing/fees'],
-  ['*', 'pricing/fees/options'],
-  ['*', 'pricing/fees/:id'],
-  ['*', 'throttle-policies'],
-  ['*', 'throttle-policies/options'],
-  ['*', 'throttle-policies/:id'],
 
   // ── server maintenance (acts on the installation, shows no customer) ──
   ['POST', 'subscribers/repair-links'],

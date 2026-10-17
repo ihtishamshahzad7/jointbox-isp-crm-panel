@@ -105,12 +105,6 @@ describe('packages tenancy', () => {
     expect(where.AND[1].OR[0]).toEqual({ ownerId: { in: [10, 12] } });
   });
 
-  it('RADIUS policy / allocation writes stay platform-owner only', () => {
-    const { controller } = make();
-    expect(() => controller.deletePolicy('1', { user: ADMIN_A })).toThrow(ForbiddenException);
-    expect(() => controller.updateAllocation('1', {}, { user: ADMIN_A })).toThrow(ForbiddenException);
-  });
-
   it('a company administrator creates its OWN tax; the platform owner a platform default', async () => {
     const { prisma, controller } = make();
     await controller.createTax({ name: 'GST' }, { user: ADMIN_A });
@@ -151,5 +145,70 @@ describe('package writes are an ownership test, not a visibility test', () => {
     await expect(service.create({ name: 'X', price: 1, poolId: 70 }, ADMIN_A as any)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+});
+
+describe('policies and allocations belong to each company', () => {
+  const POLICIES = [
+    { id: 1, ownerId: 10, attributeName: 'Rate-Limit' },
+    { id: 2, ownerId: 20, attributeName: 'Rate-Limit' },
+    { id: 3, ownerId: null, attributeName: 'Session-Timeout' },
+  ];
+  function withRules() {
+    const m = make();
+    const match = (row: any, w: any): boolean => {
+      if (!w) return true;
+      if (w.AND) return w.AND.every((x: any) => match(row, x));
+      if (w.OR) return w.OR.some((x: any) => match(row, x));
+      if (w.id?.in) return w.id.in.includes(row.id);
+      if ('ownerId' in w) return row.ownerId === w.ownerId;
+      return true;
+    };
+    const table = (rows: any[]) => ({
+      findMany: jest.fn(async ({ where }: any) => rows.filter((r) => match(r, where))),
+      findUnique: jest.fn(async ({ where }: any) => rows.find((r) => r.id === where.id) ?? null),
+      create: jest.fn(async ({ data }: any) => ({ id: 50, ...data })),
+      update: jest.fn(async ({ where, data }: any) => ({ ...rows.find((r) => r.id === where.id), ...data })),
+      delete: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 0 })),
+    });
+    m.prisma.packagePolicy = table(POLICIES);
+    m.prisma.packageAllocation = table([{ id: 5, ownerId: 20, policyId: 2, days: [] }]);
+    return m;
+  }
+
+  it('a company sees its own and legacy rules, never another company’s', async () => {
+    const { controller } = withRules();
+    const rows = await controller.getPolicies({ user: ADMIN_A });
+    expect(rows.map((r: any) => r.id).sort()).toEqual([1, 3]);
+  });
+
+  it('a new policy is owned by the creating company', async () => {
+    const { controller, prisma } = withRules();
+    await controller.createPolicy({ attributeName: 'Rate-Limit', attributeValue: '10M/10M' }, { user: STAFF_A });
+    expect(prisma.packagePolicy.create.mock.calls[0][0].data.ownerId).toBe(10);
+  });
+
+  it('company A cannot edit or delete company B’s rules', async () => {
+    const { controller } = withRules();
+    await expect(controller.updatePolicy('2', { attributeValue: 'x' }, { user: ADMIN_A })).rejects.toBeInstanceOf(NotFoundException);
+    await expect(controller.deleteAllocation('5', { user: ADMIN_A })).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('legacy rules are read-only', async () => {
+    const { controller } = withRules();
+    await expect(controller.updatePolicy('3', { attributeValue: 'x' }, { user: ADMIN_A })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('the platform account neither reads nor writes them', async () => {
+    const { controller } = withRules();
+    await expect(controller.getPolicies({ user: OWNER })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(controller.createAllocation({}, { user: OWNER })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(controller.updatePolicy('3', {}, { user: OWNER })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('an allocation cannot point at another company’s policy', async () => {
+    const { controller } = withRules();
+    await expect(controller.createAllocation({ policyId: 2 }, { user: ADMIN_A })).rejects.toThrow('That policy does not exist.');
   });
 });

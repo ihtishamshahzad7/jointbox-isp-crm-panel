@@ -25,6 +25,8 @@ describe('platform boundary: what the platform account can reach', () => {
       ['POST', 'vouchers'], ['GET', 'tickets'], ['GET', 'telemetry/live-traffic'],
       ['POST', 'groups'], ['POST', 'organization/isps'], ['GET', 'logs/activity'],
       ['POST', 'throttle-policies/:id/subscribers'], ['GET', 'pricing/subscriber-discounts'],
+      ['POST', 'packages/taxes'], ['POST', 'packages/policies'], ['PUT', 'packages/allocations/:id'],
+      ['GET', 'pricing/fees'], ['POST', 'throttle-policies'],
     ];
     for (const [m, t] of business) expect([m, t, isPlatformRoute(m, t)]).toEqual([m, t, false]);
   });
@@ -60,7 +62,7 @@ describe('platform boundary: what the platform account can reach', () => {
     for (const [m, t] of [
       ['GET', 'users/companies'], ['POST', 'users'], ['PATCH', 'users/:id/toggle'],
       ['GET', 'licence/status'], ['POST', 'backup/run'], ['GET', 'console/info'],
-      ['GET', 'communication/templates'], ['POST', 'packages/taxes'], ['POST', 'auth/impersonate/:userId'],
+      ['GET', 'communication/templates'], ['POST', 'auth/impersonate/:userId'],
       ['GET', 'security/permissions'], ['GET', 'jobs'], ['GET', 'update/check'],
     ]) expect([m, t, isPlatformRoute(m, t)]).toEqual([m, t, true]);
   });

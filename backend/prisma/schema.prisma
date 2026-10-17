@@ -4088,6 +4088,9 @@ model PackageTax {
 /// RADIUS attribute rules applied to packages.
 model PackagePolicy {
   id             Int      @id @default(autoincrement())
+  /// The ISP company that owns this rule (its top account). Every company
+  /// writes its own; NULL rows are legacy shared rules, read-only to all.
+  ownerId        Int?
   groupName      String   @default("") @db.VarChar(120)
   attributeName  String   @db.VarChar(120)
   attributeType  String   @db.VarChar(24)
@@ -4097,12 +4100,15 @@ model PackagePolicy {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  @@index([ownerId])
   @@map("package_policy")
 }
 
 /// Time-of-day / day-of-week windows in which a policy applies.
 model PackageAllocation {
   id          Int      @id @default(autoincrement())
+  /// The ISP company that owns this window. NULL = legacy shared, read-only.
+  ownerId     Int?
   groupName   String   @default("") @db.VarChar(120)
   isActive    Boolean  @default(true)
   /// ["MON","TUE",…]
@@ -4115,6 +4121,7 @@ model PackageAllocation {
   updatedAt   DateTime @updatedAt
 
   @@index([isActive])
+  @@index([ownerId])
   @@map("package_allocation")
 }
 

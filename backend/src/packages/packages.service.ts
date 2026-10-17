@@ -1098,8 +1098,8 @@ export class PackagesService {
       nextExpiredPackageId: data.nextExpiredPackageId !== undefined && data.nextExpiredPackageId !== null && data.nextExpiredPackageId !== '' ? Number(data.nextExpiredPackageId) : null,
       nextDisabledPackageId: data.nextDisabledPackageId !== undefined && data.nextDisabledPackageId !== null && data.nextDisabledPackageId !== '' ? Number(data.nextDisabledPackageId) : null,
       taxIds: (await this.visibleTaxIds(Array.isArray(data.taxIds) ? data.taxIds.map(Number) : [], actor)) ?? [],
-      policyIds: Array.isArray(data.policyIds) ? data.policyIds.map(Number) : [],
-      allocationIds: Array.isArray(data.allocationIds) ? data.allocationIds.map(Number) : [],
+      policyIds: (await this.visibleRuleIds('packagePolicy', Array.isArray(data.policyIds) ? data.policyIds.map(Number) : [], actor)) ?? [],
+      allocationIds: (await this.visibleRuleIds('packageAllocation', Array.isArray(data.allocationIds) ? data.allocationIds.map(Number) : [], actor)) ?? [],
     });
 
     this.invalidateCache();
@@ -1222,8 +1222,8 @@ export class PackagesService {
             : Number(data.nextDisabledPackageId)
           : undefined,
       taxIds: await this.visibleTaxIds(Array.isArray(data.taxIds) ? data.taxIds.map(Number) : undefined, actor),
-      policyIds: Array.isArray(data.policyIds) ? data.policyIds.map(Number) : undefined,
-      allocationIds: Array.isArray(data.allocationIds) ? data.allocationIds.map(Number) : undefined,
+      policyIds: await this.visibleRuleIds('packagePolicy', Array.isArray(data.policyIds) ? data.policyIds.map(Number) : undefined, actor),
+      allocationIds: await this.visibleRuleIds('packageAllocation', Array.isArray(data.allocationIds) ? data.allocationIds.map(Number) : undefined, actor),
     });
 
     this.invalidateCache();
@@ -1451,17 +1451,71 @@ export class PackagesService {
   }
 
   // ── Policies ───────────────────────────────────────────────────────────
-  async getPolicies(): Promise<PolicyRule[]> {
-    const rows = await this.prisma.packagePolicy.findMany({ orderBy: { id: 'asc' } });
+  /**
+   * RADIUS policies and time allocations BELONG TO A COMPANY, like its
+   * packages, pools and routers. Each company creates and edits its own; the
+   * platform account manages companies, not their network configuration, so
+   * it neither reads nor writes these. Rows from before ownership existed
+   * (ownerId NULL) stay readable to every company so no package loses a rule
+   * it already uses, but nobody can edit them — a company copies one instead.
+   */
+  private async companyConfigOwner(actor: Actor | undefined): Promise<number> {
+    if (!actor) throw new ForbiddenException('Sign in as a company to manage its policies.');
+    if (this.scope.isPlatformOwner(actor)) {
+      throw new ForbiddenException(
+        'Policies and allocations belong to each company. Sign in as the company to manage them.',
+      );
+    }
+    const owner = await this.scope.configOwnerForCreate(actor);
+    if (owner == null) throw new ForbiddenException('Only your company administrator can change these.');
+    return owner;
+  }
+
+  private async companyReadWhere(actor: Actor | undefined) {
+    if (!actor) return { ownerId: null };
+    if (this.scope.isPlatformOwner(actor)) {
+      throw new ForbiddenException(
+        'Policies and allocations belong to each company. Sign in as the company to see them.',
+      );
+    }
+    return this.scope.configReadWhere(actor);
+  }
+
+  private async assertCompanyWritable(actor: Actor | undefined, row: { ownerId: number | null } | null, what: string) {
+    await this.companyConfigOwner(actor); // refuses the platform and non-top-level accounts
+    await this.scope.assertConfigWritable(actor as Actor, row, what);
+  }
+
+  /** Only ids of rules this caller can see survive into a package's settings. */
+  private async visibleRuleIds(
+    table: 'packagePolicy' | 'packageAllocation',
+    ids: number[] | undefined,
+    actor?: Actor,
+  ): Promise<number[] | undefined> {
+    if (!Array.isArray(ids) || !ids.length || !actor || this.scope.isPlatformOwner(actor)) return ids;
+    const where = { AND: [{ id: { in: ids } }, await this.scope.configReadWhere(actor)] };
+    const rows: Array<{ id: number }> =
+      table === 'packagePolicy'
+        ? await this.prisma.packagePolicy.findMany({ where, select: { id: true } })
+        : await this.prisma.packageAllocation.findMany({ where, select: { id: true } });
+    const ok = new Set(rows.map((r) => r.id));
+    return ids.filter((i) => ok.has(i));
+  }
+
+  async getPolicies(actor?: Actor): Promise<PolicyRule[]> {
+    const where = await this.companyReadWhere(actor);
+    const rows = await this.prisma.packagePolicy.findMany({ where, orderBy: { id: 'asc' } });
     return rows.map(this.policyOut);
   }
 
-  async createPolicy(payload: any): Promise<PolicyRule> {
+  async createPolicy(payload: any, actor?: Actor): Promise<PolicyRule> {
+    const ownerId = await this.companyConfigOwner(actor);
     if (!String(payload?.attributeName || '').trim()) {
       throw new BadRequestException('An attribute name is required.');
     }
     const row = await this.prisma.packagePolicy.create({
       data: {
+        ownerId,
         groupName: payload.groupName || 'Default',
         attributeName: String(payload.attributeName),
         attributeType: payload.attributeType || 'TEXT',
@@ -1473,9 +1527,9 @@ export class PackagesService {
     return this.policyOut(row);
   }
 
-  async updatePolicy(id: number, payload: any): Promise<PolicyRule> {
+  async updatePolicy(id: number, payload: any, actor?: Actor): Promise<PolicyRule> {
     const existing = await this.prisma.packagePolicy.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Policy not found');
+    await this.assertCompanyWritable(actor, existing, 'Policy');
     const data: any = {};
     if (payload.groupName !== undefined) data.groupName = payload.groupName;
     if (payload.attributeName !== undefined) data.attributeName = String(payload.attributeName);
@@ -1486,9 +1540,9 @@ export class PackagesService {
     return this.policyOut(await this.prisma.packagePolicy.update({ where: { id }, data }));
   }
 
-  async deletePolicy(id: number) {
+  async deletePolicy(id: number, actor?: Actor) {
     const existing = await this.prisma.packagePolicy.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Policy not found');
+    await this.assertCompanyWritable(actor, existing, 'Policy');
     await this.prisma.packagePolicy.delete({ where: { id } });
     // Allocations point at a policy; leaving the id behind would make the
     // allocation reference a policy that no longer exists.
@@ -1498,29 +1552,41 @@ export class PackagesService {
   }
 
   // ── Allocations (time windows) ─────────────────────────────────────────
-  async getAllocations(): Promise<AllocationRule[]> {
-    const rows = await this.prisma.packageAllocation.findMany({ orderBy: { id: 'asc' } });
+  async getAllocations(actor?: Actor): Promise<AllocationRule[]> {
+    const where = await this.companyReadWhere(actor);
+    const rows = await this.prisma.packageAllocation.findMany({ where, orderBy: { id: 'asc' } });
     return rows.map(this.allocationOut);
   }
 
-  async createAllocation(payload: any): Promise<AllocationRule> {
+  /** An allocation may only point at a policy its company can see. */
+  private async assertPolicyUsable(policyId: number | null, actor?: Actor) {
+    if (policyId == null || !actor) return;
+    const ok = await this.visibleRuleIds('packagePolicy', [policyId], actor);
+    if (!ok?.length) throw new BadRequestException('That policy does not exist.');
+  }
+
+  async createAllocation(payload: any, actor?: Actor): Promise<AllocationRule> {
+    const ownerId = await this.companyConfigOwner(actor);
+    const policyId = payload.policyId ? Number(payload.policyId) : null;
+    await this.assertPolicyUsable(policyId, actor);
     const row = await this.prisma.packageAllocation.create({
       data: {
+        ownerId,
         groupName: payload.groupName || 'Default',
         isActive: payload.isActive !== false,
         days: Array.isArray(payload.days) ? payload.days : [],
         startTime: payload.startTime || '00:00',
         endTime: payload.endTime || '23:59',
-        policyId: payload.policyId ? Number(payload.policyId) : null,
+        policyId,
         description: payload.description || null,
       },
     });
     return this.allocationOut(row);
   }
 
-  async updateAllocation(id: number, payload: any): Promise<AllocationRule> {
+  async updateAllocation(id: number, payload: any, actor?: Actor): Promise<AllocationRule> {
     const existing = await this.prisma.packageAllocation.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Allocation not found');
+    await this.assertCompanyWritable(actor, existing, 'Allocation');
     const data: any = {};
     if (payload.groupName !== undefined) data.groupName = payload.groupName;
     if (payload.isActive !== undefined) data.isActive = !!payload.isActive;
@@ -1531,13 +1597,14 @@ export class PackagesService {
     // Explicit null/'' clears the link; omitting the key leaves it alone.
     if (payload.policyId !== undefined) {
       data.policyId = payload.policyId === null || payload.policyId === '' ? null : Number(payload.policyId);
+      await this.assertPolicyUsable(data.policyId, actor);
     }
     return this.allocationOut(await this.prisma.packageAllocation.update({ where: { id }, data }));
   }
 
-  async deleteAllocation(id: number) {
+  async deleteAllocation(id: number, actor?: Actor) {
     const existing = await this.prisma.packageAllocation.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Allocation not found');
+    await this.assertCompanyWritable(actor, existing, 'Allocation');
     await this.prisma.packageAllocation.delete({ where: { id } });
     await this.detachIdFromSettings('allocationIds', id);
     return { success: true };
@@ -1545,7 +1612,9 @@ export class PackagesService {
 
   async getManagementOptions(actor?: Actor) {
     const [taxes, policies, allocations] = await Promise.all([
-      this.getTaxes(actor), this.getPolicies(), this.getAllocations(),
+      this.getTaxes(actor),
+      actor && this.scope.isPlatformOwner(actor) ? Promise.resolve([]) : this.getPolicies(actor),
+      actor && this.scope.isPlatformOwner(actor) ? Promise.resolve([]) : this.getAllocations(actor),
     ]);
     return { taxes, policies, allocations };
   }
