@@ -112,6 +112,7 @@ const menuGroups = [
 const platformMenuGroups = [
   { label: 'Platform', items: [
     { id: 'companies', label: 'Companies', href: '/companies', Icon: navIcons.Users },
+    { id: 'plans', label: 'Plans & Pricing', href: '/platform-plans', Icon: navIcons.Payments },
     { id: 'licence', label: 'Licence', href: '/licence', Icon: navIcons.Settings },
   ]},
   { label: 'Company Defaults', items: [
@@ -130,7 +131,7 @@ const platformMenuGroups = [
   ]},
 ];
 const PLATFORM_ROUTE_TO_MENU: Array<[string, string]> = [
-  ['/companies', 'companies'], ['/licence', 'licence'], ['/communication', 'p-templates'],
+  ['/companies', 'companies'], ['/platform-plans', 'plans'], ['/licence', 'licence'], ['/communication', 'p-templates'],
   ['/packages/taxes', 'p-taxes'], ['/packages/policies', 'p-policies'], ['/packages/allocations', 'p-allocations'],
   ['/settings', 'p-settings'], ['/security', 'p-security'], ['/jobs', 'jobs'], ['/console', 'console'],
   ['/radius-admin', 'radius-admin'], ['/docs', 'docs'],

@@ -179,7 +179,7 @@ export async function assertIsCompany(prisma: any, companyId: number): Promise<{
   return { id: u.id, name: u.name };
 }
 
-const capOrNull = (v: any, field: string): number | null => {
+export const capOrNull = (v: any, field: string): number | null => {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   if (!Number.isInteger(n) || n < 0 || n > 10_000_000) {
@@ -202,10 +202,48 @@ export async function savePlan(
     if (Number.isNaN(d.getTime())) throw new BadRequestException('The end date is not a valid date.');
     expiresAt = d;
   }
+  /**
+   * A price-list plan (Plans & Pricing) may be chosen. Its limits are copied
+   * in for any cap the request leaves out — `undefined`, not `null`: an
+   * explicit null still means "no limit", so an override is always possible.
+   */
+  type Caps = {
+    maxSubscribers: number | null;
+    maxNas: number | null;
+    maxAccounts: number | null;
+  };
+  type Tier = Caps & { id: number; name: string; isActive: boolean };
+  const req = (body ?? {}) as Record<string, unknown>;
+  let planId: number | null | undefined = undefined;
+  let fromPlan: Caps | null = null;
+  if ('planId' in req) {
+    if (req.planId === null || req.planId === '') planId = null;
+    else {
+      const plans = (
+        prisma as { platformPlan: { findUnique(a: unknown): Promise<unknown> } }
+      ).platformPlan;
+      const tier = (await plans.findUnique({
+        where: { id: Number(req.planId) },
+      })) as Tier | null;
+      if (!tier) throw new BadRequestException('That plan does not exist.');
+      if (!tier.isActive) {
+        throw new BadRequestException(
+          `The ${tier.name} plan is switched off. Switch it on in Plans & Pricing first.`,
+        );
+      }
+      planId = tier.id;
+      fromPlan = tier;
+    }
+  }
+  const cap = (key: keyof Caps, label: string) =>
+    req[key] === undefined && fromPlan
+      ? fromPlan[key]
+      : capOrNull(req[key], label);
   const data = {
-    maxSubscribers: capOrNull(body?.maxSubscribers, 'Subscribers'),
-    maxNas: capOrNull(body?.maxNas, 'Routers'),
-    maxAccounts: capOrNull(body?.maxAccounts, 'Sub-accounts'),
+    maxSubscribers: cap('maxSubscribers', 'Subscribers'),
+    maxNas: cap('maxNas', 'Routers'),
+    maxAccounts: cap('maxAccounts', 'Sub-accounts'),
+    ...(planId !== undefined ? { planId } : {}),
     expiresAt,
     note: body?.note ? String(body.note).slice(0, 300) : null,
     updatedById: actorId || null,

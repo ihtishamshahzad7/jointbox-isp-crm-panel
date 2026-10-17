@@ -247,7 +247,7 @@ export default function AllocationsPage() {
       <div style={{ marginBottom: "24px", display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
         <div>
           <h1 style={{ fontSize: "28px", fontWeight: "800", letterSpacing: "-0.02em", color: "#fff" }}>Allocations</h1>
-          <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.35)", marginTop: "4px", fontFamily: "monospace" }}>Define time-based resource allocation for packages</p>
+          <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.35)", marginTop: "4px", fontFamily: "monospace" }}>Shared time windows (e.g. night-time free hours) that apply a policy on certain days and hours. Defined once here; every company can attach them to its own packages.</p>
         </div>
         <button
           style={{

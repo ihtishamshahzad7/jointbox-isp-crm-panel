@@ -782,6 +782,38 @@ export class UsersService {
       .then(() => (this.prisma as any).companyPlan?.findMany?.({ where: { companyId: { in: companies.map((c) => c.id) } } }) ?? [])
       .catch(() => []);
     const planById = new Map<number, any>((planRows || []).map((p: any) => [Number(p.companyId), p]));
+    // The price-list plan each company is on, and its contact details. Both
+    // reads fall back to empty on a server where the tables are not migrated.
+    const tierIdOf = new Map(
+      (planRows as Array<{ companyId: number; planId?: number | null }>).map(
+        (p) => [Number(p.companyId), p.planId ?? null] as const,
+      ),
+    );
+    const tierIds = [
+      ...new Set([...tierIdOf.values()].filter((v): v is number => v != null)),
+    ];
+    const tiers = tierIds.length
+      ? await this.prisma.platformPlan
+          .findMany({ where: { id: { in: tierIds } } })
+          .catch(() => [])
+      : [];
+    const tierById = new Map(
+      tiers.map((t) => [
+        t.id,
+        {
+          id: t.id,
+          name: t.name,
+          price: Number(t.price),
+          currency: t.currency,
+          billingPeriod: t.billingPeriod,
+        },
+      ]),
+    );
+    const profiles: Array<{ companyId: number } & Record<string, unknown>> =
+      await this.prisma.companyProfile
+        .findMany({ where: { companyId: { in: companies.map((c) => c.id) } } })
+        .catch(() => []);
+    const profileById = new Map(profiles.map((p) => [p.companyId, p] as const));
     return companies.map((c) => {
       const r = byRoot.get(c.id);
       const n = (v: bigint | undefined) => Number(v ?? 0);
@@ -794,6 +826,8 @@ export class UsersService {
         subscribers: n(r?.subscribers),
         nas:         n(r?.nas),
         plan:        planById.get(c.id) ?? null,
+        tier: tierById.get(tierIdOf.get(c.id) ?? -1) ?? null,
+        profile: profileById.get(c.id) ?? null,
       };
     });
   }

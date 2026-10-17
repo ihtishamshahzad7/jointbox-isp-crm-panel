@@ -2628,10 +2628,56 @@ model CompanyPlan {
   maxAccounts    Int?
   expiresAt      DateTime?
   note           String?   @db.VarChar(300)
+  /// The price-list plan this company is on (Plans & Pricing). The caps above
+  /// are copied from it when it is assigned and may then be overridden.
+  planId         Int?
   updatedById    Int?
   updatedAt      DateTime  @updatedAt
 
   @@map("company_plan")
+}
+
+/// The platform's price list: what each tier costs a company and what it
+/// allows. Assigning one to a company copies its limits into company_plan,
+/// which is what the panel enforces.
+model PlatformPlan {
+  id             Int      @id @default(autoincrement())
+  name           String   @unique @db.VarChar(60)
+  price          Decimal  @default(0) @db.Decimal(12, 2)
+  currency       String   @default("PKR") @db.VarChar(3)
+  /// MONTHLY or YEARLY
+  billingPeriod  String   @default("MONTHLY") @db.VarChar(10)
+  maxSubscribers Int?
+  maxNas         Int?
+  maxAccounts    Int?
+  /// Module names shown on the plan (e.g. "accounting", "monitoring").
+  features       String[] @default([])
+  description    String?  @db.VarChar(300)
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("platform_plan")
+}
+
+/// A company's contact and address details (one row per company account).
+model CompanyProfile {
+  companyId        Int      @id
+  contactFirstName String?  @db.VarChar(80)
+  contactLastName  String?  @db.VarChar(80)
+  contactPhone     String?  @db.VarChar(30)
+  website          String?  @db.VarChar(200)
+  addressLine1     String?  @db.VarChar(200)
+  addressLine2     String?  @db.VarChar(200)
+  city             String?  @db.VarChar(80)
+  province         String?  @db.VarChar(80)
+  postalCode       String?  @db.VarChar(20)
+  country          String?  @db.VarChar(80)
+  taxNumber        String?  @db.VarChar(40)
+  updatedAt        DateTime @updatedAt
+
+  @@map("company_profile")
 }
 
 model CompanyFinanceSettings {

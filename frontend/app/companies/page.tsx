@@ -47,7 +47,66 @@ interface Company {
   subscribers: number;
   nas: number;
   plan?: Plan | null;
+  /** The price-list plan (Plans & Pricing) the company is on. */
+  tier?: { id: number; name: string; price: number; currency: string; billingPeriod: string } | null;
+  profile?: Profile | null;
 }
+
+/** Contact and address details (Platform → company details). */
+interface Profile {
+  contactFirstName?: string | null;
+  contactLastName?: string | null;
+  contactPhone?: string | null;
+  website?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  province?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+  taxNumber?: string | null;
+}
+
+interface PriceTier {
+  id: number;
+  name: string;
+  price: number;
+  currency: string;
+  billingPeriod: string;
+  maxSubscribers: number | null;
+  maxNas: number | null;
+  maxAccounts: number | null;
+  isActive: boolean;
+}
+
+const PROFILE_KEYS: Array<[keyof Profile, string, string?]> = [
+  ["contactFirstName", "Contact first name"],
+  ["contactLastName", "Contact last name"],
+  ["contactPhone", "Contact phone", "e.g. +92 300 1234567"],
+  ["website", "Website", "e.g. myisp.pk"],
+  ["addressLine1", "Address line 1"],
+  ["addressLine2", "Address line 2"],
+  ["city", "City"],
+  ["province", "Province / state"],
+  ["postalCode", "Postal code"],
+  ["country", "Country"],
+  ["taxNumber", "Tax number (NTN)"],
+];
+const emptyProfile = (p?: Profile | null): Record<string, string> =>
+  Object.fromEntries(PROFILE_KEYS.map(([k]) => [k, (p?.[k] as string | null | undefined) ?? ""]));
+
+function useTiers(): PriceTier[] {
+  const [tiers, setTiers] = React.useState<PriceTier[]>([]);
+  React.useEffect(() => {
+    api("/platform/plans")
+      .then((r: { plans?: PriceTier[] }) => setTiers(r?.plans ?? []))
+      .catch(() => setTiers([]));
+  }, []);
+  return tiers;
+}
+
+const tierLabel = (t: { name: string; price: number; currency: string; billingPeriod: string }) =>
+  `${t.name} — ${t.currency} ${t.price.toLocaleString()} / ${t.billingPeriod === "YEARLY" ? "year" : "month"}`;
 
 /** What the platform allows this company. null in a field = no limit. */
 interface Plan {
@@ -223,6 +282,7 @@ export default function Companies() {
                       {c.city ? ` · ${c.city}` : ""}
                       {c.plan?.expiresAt && !planEnded(c.plan) ? ` · plan ends ${new Date(c.plan.expiresAt).toLocaleDateString()}` : ""}
                     </div>
+                    {c.tier && <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", marginTop: 2 }}>{tierLabel(c.tier)}</div>}
                   </td>
                   <td style={{ ...NUM, color: nearCap(c.subscribers, c.plan?.maxSubscribers) ? "#b45309" : undefined }}>{ofCap(c.subscribers, c.plan?.maxSubscribers)}</td>
                   <td style={{ ...NUM, color: nearCap(c.nas, c.plan?.maxNas) ? "#b45309" : undefined }}>{ofCap(c.nas, c.plan?.maxNas)}</td>
@@ -256,7 +316,10 @@ export default function Companies() {
 
 function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: string) => void }) {
   const [f, setF] = React.useState({ name: "", email: "", password: "", phone: "", city: "" });
+  const [profile, setProfile] = React.useState<Record<string, string>>(emptyProfile());
+  const [tierId, setTierId] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const tiers = useTiers();
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   const ready = f.name.trim() && f.email.trim() && f.password.length >= 8;
 
@@ -264,11 +327,23 @@ function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: stri
     e.preventDefault();
     if (!ready || busy) return;
     setBusy(true);
+    let created: { id?: number } | null = null;
     try {
-      await api("/users", { method: "POST", body: JSON.stringify({ ...f, role: "ADMIN" }) });
+      created = await api("/users", {
+        method: "POST",
+        body: JSON.stringify({ ...f, city: profile.city || f.city, role: "ADMIN" }),
+      });
+      const id = created?.id;
+      if (id) {
+        await api(`/platform/companies/${id}/profile`, { method: "PUT", body: JSON.stringify(profile) });
+        if (tierId) await api(`/users/companies/${id}/plan`, { method: "PUT", body: JSON.stringify({ planId: Number(tierId) }) });
+      }
       onDone();
-    } catch (err: any) {
-      onError(String(err?.message || err));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // The account exists even if the details or plan failed — say so plainly.
+      onError(created?.id ? `The company was created, but: ${msg}. Open Edit or Limits to finish.` : msg);
+      if (created?.id) onDone();
     } finally {
       setBusy(false);
     }
@@ -283,17 +358,48 @@ function NewCompany({ onDone, onError }: { onDone: () => void; onError: (m: stri
         and is invisible to every other company here. They will not see the
         licence, the server console, the database or the panel updates.
       </p>
+      <div style={SECTION}>Login</div>
       <div style={GRID}>
         <F label="Company name" v={f.name} on={set("name")} />
         <F label="Owner email (their login)" v={f.email} on={set("email")} type="email" autoComplete="off" />
         <F label="Password" v={f.password} on={set("password")} type="password" autoComplete="new-password" hint="At least 8 characters, with letters and numbers" />
-        <F label="Phone" v={f.phone} on={set("phone")} />
-        <F label="City" v={f.city} on={set("city")} />
+        <F label="Company phone" v={f.phone} on={set("phone")} />
       </div>
+      <div style={SECTION}>Contact &amp; address</div>
+      <ProfileFields value={profile} onChange={setProfile} />
+      <div style={SECTION}>Plan</div>
+      <TierSelect tiers={tiers} value={tierId} onChange={setTierId} />
       <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, marginTop: 12, opacity: !ready || busy ? 0.55 : 1 }}>
         {busy ? "Creating…" : "Create company"}
       </button>
     </form>
+  );
+}
+
+function ProfileFields({ value, onChange }: { value: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
+  return (
+    <div style={GRID}>
+      {PROFILE_KEYS.map(([k, label, hint]) => (
+        <F key={k} label={label} v={value[k] ?? ""} on={(e: React.ChangeEvent<HTMLInputElement>) => onChange({ ...value, [k]: e.target.value })} hint={hint} />
+      ))}
+    </div>
+  );
+}
+
+function TierSelect({ tiers, value, onChange }: { tiers: PriceTier[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ maxWidth: 420 }}>
+      <label style={LBL} htmlFor="company-tier">Plan (from Plans &amp; Pricing)</label>
+      <select id="company-tier" value={value} onChange={(e) => onChange(e.target.value)} style={INPUT}>
+        <option value="">No plan — set limits by hand</option>
+        {tiers.filter((t) => t.isActive || String(t.id) === value).map((t) => (
+          <option key={t.id} value={t.id}>{tierLabel(t)}</option>
+        ))}
+      </select>
+      <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3 }}>
+        The plan&apos;s subscriber, router and sub-account limits are applied to this company.
+      </div>
+    </div>
   );
 }
 
@@ -304,6 +410,7 @@ function EditCompany({ company, onDone, onCancel, onError }: {
   const [f, setF] = React.useState({
     name: company.name || "", email: company.email || "", phone: company.phone || "", city: company.city || "", password: "",
   });
+  const [profile, setProfile] = React.useState<Record<string, string>>(emptyProfile(company.profile));
   const [busy, setBusy] = React.useState(false);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   const ready = f.name.trim() && f.email.trim() && (!f.password || f.password.length >= 8);
@@ -316,6 +423,7 @@ function EditCompany({ company, onDone, onCancel, onError }: {
       const body: Record<string, string> = { name: f.name.trim(), email: f.email.trim(), phone: f.phone, city: f.city };
       if (f.password) body.password = f.password;
       await api(`/users/${company.id}`, { method: "PUT", body: JSON.stringify(body) });
+      await api(`/platform/companies/${company.id}/profile`, { method: "PUT", body: JSON.stringify(profile) });
       onDone();
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -334,6 +442,8 @@ function EditCompany({ company, onDone, onCancel, onError }: {
         <F label="City" v={f.city} on={set("city")} />
         <F label="New password" v={f.password} on={set("password")} type="password" autoComplete="new-password" hint="Leave empty to keep the current one" />
       </div>
+      <div style={SECTION}>Contact &amp; address</div>
+      <ProfileFields value={profile} onChange={setProfile} />
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
           {busy ? "Saving…" : "Save"}
@@ -359,7 +469,15 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
     expiresAt: p?.expiresAt ? new Date(p.expiresAt).toISOString().slice(0, 10) : "", note: p?.note || "",
   });
   const [busy, setBusy] = React.useState(false);
+  const tiers = useTiers();
+  const [tierId, setTierId] = React.useState(company.tier ? String(company.tier.id) : "");
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+  const chooseTier = (id: string) => {
+    setTierId(id);
+    const t = tiers.find((x) => String(x.id) === id);
+    // Choosing a plan fills its limits in; they can still be changed before saving.
+    if (t) setF((cur) => ({ ...cur, maxSubscribers: str(t.maxSubscribers), maxNas: str(t.maxNas), maxAccounts: str(t.maxAccounts) }));
+  };
   const bad = (v: string) => v.trim() !== "" && !/^\d+$/.test(v.trim());
   const ready = !bad(f.maxSubscribers) && !bad(f.maxNas) && !bad(f.maxAccounts);
 
@@ -374,6 +492,7 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
       await api(`/users/companies/${company.id}/plan`, {
         method: "PUT",
         body: JSON.stringify({
+          planId: tierId ? Number(tierId) : null,
           maxSubscribers: num(f.maxSubscribers), maxNas: num(f.maxNas), maxAccounts: num(f.maxAccounts),
           // End of the chosen day, local time.
           expiresAt: f.expiresAt ? new Date(`${f.expiresAt}T23:59:59`).toISOString() : null,
@@ -394,6 +513,9 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
       <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 10, lineHeight: 1.55, maxWidth: 640 }}>
         Leave a box empty for no limit. At a limit the company cannot add more until you raise it. After the end
         date the company and everyone under it are signed out; their customers stay online.
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <TierSelect tiers={tiers} value={tierId} onChange={chooseTier} />
       </div>
       <div style={GRID}>
         <F label={`Subscribers (now ${company.subscribers.toLocaleString()})`} v={f.maxSubscribers} on={set("maxSubscribers")} hint="Maximum customers" />
@@ -443,6 +565,9 @@ const CARD: React.CSSProperties = {
   borderRadius: 12, padding: "14px 16px", margin: "0 0 14px",
 };
 const GRID: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 10 };
+const SECTION: React.CSSProperties = {
+  fontSize: 11, fontWeight: 800, color: "var(--text)", margin: "12px 0 8px", textTransform: "uppercase", letterSpacing: ".05em",
+};
 const LBL: React.CSSProperties = {
   display: "block", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase",
   letterSpacing: ".06em", color: "var(--muted)", marginBottom: 4,

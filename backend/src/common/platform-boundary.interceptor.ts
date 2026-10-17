@@ -53,6 +53,11 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['DELETE', 'users/:id'],
   ['POST', 'users/:id/purge'],
   ['PUT', 'users/companies/:id/plan'],
+  // Plans & Pricing and company details (the service checks the role too)
+  ['*', 'platform/plans'],
+  ['*', 'platform/plans/:id'],
+  ['POST', 'platform/plans/:id/apply'],
+  ['*', 'platform/companies/:id/profile'],
 
   // ── the installation ──
   ['*', 'licence/*'],
