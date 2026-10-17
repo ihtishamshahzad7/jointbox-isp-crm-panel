@@ -6,6 +6,7 @@ import { Wizard, Field } from "../components/wizard";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -112,8 +113,8 @@ export default function AreasPage() {
      */
     try {
       const res = editItem
-        ? await fetch(`${API}/areas/${editItem.id}`, { method: 'PUT', headers, body: JSON.stringify(form) })
-        : await fetch(`${API}/areas`, { method: 'POST', headers, body: JSON.stringify(form) });
+        ? await mustOk(await fetch(`${API}/areas/${editItem.id}`, { method: 'PUT', headers, body: JSON.stringify(form) }))
+        : await mustOk(await fetch(`${API}/areas`, { method: 'POST', headers, body: JSON.stringify(form) }));
 
       if (!res.ok) {
         const body: any = await res.json().catch(() => null);
@@ -133,12 +134,12 @@ export default function AreasPage() {
 
   async function handleDelete(id: number, name: string) {
     if (!confirm(`Delete area "${name}"? This will affect subscribers in this area.`)) return;
-    await fetch(`${API}/areas/${id}`, { method: 'DELETE', headers });
+    await mustOk(await fetch(`${API}/areas/${id}`, { method: 'DELETE', headers }));
     loadData();
   }
 
   async function handleToggle(id: number) {
-    await fetch(`${API}/areas/${id}/toggle`, { method: 'PATCH', headers });
+    await mustOk(await fetch(`${API}/areas/${id}/toggle`, { method: 'PATCH', headers }));
     loadData();
   }
 

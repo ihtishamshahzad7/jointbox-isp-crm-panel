@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import API_BASE from "./api";
 import Portal from "../components/portal";
+import { readTableFile, tableToCsv } from "../../lib/spreadsheet";
 
 const API =
   API_BASE;
@@ -95,9 +96,7 @@ export default function ImportWizard({ config, onClose, onDone }: {
     const n = file.name.toLowerCase();
     try {
       if (n.endsWith(".xlsx") || n.endsWith(".xls")) {
-        const XLSX: any = await import("xlsx");
-        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-        setRaw(XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]));
+        setRaw(tableToCsv(await readTableFile(file)));
       } else setRaw(await file.text());
       setFileName(file.name);
       setMsg(null);

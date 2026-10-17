@@ -150,7 +150,9 @@ const [reverseReason, setReverseReason] = useState("");
       return;
     }
     
-    const total = parseFloat(form.amount) + parseFloat(form.tax) - parseFloat(form.discount);
+    // Empty tax/discount fields used to make the total NaN, sent as null.
+    const num = (v: string) => parseFloat(v) || 0;
+    const total = num(form.amount) + num(form.tax) - num(form.discount);
     
     const payload = {
       subscriberId: parseInt(form.subscriberId),
@@ -169,9 +171,16 @@ const [reverseReason, setReverseReason] = useState("");
     };
     
     try {
-      await fetch(`${API}/invoices`, {
+      const res = await fetch(`${API}/invoices`, {
         method: 'POST', headers, body: JSON.stringify(payload),
       });
+      // A refused invoice (no permission, plan limit, bad data) used to close
+      // the form as if it had been created.
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || 'Failed to create invoice');
+        return;
+      }
       setShowForm(false);
       resetForm();
       loadData();
@@ -207,7 +216,11 @@ const [reverseReason, setReverseReason] = useState("");
           method: 'POST', headers, body: JSON.stringify({ ...payload, force: true }),
         });
       }
-      if (!res.ok) { alert('Failed to record payment'); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || 'Failed to record payment');
+        return;
+      }
       setShowPaymentModal(false);
       setPaymentForm({ amount: '', method: 'CASH', referenceNo: '', notes: '' });
       loadData();

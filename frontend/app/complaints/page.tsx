@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import { mustOk } from "../../lib/http";
 
 interface Ticket {
   id: number;
@@ -234,11 +235,11 @@ export default function ComplaintsPage() {
 
   async function handleUpdateStatus(id: number, status: string) {
     try {
-      await fetch(`${API}/tickets/${id}`, {
+      await mustOk(await fetch(`${API}/tickets/${id}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ status }),
-      });
+      }));
       loadData();
       if (selectedTicket && selectedTicket.id === id) {
         await loadTicketDetails(id);
@@ -253,7 +254,7 @@ export default function ComplaintsPage() {
     if (!newMessage.trim()) return;
 
     try {
-      await fetch(`${API}/tickets/${ticketId}/message`, {
+      await mustOk(await fetch(`${API}/tickets/${ticketId}/message`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -261,7 +262,7 @@ export default function ComplaintsPage() {
           sentBy: user?.id,
           sentByType: 'STAFF',
         }),
-      });
+      }));
       setNewMessage("");
       await loadTicketDetails(ticketId);
       loadData();

@@ -8,6 +8,7 @@ import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
 import { renderInvoiceHtml } from './invoice-pdf-template';
 import { CurrencyService } from '../common/currency.service';
+import { newPaymentNo } from '../common/payment-number';
 
 @Injectable()
 export class InvoicesService {
@@ -467,10 +468,10 @@ export class InvoicesService {
 
     // Duplicate guard: reject a payment matching a very recent one on this
     // invoice (same amount + method) unless the caller confirms with force.
-    if (!data.force && data.amount != null) {
+    if (!data.force) {
       const recent = await this.prisma.payment.findFirst({
         where: {
-          invoiceId, amount: data.amount, method: data.method,
+          invoiceId, amount, method: data.method,
           refundedAt: null, createdAt: { gte: new Date(Date.now() - 90_000) },
         },
         orderBy: { createdAt: 'desc' }, select: { paymentNo: true, createdAt: true },
@@ -484,27 +485,56 @@ export class InvoicesService {
       }
     }
 
-    const newPaidAmount = invoice.paidAmount + data.amount;
-    const newDueAmount  = Math.max(invoice.total - newPaidAmount, 0);
-
-    let status: 'UNPAID' | 'PARTIAL' | 'PAID' | 'OVERDUE' = 'PARTIAL';
-    if (newPaidAmount >= invoice.total) status = 'PAID';
-
-    const paymentNo = `PAY-${Date.now()}`;
     const receivedBy = await this.receivedByFor(actor, data.receivedBy);
 
-    const payment = await this.prisma.payment.create({
-      data: {
-        ...(await this.currency.paymentStamp(data.amount, { invoiceCurrency: invoice.currency })),
-        paymentNo,
-        invoiceId,
-        subscriberId: invoice.subscriberId,
-        amount:       data.amount,
-        method:       data.method,
-        referenceNo:  data.referenceNo,
-        notes:        data.notes,
-        receivedBy,
-      },
+    /**
+     * ONE LOCKED TRANSACTION. The invoice used to be read above, the Payment
+     * created, and the invoice later overwritten with `paidAmount = read +
+     * amount`. Two payments at once (two cashiers, a cashier beside a gateway
+     * callback) both read the same paidAmount and the second overwrite erased
+     * the first: the money was recorded, the invoice still showed it due. Two
+     * staff payments could also each pass the "not more than is due" check
+     * and overpay together. The row is now locked, re-read, re-checked, and
+     * the Payment and the invoice move commit together or not at all.
+     */
+    const { payment, updated } = await this.prisma.$transaction(async (db) => {
+      await db.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${invoiceId} FOR UPDATE`;
+      const inv = await db.invoice.findUnique({ where: { id: invoiceId } });
+      if (!inv) throw new NotFoundException('Invoice not found');
+      if (actor) {
+        const dueNow = Math.max(Number(inv.total) - Number(inv.paidAmount || 0), 0);
+        if (inv.status === 'CANCELLED' || inv.status === 'PAID' || dueNow <= 0) {
+          throw new BadRequestException(`Invoice ${inv.invoiceNo} was settled or cancelled a moment ago. Refresh and check before paying again.`);
+        }
+        if (amount > dueNow + 0.5) {
+          throw new BadRequestException(`Invoice ${inv.invoiceNo} now has ${Math.round(dueNow)} due — another payment was recorded a moment ago.`);
+        }
+      }
+      const newPaidAmount = Number(inv.paidAmount || 0) + amount;
+      const status: 'PARTIAL' | 'PAID' = newPaidAmount >= Number(inv.total) - 0.01 ? 'PAID' : 'PARTIAL';
+      const created = await db.payment.create({
+        data: {
+          ...(await this.currency.paymentStamp(amount, { invoiceCurrency: inv.currency })),
+          paymentNo: newPaymentNo(),
+          invoiceId,
+          subscriberId: inv.subscriberId,
+          amount,
+          method: data.method,
+          referenceNo: data.referenceNo,
+          notes: data.notes,
+          receivedBy,
+        },
+      });
+      const after = await db.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          paidAmount: newPaidAmount,
+          dueAmount: Math.max(Number(inv.total) - newPaidAmount, 0),
+          status,
+          paidDate: status === 'PAID' ? new Date() : null,
+        },
+      });
+      return { payment: created, updated: after };
     });
 
     // Phase 1: double-entry posting (Cash ↔ AR)
@@ -521,26 +551,18 @@ export class InvoicesService {
         })
       : null;
     void this.notifications.fireEvent('PAYMENT_RECEIVED', paySubscriber, {
-      amount: data.amount,
+      amount,
       invoiceNo: invoice.invoiceNo,
     });
     this.events.broadcast('payment', {
       id: payment.id,
-      amount: data.amount,
+      amount,
       method: data.method,
       invoiceNo: invoice.invoiceNo,
       subscriberName: paySubscriber?.fullName,
       ownerUserId: paySubscriber?.userId ?? null,
     });
 
-    return this.prisma.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        paidAmount: newPaidAmount,
-        dueAmount:  newDueAmount,
-        status,
-        paidDate: status === 'PAID' ? new Date() : null,
-      },
-    });
+    return updated;
   }
 }

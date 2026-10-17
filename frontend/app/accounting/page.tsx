@@ -6,6 +6,7 @@ import { silent } from "../components/silent";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
 import { tokenPayload } from "../components/platform";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -261,8 +262,12 @@ export default function AccountingPage() {
 
   async function deleteExpense(id: number) {
     if (!confirm("Delete this expense? A reversal will be posted to the ledger.")) return;
-    await fetch(`${API}/accounting/expenses/${id}`, { method: "DELETE", headers });
-    setExpenses(await get("/accounting/expenses"));
+    try {
+      await mustOk(await fetch(`${API}/accounting/expenses/${id}`, { method: "DELETE", headers }));
+      setExpenses(await get("/accounting/expenses"));
+    } catch (e) {
+      setMsg(`Could not delete the expense: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async function doTopup() {
@@ -270,15 +275,17 @@ export default function AccountingPage() {
     if (!amount || amount <= 0) return setMsg("Enter a valid amount");
     setBusy(true);
     try {
-      await fetch(`${API}/accounting/balances/${topupFor.id}/topup`, {
+      await mustOk(await fetch(`${API}/accounting/balances/${topupFor.id}/topup`, {
         method: "POST",
         headers,
         body: JSON.stringify({ amount }),
-      });
+      }));
       setTopupFor(null);
       setTopupAmount("");
       setBalances(await get("/accounting/balances"));
       setMsg("Balance topped up");
+    } catch (e) {
+      setMsg(`Top-up refused: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
     }

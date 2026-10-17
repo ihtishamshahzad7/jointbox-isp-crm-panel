@@ -3,6 +3,8 @@
 import React from "react";
 import API from "../components/api";
 import { useSSE } from "../components/use-sse";
+import { readTableFile, tableToObjects } from "../../lib/spreadsheet";
+import { mustOk } from "../../lib/http";
 
 /**
  * Network Monitoring — each account adds hosts (IP/hostname), grouped, pinged
@@ -265,13 +267,13 @@ export default function MonitoringPage() {
   };
   const del = async (id: number) => {
     if (!confirm("Remove this monitor?")) return;
-    await fetch(`${API}/monitoring/targets/${id}`, { method: "DELETE", headers: H }); load();
+    await mustOk(await fetch(`${API}/monitoring/targets/${id}`, { method: "DELETE", headers: H })); load();
   };
   const checkNow = async (id: number) => {
-    await fetch(`${API}/monitoring/targets/${id}/check`, { method: "POST", headers: H }); setTimeout(load, 500);
+    await mustOk(await fetch(`${API}/monitoring/targets/${id}/check`, { method: "POST", headers: H })); setTimeout(load, 500);
   };
   const toggle = async (t: Target) => {
-    await fetch(`${API}/monitoring/targets/${t.id}`, { method: "PUT", headers: H, body: JSON.stringify({ enabled: !t.enabled }) }); load();
+    await mustOk(await fetch(`${API}/monitoring/targets/${t.id}`, { method: "PUT", headers: H, body: JSON.stringify({ enabled: !t.enabled }) })); load();
   };
   const importRows = async (rows: ImportRow[]) => {
     const r = await fetch(`${API}/monitoring/targets/import`, {
@@ -531,12 +533,9 @@ function ImportModal({ onClose, onImport, knownGroups }: {
   const onFile = async (f: File) => {
     setParseErr(""); setResult(null); setFileName(f.name);
     try {
-      const XLSX = await import("xlsx");
-      const buf = await f.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      if (!sheet) throw new Error("The file has no readable sheet.");
-      const json: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const table = await readTableFile(f);
+      if (!table.length) throw new Error("The file has no readable rows.");
+      const json: any[] = tableToObjects(table);
 
       let parsed: ImportRow[] = json.map((r) => ({
         host: pick(r, ["host", "ip", "ipaddress", "address", "hostname", "target"]),
@@ -546,8 +545,7 @@ function ImportModal({ onClose, onImport, knownGroups }: {
 
       // Headerless file → treat columns positionally.
       if (parsed.length === 0) {
-        const raw: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-        parsed = raw
+        parsed = table
           .map((c) => ({ host: String(c[0] ?? "").trim(), name: String(c[1] ?? "").trim(), group: String(c[2] ?? "").trim() }))
           .filter((r) => r.host && !/^(host|ip|ip address|address|hostname)$/i.test(r.host));
       }

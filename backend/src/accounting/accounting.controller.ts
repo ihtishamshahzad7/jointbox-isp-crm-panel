@@ -24,6 +24,24 @@ export class AccountingController {
     return this.accounting.getLedgerSummary(req.user);
   }
 
+  /**
+   * Read-only reconciliation: invoices vs payments, wallets vs their ledgers.
+   * The owner of the business (or the platform) only — it lists balances.
+   */
+  @Get('reconciliation')
+  getReconciliation(
+    @Query('days') days: string,
+    @Request() req: { user: { sub: number; role: string } },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
+      throw new ForbiddenException(
+        'Only the ISP owner can run the reconciliation report.',
+      );
+    }
+    return this.accounting.reconciliation(req.user, Number(days) || 90);
+  }
+
   /** Trial balance — total debits vs credits + malformed-entry count. Scoped as above. */
   @Get('trial-balance')
   getTrialBalance(@Request() req: any) {

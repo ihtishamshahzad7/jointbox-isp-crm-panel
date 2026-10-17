@@ -10,6 +10,7 @@ import { GroupPanel } from "../components/group-panel";
 import API_BASE from "../components/api";
 import { money, currencySymbol } from "../components/currency";
 import Portal from "../components/portal";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -210,19 +211,19 @@ export default function UsersPage() {
     if (!confirm(`Delete user "${name}"? This action cannot be undone.`)) return;
     
     try {
-      await fetch(`${API}/users/${id}`, { method: "DELETE", headers });
+      await mustOk(await fetch(`${API}/users/${id}`, { method: "DELETE", headers }));
       fetchUsers();
     } catch (err) {
-      setError("Failed to delete user");
+      setError(err instanceof Error ? err.message : "Failed to delete user");
     }
   };
 
   const handleToggleStatus = async (id: number, currentStatus: boolean) => {
     try {
-      await fetch(`${API}/users/${id}/toggle`, { 
+      await mustOk(await fetch(`${API}/users/${id}/toggle`, { 
         method: "PATCH", 
         headers 
-      });
+      }));
       fetchUsers();
     } catch (err) {
       setError("Failed to update user status");

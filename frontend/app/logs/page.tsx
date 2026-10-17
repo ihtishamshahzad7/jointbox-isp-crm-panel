@@ -8,6 +8,7 @@ import { WinBoxLog } from "../components/winbox-log";
 import { LogRecordsTable } from "../components/log-records-table";
 import { CauseBadge, SeverityTag, causeOf, resolveCause } from "./terminate-cause";
 import DisconnectsPanel from "./disconnects-panel";
+import { mustOk } from "../../lib/http";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -763,7 +764,7 @@ export default function LogsPage() {
                   {diagBusy ? "⟳ Refreshing…" : "↻ Refresh"}
                 </button>
                 {!!diag?.staleSessions?.length && (
-                  <button onClick={async () => { setDiagBusy(true); await fetch(`${API}/logs/radius/close-stale`, { method: "POST", headers }); loadDiag(); }}
+                  <button onClick={async () => { setDiagBusy(true); await mustOk(await fetch(`${API}/logs/radius/close-stale`, { method: "POST", headers })); loadDiag(); }}
                     disabled={diagBusy} style={{ background: "transparent", color: "#f59e0b", border: "1px solid #f59e0b", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     Close {diag.staleSessions.length} stale
                   </button>

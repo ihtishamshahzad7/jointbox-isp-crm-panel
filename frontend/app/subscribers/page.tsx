@@ -15,6 +15,7 @@ import ExportDialog from "../components/export-dialog";
 import { silent } from "../components/silent";
 import type { Subscriber, Package, Area, NasEntry, Salesperson } from "./types";
 import type { SubscriberRow } from "./subscriber-table";
+import { readTableFile, tableToCsv } from "../../lib/spreadsheet";
 
 /** DataTable column key → backend sortBy path (backend whitelists these). */
 const SORT_FIELDS: Record<string, string> = {
@@ -104,6 +105,7 @@ interface OverviewStats extends Stats {
 const API = API_BASE;
 
 import { Icons } from "../components/icons";
+import { mustOk } from "../../lib/http";
 
 // ─── Icons (complete set) ──────────────────────────────────────────────────
 const Ic = {
@@ -657,10 +659,10 @@ export default function SubscribersPage() {
                 : ` · ${d.ipAddress} applies on next connection`;
             } else if (currentIp && (editSub as any).staticIp?.id) {
               // Field cleared — release the address and stop the monthly charge.
-              await fetch(`${API}/static-ips/${(editSub as any).staticIp.id}/release`, {
+              await mustOk(await fetch(`${API}/static-ips/${(editSub as any).staticIp.id}/release`, {
                 method: "PATCH", headers,
                 body: JSON.stringify({ reason: "Cleared on the subscriber form" }),
-              });
+              }));
               ipNote = " · static IP removed, billing stopped";
             }
           } catch (ipErr: any) {
@@ -870,7 +872,7 @@ export default function SubscribersPage() {
 
         // The credit is only the debt record — the service still has to be
         // switched on for the days granted.
-        await fetch(`${API}/subscribers/activate-renewal`, {
+        await mustOk(await fetch(`${API}/subscribers/activate-renewal`, {
           method: "POST", headers,
           body: JSON.stringify({
             subscriberId: Number(f.subscriberId),
@@ -883,7 +885,7 @@ export default function SubscribersPage() {
             skipPayment: true,
             idempotencyKey: activationKeyRef.current,
           }),
-        });
+        }));
 
         showToast(`Activated on credit — ${money(d.quote?.total ?? 0)} owed`, "warn");
         setShowActivationModal(false);
@@ -948,11 +950,7 @@ export default function SubscribersPage() {
     const name = file.name.toLowerCase();
     try {
       if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
-        const XLSX: any = await import("xlsx");
-        const buf = await file.arrayBuffer();
-        const wb = XLSX.read(buf, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        setImportRaw(XLSX.utils.sheet_to_csv(ws));
+        setImportRaw(tableToCsv(await readTableFile(file)));
         setImportType("EXCEL");
       } else {
         setImportRaw(await file.text());

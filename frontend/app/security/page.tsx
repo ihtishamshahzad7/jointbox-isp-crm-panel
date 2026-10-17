@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API_BASE from "../components/api";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -175,9 +176,9 @@ export default function SecurityPage() {
     if (!selChild) return;
     setBusy(true);
     try {
-      await fetch(`${API}/security/child-permissions/${selChild}`, {
+      await mustOk(await fetch(`${API}/security/child-permissions/${selChild}`, {
         method: "PUT", headers, body: JSON.stringify({ denied: Array.from(denied) }),
-      });
+      }));
       setMsg("Permissions saved");
     } finally { setBusy(false); }
   }
@@ -264,7 +265,7 @@ export default function SecurityPage() {
 
   async function kill(sessionId: string) {
     if (!confirm2("Force log out this session?")) return;
-    await fetch(`${API}/security/sessions/${sessionId}`, { method: "DELETE", headers });
+    await mustOk(await fetch(`${API}/security/sessions/${sessionId}`, { method: "DELETE", headers }));
     setSessions(await get("/security/sessions"));
   }
   const confirm2 = (m: string) => window.confirm(m);

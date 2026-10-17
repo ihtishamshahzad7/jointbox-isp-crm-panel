@@ -7,6 +7,7 @@ import ImageUpload from "../components/image-upload";
 import Avatar from "../components/avatar";
 import { CrownBadge } from "../components/crown";
 import API_BASE from "../components/api";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -41,11 +42,11 @@ export default function MyProfilePage() {
   const savePhoto = useCallback(async (url: string) => {
     setSaving(true);
     try {
-      await fetch(`${API}/users/me/profile`, {
+      await mustOk(await fetch(`${API}/users/me/profile`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ photoUrl: url }),
-      });
+      }));
       setP((prev: any) => ({ ...prev, photoUrl: url }));
       setEditingPhoto(false);
       window.dispatchEvent(new Event("profile-photo-changed"));

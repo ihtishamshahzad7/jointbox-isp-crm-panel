@@ -4,6 +4,7 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
 import { money } from "../components/currency";
+import { mustOk } from "../../lib/http";
 
 /**
  * Quick Connect — one screen to add + activate a new customer: enter details,
@@ -58,7 +59,7 @@ export default function QuickConnectPage() {
       if (!r.ok) throw new Error(d?.message || "Could not create the connection");
       // Record the customer's first cash payment against their invoice, if collected.
       if (collect && pkg?.price && d.activated !== false && !d.warning) {
-        await fetch(`${API}/payments`, { method: "POST", headers, body: JSON.stringify({ subscriberId: d.id, amount: pkg.price, method: "CASH", notes: "First payment (Quick Connect)" }) }).catch(() => null);
+        await mustOk(await fetch(`${API}/payments`, { method: "POST", headers, body: JSON.stringify({ subscriberId: d.id, amount: pkg.price, method: "CASH", notes: "First payment (Quick Connect)" }) })).catch(() => null);
       }
       setResult({ ...d, _collected: collect && pkg?.price });
     } catch (e: any) { setErr(e.message); }

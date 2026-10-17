@@ -49,6 +49,8 @@ const invoiceRow = (id: number) => ({
 
 function make() {
   const prisma: any = {
+    // recordPayment runs in one interactive transaction; the mock runs it inline.
+    $transaction: jest.fn((fn: (db: unknown) => unknown) => fn(prisma)),
     $queryRaw: jest.fn(async (s: any, ...v: any[]) => treeQuery(s, ...v)),
     $queryRawUnsafe: jest.fn().mockResolvedValue([{ n: BigInt(7) }]),
     user: { findUnique: jest.fn() },

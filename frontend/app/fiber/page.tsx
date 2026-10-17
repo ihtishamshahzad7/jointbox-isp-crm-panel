@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import { mustOk } from "../../lib/http";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface FiberSummary {
@@ -207,12 +208,12 @@ export default function FiberPage() {
   const handleCreatePort = async (e: any) => {
     e.preventDefault();
     try {
-      await fetch(`${API}/fiber/ports`,{method:"POST",headers,body:JSON.stringify({
+      await mustOk(await fetch(`${API}/fiber/ports`,{method:"POST",headers,body:JSON.stringify({
         oltId: Number(portForm.oltId), portName: portForm.portName,
         slot: portForm.slot||undefined, port: portForm.port||undefined,
         splitRatio: portForm.splitRatio?Number(portForm.splitRatio):undefined,
         splitterLocation: portForm.splitterLocation||undefined,
-      })});
+      })}));
       setShowPortForm(false); resetPortForm(); loadAll();
     } catch { alert("Failed to create PON port"); }
   };
@@ -221,12 +222,12 @@ export default function FiberPage() {
     e.preventDefault();
     if (!editingPort) return;
     try {
-      await fetch(`${API}/fiber/ports/${editingPort.id}`,{method:"PUT",headers,body:JSON.stringify({
+      await mustOk(await fetch(`${API}/fiber/ports/${editingPort.id}`,{method:"PUT",headers,body:JSON.stringify({
         portName: portForm.portName,
         slot: portForm.slot||undefined, port: portForm.port||undefined,
         splitRatio: portForm.splitRatio?Number(portForm.splitRatio):undefined,
         splitterLocation: portForm.splitterLocation||undefined,
-      })});
+      })}));
       setShowPortForm(false); setEditingPort(null); resetPortForm(); loadAll();
     } catch { alert("Failed to update port"); }
   };
@@ -252,7 +253,7 @@ export default function FiberPage() {
   const handleUnassignOnu = async (onuId: number) => {
     if (!confirm("Unassign this ONU from its subscriber?")) return;
     try {
-      await fetch(`${API}/fiber/onus/${onuId}/unassign`,{method:"POST",headers});
+      await mustOk(await fetch(`${API}/fiber/onus/${onuId}/unassign`,{method:"POST",headers}));
       loadOnus(onuPage);
     } catch { alert("Failed to unassign ONU"); }
   };

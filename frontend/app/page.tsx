@@ -149,10 +149,13 @@ export default function HomePage() {
 
         <div className={s.stats}>
           {[
-            ["12", t("Core Modules")],
-            ["50+", t("Features")],
-            ["8", t("User Roles")],
-            ["100%", t("Multi-tenant")],
+            // Each figure is checkable in the code: the UserRole enum (7), LANGS
+            // in lib/i18n (5), AES-256-GCM in common/crypto-box.ts. The old
+            // "8 roles / 50+ features / 100%" were not.
+            ["7", t("User Roles")],
+            ["5", t("Languages")],
+            ["AES-256", t("Encrypted router secrets")],
+            ["1 → many", t("Companies on one server")],
           ].map(([value, label]) => (
             <div key={label} className={s.stat}>
               <b><span>{value}</span></b>

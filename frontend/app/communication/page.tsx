@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API_BASE from "../components/api";
 import { BRAND } from "../../lib/brand";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -144,7 +145,7 @@ export default function CommunicationPage() {
   }
 
   async function retry(id: number) {
-    await fetch(`${API}/communication/messages/${id}/retry`, { method: "POST", headers });
+    await mustOk(await fetch(`${API}/communication/messages/${id}/retry`, { method: "POST", headers }));
     void loadLog(true);
   }
 

@@ -10,6 +10,7 @@ import {
   type DataTableFetchParams,
   type DataTableFetchResult,
 } from "../components/data-table";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -289,7 +290,7 @@ export default function NetworkPage() {
   }
   async function unbind(mac: string) {
     if (!macFor) return;
-    await fetch(`${API}/network/mac/${macFor.username}?mac=${encodeURIComponent(mac)}`, { method: "DELETE", headers: headers() });
+    await mustOk(await fetch(`${API}/network/mac/${macFor.username}?mac=${encodeURIComponent(mac)}`, { method: "DELETE", headers: headers() }));
     setMacBinding(await get(`/network/mac/${macFor.username}`));
   }
 

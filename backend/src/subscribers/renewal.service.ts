@@ -1,3 +1,4 @@
+import { newPaymentNo } from '../common/payment-number';
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -379,7 +380,7 @@ export class RenewalService {
     const payment = await this.prisma.payment.create({
       data: {
         ...(await this.currency.paymentStamp(credit.amountDue, { invoiceCurrency: invoice.currency })),
-        paymentNo: `PAY-${Date.now()}`,
+        paymentNo: newPaymentNo(),
         invoiceId: invoice.id,
         subscriberId: credit.subscriberId,
         amount: credit.amountDue,

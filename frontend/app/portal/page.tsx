@@ -6,6 +6,7 @@ import API_BASE from "../components/api";
 import { Logo } from "../components/logo";
 import { BRAND } from "../../lib/brand";
 import { LANGS, useI18n } from "../../lib/i18n";
+import { mustOk } from "../../lib/http";
 
 const API = API_BASE;
 
@@ -196,7 +197,7 @@ export default function PortalPage() {
     if (!ticketForm.subject || !ticketForm.description) return setErr(t("Subject and description required"));
     setBusy(true);
     try {
-      await fetch(`${API}/portal/tickets`, { method: "POST", headers: headers(), body: JSON.stringify(ticketForm) });
+      await mustOk(await fetch(`${API}/portal/tickets`, { method: "POST", headers: headers(), body: JSON.stringify(ticketForm) }));
       setTicketForm({ subject: "", description: "" });
       setTickets(await get("/portal/tickets"));
     } finally { setBusy(false); }

@@ -302,6 +302,125 @@ export class AccountingService {
    * (a bug, a manual DB edit, a partial failure) and the books no longer add up.
    * Report-only; it names the drift so a human can find the cause.
    */
+  /**
+   * MONEY RECONCILIATION — read-only.
+   *
+   * Three things that must agree and, until now, nothing compared:
+   *   1. an invoice's paidAmount  = its payments minus what was refunded;
+   *   2. a subscriber's wallet    = balanceAfter of its latest ledger entry;
+   *   3. a reseller's wallet      = balanceAfter of its latest ledger entry.
+   * A mismatch is not proof of a bug (an invoice settled from a wallet has no
+   * Payment row) — it is the list a person checks. Scoped to the caller's own
+   * business exactly like every other accounting read. Changes nothing.
+   */
+  async reconciliation(actor: Actor, days = 90) {
+    const since = new Date(
+      Date.now() - Math.min(Math.max(days, 1), 730) * 86_400_000,
+    );
+    const subWhere = (await this.scope.subscriberWhere(
+      actor,
+    )) as Prisma.SubscriberWhereInput;
+    const userWhere = (await this.scope.userWhere(
+      actor,
+    )) as Prisma.UserWhereInput;
+    const CAP = 200;
+    const off = (a: number, b: number) => Math.abs(a - b) > 0.01;
+
+    const invoices = await this.prisma.invoice.findMany({
+      where: {
+        createdAt: { gte: since },
+        status: { not: 'CANCELLED' },
+        subscriber: subWhere,
+      },
+      select: {
+        id: true,
+        invoiceNo: true,
+        paidAmount: true,
+        total: true,
+        subscriberId: true,
+      },
+      take: 20_000,
+    });
+    const paid = invoices.length
+      ? await this.prisma.payment.groupBy({
+          by: ['invoiceId'],
+          where: { invoiceId: { in: invoices.map((i) => i.id) } },
+          _sum: { amount: true, refundedAmount: true },
+        })
+      : [];
+    const net = new Map(
+      paid.map((p) => [
+        p.invoiceId,
+        Number(p._sum.amount || 0) - Number(p._sum.refundedAmount || 0),
+      ]),
+    );
+    const invoiceMismatches = invoices
+      .filter((i) => off(Number(i.paidAmount || 0), net.get(i.id) ?? 0))
+      .map((i) => ({
+        invoiceId: i.id,
+        invoiceNo: i.invoiceNo,
+        invoicePaid: Number(i.paidAmount || 0),
+        paymentsNet: round2(net.get(i.id) ?? 0),
+        hint:
+          (net.get(i.id) ?? 0) === 0
+            ? 'no Payment rows — settled from a wallet or edited by hand?'
+            : 'payments and invoice disagree',
+      }));
+
+    const walletCheck = async (kind: 'subscriber' | 'user') => {
+      const owners =
+        kind === 'subscriber'
+          ? await this.prisma.subscriber.findMany({
+              where: subWhere,
+              select: { id: true, balance: true },
+              take: 50_000,
+            })
+          : await this.prisma.user.findMany({
+              where: userWhere,
+              select: { id: true, balance: true },
+              take: 50_000,
+            });
+      if (!owners.length) return [];
+      const ids = owners.map((o) => o.id);
+      const latest: Array<{ ownerId: number; balanceAfter: number }> =
+        kind === 'subscriber'
+          ? await this.prisma
+              .$queryRaw`SELECT DISTINCT ON ("subscriberId") "subscriberId" AS "ownerId", "balanceAfter"
+              FROM "BalanceTransaction" WHERE "subscriberId" = ANY(${ids}) ORDER BY "subscriberId", id DESC`
+          : await this.prisma
+              .$queryRaw`SELECT DISTINCT ON ("userId") "userId" AS "ownerId", "balanceAfter"
+              FROM "UserBalanceTransaction" WHERE "userId" = ANY(${ids}) ORDER BY "userId", id DESC`;
+      const last = new Map(
+        latest.map((r) => [Number(r.ownerId), Number(r.balanceAfter)]),
+      );
+      return owners
+        .filter(
+          (o) => last.has(o.id) && off(Number(o.balance || 0), last.get(o.id)!),
+        )
+        .map((o) => ({
+          id: o.id,
+          balance: Number(o.balance || 0),
+          ledgerBalanceAfter: last.get(o.id)!,
+        }));
+    };
+    const subscriberWallets = await walletCheck('subscriber');
+    const resellerWallets = await walletCheck('user');
+
+    return {
+      checkedSince: since,
+      invoicesChecked: invoices.length,
+      ok:
+        !invoiceMismatches.length &&
+        !subscriberWallets.length &&
+        !resellerWallets.length,
+      invoiceMismatches: invoiceMismatches.slice(0, CAP),
+      subscriberWalletMismatches: subscriberWallets.slice(0, CAP),
+      resellerWalletMismatches: resellerWallets.slice(0, CAP),
+      truncated: [invoiceMismatches, subscriberWallets, resellerWallets].some(
+        (l) => l.length > CAP,
+      ),
+    };
+  }
   async getTrialBalance(actor?: Actor) {
     const tenant = await this.tenantScope(actor);
     const cacheKey = tenant ? `accounting:trial-balance:${tenant.key}` : 'accounting:trial-balance';

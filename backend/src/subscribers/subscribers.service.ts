@@ -1,3 +1,4 @@
+import { newPaymentNo } from '../common/payment-number';
 import {
   Injectable, Logger, OnModuleInit,
   ForbiddenException, NotFoundException, BadRequestException, ConflictException,
@@ -3806,7 +3807,7 @@ if (!unpaid && data.username && data.password) {
           payment = await tx.payment.create({
             data: {
               ...(await this.currency.paymentStamp(total, { invoiceCurrency: invoice.currency })),
-              paymentNo: `PAY-${Date.now()}`,
+              paymentNo: newPaymentNo(),
               invoiceId: invoice.id,
               subscriberId,
               amount: total,

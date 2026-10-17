@@ -123,7 +123,8 @@ export default function LoginPage() {
           </div>
           <NetworkScene variant="login" className={s.loginScene} label={t("3D view of a healthy fiber network around a core router.")} />
           <div className={s.loginStats}>
-            {[["99.9%", "Uptime"], ["256-bit", "Encryption"], ["24/7", "Support"]].map(([v, k]) => (
+            {/* Facts the code backs, not marketing numbers: AES-256-GCM in common/crypto-box.ts, the UserRole enum, LANGS in lib/i18n. */}
+            {[["AES-256", "Encrypted router secrets"], ["7", "User Roles"], ["5", "Languages"]].map(([v, k]) => (
               <div key={k}><b>{v}</b><small>{t(k)}</small></div>
             ))}
           </div>
