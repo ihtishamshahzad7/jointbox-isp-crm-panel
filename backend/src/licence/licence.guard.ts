@@ -114,6 +114,11 @@ const BLOCKING_STATES = new Set([
   'INVALID',
   'TAMPERED',
   'SUSPENDED',
+  // Agent 1.2: the single locked state of the policy machine. The windowed and
+  // unverified states (UNVERIFIED, UNLICENSED_WINDOW, OFFLINE_GRACE) are NOT
+  // here — the panel still works in them — so adding one of those to the agent
+  // without listing it here keeps writes open, which is the safe direction.
+  'LOCKED',
 ]);
 
 export function normalisePath(url: string): string {

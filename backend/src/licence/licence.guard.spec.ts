@@ -49,6 +49,10 @@ const ALL_STATES: LicenceState[] = [
   'SUSPENDED',
   'TAMPERED',
   'UNAVAILABLE',
+  'UNVERIFIED',
+  'UNLICENSED_WINDOW',
+  'OFFLINE_GRACE',
+  'LOCKED',
 ];
 
 const BLOCKED_STATES: LicenceState[] = [
@@ -57,12 +61,16 @@ const BLOCKED_STATES: LicenceState[] = [
   'INVALID',
   'TAMPERED',
   'SUSPENDED',
+  'LOCKED',
 ];
 const ALLOWED_STATES: LicenceState[] = [
   'ACTIVE',
   'GRACE',
   'UNLICENSED',
   'UNAVAILABLE',
+  'UNVERIFIED',
+  'UNLICENSED_WINDOW',
+  'OFFLINE_GRACE',
 ];
 
 beforeEach(() => {

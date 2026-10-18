@@ -52,7 +52,23 @@ export type LicenceState =
    */
   | 'SUSPENDED'
   | 'TAMPERED'
-  | 'UNAVAILABLE';
+  | 'UNAVAILABLE'
+  // Agent 1.2 policy state machine.
+  | 'UNVERIFIED'
+  | 'UNLICENSED_WINDOW'
+  | 'OFFLINE_GRACE'
+  | 'LOCKED';
+
+/** Reason codes the agent reports with a LOCKED state (display only). */
+export type LockReason =
+  | 'UNLICENSED_EXPIRED'
+  | 'NEVER_VERIFIED'
+  | 'TAMPER_DETECTED'
+  | 'CLOCK_ROLLBACK'
+  | 'HARDWARE_MISMATCH'
+  | 'LICENCE_REVOKED'
+  | 'OFFLINE_TOO_LONG'
+  | 'LICENCE_EXPIRED';
 
 export interface Entitlement {
   state: LicenceState;
@@ -324,6 +340,7 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
         : null,
       usage: this.counts,
       banner: this.banner,
+      policy: this.policyDisplay,
     };
   }
 
@@ -576,6 +593,45 @@ export class LicenceService implements OnModuleInit, OnModuleDestroy {
 
   get usage(): LicenceUsage | null {
     return this.counts;
+  }
+
+  /**
+   * The agent's current decision, for the banner and the locked screen.
+   *
+   * DISPLAY ONLY. Enforcement runs off the signed socket answer (`state` /
+   * `writable`), never off this file, so a hand-edit of it can change wording
+   * but not whether the panel is locked. Written by agent 1.2; absent on 1.1
+   * and earlier, where the getter simply returns null.
+   */
+  get policyDisplay(): {
+    state: string;
+    reason?: string;
+    deadline?: string;
+    support?: { name?: string; email?: string; phone?: string };
+  } | null {
+    try {
+      const raw = fs.readFileSync(
+        path.join(RUN_DIR, 'policy-state.json'),
+        'utf8',
+      );
+      const j = JSON.parse(raw) as {
+        state?: string;
+        reason?: string;
+        deadline?: number;
+        support?: { name?: string; email?: string; phone?: string };
+      };
+      if (!j || typeof j.state !== 'string') return null;
+      return {
+        state: j.state,
+        reason: j.reason || undefined,
+        deadline: j.deadline
+          ? new Date(j.deadline * 1000).toISOString()
+          : undefined,
+        support: j.support,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**

@@ -25,6 +25,10 @@ const LABEL: Record<LicenceState, { text: string; tone: "ok" | "warn" | "bad" }>
   SUSPENDED: { text: "Suspended", tone: "bad" },
   TAMPERED: { text: "Verification failed", tone: "bad" },
   UNAVAILABLE: { text: "Agent not running", tone: "warn" },
+  UNVERIFIED: { text: "Not verified yet", tone: "warn" },
+  UNLICENSED_WINDOW: { text: "Unlicensed", tone: "warn" },
+  OFFLINE_GRACE: { text: "Offline", tone: "warn" },
+  LOCKED: { text: "Locked", tone: "bad" },
 };
 
 const TONE = {
@@ -39,6 +43,33 @@ function fmt(iso: string | null): string {
     return new Date(iso).toLocaleString();
   } catch {
     return iso;
+  }
+}
+
+function lockTitle(reason?: string): string {
+  switch (reason) {
+    case "UNLICENSED_EXPIRED": return "no licence";
+    case "NEVER_VERIFIED": return "never verified";
+    case "TAMPER_DETECTED": return "verification failed";
+    case "CLOCK_ROLLBACK": return "clock changed";
+    case "HARDWARE_MISMATCH": return "hardware changed";
+    case "LICENCE_REVOKED": return "licence suspended";
+    case "OFFLINE_TOO_LONG": return "offline too long";
+    case "LICENCE_EXPIRED": return "licence expired";
+    default: return "locked";
+  }
+}
+function lockBody(reason?: string): string {
+  switch (reason) {
+    case "UNLICENSED_EXPIRED": return "The time allowed to run without a licence has ended.";
+    case "NEVER_VERIFIED": return "This panel never reached the licence server, so it could not be verified.";
+    case "TAMPER_DETECTED": return "The licence check on this server did not verify.";
+    case "CLOCK_ROLLBACK": return "The server clock was moved backwards, so the licence can no longer be trusted.";
+    case "HARDWARE_MISMATCH": return "This licence belongs to different hardware.";
+    case "LICENCE_REVOKED": return "Jointbox has suspended or revoked this licence.";
+    case "OFFLINE_TOO_LONG": return "This panel has not reached the licence server for too long.";
+    case "LICENCE_EXPIRED": return "This licence has expired.";
+    default: return "This panel is locked.";
   }
 }
 
@@ -257,6 +288,43 @@ jointbox-licensed -status`}
           involved. Once the hold is lifted the panel returns to normal within
           about 15 minutes on its own; press <strong>Re-check now</strong> to
           pick it up sooner.
+        </Card>
+      )}
+
+      {status.state === "LOCKED" && (
+        <Card tone="bad" title={`Panel locked — ${lockTitle(status.policy?.reason)}`}>
+          {lockBody(status.policy?.reason)} The panel is read-only: existing
+          records can be viewed, exported and collected against, but nothing new
+          can be created. Subscribers stay online — RADIUS is not involved.
+          {status.policy?.support && (status.policy.support.name || status.policy.support.email || status.policy.support.phone) ? (
+            <div style={{ marginTop: 10 }}>
+              <strong>Contact support:</strong>{" "}
+              {[status.policy.support.name, status.policy.support.email, status.policy.support.phone]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+          ) : null}
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+            Reason code: <code>{status.policy?.reason ?? "LOCKED"}</code>
+          </div>
+        </Card>
+      )}
+
+      {(status.state === "UNLICENSED_WINDOW" || status.state === "UNVERIFIED") && (
+        <Card tone="warn" title="This panel is not licensed yet">
+          It keeps working for now. {status.policy?.deadline
+            ? <>Adding and changing records stops on <strong>{fmt(status.policy.deadline)}</strong> unless a licence is activated.</>
+            : <>Activate a licence before the allowed period ends.</>}{" "}
+          Enter your licence key above, or run <code>sudo jointbox-activate</code> on the server.
+        </Card>
+      )}
+
+      {status.state === "OFFLINE_GRACE" && (
+        <Card tone="warn" title="The licence server has not been reached recently">
+          The panel keeps working. Check this server's internet connection.
+          {status.policy?.deadline
+            ? <> If contact is not restored, the panel locks on <strong>{fmt(status.policy.deadline)}</strong>.</>
+            : null}
         </Card>
       )}
 

@@ -39,7 +39,11 @@ export type LicenceState =
   | "UNLICENSED"
   | "SUSPENDED"
   | "TAMPERED"
-  | "UNAVAILABLE";
+  | "UNAVAILABLE"
+  | "UNVERIFIED"
+  | "UNLICENSED_WINDOW"
+  | "OFFLINE_GRACE"
+  | "LOCKED";
 
 export interface LicenceStatus {
   state: LicenceState;
@@ -70,6 +74,13 @@ export interface LicenceStatus {
   noLicenceDeadline?: string | null;
   message: string;
   banner: { level: "none" | "info" | "warn" | "error"; message: string };
+  /** Agent 1.2 decision for the banner and locked screen (display only). */
+  policy?: {
+    state: string;
+    reason?: string;
+    deadline?: string;
+    support?: { name?: string; email?: string; phone?: string };
+  } | null;
 }
 
 interface Ctx {

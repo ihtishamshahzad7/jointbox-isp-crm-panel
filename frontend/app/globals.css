@@ -6920,3 +6920,56 @@ html[data-theme="dark"] .topbar-title { color: var(--text); }
 .platform-note-actions button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
 .platform-note-actions button:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
 html .main .platform-note span:not([class]), html .main .platform-note b { color: inherit; }
+
+/* ===========================================================================
+   Feature guide — the green "How to use" note at the top of each screen.
+   Self-contained; readable on both the light and dark themes.
+   ======================================================================== */
+.jb-guide {
+  --jb-green: #16a34a;
+  --jb-green-2: #22c55e;
+  border: 1px solid rgba(22, 163, 74, 0.35);
+  border-left: 4px solid var(--jb-green);
+  background:
+    linear-gradient(0deg, rgba(22, 163, 74, 0.06), rgba(22, 163, 74, 0.06)),
+    var(--surface);
+  border-radius: 12px;
+  padding: 14px 16px 15px;
+  margin: 0 0 18px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.jb-guide-head { display: flex; align-items: center; gap: 10px; }
+.jb-guide-badge {
+  background: linear-gradient(135deg, var(--jb-green), var(--jb-green-2));
+  color: #fff; font-weight: 800; font-size: 11.5px; letter-spacing: .02em;
+  padding: 4px 11px; border-radius: 999px; white-space: nowrap;
+}
+.jb-guide-title { font-size: 15px; font-weight: 800; color: var(--text); }
+.jb-guide-x {
+  margin-left: auto; background: transparent; border: none; cursor: pointer;
+  color: var(--muted); font-size: 15px; line-height: 1; padding: 4px 6px; border-radius: 6px;
+}
+.jb-guide-x:hover { background: rgba(22, 163, 74, 0.12); color: var(--text); }
+.jb-guide-lead { margin: 9px 0 6px; color: var(--text); font-size: 13.5px; line-height: 1.6; }
+.jb-guide-steps { margin: 4px 0 0; padding-left: 20px; }
+.jb-guide-steps li { color: var(--text); font-size: 13.5px; line-height: 1.7; }
+.jb-guide-steps li::marker { color: var(--jb-green); font-weight: 800; }
+.jb-guide-next {
+  margin: 11px 0 0; padding: 9px 12px; border-radius: 9px;
+  background: rgba(22, 163, 74, 0.10);
+  color: var(--text); font-size: 13px; line-height: 1.6;
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.jb-guide-next > span[aria-hidden] { color: var(--jb-green); font-weight: 800; }
+.jb-guide-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid rgba(22, 163, 74, 0.4);
+  background: rgba(22, 163, 74, 0.10);
+  color: #15803d; font-weight: 700; font-size: 12.5px;
+  padding: 6px 13px; border-radius: 999px; cursor: pointer; margin: 0 0 16px;
+}
+.jb-guide-pill:hover { background: rgba(22, 163, 74, 0.18); }
+html[data-theme="dark"] .jb-guide-pill { color: #4ade80; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .jb-guide-pill { color: #4ade80; }
+}

@@ -19,6 +19,7 @@ import { LANGS, useI18n } from '../../lib/i18n';
 import { LicenceProvider, LicenceBanner } from './licence';
 import { ensureMediaToken, hasFreshMediaToken, clearMediaToken } from './image-upload';
 import { PLATFORM_HOME, isPlatformPath, isPlatformOnlyPath } from './platform';
+import FeatureGuide from './feature-guide';
 
 const API = API_BASE;
 
@@ -1273,6 +1274,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             )}
             {/* Renders nothing on an ACTIVE licence, which is the normal case. */}
             <LicenceBanner />
+            {/* Green "How to use" note for the current screen. */}
+            {roleReady && !platformBlocked && <FeatureGuide pathname={pathname} />}
             <div key={mediaKey} style={{ display: 'contents' }}>{roleReady && !platformBlocked ? children : null}</div>
           </div>
         </main>
