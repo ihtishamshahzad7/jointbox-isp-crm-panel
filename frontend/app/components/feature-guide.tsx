@@ -707,6 +707,62 @@ const TAB_TO_GUIDE: Record<string, Record<string, string>> = {
   insights: { segments: 'segments', analytics: 'analytics', reports: 'reports', logs: 'logs' },
 };
 
+// Pages whose tabs live in internal state (not the URL): matched by the tab
+// button's visible label. When the operator clicks one of these, the guide
+// switches to that tab's note. Keyed by first path segment, then exact label.
+const CLICK_TAB_GUIDES: Record<string, Record<string, Guide>> = {
+  accounting: {
+    'Ledger': { title: 'Ledger', lead: 'Every income and expense entry, line by line.',
+      steps: ['Filter by account or date.', 'Open an entry for its full detail.'],
+      example: 'A Rs 1500 payment from Ali shows as income dated to his renewal day.' },
+    'Cashflow': { title: 'Cashflow', lead: 'Money in versus money out over time.',
+      steps: ['Pick the period.', 'Compare income against expenses.'],
+      example: 'This month: Rs 90,000 in from customers, Rs 25,000 out in costs → Rs 65,000 net.' },
+    'Collections': { title: 'Collections', lead: 'What is still to be collected from customers.',
+      steps: ['See who owes and how much.', 'Follow up or record a payment.'] },
+    'Expenses': { title: 'Expenses', lead: 'Record and review your running costs.',
+      steps: ['Click add, set amount, category and date.', 'Approve or reject submitted expenses.'],
+      example: 'Add "Fuel for generator — Rs 4,000" so profit stays accurate.' },
+    'Balances': { title: 'Balances', lead: 'Current balances and wallets across accounts.',
+      steps: ['Review each account balance.', 'Drill in for its entries.'] },
+    'Automation': { title: 'Accounting Automation', lead: 'Rules that post ledger entries for you.',
+      steps: ['Review the active rules.', 'Enable or adjust a rule.'] },
+  },
+  security: {
+    'Permissions': { title: 'Permissions', lead: 'What each role can see and do.',
+      steps: ['Pick a role.', 'Tick or untick each permission.'],
+      example: 'Give "Sales" permission to add subscribers but not to delete them.' },
+    'Child Permissions': { title: 'Child Permissions', lead: 'Limits for the dealer/sub-accounts beneath you.',
+      steps: ['Choose what dealers under you may do.', 'Save.'] },
+    'Two-Factor Auth': { title: 'Two-Factor Auth', lead: 'Add a second step at login for extra safety.',
+      steps: ['Turn on 2FA.', 'Scan the code with an authenticator app.'],
+      example: 'After enabling, login asks for a 6-digit code from Google Authenticator.' },
+    'Active Sessions': { title: 'Active Sessions', lead: 'Who is signed in right now.',
+      steps: ['Review the active devices.', 'Sign out any you do not recognise.'] },
+    'API Keys': { title: 'API Keys', lead: 'Keys that let external tools call your panel.',
+      steps: ['Create a key and copy it once.', 'Revoke a key you no longer use.'] },
+  },
+  organization: {
+    'ISPs': { title: 'ISP Companies', lead: 'The ISP companies on this installation.',
+      steps: ['Add or open a company.', 'Set its details and plan.'] },
+    'Branches': { title: 'Branches', lead: 'Branch offices under a company.',
+      steps: ['Add a branch.', 'Assign staff or areas to it.'] },
+    'Resellers': { title: 'Resellers', lead: 'Reseller accounts and their terms.',
+      steps: ['Add a reseller.', 'Set its wallet or commission.'] },
+  },
+  communication: {
+    'Templates': { title: 'Message Templates', lead: 'The wording of automatic messages.',
+      steps: ['Edit the invoice, reminder and expiry templates.', 'Use placeholders like {name} and {amount}.'],
+      example: 'Expiry template: "Dear {name}, your package expires on {date}. Please recharge."' },
+    'Send': { title: 'Send a Message', lead: 'Message one customer or a group now.',
+      steps: ['Pick recipients.', 'Choose a template or type a message.', 'Send.'] },
+    'Log': { title: 'Message Log', lead: 'What was sent and whether it delivered.',
+      steps: ['Filter by date or customer.', 'Check delivery status.'] },
+    'Alerts': { title: 'Alert Rules', lead: 'Rules that trigger automatic messages.',
+      steps: ['Add a rule (e.g. 3 days before expiry).', 'Pick the template it sends.'] },
+  },
+};
+
 function byKey(key: string): Guide | null {
   return GUIDES[key] ?? SUB_GUIDES[key] ?? null;
 }
@@ -735,7 +791,31 @@ export default function FeatureGuide({ pathname }: { pathname: string }) {
   // The open tab (?tab=…) on a hub screen, so the guide matches the tab.
   const searchParams = useSearchParams();
   const tab = searchParams?.get('tab') ?? null;
-  const guide = guideFor(pathname, tab);
+
+  // For pages whose tabs are internal state (plain buttons, no URL), detect the
+  // active tab from the label of the button the operator clicks. No per-page
+  // code is needed: we match the button text against this page's known tabs.
+  const seg = (pathname || '/').replace(/^\/+|\/+$/g, '').split('/')[0];
+  const [clickTab, setClickTab] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setClickTab(null); // reset when the screen changes
+    const map = CLICK_TAB_GUIDES[seg];
+    if (!map) return;
+    const onClick = (e: MouseEvent) => {
+      const el = (e.target as HTMLElement | null)?.closest(
+        'button, [role="tab"], a',
+      );
+      if (!el) return;
+      const label = (el.textContent || '').trim();
+      if (label && map[label]) setClickTab(label);
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [seg, pathname]);
+
+  const clickGuide = clickTab ? CLICK_TAB_GUIDES[seg]?.[clickTab] : null;
+  const guide = clickGuide ?? guideFor(pathname, tab);
   // Closed by default: the screen shows only a small button, never the full
   // panel, until the operator asks for it. Opening it is per-visit and takes no
   // space otherwise, so it never gets in the way of daily work.
