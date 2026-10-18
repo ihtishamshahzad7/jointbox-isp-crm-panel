@@ -362,6 +362,246 @@ const GUIDES: Record<string, Guide> = {
     ],
     next: 'Useful for Security reviews.',
   },
+
+  // --- Hubs and the remaining screens, so every area has a note ------------
+  'admin-center': {
+    title: 'Admin Center',
+    lead: 'A hub linking the admin tools — staff, security, settings and system.',
+    steps: [
+      'Use the cards/tabs to jump to the tool you need.',
+      'Each card opens its own full screen.',
+    ],
+    next: 'Staff logins live in Users; access rules in Security; company options in Settings.',
+  },
+  'billing-center': {
+    title: 'Billing Center',
+    lead: 'A hub for everything money — invoices, payments, renewals and reversals.',
+    steps: [
+      'Use the tabs to switch between invoices, payments and renewals.',
+      'Open any item to view or act on it.',
+    ],
+    next: 'Prices come from Packages; income is summarised in Accounting and Reports.',
+  },
+  'network-center': {
+    title: 'Network Command Center',
+    lead: 'A hub for live network control — routers, sessions, bandwidth and outages.',
+    steps: [
+      'Use the tabs to move between routers, live sessions and traffic.',
+      'Act on a session (disconnect / change bandwidth) from here.',
+    ],
+    next: 'Depends on Routers (NAS) and IP Pools being set up.',
+  },
+  'support-center': {
+    title: 'Support Center',
+    lead: 'A hub for customer care — tickets/complaints and field jobs.',
+    steps: [
+      'Use the tabs to switch between tickets and field jobs.',
+      'Open a ticket to assign, note and resolve it.',
+    ],
+    next: 'Create a Field Job for a site visit; messages use Communication.',
+  },
+  operations: {
+    title: 'Operations',
+    lead: 'Day-to-day operational overview and shortcuts.',
+    steps: [
+      'Scan the panels for what needs attention today.',
+      'Click through to the full screen for any item.',
+    ],
+    next: 'Links into Monitoring, Outages, Field Jobs and Complaints.',
+  },
+  noc: {
+    title: 'Network Operations Center',
+    lead: 'A live wall of network health across routers and areas.',
+    steps: [
+      'Watch the status tiles for anything red.',
+      'Click a tile to drill into that router or area.',
+    ],
+    next: 'Feeds from Routers (NAS), Monitoring and Outages.',
+  },
+  'quick-connect': {
+    title: 'Quick Connect',
+    lead: 'Onboard a new subscriber fast, in one short form.',
+    steps: [
+      'Enter the customer’s name and login.',
+      'Pick the Package (this sets speed, price and IP pool).',
+      'Save — the account is created and pushed to RADIUS.',
+    ],
+    next: 'Opens the full Subscriber record for billing and details.',
+  },
+  hierarchy: {
+    title: 'Hierarchy',
+    lead: 'The tree of your franchises, dealers and sub-dealers under you.',
+    steps: [
+      'Expand a branch to see the accounts beneath it.',
+      'Click an account to open it.',
+    ],
+    next: 'Accounts are created in Franchises/Dealers; earnings roll up to Earnings.',
+  },
+  earnings: {
+    title: 'Collections & Earnings',
+    lead: 'What you and your dealers have collected and earned.',
+    steps: [
+      'Pick the period to review.',
+      'Drill into a dealer for their detail.',
+    ],
+    next: 'Figures come from Payments across your Hierarchy.',
+  },
+  segments: {
+    title: 'Customer Segments',
+    lead: 'Groups of customers that need attention — expiring, overdue, inactive.',
+    steps: [
+      'Open a segment to see who is in it.',
+      'Act in bulk (message or renew) from the list.',
+    ],
+    next: 'Messages use Communication; renewals create Invoices.',
+  },
+  insights: {
+    title: 'Insights',
+    lead: 'Trends and highlights drawn from your data.',
+    steps: [
+      'Review the highlighted trends.',
+      'Click through for the underlying report.',
+    ],
+    next: 'Deeper numbers are under Reports and Analytics.',
+  },
+  analytics: {
+    title: 'Analytics',
+    lead: 'Charts for growth, revenue and usage over time.',
+    steps: [
+      'Choose the metric and date range.',
+      'Hover a chart for exact values.',
+    ],
+    next: 'Source data comes from Subscribers, Payments and Monitoring.',
+  },
+  reversals: {
+    title: 'Disputes & Reversals',
+    lead: 'Refunds, charge reversals and payment disputes.',
+    steps: [
+      'Open a dispute to review it.',
+      'Approve a reversal or reject it, with a note.',
+    ],
+    next: 'A reversal adjusts the matching Payment and Invoice.',
+  },
+  compliance: {
+    title: 'Compliance (KYC)',
+    lead: 'Customer identity records (CNIC/KYC) for regulatory compliance.',
+    steps: [
+      'Review which subscribers are missing verified ID.',
+      'Open a subscriber to add or confirm their documents.',
+    ],
+    next: 'Linked to each Subscriber record.',
+  },
+  status: {
+    title: 'Service Status',
+    lead: 'A clear up/down view of your services.',
+    steps: [
+      'Check the status indicators.',
+      'Investigate anything not green.',
+    ],
+    next: 'Record any interruption under Outages.',
+  },
+  trace: {
+    title: 'Global Trace Search',
+    lead: 'Find anything fast — a subscriber, IP, invoice or session.',
+    steps: [
+      'Type a name, username, IP or number.',
+      'Open the matching record from the results.',
+    ],
+    next: 'Jumps you straight to the right screen.',
+  },
+  console: {
+    title: 'Console',
+    lead: 'A terminal/diagnostics view for advanced checks.',
+    steps: [
+      'Use it only for the checks support asks for.',
+      'Read the output; it changes nothing on its own.',
+    ],
+    next: 'For routine work use the normal screens instead.',
+  },
+  'router-console': {
+    title: 'Router Console',
+    lead: 'Run read-only commands against one of your routers.',
+    steps: [
+      'Pick the router.',
+      'Run a diagnostic command and read the result.',
+    ],
+    next: 'Routers are added under Routers (NAS).',
+  },
+  jobs: {
+    title: 'Background Jobs',
+    lead: 'Scheduled and queued tasks the panel runs for you.',
+    steps: [
+      'Check that jobs are running and not failing.',
+      'Open a job for its last run and log.',
+    ],
+    next: 'Covers billing runs, reminders and syncs.',
+  },
+  'my-work': {
+    title: 'My Work',
+    lead: 'Your own assigned tasks, tickets and jobs.',
+    steps: [
+      'Work through the items assigned to you.',
+      'Update status as you go.',
+    ],
+    next: 'Tickets come from Complaints; visits from Field Jobs.',
+  },
+  'my-business': {
+    title: 'My Business',
+    lead: 'Your account summary as a dealer/franchise.',
+    steps: [
+      'Review your wallet, subscribers and earnings.',
+      'Top up or act from here.',
+    ],
+    next: 'Your customers are under Subscribers; income under Earnings.',
+  },
+  'my-profile': {
+    title: 'My Profile',
+    lead: 'Your personal account details and preferences.',
+    steps: [
+      'Update your name and contact details.',
+      'Save.',
+    ],
+    next: 'Change your password under Change Password.',
+  },
+  'change-password': {
+    title: 'Change Password',
+    lead: 'Set a new password for your login.',
+    steps: [
+      'Enter your current password, then the new one twice.',
+      'Save — you stay signed in on this device.',
+    ],
+    next: 'Keep it private; activity is recorded in Logs.',
+  },
+  assistant: {
+    title: 'Assistant',
+    lead: 'An in-panel helper for questions and quick actions.',
+    steps: [
+      'Ask a question in plain words.',
+      'Follow the links it gives you.',
+    ],
+    next: 'It points you to the right feature screen.',
+  },
+  docs: {
+    title: 'Documentation',
+    lead: 'Reference guides for the panel.',
+    steps: [
+      'Browse or search the topics.',
+      'Open a topic to read it.',
+    ],
+    next: 'Each screen also has its own green “How to use” note.',
+  },
+};
+
+// Shown on any screen without a specific guide, so nothing is ever blank.
+const DEFAULT_GUIDE: Guide = {
+  title: 'this screen',
+  lead: 'This screen is part of your ISP management panel.',
+  steps: [
+    'Use the buttons at the top to add or create a new item.',
+    'Use the tabs and filters to find what you need.',
+    'Click any row to open, edit or act on it.',
+  ],
+  next: 'New here? Set up in this order: IP Pools → Routers (NAS) → Packages → Subscribers.',
 };
 
 // Two-segment pages get their own, more specific guide.
@@ -403,7 +643,10 @@ function guideFor(pathname: string): Guide | null {
   const parts = clean.split('/');
   const two = parts.slice(0, 2).join('/');
   if (SUB_GUIDES[two]) return SUB_GUIDES[two];
-  return GUIDES[parts[0]] ?? null;
+  // Every screen gets a note: a tailored one when we have it, the default
+  // otherwise. Login and the public portal are the only screens with no shell,
+  // so they never reach this component.
+  return GUIDES[parts[0]] ?? DEFAULT_GUIDE;
 }
 
 export default function FeatureGuide({ pathname }: { pathname: string }) {
