@@ -1637,7 +1637,11 @@ export class PackagesService {
     // row). This stops a reseller from guessing ids to read other accounts'
     // reseller prices and revenue.
     if (actor && !this.scope.isAdmin(actor.role)) {
-      const visible = await this.scopeToActor([{ id }], actor);
+      // Pass the real package row, not a bare { id }: scopeToActor decides
+      // visibility by ownerId (and the caller's reseller price rows), so an
+      // object without ownerId is never "owned" and the owner's own package
+      // was wrongly judged invisible — a 404 on a package the operator owns.
+      const visible = await this.scopeToActor([pkg], actor);
       if (!visible.length) throw new NotFoundException('Package not found');
     }
 
