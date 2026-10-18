@@ -7011,3 +7011,15 @@ html[data-theme="dark"] .jb-guide-tabs-head { color: #4ade80; }
   .jb-guide-fab-label { display: none; }
 }
 @media print { .jb-guide-fab { display: none !important; } }
+
+/* Feature guide — the simple example line. */
+.jb-guide-example {
+  margin: 8px 0 2px; padding: 9px 12px; border-radius: 9px;
+  background: rgba(22, 163, 74, 0.09); border: 1px dashed rgba(22, 163, 74, 0.4);
+  display: flex; gap: 9px; align-items: baseline;
+  font-size: 13px; line-height: 1.6; color: var(--text);
+}
+.jb-guide-example-tag {
+  font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+  color: #fff; background: #16a34a; border-radius: 5px; padding: 2px 7px; white-space: nowrap;
+}

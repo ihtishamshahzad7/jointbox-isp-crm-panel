@@ -12,12 +12,15 @@
  */
 
 import React from 'react';
+import { useSearchParams } from 'next/navigation';
 
 type Guide = {
   title: string;
   lead: string;
   steps: string[];
   next?: string;
+  // A short, concrete example so the feature is easy to grasp.
+  example?: string;
   // For screens with tabs: what each tab is for. Shown as a labelled list so
   // the operator knows where to add or configure each thing, tab by tab.
   tabs?: { name: string; note: string }[];
@@ -46,6 +49,7 @@ const GUIDES: Record<string, Guide> = {
       'Save. The pool is now available to attach elsewhere.',
     ],
     next: 'Next, open Routers (NAS) and point a router at this pool, then choose this pool on a Package so subscribers on that package draw from it.',
+    example: 'A /24 pool named "Main-PPPoE" with range 10.10.0.2–10.10.0.254 gives you ~253 usable addresses for PPPoE customers.',
   },
   nas: {
     title: 'Routers (NAS)',
@@ -56,6 +60,7 @@ const GUIDES: Record<string, Guide> = {
       'Save, then send a test request from the router to confirm it authenticates.',
     ],
     next: 'Once a router is online, it is selectable on Packages and Subscribers. Live sessions and bandwidth control for this router appear under Monitoring and Network.',
+    example: 'Add your MikroTik at 192.168.88.1 with the RADIUS secret "mySecret123" and point it at the "Main-PPPoE" pool.',
   },
   packages: {
     title: 'Packages (Plans)',
@@ -67,6 +72,7 @@ const GUIDES: Record<string, Guide> = {
       'Save. The package is now sellable.',
     ],
     next: 'Assign this package to a customer on the Subscribers screen. Invoices and renewals then use its price automatically.',
+    example: 'A "10 Mbps Home" plan: 10/10 Mbps, Rs 1500/month, pool "Main-PPPoE", 500 GB then throttle — assign it to home customers.',
   },
   subscribers: {
     title: 'Subscribers',
@@ -78,6 +84,7 @@ const GUIDES: Record<string, Guide> = {
       'Use the row actions to recharge, change package, or disable.',
     ],
     next: 'Billing happens under Invoices and Payments. Watch who is online under Monitoring.',
+    example: 'Add "Ali Khan", username ali@net, package "10 Mbps Home" → he can log in over PPPoE straight away and is billed Rs 1500/month.',
   },
   invoices: {
     title: 'Invoices',
@@ -88,6 +95,7 @@ const GUIDES: Record<string, Guide> = {
       'Use filters to find unpaid or overdue invoices.',
     ],
     next: 'Record money received under Payments; it clears the matching invoice.',
+    example: 'Ali’s monthly invoice for "10 Mbps Home" is Rs 1500 + 0 tax = Rs 1500, due on his renewal date.',
   },
   payments: {
     title: 'Payments',
@@ -98,6 +106,7 @@ const GUIDES: Record<string, Guide> = {
       'Save — the oldest unpaid invoice is settled first.',
     ],
     next: 'Online methods are configured under Gateways. Totals roll up into Accounting and Reports.',
+    example: 'Record Rs 1500 cash from Ali → his oldest unpaid invoice is cleared and his account stays active.',
   },
   vouchers: {
     title: 'Vouchers',
@@ -108,6 +117,7 @@ const GUIDES: Record<string, Guide> = {
       'Redeemed codes show who used them and when.',
     ],
     next: 'Vouchers recharge Subscribers; the income appears under Payments and Reports.',
+    example: 'Generate 50 "10 Mbps Home" vouchers, print them, and a customer redeems one to recharge for a month.',
   },
   areas: {
     title: 'Areas / Zones',
@@ -117,6 +127,7 @@ const GUIDES: Record<string, Guide> = {
       'Assign routers and subscribers to the area.',
     ],
     next: 'Areas let you filter Monitoring, Reports and Outages by location.',
+    example: 'Create "Gulberg Block A", then tag the routers and customers there — now you can filter reports and outages by that area.',
   },
   'franchise-groups': {
     title: 'Franchises / Dealers',
@@ -126,6 +137,7 @@ const GUIDES: Record<string, Guide> = {
       'Set its wallet or commission terms.',
     ],
     next: 'The dealer signs in to manage their own Subscribers; their numbers roll up to your Earnings and Hierarchy.',
+    example: 'Make a "Gold Dealers" group, add 3 dealers, then on the 10 Mbps package set their wholesale price to Rs 1200.',
   },
   inventory: {
     title: 'Inventory',
@@ -135,6 +147,7 @@ const GUIDES: Record<string, Guide> = {
       'Record issues/returns as stock moves out to the field.',
     ],
     next: 'Assign equipment to Subscribers or Field Jobs as it is installed.',
+    example: 'Add "TP-Link ONT" with quantity 20; when you install one for a customer, record it as issued so stock drops to 19.',
   },
   companies: {
     title: 'Companies',
@@ -145,6 +158,7 @@ const GUIDES: Record<string, Guide> = {
       'The company admin then signs in and manages its own subscribers, routers and packages.',
     ],
     next: 'Set tiers and prices under Plans & Pricing; the licence for each server is managed on your licence site.',
+    example: 'Add company "CityNet", assign the "Professional" plan (3000 subscribers), then its admin signs in to run its own ISP.',
   },
   'platform-plans': {
     title: 'Plans & Pricing',
@@ -456,6 +470,7 @@ const GUIDES: Record<string, Guide> = {
       'Save — the account is created and pushed to RADIUS.',
     ],
     next: 'Opens the full Subscriber record for billing and details.',
+    example: 'Type the name, pick "10 Mbps Home", Save — the PPPoE account is created and online in seconds.',
   },
   hierarchy: {
     title: 'Hierarchy',
@@ -666,52 +681,75 @@ const SUB_GUIDES: Record<string, Guide> = {
   },
 };
 
-function guideFor(pathname: string): Guide | null {
+// Hub screens show several features as tabs (?tab=…). Each tab maps to the
+// guide for the feature it contains, so the note changes with the tab instead
+// of showing one page-level message for the whole hub.
+const TAB_TO_GUIDE: Record<string, Record<string, string>> = {
+  'service-catalog': {
+    packages: 'packages', areas: 'areas', inventory: 'inventory',
+    franchiseGroups: 'franchise-groups',
+  },
+  'support-center': { complaints: 'complaints', communication: 'communication' },
+  'network-center': {
+    ops: 'operations', noc: 'noc', live: 'network', nas: 'nas', fiber: 'fiber',
+    pools: 'ip-pools', static: 'static-ips', prefixes: 'prefixes', outages: 'outages',
+  },
+  'billing-center': {
+    profit: 'reports', accountability: 'accounting', accounting: 'accounting',
+    wallets: 'accounting', earnings: 'earnings', invoices: 'invoices',
+    payments: 'payments', gateways: 'gateways', vouchers: 'vouchers', pricing: 'pricing',
+  },
+  'admin-center': {
+    companies: 'companies', organization: 'organization', hierarchy: 'hierarchy',
+    users: 'users', security: 'security', settings: 'settings', licence: 'licence',
+  },
+  'my-work': { business: 'my-business', connect: 'quick-connect', renewals: 'renewals' },
+  insights: { segments: 'segments', analytics: 'analytics', reports: 'reports', logs: 'logs' },
+};
+
+function byKey(key: string): Guide | null {
+  return GUIDES[key] ?? SUB_GUIDES[key] ?? null;
+}
+
+function guideFor(pathname: string, tab?: string | null): Guide | null {
   const clean = (pathname || '/').replace(/^\/+|\/+$/g, '');
-  if (clean === '' ) return GUIDES.dashboard;
+  if (clean === '') return GUIDES.dashboard;
   const parts = clean.split('/');
+  const seg = parts[0];
+
+  // Tab-aware: on a hub, show the guide for the open tab.
+  if (tab && TAB_TO_GUIDE[seg] && TAB_TO_GUIDE[seg][tab]) {
+    const g = byKey(TAB_TO_GUIDE[seg][tab]);
+    if (g) return g;
+  }
+
   const two = parts.slice(0, 2).join('/');
   if (SUB_GUIDES[two]) return SUB_GUIDES[two];
   // Every screen gets a note: a tailored one when we have it, the default
   // otherwise. Login and the public portal are the only screens with no shell,
   // so they never reach this component.
-  return GUIDES[parts[0]] ?? DEFAULT_GUIDE;
+  return GUIDES[seg] ?? DEFAULT_GUIDE;
 }
 
 export default function FeatureGuide({ pathname }: { pathname: string }) {
-  const guide = guideFor(pathname);
-  const storeKey = guide ? `jb-guide-closed:${pathname}` : '';
+  // The open tab (?tab=…) on a hub screen, so the guide matches the tab.
+  const searchParams = useSearchParams();
+  const tab = searchParams?.get('tab') ?? null;
+  const guide = guideFor(pathname, tab);
+  // Closed by default: the screen shows only a small button, never the full
+  // panel, until the operator asks for it. Opening it is per-visit and takes no
+  // space otherwise, so it never gets in the way of daily work.
   const [closed, setClosed] = React.useState(true);
 
+  // A new screen OR a new tab always starts collapsed.
   React.useEffect(() => {
-    if (!guide) return;
-    let wasClosed = false;
-    try {
-      wasClosed = localStorage.getItem(storeKey) === '1';
-    } catch {
-      /* private mode */
-    }
-    setClosed(wasClosed);
-  }, [guide, storeKey]);
+    setClosed(true);
+  }, [pathname, tab]);
 
   if (!guide) return null;
 
-  const close = () => {
-    setClosed(true);
-    try {
-      localStorage.setItem(storeKey, '1');
-    } catch {
-      /* ignore */
-    }
-  };
-  const open = () => {
-    setClosed(false);
-    try {
-      localStorage.removeItem(storeKey);
-    } catch {
-      /* ignore */
-    }
-  };
+  const close = () => setClosed(true);
+  const open = () => setClosed(false);
 
   // A fixed, always-visible green "How to use" button sits in the corner of
   // every screen, so the guide can always be opened — even after it has been
@@ -742,6 +780,12 @@ export default function FeatureGuide({ pathname }: { pathname: string }) {
           <button type="button" onClick={close} className="jb-guide-x" aria-label="Hide this guide">✕</button>
         </div>
         <p className="jb-guide-lead">{guide.lead}</p>
+        {guide.example && (
+          <p className="jb-guide-example">
+            <span className="jb-guide-example-tag" aria-hidden>Example</span>
+            <span>{guide.example}</span>
+          </p>
+        )}
         <ol className="jb-guide-steps">
           {guide.steps.map((s, i) => (
             <li key={i}>{s}</li>
