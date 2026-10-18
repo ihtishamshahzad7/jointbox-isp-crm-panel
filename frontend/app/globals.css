@@ -6973,3 +6973,41 @@ html[data-theme="dark"] .jb-guide-pill { color: #4ade80; }
 @media (prefers-color-scheme: dark) {
   html:not([data-theme]) .jb-guide-pill { color: #4ade80; }
 }
+
+/* Feature guide — per-tab breakdown inside the note. */
+.jb-guide-tabs { margin: 11px 0 0; }
+.jb-guide-tabs-head {
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+  color: #15803d; margin-bottom: 5px;
+}
+html[data-theme="dark"] .jb-guide-tabs-head { color: #4ade80; }
+@media (prefers-color-scheme: dark) { html:not([data-theme]) .jb-guide-tabs-head { color: #4ade80; } }
+.jb-guide-tabs ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.jb-guide-tabs li {
+  display: flex; gap: 8px; align-items: baseline;
+  font-size: 13px; line-height: 1.55; color: var(--text);
+  padding: 5px 10px; border-radius: 8px; background: rgba(22, 163, 74, 0.07);
+}
+.jb-guide-tab-name {
+  font-weight: 700; white-space: nowrap; color: var(--text);
+  border-right: 1px solid rgba(22,163,74,.3); padding-right: 8px; min-width: 112px;
+}
+.jb-guide-tab-note { color: var(--muted); }
+
+/* Feature guide — fixed floating "How to use" button, always reachable. */
+.jb-guide-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 50;
+  display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(135deg, #16a34a, #22c55e); color: #fff;
+  border: none; border-radius: 999px; cursor: pointer;
+  padding: 11px 17px; font-size: 13.5px; font-weight: 800;
+  box-shadow: 0 6px 20px rgba(22, 163, 74, 0.38);
+}
+.jb-guide-fab:hover { filter: brightness(1.05); }
+.jb-guide-fab span[aria-hidden] { font-size: 16px; line-height: 1; }
+.jb-guide-fab-open { background: #475569; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+@media (max-width: 640px) {
+  .jb-guide-fab { right: 12px; bottom: 12px; padding: 10px 13px; }
+  .jb-guide-fab-label { display: none; }
+}
+@media print { .jb-guide-fab { display: none !important; } }

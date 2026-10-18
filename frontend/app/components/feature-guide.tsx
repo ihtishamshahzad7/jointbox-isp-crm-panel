@@ -18,6 +18,9 @@ type Guide = {
   lead: string;
   steps: string[];
   next?: string;
+  // For screens with tabs: what each tab is for. Shown as a labelled list so
+  // the operator knows where to add or configure each thing, tab by tab.
+  tabs?: { name: string; note: string }[];
 };
 
 // Keyed by the first path segment, with a few exact two-segment overrides.
@@ -171,6 +174,12 @@ const GUIDES: Record<string, Guide> = {
       'Connect a channel/gateway and send a test.',
     ],
     next: 'Templates are used automatically by billing and renewals, and manually from a subscriber’s row.',
+    tabs: [
+      { name: 'Templates', note: 'Edit the wording of automatic messages (invoice, reminder, expiry).' },
+      { name: 'Send', note: 'Message one customer or a group right now.' },
+      { name: 'Log', note: 'See what was sent, when, and whether it delivered.' },
+      { name: 'Alerts', note: 'Set up the rules that trigger automatic messages.' },
+    ],
   },
   pricing: {
     title: 'Pricing & Fees',
@@ -244,6 +253,14 @@ const GUIDES: Record<string, Guide> = {
       'Add expenses so profit is accurate.',
     ],
     next: 'Income flows in from Payments; summaries appear in Reports.',
+    tabs: [
+      { name: 'Ledger', note: 'Every income and expense entry.' },
+      { name: 'Cashflow', note: 'Money in vs out over time.' },
+      { name: 'Collections', note: 'What is still to be collected.' },
+      { name: 'Expenses', note: 'Record and review your costs.' },
+      { name: 'Balances', note: 'Current balances and wallets.' },
+      { name: 'Automation', note: 'Rules that post entries automatically.' },
+    ],
   },
   hotspot: {
     title: 'Hotspot',
@@ -298,6 +315,13 @@ const GUIDES: Record<string, Guide> = {
       'Check active sessions and security events.',
     ],
     next: 'Applies to everyone in Staff / Users.',
+    tabs: [
+      { name: 'Permissions', note: 'What each role can see and do.' },
+      { name: 'Child Permissions', note: 'Limits for dealer/sub-accounts beneath you.' },
+      { name: 'Two-Factor Auth', note: 'Turn on 2FA for extra login security.' },
+      { name: 'Active Sessions', note: 'Who is signed in now; sign a device out.' },
+      { name: 'API Keys', note: 'Create keys for external integrations.' },
+    ],
   },
   settings: {
     title: 'Settings',
@@ -316,6 +340,11 @@ const GUIDES: Record<string, Guide> = {
       'Review ISPs under this installation.',
     ],
     next: 'Ties into Companies and Plans & Pricing.',
+    tabs: [
+      { name: 'ISPs', note: 'The ISP companies on this installation; add or open one.' },
+      { name: 'Branches', note: 'Branch offices under a company.' },
+      { name: 'Resellers', note: 'Reseller accounts and their terms.' },
+    ],
   },
   network: {
     title: 'Network',
@@ -684,32 +713,60 @@ export default function FeatureGuide({ pathname }: { pathname: string }) {
     }
   };
 
+  // A fixed, always-visible green "How to use" button sits in the corner of
+  // every screen, so the guide can always be opened — even after it has been
+  // closed, and no matter where the page has scrolled.
+  const floatBtn = (
+    <button
+      type="button"
+      onClick={closed ? open : close}
+      className={`jb-guide-fab${closed ? '' : ' jb-guide-fab-open'}`}
+      aria-label={closed ? `How to use ${guide.title}` : 'Hide the guide'}
+      aria-expanded={!closed}
+    >
+      <span aria-hidden>❔</span>
+      <span className="jb-guide-fab-label">How to use</span>
+    </button>
+  );
+
   if (closed) {
-    return (
-      <button type="button" onClick={open} className="jb-guide-pill" aria-label="Show how to use this screen">
-        <span aria-hidden>❔</span> How to use {guide.title}
-      </button>
-    );
+    return floatBtn;
   }
 
   return (
-    <section className="jb-guide" role="note" aria-label={`How to use ${guide.title}`}>
-      <div className="jb-guide-head">
-        <span className="jb-guide-badge" aria-hidden>❔ How to use</span>
-        <strong className="jb-guide-title">{guide.title}</strong>
-        <button type="button" onClick={close} className="jb-guide-x" aria-label="Hide this guide">✕</button>
-      </div>
-      <p className="jb-guide-lead">{guide.lead}</p>
-      <ol className="jb-guide-steps">
-        {guide.steps.map((s, i) => (
-          <li key={i}>{s}</li>
-        ))}
-      </ol>
-      {guide.next && (
-        <p className="jb-guide-next">
-          <span aria-hidden>➜</span> <span><strong>Where next:</strong> {guide.next}</span>
-        </p>
-      )}
-    </section>
+    <>
+      <section className="jb-guide" role="note" aria-label={`How to use ${guide.title}`}>
+        <div className="jb-guide-head">
+          <span className="jb-guide-badge" aria-hidden>❔ How to use</span>
+          <strong className="jb-guide-title">{guide.title}</strong>
+          <button type="button" onClick={close} className="jb-guide-x" aria-label="Hide this guide">✕</button>
+        </div>
+        <p className="jb-guide-lead">{guide.lead}</p>
+        <ol className="jb-guide-steps">
+          {guide.steps.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ol>
+        {guide.tabs && guide.tabs.length > 0 && (
+          <div className="jb-guide-tabs">
+            <div className="jb-guide-tabs-head">Tabs on this screen</div>
+            <ul>
+              {guide.tabs.map((t, i) => (
+                <li key={i}>
+                  <span className="jb-guide-tab-name">{t.name}</span>
+                  <span className="jb-guide-tab-note">{t.note}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {guide.next && (
+          <p className="jb-guide-next">
+            <span aria-hidden>➜</span> <span><strong>Where next:</strong> {guide.next}</span>
+          </p>
+        )}
+      </section>
+      {floatBtn}
+    </>
   );
 }
