@@ -364,6 +364,154 @@ export class VpnService {
     return m.join('.');
   }
 
+  // ── per-router client config, for any vendor ──────────────────────────
+  /**
+   * The config a SPECIFIC router pastes to join a VPN, rendered for its
+   * vendor. "All vendors" means we emit the right syntax for each platform —
+   * the operator still applies it on the device (we never push blindly to
+   * third-party gear). WireGuard is the fast, low-overhead default.
+   */
+  clientConfig(type: VpnType, vendor: string, name: string, overlayIp: string): string {
+    const nm = /^[A-Za-z0-9_-]{1,32}$/.test(name) ? name : 'router';
+    const ip = this.assertIpStr(overlayIp);
+    const cfg = this.getConfig();
+    const host = cfg.endpointHost || '<panel-host>';
+    const v = (vendor || 'mikrotik').toLowerCase();
+
+    if (type === 'wireguard') return this.wgClient(v, nm, ip, host, cfg);
+    if (type === 'openvpn') return this.ovpnClient(v, nm, host, cfg);
+    return this.l2tpClient(v, nm, host);
+  }
+
+  private assertIpStr(ip: string): string {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || ''));
+    if (!m || m.slice(1).some((o) => Number(o) > 255)) {
+      throw new BadRequestException(`"${ip}" is not a valid overlay IP.`);
+    }
+    return ip;
+  }
+
+  private wgClient(vendor: string, nm: string, ip: string, host: string, cfg: VpnConfig): string {
+    const port = cfg.wireguard.port;
+    const mask = cfg.wireguard.subnet.split('/')[1];
+    const panelIp = this.firstHostIp(cfg.wireguard.subnet);
+    switch (vendor) {
+      case 'cisco':
+        return [
+          `! Cisco IOS-XE WireGuard — ${nm}`,
+          'crypto wireguard',
+          ` private-key generate`,
+          `interface wireguard1`,
+          ` ip address ${ip} 255.255.255.255`,
+          ` peer panel`,
+          `  public-key <panel-public-key>`,
+          `  endpoint ${host} ${port}`,
+          `  allowed-ips ${panelIp}/32`,
+          `  persistent-keepalive 25`,
+        ].join('\n');
+      case 'juniper':
+        return [
+          `# Juniper (set syntax) — ${nm}`,
+          `set interfaces wg0 unit 0 family inet address ${ip}/${mask}`,
+          `set security wireguard interface wg0 peer panel endpoint ${host}:${port}`,
+          `set security wireguard interface wg0 peer panel allowed-ips ${panelIp}/32`,
+          `set security wireguard interface wg0 peer panel public-key <panel-public-key>`,
+        ].join('\n');
+      case 'linux':
+        return [
+          `# wg-quick — /etc/wireguard/jointbox.conf on ${nm}`,
+          '[Interface]',
+          'PrivateKey = <this-router-private-key>',
+          `Address = ${ip}/${mask}`,
+          '[Peer]',
+          'PublicKey = <panel-public-key>',
+          `Endpoint = ${host}:${port}`,
+          `AllowedIPs = ${panelIp}/32`,
+          'PersistentKeepalive = 25',
+        ].join('\n');
+      default: // mikrotik
+        return [
+          `# RouterOS 7 — ${nm}. Keys are issued per-router on its Tunnel tab;`,
+          `# this is the panel endpoint it dials:`,
+          '/interface/wireguard add name=jointbox listen-port=13231',
+          `/ip/address add address=${ip}/32 interface=jointbox`,
+          '/interface/wireguard/peers add interface=jointbox \\',
+          `    public-key="<panel-public-key>" endpoint-address=${host} endpoint-port=${port} \\`,
+          `    allowed-address=${panelIp}/32 persistent-keepalive=25s`,
+        ].join('\n');
+    }
+  }
+
+  private ovpnClient(vendor: string, nm: string, host: string, cfg: VpnConfig): string {
+    const port = cfg.openvpn.port;
+    const proto = cfg.openvpn.proto;
+    switch (vendor) {
+      case 'cisco':
+        return [
+          `! Cisco OpenVPN is non-native; use a standard .ovpn on an attached host, or:`,
+          `! crypto / AnyConnect is the Cisco path. Recommended: use WireGuard or L2TP on Cisco.`,
+        ].join('\n');
+      case 'linux':
+      case 'generic':
+        return [
+          `# ${nm}.ovpn (OpenVPN client, any OS)`,
+          'client',
+          'dev tun',
+          `proto ${proto}`,
+          `remote ${host} ${port}`,
+          'resolv-retry infinite',
+          'nobind',
+          'persist-key',
+          'persist-tun',
+          'remote-cert-tls server',
+          '<ca>  # paste ca.crt from the panel host',
+          '<cert># paste this router’s client cert',
+          '<key> # paste this router’s client key',
+        ].join('\n');
+      default: // mikrotik
+        return [
+          `# RouterOS 7 — OpenVPN client ${nm}. Import this router’s cert+key first.`,
+          '/interface/ovpn-client',
+          `add name=jointbox-ovpn connect-to=${host} port=${port} protocol=${proto} \\`,
+          `    mode=ip user=${nm} certificate=${nm}.crt_0 add-default-route=no \\`,
+          '    comment="Jointbox management tunnel"',
+        ].join('\n');
+    }
+  }
+
+  private l2tpClient(vendor: string, nm: string, host: string): string {
+    switch (vendor) {
+      case 'cisco':
+        return [
+          `! Cisco IOS — L2TP/IPsec to the panel (${nm})`,
+          'crypto isakmp policy 10',
+          ' encr aes',
+          ' authentication pre-share',
+          ' group 2',
+          `crypto isakmp key <shared-secret> address ${host}`,
+          '! then an l2tp pseudowire / virtual-ppp to ' + host,
+        ].join('\n');
+      case 'juniper':
+        return [
+          `# Juniper — L2TP/IPsec to ${host} (${nm})`,
+          `set services l2tp ... remote ${host}  # with IKE pre-shared-key <shared-secret>`,
+        ].join('\n');
+      case 'linux':
+        return [
+          `# Linux (NetworkManager/xl2tpd) — ${nm}`,
+          `# server = ${host}, IPsec PSK = <shared-secret>, user = ${nm}, CHAP password = <password>`,
+        ].join('\n');
+      default: // mikrotik
+        return [
+          `# RouterOS 7 — L2TP/IPsec client ${nm}`,
+          '/interface/l2tp-client',
+          `add name=jointbox-l2tp connect-to=${host} user=${nm} password=<password> \\`,
+          '    use-ipsec=yes ipsec-secret=<shared-secret> add-default-route=no \\',
+          '    comment="Jointbox management tunnel"',
+        ].join('\n');
+    }
+  }
+
   /** The script for one VPN type, for a Download/Copy button. */
   async install(type: VpnType): Promise<{ script: string; mikrotik: string }> {
     const o = await this.overview();

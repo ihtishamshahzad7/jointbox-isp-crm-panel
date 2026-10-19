@@ -214,7 +214,83 @@ export default function VpnPage() {
         </div>
       ))}
 
+      {data && (
+        <ClientConfigMaker card={card} input={input} pre={pre} token={token} />
+      )}
+
       {!data && !err && <p style={{ color: "var(--muted,#64748B)" }}>Loading…</p>}
+    </div>
+  );
+}
+
+/** Generate the join config for one router, for any vendor. */
+function ClientConfigMaker({
+  card, input, pre, token,
+}: {
+  card: React.CSSProperties; input: React.CSSProperties; pre: React.CSSProperties; token: string | null;
+}) {
+  const [type, setType] = React.useState<"wireguard" | "openvpn" | "l2tp">("wireguard");
+  const [vendor, setVendor] = React.useState("mikrotik");
+  const [name, setName] = React.useState("");
+  const [ip, setIp] = React.useState("");
+  const [cfg, setCfg] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  const gen = async () => {
+    setBusy(true);
+    try {
+      const q = new URLSearchParams({ vendor, name: name || "router", ip });
+      const r = await fetch(`${API}/vpn/${type}/client?${q.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const b = await r.json();
+      setCfg(r.ok ? b.config : b?.message || `Error (HTTP ${r.status})`);
+    } catch {
+      setCfg("Could not reach the panel.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sel: React.CSSProperties = { ...input, width: "auto", flex: "0 0 auto" };
+  return (
+    <div style={card}>
+      <h2 style={{ fontSize: 15, fontWeight: 800, margin: "0 0 4px", color: "var(--text,#111)" }}>
+        Client config for a router — any vendor
+      </h2>
+      <p style={{ color: "var(--muted,#64748B)", fontSize: 13, margin: "0 0 10px" }}>
+        Pick the VPN, the router’s vendor and its overlay IP, then paste the generated config on the device.
+        WireGuard is the fastest and the recommended default.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <select style={sel} value={type} onChange={(e) => setType(e.target.value as typeof type)}>
+          <option value="wireguard">WireGuard</option>
+          <option value="openvpn">OpenVPN</option>
+          <option value="l2tp">L2TP/IPsec</option>
+        </select>
+        <select style={sel} value={vendor} onChange={(e) => setVendor(e.target.value)}>
+          <option value="mikrotik">MikroTik</option>
+          <option value="cisco">Cisco</option>
+          <option value="juniper">Juniper</option>
+          <option value="linux">Linux</option>
+          <option value="generic">Generic</option>
+        </select>
+        <input style={{ ...input, width: 160, flex: "0 0 auto" }} placeholder="router name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input style={{ ...input, width: 150, flex: "0 0 auto" }} placeholder="overlay IP e.g. 10.66.0.2" value={ip} onChange={(e) => setIp(e.target.value)} />
+        <button type="button" onClick={gen} disabled={busy || !ip}
+          style={{ border: "none", borderRadius: 9, padding: "9px 18px", fontWeight: 800, color: "#fff", cursor: "pointer", background: "linear-gradient(135deg,#16a34a,#22c55e)", opacity: busy || !ip ? 0.6 : 1 }}>
+          {busy ? "…" : "Generate"}
+        </button>
+      </div>
+      {cfg && (
+        <div style={{ marginTop: 10 }}>
+          <button type="button" onClick={() => { void navigator.clipboard?.writeText(cfg); }}
+            style={{ border: "1px solid #16a34a", background: "transparent", color: "#16a34a", borderRadius: 8, padding: "4px 11px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+            Copy
+          </button>
+          <pre style={pre}>{cfg}</pre>
+        </div>
+      )}
     </div>
   );
 }

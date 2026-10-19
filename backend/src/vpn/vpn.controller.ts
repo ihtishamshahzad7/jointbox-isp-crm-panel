@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -34,4 +34,22 @@ export class VpnController {
     this.scope.assertPlatformOwner(req.user);
     return this.vpn.install(type as VpnType);
   }
+
+  /** Per-router client config for a chosen vendor and overlay IP. */
+  @Get(':type/client')
+  client(
+    @Param('type') type: string,
+    @Query('vendor') vendor: string,
+    @Query('name') name: string,
+    @Query('ip') ip: string,
+    @Req() req: any,
+  ) {
+    this.scope.assertPlatformOwner(req.user);
+    return {
+      vendors: VPN_VENDORS,
+      config: this.vpn.clientConfig(type as VpnType, vendor || 'mikrotik', name || 'router', ip || ''),
+    };
+  }
 }
+
+export const VPN_VENDORS = ['mikrotik', 'cisco', 'juniper', 'linux', 'generic'];
