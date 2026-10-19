@@ -63,6 +63,36 @@ export function TunnelPanel({ nasId, nasName }: { nasId: number; nasName?: strin
   const [copied, setCopied] = React.useState<string | null>(null);
   const [confirmRotate, setConfirmRotate] = React.useState(false);
 
+  // Which VPN type to set up for this router. WireGuard is the fully-integrated
+  // path (keys issued + tracked here). OpenVPN / L2/IPsec generate the config to
+  // paste, served by the panel VPN server for that type.
+  const [vpnType, setVpnType] = React.useState<"wireguard" | "openvpn" | "l2tp">("wireguard");
+  const [vendor, setVendor] = React.useState("mikrotik");
+  const [overlayIp, setOverlayIp] = React.useState("");
+  const [genCfg, setGenCfg] = React.useState<string | null>(null);
+  const [genErr, setGenErr] = React.useState<string | null>(null);
+  const [genBusy, setGenBusy] = React.useState(false);
+
+  async function generateClient() {
+    setGenBusy(true);
+    setGenErr(null);
+    setGenCfg(null);
+    try {
+      const q = new URLSearchParams({ vendor, name: (nasName || `nas${nasId}`).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) || "router", ip: overlayIp });
+      const r = await fetch(`${API}/vpn/${vpnType}/client?${q.toString()}`, { headers: H });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setGenErr(r.status === 403 ? "Only the platform owner can generate VPN server configs." : d?.message || `Error (HTTP ${r.status})`);
+        return;
+      }
+      setGenCfg(d.config || "");
+    } catch {
+      setGenErr("Could not reach the panel API.");
+    } finally {
+      setGenBusy(false);
+    }
+  }
+
   const load = React.useCallback(async () => {
     try {
       const r = await fetch(`${API}/nas/${nasId}/tunnel`, { headers: H });
@@ -192,18 +222,68 @@ export function TunnelPanel({ nasId, nasName }: { nasId: number; nasName?: strin
 
       <div className="tp-head">
         <h3>Management tunnel</h3>
-        {status && (
+        {vpnType === "wireguard" && status && (
           <span className={`tp-pill ${status.online ? "up" : "down"}`}>
             {status.online ? "Connected" : status.lastHandshake ? "Not responding" : "Waiting for router"}
           </span>
         )}
       </div>
 
-      {err && <div className="tp-err">{err}</div>}
+      {/* VPN type selector — choose how this router reaches the panel. */}
+      <div className="tp-tabs" style={{ marginBottom: 12 }}>
+        {([
+          ["wireguard", "WireGuard (recommended)"],
+          ["openvpn", "OpenVPN"],
+          ["l2tp", "L2TP / IPsec"],
+        ] as const).map(([id, label]) => (
+          <button key={id} className={vpnType === id ? "on" : ""} onClick={() => { setVpnType(id); setGenCfg(null); setGenErr(null); }}>
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {!loaded && <div className="tp-muted">Checking…</div>}
+      {/* ── OpenVPN / L2TP: generate the per-router config to paste ── */}
+      {vpnType !== "wireguard" && (
+        <>
+          <p className="tp-lead">
+            Generate the {vpnType === "openvpn" ? "OpenVPN" : "L2TP/IPsec"} config for this router. The
+            panel’s {vpnType === "openvpn" ? "OpenVPN" : "L2TP/IPsec"} server must be installed first
+            (Network → <b>VPN Servers</b>). Keys/secrets are placeholders you fill from the server install output.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+            <select value={vendor} onChange={(e) => setVendor(e.target.value)} className="tp-btn" style={{ cursor: "pointer" }}>
+              <option value="mikrotik">MikroTik</option>
+              <option value="cisco">Cisco</option>
+              <option value="juniper">Juniper</option>
+              <option value="linux">Linux</option>
+              <option value="generic">Generic</option>
+            </select>
+            <input value={overlayIp} onChange={(e) => setOverlayIp(e.target.value)} placeholder="overlay IP e.g. 10.67.0.2"
+              style={{ border: "1px solid #D7DCE3", borderRadius: 8, padding: "8px 11px", fontSize: 13, fontFamily: "inherit" }} />
+            <button className="tp-btn primary" disabled={genBusy || !overlayIp} onClick={() => void generateClient()}>
+              {genBusy ? "Generating…" : "Generate config"}
+            </button>
+          </div>
+          {genErr && <div className="tp-err">{genErr}</div>}
+          {genCfg && (
+            <>
+              <pre className="tp-config">{genCfg}</pre>
+              <div className="tp-actions">
+                <button className="tp-btn primary" onClick={() => copy(genCfg, "gencfg")}>
+                  {copied === "gencfg" ? "Copied" : "Copy config"}
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
 
-      {loaded && !status && (
+      {/* ── WireGuard: the fully-integrated, key-issuing management tunnel ── */}
+      {vpnType === "wireguard" && err && <div className="tp-err">{err}</div>}
+
+      {vpnType === "wireguard" && !loaded && <div className="tp-muted">Checking…</div>}
+
+      {vpnType === "wireguard" && loaded && !status && (
         <>
           <p className="tp-lead">
             This router has no tunnel. Without one, the panel can only reach it when they
@@ -216,7 +296,7 @@ export function TunnelPanel({ nasId, nasName }: { nasId: number; nasName?: strin
         </>
       )}
 
-      {loaded && status && (
+      {vpnType === "wireguard" && loaded && status && (
         <>
           <dl className="tp-facts">
             <div>
