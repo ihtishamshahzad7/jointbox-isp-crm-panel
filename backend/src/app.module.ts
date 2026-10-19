@@ -22,6 +22,7 @@ import { SubscribersModule } from './subscribers/subscribers.module';
 import { PackagesModule } from './packages/packages.module';
 import { AreasModule } from './areas/areas.module';
 import { NasModule } from './nas/nas.module';
+import { VpnModule } from './vpn/vpn.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { VouchersModule } from './vouchers/vouchers.module';
 import { UsersModule } from './users/users.module';
@@ -75,6 +76,7 @@ import { GroupsModule } from './groups/groups.module';
     PackagesModule,
     AreasModule,
     NasModule,
+    VpnModule,
     InvoicesModule,
     VouchersModule,
     UsersModule,

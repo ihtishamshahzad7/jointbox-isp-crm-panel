@@ -360,6 +360,18 @@ const GUIDES: Record<string, Guide> = {
       { name: 'Resellers', note: 'Reseller accounts and their terms.' },
     ],
   },
+  vpn: {
+    title: 'Panel VPN Servers',
+    lead: 'Let a remote MikroTik behind CGNAT reach this panel so its users authenticate here and the panel can run RADIUS/CoA to it.',
+    steps: [
+      'Set the panel public address (hostname or IP routers will dial).',
+      'Pick a VPN type (WireGuard, OpenVPN or L2TP/IPsec) and click Setup.',
+      'Run the one-time script on the panel host, then paste the config on the router.',
+      'Add that router under Routers (NAS) using its overlay IP.',
+    ],
+    example: 'WireGuard: set endpoint vpn.myisp.com, run the installer, and a MikroTik at a CGNAT site dials in on 10.66.0.x so the panel polls and disconnects its users over the tunnel.',
+    next: 'Run several VPNs at once; many routers can connect to each. Per-router WireGuard keys come from each NAS\'s Tunnel tab.',
+  },
   network: {
     title: 'Network',
     lead: 'Live network control — sessions, bandwidth and disconnects.',
@@ -692,7 +704,7 @@ const TAB_TO_GUIDE: Record<string, Record<string, string>> = {
   'support-center': { complaints: 'complaints', communication: 'communication' },
   'network-center': {
     ops: 'operations', noc: 'noc', live: 'network', nas: 'nas', fiber: 'fiber',
-    pools: 'ip-pools', static: 'static-ips', prefixes: 'prefixes', outages: 'outages',
+    pools: 'ip-pools', static: 'static-ips', prefixes: 'prefixes', outages: 'outages', vpn: 'vpn',
   },
   'billing-center': {
     profit: 'reports', accountability: 'accounting', accounting: 'accounting',
@@ -749,6 +761,23 @@ const CLICK_TAB_GUIDES: Record<string, Record<string, Guide>> = {
       steps: ['Add a branch.', 'Assign staff or areas to it.'] },
     'Resellers': { title: 'Resellers', lead: 'Reseller accounts and their terms.',
       steps: ['Add a reseller.', 'Set its wallet or commission.'] },
+  },
+  fiber: {
+    'OLTs': { title: 'OLTs', lead: 'Your fiber line terminals (the head-end devices).',
+      steps: ['Add an OLT with its IP and credentials.', 'Discover the PON ports and ONUs on it.'],
+      example: 'Add "Huawei OLT — 10.0.0.2"; it then lists its PON ports and connected ONUs.' },
+    'PON Ports': { title: 'PON Ports', lead: 'The ports on an OLT that fiber splitters hang off.',
+      steps: ['Pick an OLT to see its ports.', 'Check how many ONUs each port carries.'] },
+    'ONUs': { title: 'ONUs', lead: 'The fiber modems at each customer\'s home.',
+      steps: ['Find an ONU by serial or customer.', 'Link it to a subscriber.'],
+      example: 'Link ONU serial HWTC12345678 to "Ali Khan" so his line shows under his account.' },
+  },
+  gateways: {
+    'Gateways': { title: 'Payment Gateways', lead: 'Online providers that let customers pay you directly.',
+      steps: ['Add a gateway and enter its API keys.', 'Enable it and send a test payment.'],
+      example: 'Add JazzCash with your merchant keys; paid invoices then clear automatically.' },
+    'Transactions': { title: 'Gateway Transactions', lead: 'Online payments received through your gateways.',
+      steps: ['Review each transaction and its status.', 'Match any that need manual reconciliation.'] },
   },
   communication: {
     'Templates': { title: 'Message Templates', lead: 'The wording of automatic messages.',

@@ -10,6 +10,7 @@ import StaticIps from "../static-ips/page";
 import Prefixes from "../prefixes/page";
 import Outages from "../outages/page";
 import Fiber from "../fiber/page";
+import VpnServers from "../vpn/page";
 import React from "react";
 import { tokenPayload } from "../components/platform";
 
@@ -56,6 +57,7 @@ export default function NetworkCenter() {
           { id: "static", label: "Static IPs", hint: "Fixed addresses sold as a monthly add-on.", render: () => <StaticIps /> },
           ...(isOwner ? [{ id: "prefixes", label: "Prefix Register", hint: "Routed blocks, VLANs and transit links for corporate clients.", render: () => <Prefixes /> }] : []),
           { id: "outages", label: "Outages & Power", hint: "Load-shedding, power cuts and network faults.", render: () => <Outages /> },
+          ...(isOwner ? [{ id: "vpn", label: "VPN Servers", hint: "WireGuard / OpenVPN / L2TP tunnels so remote routers reach the panel.", render: () => <VpnServers /> }] : []),
         ]}
       />
 
