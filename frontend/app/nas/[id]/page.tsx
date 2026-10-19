@@ -112,7 +112,19 @@ function DevicePage() {
   const nasId = useNasDetailId();
 
   // Remember the last tab per device (session storage, never persisted to disk).
+  // A `?tab=` in the URL wins — it lets other screens deep-link to a tab
+  // (e.g. the NAS list's "VPN" button jumps straight to the Tunnel tab).
   React.useEffect(() => {
+    let fromUrl: string | null = null;
+    try {
+      fromUrl = new URLSearchParams(window.location.search).get("tab");
+    } catch {
+      /* SSR / no window */
+    }
+    if (fromUrl && TABS.some((t) => t.id === fromUrl)) {
+      setTab(fromUrl);
+      return;
+    }
     const saved = sessionStorage.getItem(`nb-nas-tab-${nasId}`);
     if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -196,6 +196,9 @@ export default function NasPage() {
   const [logs, setLogs] = useState<NasLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number|null>(null);
+  // Overview (stat cards + RADIUS bar) is collapsed by default so the router
+  // list is visible on the first screen without scrolling.
+  const [showOverview, setShowOverview] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview'|'health'|'interfaces'|'pppoe'|'radius'|'ips'|'sessions'>('overview');
 
   // Auto-refresh intervals
@@ -829,7 +832,18 @@ export default function NasPage() {
             )}
           </div>
 
+          {/* Overview toggle — keeps the router list on the first screen. */}
+          <div style={{ marginBottom:12 }}>
+            <button onClick={() => setShowOverview(v => !v)} style={{
+              background:'transparent', border:`1px solid ${t.cardBorder}`, color:t.text,
+              borderRadius:8, padding:'5px 12px', fontSize:12, fontWeight:700, cursor:'pointer',
+            }}>
+              {showOverview ? '▲ Hide overview' : '▼ Show overview (stats & RADIUS)'}
+            </button>
+          </div>
+
           {/* Stat Cards */}
+          {showOverview && (<>
           <div className="jb-kpi-row" style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))', gap:10, marginBottom:16 }}>
             {[
               { label:'Total NAS',       value: overview?.totalNas ?? stats.total,    color: t.accent,  icon:<Icons.Router /> },
@@ -875,6 +889,8 @@ export default function NasPage() {
               </div>
             </div>
           )}
+
+          </>)}
 
           <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
             <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search by NAS name or IP address" style={{ ...inputSt, maxWidth:320 }} />
@@ -968,6 +984,7 @@ export default function NasPage() {
                 onEdit={openEdit}
                 onShare={openShare}
                 onCheck={checkNas}
+                onVpn={(nas) => { router.push(`/nas/${nas.id}?tab=tunnel`); }}
                 onDelete={(nas) => setDeleteConfirm(nas.id)}
                 onMessageSubs={async (nas) => {
                   const message = prompt(`Send SMS to all subscribers on "${nas.shortname || nas.nasname}":`, "Maintenance notice: brief downtime expected tonight.");
