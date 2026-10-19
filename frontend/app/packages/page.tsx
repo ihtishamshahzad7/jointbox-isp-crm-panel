@@ -143,6 +143,9 @@ export default function PackagesPage() {
   const [me, setMe] = useState<any>(null);
   const isIsp = !me || me.role === "ADMIN" || me.role === "SUPER_ADMIN";
   const [searchQ, setSearchQ] = useState("");
+  // Overview (stat cards + secondary actions) collapsed by default so the
+  // package list is on the first screen — same pattern as NAS / Routers.
+  const [showOverview, setShowOverview] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [serviceTypeFilter, setServiceTypeFilter] = useState<string>("ALL");
   const [durationTypeFilter, setDurationTypeFilter] = useState<string>("ALL");
@@ -616,7 +619,18 @@ export default function PackagesPage() {
         </div>
       )}
 
+      {/* Overview toggle — keeps the package list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{
+          background: "transparent", border: "1px solid var(--border)", color: "var(--text)",
+          borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer",
+        }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview (stats & actions)"}
+        </button>
+      </div>
+
       {/* Stats */}
+      {showOverview && (<>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "12px", marginBottom: "16px" }}>
         {[
           { label: "Total Packages", value: stats?.total ?? 0, color: "#00C9FF" },
@@ -804,6 +818,7 @@ export default function PackagesPage() {
           Allocations Page
         </a>
       </div>
+      </>)}
 
       {/* Filters */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", marginBottom: "16px" }}>
