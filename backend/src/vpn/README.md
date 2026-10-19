@@ -108,8 +108,30 @@ WireGuard/OpenVPN/L2TP daemons or a real MikroTik router.** A lab acceptance
 run against at least one live server + one router is required before claiming
 production readiness.
 
+## Privileged service control (optional, off by default)
+The panel can start/stop/restart/status an **already-installed** service through
+a root-owned helper, without general sudo. It does **not** provision (no apt, no
+keygen) — that stays the operator installer.
+- Install `provision/jointbox-vpn-helper.sh` → `/opt/jointbox/vpn/` (root:root, 0755)
+  and `provision/sudoers.jointbox-vpn` → `/etc/sudoers.d/jointbox-vpn` (0440,
+  `visudo -c` first); edit the user in the sudoers file to the backend's user.
+- Enable in the backend env: `JBX_VPN_PRIVILEGED=1` (and `JBX_VPN_HELPER` if the
+  path differs). Without it, `POST /vpn/:type/service/:op` returns
+  `{ enabled: false }` and the UI says to use `systemctl`.
+- Boundary: the helper and sudoers grant exactly one fixed executable; op and
+  type are strict enums (no shell, no path input) and the helper re-validates.
+  The helper **must** be root-owned and not writable by the backend user.
+
+## VPN↔NAS↔RADIUS↔CoA (already in the NAS module)
+Per-router association lives in `src/nas/` (the `Tunnel` model with a **unique**
+`overlayIp`, `radius-sync`, `coa`). Overlay IPs are allocated there and locked
+to `/32`; tenant isolation is covered by `nas-tenancy`, `radius-tenancy-*`,
+`coa-tenancy` specs. The VPN Server Manager here is the panel-side server/health
+layer and does **not** duplicate that association. The three VPN overlays are
+kept mutually disjoint by `setConfig` (overlapping ranges are rejected).
+
 ## Not done (still open)
-- Privileged root-owned provisioning helper + least-privilege sudoers.
+- **Full** privileged *provisioning* (install/keygen) — retained as operator-run.
 - Deeper installer hardening: rollback, MTU/MSS auto-clamp, post-install self-test.
-- Explicit VPN ↔ NAS ↔ RADIUS/CoA binding with tenant isolation surfaced in UI.
-- Real-router / live-daemon acceptance tests.
+- Real-router / live-daemon acceptance tests (the privileged helper's execution
+  path and all three health engines are unverified against real services).

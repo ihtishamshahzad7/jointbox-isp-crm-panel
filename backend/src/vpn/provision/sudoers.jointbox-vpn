@@ -1,0 +1,17 @@
+# Jointbox VPN — least-privilege sudoers for the privileged helper.
+#
+# Install as /etc/sudoers.d/jointbox-vpn, mode 0440, root:root.
+# Validate BEFORE installing:   visudo -cf sudoers.jointbox-vpn
+#
+# Replace "jointbox" with the user the backend actually runs as (e.g. the pm2
+# user). This grants NOPASSWD sudo to EXACTLY one fixed executable and nothing
+# else. The helper itself allow-lists its two arguments, so no wildcard is
+# needed or given here — do not add one.
+#
+# The helper must be root-owned and not writable by this user, or this rule is
+# an escalation path. Keep env_reset (the default) so the backend cannot pass a
+# crafted environment through sudo.
+
+Defaults:jointbox !env_keep, env_reset, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+
+jointbox ALL=(root) NOPASSWD: /opt/jointbox/vpn/jointbox-vpn-helper.sh

@@ -240,6 +240,49 @@ export class VpnService {
     return s;
   }
 
+  /** [networkStart, networkEnd] as unsigned 32-bit ints for a validated CIDR. */
+  private cidrRange(cidr: string): [number, number] {
+    const [ip, bitsStr] = cidr.split('/');
+    const bits = Number(bitsStr);
+    const octets = ip.split('.').map(Number);
+    const addr = ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    const network = (addr & mask) >>> 0;
+    const broadcast = (network | (~mask >>> 0)) >>> 0;
+    return [network, broadcast];
+  }
+
+  /** Two CIDRs overlap if their address ranges intersect at all. */
+  private cidrsOverlap(a: string, b: string): boolean {
+    const [as_, ae] = this.cidrRange(a);
+    const [bs, be] = this.cidrRange(b);
+    return as_ <= be && bs <= ae;
+  }
+
+  /**
+   * The three overlays must be mutually disjoint — if WireGuard and OpenVPN
+   * share addresses, a router's overlay IP is ambiguous and traffic/RADIUS
+   * routing silently breaks. Reject a config that would overlap before it is
+   * persisted. (Overlap with the host's LAN can't be known here; the runbook
+   * warns the operator to keep these off their LAN ranges.)
+   */
+  private assertDisjoint(cfg: VpnConfig): void {
+    const nets: Array<[string, string]> = [
+      ['WireGuard', cfg.wireguard.subnet],
+      ['OpenVPN', cfg.openvpn.subnet],
+      ['L2TP', cfg.l2tp.subnet],
+    ];
+    for (let i = 0; i < nets.length; i++) {
+      for (let j = i + 1; j < nets.length; j++) {
+        if (this.cidrsOverlap(nets[i][1], nets[j][1])) {
+          throw new BadRequestException(
+            `${nets[i][0]} (${nets[i][1]}) and ${nets[j][0]} (${nets[j][1]}) overlay subnets overlap. Give each VPN a distinct, non-overlapping range.`,
+          );
+        }
+      }
+    }
+  }
+
   /** Update endpoint host and per-type settings from the GUI. */
   async setConfig(body: Record<string, unknown>): Promise<VpnConfig> {
     const cfg = this.getConfig();
@@ -263,6 +306,8 @@ export class VpnService {
     }
     const l2 = body.l2tp as Record<string, unknown> | undefined;
     if (l2 && l2.subnet !== undefined) cfg.l2tp.subnet = this.cidr(l2.subnet, 'L2TP subnet');
+    // Reject overlapping overlays before persisting — they silently break routing.
+    this.assertDisjoint(cfg);
     await this.save(cfg);
     this.logger.log('VPN server config updated');
     return cfg;
@@ -374,6 +419,24 @@ export class VpnService {
     return { peers, connected, newestHandshakeSecs: newest };
   }
 
+  /**
+   * Count connected OpenVPN clients from the status file the installer writes
+   * (`/run/openvpn-server/status-jointbox.log`). Returns null if the file is
+   * absent/unreadable (don't treat that as zero). Never reads secrets.
+   */
+  private async ovpnSessions(): Promise<number | null> {
+    const file = process.env.JBX_OVPN_STATUS || '/run/openvpn-server/status-jointbox.log';
+    const r = await this.runFull('cat', [file]);
+    if (!r.ran || r.code !== 0 || !r.out) return null;
+    // Modern status format has a CLIENT_LIST line per client; legacy format has
+    // a "OpenVPN CLIENT LIST" section. Count CLIENT_LIST rows, else fall back.
+    const clientList = (r.out.match(/^CLIENT_LIST\b/gm) || []).length;
+    if (clientList > 0) return clientList;
+    const legacy = r.out.match(/Common Name,Real Address[\s\S]*?\n([\s\S]*?)\nROUTING TABLE/);
+    if (legacy) return legacy[1].split('\n').filter((l) => l.trim()).length;
+    return 0;
+  }
+
   // ── truthful per-type health ──────────────────────────────────────────
   private stamp(state: HealthState, summary: string, checks: HealthCheck[], metrics: Record<string, any> = {}): Health {
     return { state, summary, checkedAt: new Date().toISOString(), metrics, checks };
@@ -435,7 +498,13 @@ export class VpnService {
     const hasIp = await this.ifaceHasIp(serverIp);
     checks.push({ name: `overlay ip ${serverIp} assigned`, ok: hasIp, detail: hasIp === null ? '`ip` unavailable' : hasIp ? 'assigned' : 'tun not up' });
 
-    const metrics = { listening: listening === true, unit: st || 'unknown' };
+    // Connected routers, from the OpenVPN status file the installer configures.
+    const sessions = await this.ovpnSessions();
+    if (sessions !== null) {
+      checks.push({ name: 'connected clients', ok: null, detail: `${sessions} client(s) in the status file` });
+    }
+
+    const metrics = { listening: listening === true, unit: st || 'unknown', connected: sessions ?? -1 };
 
     if (have === false && st == null) return this.stamp('install_required', 'OpenVPN is not installed on the panel host.', checks, metrics);
     if (st === 'failed') return this.stamp('error', 'The OpenVPN service is in a failed state. Check `journalctl -u ' + unit + '`.', checks, metrics);
@@ -444,7 +513,7 @@ export class VpnService {
     if (st === 'active') {
       if (listening === false) return this.stamp('degraded', 'Service active but not listening on its port yet.', checks, metrics);
       if (hasIp === false) return this.stamp('degraded', 'Service active but the tun overlay IP is missing.', checks, metrics);
-      return this.stamp('online', 'OpenVPN server active and listening.', checks, metrics);
+      return this.stamp('online', sessions && sessions > 0 ? `OpenVPN active; ${sessions} router(s) connected.` : 'OpenVPN server active and listening. No routers connected yet.', checks, metrics);
     }
     // No systemd to consult — fall back to the listening socket, honestly.
     if (listening === true) return this.stamp('online', 'Listening on its port (service state unknown).', checks, metrics);
@@ -633,8 +702,37 @@ export class VpnService {
     return [
       '#!/usr/bin/env bash',
       `# Jointbox — ${title}. Run once on the PANEL host as root.`,
+      '# Idempotent: safe to re-run. Config files are backed up before changes,',
+      '# and a failure rolls those backups back automatically.',
       'set -euo pipefail',
       '[ "$(id -u)" = "0" ] || { echo "Run with sudo."; exit 1; }',
+      '',
+      'JBX_STAMP=$(date +%Y%m%d-%H%M%S)',
+      'JBX_BACKUPS=()',
+      '# backup_file <path>: snapshot an existing file before we modify it.',
+      'backup_file() {',
+      '  if [ -f "$1" ]; then cp -a "$1" "$1.jbx-bak-$JBX_STAMP"; JBX_BACKUPS+=("$1"); fi',
+      '}',
+      '# On any error, restore every file we backed up this run, then report.',
+      'jbx_rollback() {',
+      '  echo "ERROR — rolling back changed config files." >&2',
+      '  for f in "${JBX_BACKUPS[@]:-}"; do',
+      '    [ -n "$f" ] && [ -f "$f.jbx-bak-$JBX_STAMP" ] && cp -a "$f.jbx-bak-$JBX_STAMP" "$f" || true',
+      '  done',
+      '}',
+      'trap jbx_rollback ERR',
+      '# Overlay traffic must be forwarded for RADIUS/services to be reachable.',
+      'enable_forwarding() {',
+      '  sysctl -w net.ipv4.ip_forward=1 >/dev/null',
+      "  grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.d/99-jointbox-vpn.conf 2>/dev/null || echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-jointbox-vpn.conf",
+      '}',
+      '# Clamp TCP MSS to path MTU so PPPoE-over-tunnel does not black-hole large',
+      '# packets. Narrow and reversible (remove the rule to undo).',
+      'clamp_mss() {',
+      '  command -v iptables >/dev/null 2>&1 || return 0',
+      "  iptables -t mangle -C FORWARD -o \"$1\" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \\",
+      "    || iptables -t mangle -A FORWARD -o \"$1\" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
+      '}',
       '',
     ].join('\n');
   }
@@ -647,8 +745,10 @@ export class VpnService {
       this.header('WireGuard panel server') +
       [
         'apt-get update -y && apt-get install -y wireguard-tools',
+        'enable_forwarding',
         'install -d -m 0700 /etc/wireguard',
         `CONF=/etc/wireguard/${iface}.conf`,
+        'backup_file "$CONF"',
         'if [ ! -f "$CONF" ]; then',
         '  umask 077',
         '  KEY=$(wg genkey)',
@@ -660,8 +760,12 @@ export class VpnService {
         'EOF',
         'fi',
         `systemctl enable --now wg-quick@${iface}`,
+        `clamp_mss ${iface}`,
         `ufw allow ${cfg.wireguard.port}/udp 2>/dev/null || true`,
-        `echo; echo "WireGuard up. Public key:"; wg show ${iface} public-key`,
+        '# Post-install self-test — fail loudly rather than report false success.',
+        `systemctl is-active --quiet wg-quick@${iface} || { echo "SELF-TEST FAILED: wg-quick@${iface} not active" >&2; exit 1; }`,
+        `wg show ${iface} >/dev/null || { echo "SELF-TEST FAILED: ${iface} not present" >&2; exit 1; }`,
+        `echo; echo "WireGuard up (self-test OK). Public key:"; wg show ${iface} public-key`,
         'echo "Now click Re-check in the panel, then Reconcile to push router peers."',
       ].join('\n') +
       '\n'
@@ -687,7 +791,8 @@ export class VpnService {
     return (
       this.header('OpenVPN panel server') +
       [
-        'apt-get update -y && apt-get install -y openvpn easy-rsa',
+        'apt-get update -y && apt-get install -y openvpn easy-rsa iptables',
+        'enable_forwarding',
         'MK=/etc/openvpn/jointbox',
         'install -d -m 0700 "$MK"',
         'if [ ! -f "$MK/ca.crt" ]; then',
@@ -698,6 +803,8 @@ export class VpnService {
         '  ./easyrsa gen-dh',
         '  cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem "$MK/"',
         'fi',
+        'install -d -m 0755 /etc/openvpn/server',
+        'backup_file /etc/openvpn/server/jointbox.conf',
         'cat > /etc/openvpn/server/jointbox.conf <<EOF',
         `port ${cfg.openvpn.port}`,
         `proto ${cfg.openvpn.proto}`,
@@ -709,12 +816,16 @@ export class VpnService {
         `server ${net} ${this.maskFor(cfg.openvpn.subnet)}`,
         'topology subnet',
         'keepalive 10 60',
+        'status /run/openvpn-server/status-jointbox.log 10',
         'persist-key',
         'persist-tun',
         'EOF',
         'systemctl enable --now openvpn-server@jointbox',
+        'clamp_mss "tun+"',
         `ufw allow ${cfg.openvpn.port}/${cfg.openvpn.proto} 2>/dev/null || true`,
-        `echo "OpenVPN up on ${ip}. Create a client cert per router:"`,
+        '# Post-install self-test.',
+        'systemctl is-active --quiet openvpn-server@jointbox || { echo "SELF-TEST FAILED: openvpn-server@jointbox not active" >&2; exit 1; }',
+        `echo "OpenVPN up on ${ip} (self-test OK). Create a client cert per router:"`,
         'echo "  cd /etc/openvpn/jointbox/easyrsa && EASYRSA_BATCH=1 ./easyrsa build-client-full <routername> nopass"',
         'echo "Then export its .ovpn and paste into the router (see the panel)."',
       ].join('\n') +
@@ -744,12 +855,22 @@ export class VpnService {
     return (
       this.header('L2TP/IPsec panel server') +
       [
-        'apt-get update -y && apt-get install -y strongswan xl2tpd',
-        '# Shared secret for IPsec — change this and use the same on every router:',
-        'PSK=$(head -c 18 /dev/urandom | base64)',
+        'apt-get update -y && apt-get install -y strongswan xl2tpd iptables',
+        'enable_forwarding',
+        '# Reuse the existing PSK on a re-run so routers keep working; only mint a',
+        '# new one on first install. Back up before touching either file.',
+        'backup_file /etc/ipsec.secrets',
+        'backup_file /etc/xl2tpd/xl2tpd.conf',
+        'if grep -qE \'^\\s*: PSK\' /etc/ipsec.secrets 2>/dev/null; then',
+        "  PSK=$(sed -nE 's/^\\s*: PSK \"(.*)\"\\s*$/\\1/p' /etc/ipsec.secrets | head -n1)",
+        'else',
+        '  PSK=$(head -c 18 /dev/urandom | base64)',
+        'fi',
+        'umask 077',
         'cat > /etc/ipsec.secrets <<EOF',
         ': PSK "${PSK}"',
         'EOF',
+        'chmod 600 /etc/ipsec.secrets',
         'cat > /etc/xl2tpd/xl2tpd.conf <<EOF',
         '[global]',
         '[lns default]',
@@ -762,8 +883,12 @@ export class VpnService {
         'length bit = yes',
         'EOF',
         'systemctl enable --now strongswan-starter xl2tpd',
+        'clamp_mss "ppp+"',
         'ufw allow 500,4500/udp 2>/dev/null || true; ufw allow 1701/udp 2>/dev/null || true',
-        'echo; echo "L2TP/IPsec up. Shared secret (use on every router):"; echo "$PSK"',
+        '# Post-install self-test — both daemons must be up.',
+        'systemctl is-active --quiet xl2tpd || { echo "SELF-TEST FAILED: xl2tpd not active" >&2; exit 1; }',
+        'systemctl is-active --quiet strongswan-starter || systemctl is-active --quiet strongswan || { echo "SELF-TEST FAILED: strongSwan not active" >&2; exit 1; }',
+        'echo; echo "L2TP/IPsec up (self-test OK). Shared secret (use on every router):"; echo "$PSK"',
         'echo "Add a login per router in /etc/ppp/chap-secrets:  <routername> * <password> *"',
       ].join('\n') +
       '\n'
@@ -934,6 +1059,33 @@ export class VpnService {
           '    comment="Jointbox management tunnel"',
         ].join('\n');
     }
+  }
+
+  /**
+   * Recover an already-installed service via the root-owned privileged helper
+   * (start/stop/restart/status). DISABLED unless `JBX_VPN_PRIVILEGED=1` and the
+   * helper is installed — otherwise the operator-run model stands and this
+   * returns `{ enabled: false }`. Inputs are strict enums, so nothing
+   * user-supplied reaches a shell or a path; the helper re-validates too.
+   */
+  async serviceAction(
+    type: VpnType,
+    op: string,
+  ): Promise<{ enabled: boolean; ran?: boolean; code?: number; output?: string; detail?: string }> {
+    const VALID_OPS = ['start', 'stop', 'restart', 'status'];
+    const VALID_TYPES: VpnType[] = ['wireguard', 'openvpn', 'l2tp'];
+    if (!VALID_OPS.includes(op)) throw new BadRequestException(`Unknown service operation "${op}".`);
+    if (!VALID_TYPES.includes(type)) throw new BadRequestException(`Unknown VPN type "${type}".`);
+
+    if (process.env.JBX_VPN_PRIVILEGED !== '1') {
+      return { enabled: false, detail: 'Privileged service control is not enabled on this host. Use the operator installer / systemctl.' };
+    }
+    const helper = process.env.JBX_VPN_HELPER || '/opt/jointbox/vpn/jointbox-vpn-helper.sh';
+    // Fixed path + argv array + bounded time + clean env. `sudo -n` never prompts.
+    const r = await this.runFull('sudo', ['-n', helper, op, type], 15000);
+    // Audit WITHOUT secrets (there are none in op/type, and we don't echo output verbatim to logs).
+    this.logger.log(`VPN privileged action ${op} ${type} → ran=${r.ran} code=${r.code}`);
+    return { enabled: true, ran: r.ran, code: r.code ?? undefined, output: (r.out || r.err).slice(0, 2000) };
   }
 
   /** The script for one VPN type, for a Download/Copy button. */

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
@@ -40,6 +40,17 @@ export class VpnController {
   verify(@Param('type') type: string, @Req() req: any) {
     this.scope.assertPlatformOwner(req.user);
     return this.vpn.verify(type as VpnType);
+  }
+
+  /**
+   * Service recovery via the root-owned privileged helper (start/stop/restart/
+   * status). Disabled unless JBX_VPN_PRIVILEGED=1 — otherwise returns
+   * { enabled: false } and the operator uses systemctl. Platform-owner only.
+   */
+  @Post(':type/service/:op')
+  serviceAction(@Param('type') type: string, @Param('op') op: string, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.vpn.serviceAction(type as VpnType, op);
   }
 
   /** Per-router client config for a chosen vendor and overlay IP. */

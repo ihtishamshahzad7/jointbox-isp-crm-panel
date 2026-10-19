@@ -81,6 +81,91 @@ describe('VpnService', () => {
     });
   });
 
+  describe('overlay subnet conflict detection', () => {
+    it('rejects overlapping VPN overlays', async () => {
+      // OpenVPN set to overlap WireGuard's 10.66.0.0/24.
+      await expect(
+        svc.setConfig({ openvpn: { subnet: '10.66.0.0/25' } }),
+      ).rejects.toThrow(/overlap/i);
+    });
+    it('accepts three disjoint overlays', async () => {
+      await expect(
+        svc.setConfig({ wireguard: { subnet: '10.80.0.0/24' }, openvpn: { subnet: '10.81.0.0/24' }, l2tp: { subnet: '10.82.0.0/24' } }),
+      ).resolves.toBeDefined();
+    });
+    it('detects overlap regardless of prefix length (supernet vs subnet)', () => {
+      expect((svc as any).cidrsOverlap('10.66.0.0/16', '10.66.5.0/24')).toBe(true);
+      expect((svc as any).cidrsOverlap('10.66.0.0/24', '10.67.0.0/24')).toBe(false);
+    });
+  });
+
+  describe('OpenVPN session parsing', () => {
+    it('counts CLIENT_LIST rows from the status file (no secrets)', async () => {
+      (svc as any).runFull = async (cmd: string) =>
+        cmd === 'cat'
+          ? { code: 0, out: 'TITLE,x\nCLIENT_LIST,r1,1.2.3.4\nCLIENT_LIST,r2,1.2.3.5\nROUTING_TABLE,x', err: '', ran: true }
+          : { code: 1, out: '', err: '', ran: true };
+      expect(await (svc as any).ovpnSessions()).toBe(2);
+    });
+    it('returns null when the status file is absent (not zero)', async () => {
+      (svc as any).runFull = async () => ({ code: 1, out: '', err: '', ran: true });
+      expect(await (svc as any).ovpnSessions()).toBeNull();
+    });
+  });
+
+  describe('privileged service action (Phase 2)', () => {
+    afterEach(() => delete process.env.JBX_VPN_PRIVILEGED);
+
+    it('is disabled by default (operator-run model retained)', async () => {
+      const r = await svc.serviceAction('wireguard', 'restart');
+      expect(r.enabled).toBe(false);
+    });
+
+    it('rejects an injected operation even when enabled', async () => {
+      process.env.JBX_VPN_PRIVILEGED = '1';
+      await expect(svc.serviceAction('wireguard', 'restart; rm -rf /' as any)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(svc.serviceAction('wireguard', '../../bin/sh' as any)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects an invalid VPN type (no path/arg smuggling)', async () => {
+      process.env.JBX_VPN_PRIVILEGED = '1';
+      await expect(svc.serviceAction('wireguard; id' as any, 'status')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('passes only fixed argv to the helper when enabled', async () => {
+      process.env.JBX_VPN_PRIVILEGED = '1';
+      let seen: { cmd: string; args: string[] } | null = null;
+      (svc as any).runFull = async (cmd: string, args: string[]) => {
+        seen = { cmd, args };
+        return { code: 0, out: 'active', err: '', ran: true };
+      };
+      const r = await svc.serviceAction('openvpn', 'status');
+      expect(r.enabled).toBe(true);
+      expect(seen!.cmd).toBe('sudo');
+      expect(seen!.args).toEqual(['-n', expect.any(String), 'status', 'openvpn']);
+    });
+  });
+
+  describe('generated installers', () => {
+    const { execFileSync } = require('child_process');
+    const types = ['wireguard', 'openvpn', 'l2tp'] as const;
+    it.each(types)('emits syntactically valid bash for %s', async (type) => {
+      const { script } = await svc.install(type);
+      const file = path.join(dir, `${type}-install.sh`);
+      fs.writeFileSync(file, script);
+      // bash -n parses without executing — catches broken heredocs/functions.
+      expect(() => execFileSync('bash', ['-n', file])).not.toThrow();
+    });
+    it('backs up and self-tests in every installer', async () => {
+      for (const type of types) {
+        const { script } = await svc.install(type);
+        expect(script).toContain('backup_file');
+        expect(script).toContain('SELF-TEST FAILED');
+        expect(script).toContain('enable_forwarding');
+      }
+    });
+  });
+
   describe('client config validation', () => {
     it('rejects a non-IP overlay address', () => {
       expect(() => svc.clientConfig('wireguard', 'mikrotik', 'r1', 'not-an-ip')).toThrow(BadRequestException);

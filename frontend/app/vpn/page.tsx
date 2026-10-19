@@ -102,7 +102,26 @@ export default function VpnPage() {
   const [open, setOpen] = React.useState<string | null>(null);
   const [verifying, setVerifying] = React.useState<string | null>(null);
   const [verifyResult, setVerifyResult] = React.useState<Record<string, { ok: boolean; checks: HealthCheck[] }>>({});
+  const [svcMsg, setSvcMsg] = React.useState<Record<string, string>>({});
+  const [svcBusy, setSvcBusy] = React.useState<string | null>(null);
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+
+  const serviceAction = async (type: string, op: string) => {
+    setSvcBusy(`${type}:${op}`);
+    try {
+      const r = await fetch(`${API}/vpn/${type}/service/${op}`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+      const b = await r.json().catch(() => ({}));
+      const text = !r.ok
+        ? b?.message || `Error (HTTP ${r.status})`
+        : b.enabled === false
+          ? b.detail || "Privileged service control is not enabled on this host."
+          : `${op}: ${b.ran ? `exit ${b.code}` : "helper not installed"}`;
+      setSvcMsg((m) => ({ ...m, [type]: text }));
+      await load();
+    } finally {
+      setSvcBusy(null);
+    }
+  };
 
   const verify = async (type: string) => {
     setVerifying(type);
@@ -276,6 +295,21 @@ export default function VpnPage() {
                 and the panel will run RADIUS/CoA to it over the tunnel. For WireGuard, issue the per-router
                 keys from that router’s <b>Tunnel</b> tab, then click <b>Reconcile</b>.
               </p>
+              <div style={{ marginTop: 14, borderTop: "1px solid var(--border,#E2E8F0)", paddingTop: 10 }}>
+                <strong style={{ fontSize: 13, color: "var(--text,#111)" }}>Service control</strong>
+                <span style={{ color: "var(--muted,#64748B)", fontSize: 12, marginLeft: 8 }}>
+                  (requires the privileged helper; otherwise use <code>systemctl</code> on the host)
+                </span>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+                  {["start", "restart", "stop", "status"].map((op) => (
+                    <button key={op} type="button" onClick={() => void serviceAction(s.type, op)} disabled={svcBusy === `${s.type}:${op}`}
+                      style={{ border: `1px solid ${op === "stop" ? "#b02a37" : G}`, background: "transparent", color: op === "stop" ? "#b02a37" : G, borderRadius: 8, padding: "4px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: svcBusy === `${s.type}:${op}` ? 0.6 : 1 }}>
+                      {op}
+                    </button>
+                  ))}
+                </div>
+                {svcMsg[s.type] && <p style={{ color: "var(--muted,#64748B)", fontSize: 12, margin: "6px 0 0" }}>{svcMsg[s.type]}</p>}
+              </div>
             </div>
           )}
         </div>
