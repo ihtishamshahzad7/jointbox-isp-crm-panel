@@ -248,6 +248,7 @@ export default function SubscribersPage() {
   const [dateTo, setDateTo] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [showOverview, setShowOverview] = useState(false);
   // Ownership transfer between accounts in the caller's own tree.
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferAccounts, setTransferAccounts] = useState<any[]>([]);
@@ -1627,6 +1628,13 @@ export default function SubscribersPage() {
               contrast-safe on white (the old row had white "Offline" text and
               neon numbers that were invisible or unreadable on a light page).
               On a phone the row scrolls sideways instead of squashing. */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div className="jb-kpi-row" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 16 }}>
             {[
               { label: "Total Subscribers", value: stats.total, color: "#3C50E0" },
@@ -1655,6 +1663,7 @@ export default function SubscribersPage() {
               </div>
             )}
           </div>
+      )}
 
           {/* Toolbar */}
           <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>

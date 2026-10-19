@@ -60,6 +60,7 @@ export default function UsersPage() {
     city: '',
   });
   const [saving, setSaving] = useState(false);
+  const [showOverview, setShowOverview] = useState(false);
 
   /**
    * Inline wallet top-up.
@@ -452,7 +453,13 @@ export default function UsersPage() {
             </div>
           )}
 
-          {/* Stat Cards */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 24 }}>
             {statCards.map((card, idx) => (
               <div key={idx} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px", transition: "transform .15s" }}
@@ -468,6 +475,7 @@ export default function UsersPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* Users Table */}
           {users.length === 0 ? (

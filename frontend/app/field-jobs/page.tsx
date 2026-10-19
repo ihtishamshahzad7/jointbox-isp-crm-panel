@@ -39,6 +39,7 @@ export default function FieldJobsPage() {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [showOverview, setShowOverview] = useState(false);
   const [form, setForm] = useState({
     type: "INSTALLATION", priority: "MEDIUM", subscriberId: "",
     assignedTo: "", scheduledAt: "", description: "",
@@ -119,7 +120,13 @@ export default function FieldJobsPage() {
           color: toast.ok ? T.green : T.red, fontSize: 12, fontWeight: 600 }}>{toast.msg}</div>
       )}
 
-      {/* Dispatch board — overdue is the number a dispatcher works from */}
+      {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 14 }}>
         {[
           ["Unassigned", stats?.unassigned, T.amber],
@@ -134,6 +141,7 @@ export default function FieldJobsPage() {
           </div>
         ))}
       </div>
+      )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <select style={{ ...input, width: 160 }} value={status} onChange={(e) => setStatus(e.target.value)}>

@@ -35,6 +35,7 @@ export default function LogsPage() {
   const [activeTab, setActiveTab] = useState("timeline");
   const [loading, setLoading] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
+  const [showOverview, setShowOverview] = useState(false);
 
   // ── Data ───────────────────────────────────────────────────────
   const [loginLogs, setLoginLogs] = useState<any[]>([]);
@@ -291,6 +292,13 @@ export default function LogsPage() {
         <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
 
           {/* ═══════════════ TOP KPI CARDS ═══════════════ */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 18 }}>
             {[
               { label: "Events (24h)",  val: stats ? stats.totals.login + stats.totals.activity + stats.totals.network + stats.totals.system : "—", sub: "all types", color: t.accent },
@@ -305,6 +313,7 @@ export default function LogsPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* ═══════════════ FILTER BAR ═══════════════ */}
           <div style={{ marginBottom: 14 }}>

@@ -44,6 +44,7 @@ export default function AccountingPage() {
   // account and its auditor. A franchise or dealer starts on Cashflow.
   const [tab, setTab] = useState<Tab>(() => (canSeeLedger() ? "Ledger" : "Cashflow"));
   const [summary, setSummary] = useState<any[]>([]);
+  const [showOverview, setShowOverview] = useState(false);
 
   // ledger
   const [ledger, setLedger] = useState<any[]>([]);
@@ -373,6 +374,13 @@ export default function AccountingPage() {
       </div>
 
       {/* summary cards */}
+      {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 16 }}>
         {summary.map((s) => (
           <div key={s.account} style={card}>
@@ -386,6 +394,7 @@ export default function AccountingPage() {
           </div>
         ))}
       </div>
+      )}
 
       {/* trial balance — double-entry integrity */}
       {trial && (

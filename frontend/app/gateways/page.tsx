@@ -35,6 +35,7 @@ export default function GatewaysPage() {
   const [reconcileResult, setReconcileResult] = useState<any>(null);
   const [showReconcileModal, setShowReconcileModal] = useState(false);
   const [activeTab, setActiveTab] = useState<"gateways"|"transactions">("gateways");
+  const [showOverview, setShowOverview] = useState(false);
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : '';
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
@@ -128,7 +129,13 @@ export default function GatewaysPage() {
             <Btn onClick={handleReconcile} variant="warning"><Ic.Database width={14} height={14}/> Reconcile</Btn>
           </div>
 
-          {/* ── Stat Cards ── */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
             {statCards.map((c,i)=>(
               <div key={i} style={{background:t.card,border:`1px solid ${t.cardBorder}`,borderRadius:10,padding:"12px 14px"}}>
@@ -141,6 +148,7 @@ export default function GatewaysPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* ── Tab Bar ── */}
           <div style={{display:"flex",gap:4,marginBottom:12,borderBottom:`1px solid ${t.cardBorder}`,paddingBottom:0}}>

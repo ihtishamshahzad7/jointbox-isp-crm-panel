@@ -144,6 +144,7 @@ export default function SegmentsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [hovered, setHovered] = useState<number | null>(null);
+  const [showOverview, setShowOverview] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -207,6 +208,13 @@ export default function SegmentsPage() {
       ) : (
         <>
           {/* Summary */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div className="sg-strip">
             {[
               { k: "Subscribers", v: cSubs, s: "in your scope", tone: "" },
@@ -222,6 +230,7 @@ export default function SegmentsPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* Controls */}
           <div className="sg-controls">

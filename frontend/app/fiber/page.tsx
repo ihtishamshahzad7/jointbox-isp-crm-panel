@@ -51,6 +51,7 @@ export default function FiberPage() {
   const [user, setUser] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"olts"|"ports"|"onus">("olts");
   const [loading, setLoading] = useState(true);
+  const [showOverview, setShowOverview] = useState(false);
 
   // Data
   const [summary, setSummary] = useState<FiberSummary | null>(null);
@@ -323,7 +324,13 @@ export default function FiberPage() {
           </div>
 
           {/* ── Summary Cards ── */}
-          {summary && (
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && summary && (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
               {[
                 {label:"Total OLTs",value:summary.totalOlts,icon:"🏛️",bg:"linear-gradient(135deg,#3b82f6,#2563eb)"},

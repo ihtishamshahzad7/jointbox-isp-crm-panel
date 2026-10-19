@@ -26,6 +26,7 @@ export default function AreasPage() {
   const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [form, setForm] = useState({ name: '', city: '', description: '' });
+  const [showOverview, setShowOverview] = useState(false);
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : '';
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
@@ -211,7 +212,13 @@ export default function AreasPage() {
             </button>
           </div>
 
-          {/* Stat Cards */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 24 }}>
             {statCards.map((card, idx) => (
               <div key={idx} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "16px", transition: "transform .15s" }}
@@ -227,6 +234,7 @@ export default function AreasPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* Areas Grid */}
           {loading ? (

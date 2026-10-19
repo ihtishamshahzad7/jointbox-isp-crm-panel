@@ -107,6 +107,7 @@ export default function IpPoolsPage() {
   const [loading, setLoading] = useState(true);
 
   const [searchQ, setSearchQ] = useState("");
+  const [showOverview, setShowOverview] = useState(false);
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [groupOptions, setGroupOptions] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
   const [showForm, setShowForm] = useState(false);
@@ -451,7 +452,13 @@ export default function IpPoolsPage() {
             </div>
           </div>
 
-          {/* Stat Cards */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:16 }}>
             {[
               { label:"Total Pools", value: stats.total, color: t.teal },
@@ -464,6 +471,7 @@ export default function IpPoolsPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* Toolbar - WITH ADD BUTTON */}
           <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>

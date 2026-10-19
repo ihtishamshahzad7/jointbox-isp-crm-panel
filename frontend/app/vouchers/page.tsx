@@ -49,6 +49,7 @@ export default function VouchersPage() {
     totalRedeemed: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [showOverview, setShowOverview] = useState(false);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showRedeemModal, setShowRedeemModal] = useState(false);
@@ -334,7 +335,13 @@ export default function VouchersPage() {
             </div>
           )}
 
-          {/* Stat Cards */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 24 }}>
             {statCards.map((card, idx) => (
               <div key={idx} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "16px", transition: "transform .15s" }}
@@ -350,6 +357,7 @@ export default function VouchersPage() {
               </div>
             ))}
           </div>
+      )}
 
           {/* Total Redeemed Card */}
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>

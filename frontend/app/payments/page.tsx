@@ -32,6 +32,7 @@ export default function PaymentsPage() {
   const [greeting, setGreeting] = useState("Welcome");
 const [payments, setPayments] = useState<Payment[]>([]);
 const [loading, setLoading] = useState(true);
+const [showOverview, setShowOverview] = useState(false);
 const [error, setError] = useState("");
 const [showRefundModal, setShowRefundModal] = useState(false);
 const [refundReason, setRefundReason] = useState("");
@@ -220,7 +221,13 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
         {/* ── CONTENT ── */}
         <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
 
-          {/* Stat Cards */}
+          {/* Overview toggle — keeps the list on the first screen. */}
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+        </button>
+      </div>
+      {showOverview && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 24 }}>
             {statCards.map((card, idx) => (
               <div key={idx} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "16px", transition: "transform .15s" }}
@@ -236,6 +243,7 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
               </div>
             ))}
           </div>
+      )}
 
           {/* Payments Table */}
           {loading ? (
