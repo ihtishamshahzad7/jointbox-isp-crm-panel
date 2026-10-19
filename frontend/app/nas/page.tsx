@@ -309,13 +309,51 @@ export default function NasPage() {
       .catch(silent("authProfileFetch"));
   }, [token, headers]);
 
+  const reloadGroups = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/groups/options`, { headers });
+      const data = r.ok ? await r.json() : [];
+      setGroupOptions(Array.isArray(data) ? data : []);
+    } catch { /* non-fatal */ }
+  }, [headers]);
+
   useEffect(() => {
     if (!token) return;
-    fetch(`${API}/groups/options`, { headers })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setGroupOptions(Array.isArray(data) ? data : []))
-      .catch(silent("groupsFetch"));
-  }, [token, headers]);
+    void reloadGroups();
+  }, [token, reloadGroups]);
+
+  // Create a new group from a name, then refresh the dropdown.
+  const createGroup = async () => {
+    const name = (typeof window !== 'undefined' ? window.prompt('New group name:') : '')?.trim();
+    if (!name) return;
+    try {
+      const r = await fetch(`${API}/groups`, { method: 'POST', headers, body: JSON.stringify({ name }) });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); addLog('error', `Create group failed: ${b?.message || r.status}`); return; }
+      addLog('info', `Group "${name}" created`);
+      await reloadGroups();
+    } catch (e: any) { addLog('error', `Create group error: ${e.message}`); }
+  };
+
+  // Assign one NAS to a group (picker prompt), then refresh.
+  const moveToGroup = async (nas: NasEntry) => {
+    if (!groupOptions.length) {
+      const makeNow = typeof window !== 'undefined' && window.confirm('No groups yet. Create one now?');
+      if (makeNow) await createGroup();
+      return;
+    }
+    const list = groupOptions.map((g, i) => `${i + 1}. ${g.name}`).join('\n');
+    const pick = (typeof window !== 'undefined' ? window.prompt(`Move "${nas.shortname || nas.nasname}" to which group?\n\n${list}\n\nEnter a number:`) : '')?.trim();
+    if (!pick) return;
+    const idx = Number(pick) - 1;
+    const g = groupOptions[idx];
+    if (!g) { addLog('error', 'Invalid group selection'); return; }
+    try {
+      const r = await fetch(`${API}/groups/${g.id}/nas`, { method: 'POST', headers, body: JSON.stringify({ nasId: nas.id }) });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); addLog('error', `Move failed: ${b?.message || r.status}`); return; }
+      addLog('info', `"${nas.shortname || nas.nasname}" moved to group "${g.name}"`);
+      await loadData();
+    } catch (e: any) { addLog('error', `Move error: ${e.message}`); }
+  };
 
   useEffect(() => {
     if (!token) return;
@@ -890,6 +928,10 @@ export default function NasPage() {
             </div>
           )}
 
+          {/* Is each of my routers actually in FreeRADIUS's list? (scoped by the backend) */}
+          <div style={{ marginBottom: 16 }}>
+            <RadiusRouters />
+          </div>
           </>)}
 
           <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
@@ -906,13 +948,15 @@ export default function NasPage() {
               <option value="HUAWEI">Huawei</option>
               <option value="OTHER">Other</option>
             </select>
-            <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
+            <select value={groupFilter} onChange={e => { if (e.target.value === '__new__') { void createGroup(); return; } setGroupFilter(e.target.value); }} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
               <option value="ALL">All Groups</option>
               <option value="UNGROUPED">Ungrouped</option>
               {groupOptions.map((g) => (
                 <option key={g.id} value={String(g.id)}>{g.name}</option>
               ))}
+              <option value="__new__">＋ Create group…</option>
             </select>
+            <button onClick={() => void createGroup()} title="Create a new group" style={{ ...inputSt, width:'auto', cursor:'pointer', fontWeight:700 }}>＋ New group</button>
             <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
               <option value="ALL">All Sites</option>
               {[...new Set(nasList.map(n => n.description || n.shortname || '').filter(Boolean))].map(s => (
@@ -985,6 +1029,7 @@ export default function NasPage() {
                 onShare={openShare}
                 onCheck={checkNas}
                 onVpn={(nas) => { router.push(`/nas/${nas.id}?tab=tunnel`); }}
+                onGroup={moveToGroup}
                 onDelete={(nas) => setDeleteConfirm(nas.id)}
                 onMessageSubs={async (nas) => {
                   const message = prompt(`Send SMS to all subscribers on "${nas.shortname || nas.nasname}":`, "Maintenance notice: brief downtime expected tonight.");
@@ -1008,10 +1053,6 @@ export default function NasPage() {
         </div>
       </div>
 
-      {/* Is each of my routers actually in FreeRADIUS's list? (scoped by the backend) */}
-      <div style={{ marginTop: 16 }}>
-        <RadiusRouters />
-      </div>
 
       {/* ══════════════════════════════════════
           MODAL: VIEW NAS DETAIL

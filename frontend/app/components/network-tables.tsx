@@ -50,7 +50,7 @@ function useCtxMenu() {
    NAS / ROUTERS
    ═══════════════════════════════════════════════════════════════════ */
 export function NasTable({
-  rows, me, onView, onEdit, onShare, onCheck, onDelete, onVpn, checking, checkingIds, reachOf, onMessageSubs, healthOf,
+  rows, me, onView, onEdit, onShare, onCheck, onDelete, onVpn, onGroup, checking, checkingIds, reachOf, onMessageSubs, healthOf,
 }: {
   rows: Row[];
   me?: any;
@@ -61,6 +61,8 @@ export function NasTable({
   onDelete: (r: Row) => void;
   /** Optional: configure the per-router VPN tunnel for this NAS. */
   onVpn?: (r: Row) => void;
+  /** Optional: move this NAS into a group. */
+  onGroup?: (r: Row) => void;
   /** Optional: message all subscribers on this NAS (maintenance notice, etc.). */
   onMessageSubs?: (r: Row) => void;
   /** Optional: live throughput per NAS id (from /telemetry/nas-health). */
@@ -109,6 +111,7 @@ export function NasTable({
                   ...(mine ? [
                     { label: "Check reachability", onClick: () => onCheck(n.id) },
                     ...(onVpn ? [{ label: "Configure VPN tunnel…", onClick: () => onVpn(n) }] : []),
+                    ...(onGroup ? [{ label: "Move to group…", onClick: () => onGroup(n) }] : []),
                     { label: "Share…", onClick: () => onShare(n) },
                     { label: "Edit…", onClick: () => onEdit(n) },
                     { label: "Delete", onClick: () => onDelete(n), danger: true },
@@ -196,6 +199,7 @@ export function NasTable({
                 <td className="act" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => onCheck(n.id)} disabled={rowChecking}>{rowChecking ? "Checking…" : "Check"}</button>
                   {mine && onVpn && <button onClick={() => onVpn(n)} title="Configure the VPN tunnel for this router">VPN</button>}
+                  {mine && onGroup && <button onClick={() => onGroup(n)} title="Move this router to a group">Group</button>}
                   {mine && <button onClick={() => onShare(n)}>Share</button>}
                   {mine && <button onClick={() => onEdit(n)}>Edit</button>}
                   {mine && <button className="bad" onClick={() => onDelete(n)}>Del</button>}
