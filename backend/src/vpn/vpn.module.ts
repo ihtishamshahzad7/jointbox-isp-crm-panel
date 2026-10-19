@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { VpnService } from './vpn.service';
+import { VpnMonitorService } from './vpn-monitor.service';
 import { VpnController } from './vpn.controller';
 import { CommonModule } from '../common/common.module';
 
@@ -11,7 +12,7 @@ import { CommonModule } from '../common/common.module';
 @Module({
   imports: [CommonModule],
   controllers: [VpnController],
-  providers: [VpnService],
+  providers: [VpnService, VpnMonitorService],
   exports: [VpnService],
 })
 export class VpnModule {}

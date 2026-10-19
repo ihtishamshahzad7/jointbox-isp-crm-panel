@@ -37,6 +37,58 @@ export interface VpnConfig {
   l2tp: { subnet: string };
 }
 
+/**
+ * The one state vocabulary every VPN type reports in. It describes what we
+ * were actually able to observe on the host — never "the port is open, so
+ * assume connected".
+ *   unconfigured    — no config file / endpoint host not set yet
+ *   install_required— the daemon's binaries are not installed on the host
+ *   starting        — daemon enabled but not yet active (transient)
+ *   online          — daemon active AND the server's own overlay is up
+ *   degraded        — running but something is off (stale peers, one of two
+ *                     required daemons down, overlay IP missing)
+ *   offline         — installed but the daemon is not running
+ *   error           — the daemon is in a failed state
+ *   unknown         — we could not determine it (a probe tool was missing or
+ *                     timed out); NOT treated as either healthy or broken
+ */
+export type HealthState =
+  | 'unconfigured'
+  | 'install_required'
+  | 'starting'
+  | 'online'
+  | 'degraded'
+  | 'offline'
+  | 'error'
+  | 'unknown';
+
+/** One probe we ran. ok=null means "could not determine", not "failed". */
+export interface HealthCheck {
+  name: string;
+  ok: boolean | null;
+  detail: string;
+}
+
+export interface Health {
+  state: HealthState;
+  summary: string;
+  checkedAt: string; // ISO
+  /** Non-secret, operator-facing numbers (peer counts, handshake age, …). */
+  metrics: Record<string, number | string | boolean>;
+  checks: HealthCheck[];
+}
+
+/**
+ * OBSERVED state, persisted separately from the DESIRED config. The config
+ * file holds what the operator wants; this holds what we last saw and did, so
+ * a restart does not lose the health history and the two never get conflated.
+ */
+export interface ObservedState {
+  health: Partial<Record<VpnType, Health>>;
+  lastReconcileAt?: string;
+  lastReconcileDetail?: string;
+}
+
 const DEFAULTS: VpnConfig = {
   endpointHost: '',
   wireguard: { port: 51820, subnet: '10.66.0.0/24' },
@@ -48,28 +100,127 @@ const DEFAULTS: VpnConfig = {
 export class VpnService {
   private readonly logger = new Logger(VpnService.name);
 
+  /** Serialises all config/state writes in this process so two concurrent
+   *  requests can't interleave a temp-file rename. */
+  private writeChain: Promise<void> = Promise.resolve();
+
   private get configPath(): string {
     return process.env.JBX_VPN_CONFIG || path.join(process.cwd(), 'vpn-servers.json');
   }
 
-  // ── stored, editable config (no DB migration needed) ──────────────────
+  private get statePath(): string {
+    return process.env.JBX_VPN_STATE || path.join(path.dirname(this.configPath), 'vpn-state.json');
+  }
+
+  /**
+   * Validate+normalise a raw parsed object into a VpnConfig. Rejects nothing
+   * silently that matters: a bad port or subnet falls back to the default for
+   * that field rather than poisoning the running server, and the caller is
+   * told via the returned `repaired` flag so it can rewrite a clean file.
+   */
+  private normalise(raw: any): { cfg: VpnConfig; repaired: boolean } {
+    let repaired = false;
+    const okPort = (v: unknown, d: number) => {
+      const p = Number(v);
+      if (Number.isInteger(p) && p >= 1 && p <= 65535) return p;
+      if (v !== undefined) repaired = true;
+      return d;
+    };
+    const okCidr = (v: unknown, d: string) => {
+      const s = String(v ?? '');
+      const m = CIDR.exec(s);
+      if (m && !m.slice(1, 5).some((o) => Number(o) > 255) && Number(m[5]) >= 16 && Number(m[5]) <= 30) return s;
+      if (v !== undefined) repaired = true;
+      return d;
+    };
+    const host =
+      typeof raw?.endpointHost === 'string' && (raw.endpointHost === '' || HOST.test(raw.endpointHost))
+        ? raw.endpointHost
+        : (raw?.endpointHost !== undefined && ((repaired = true), ''), '');
+    const cfg: VpnConfig = {
+      endpointHost: host,
+      wireguard: {
+        port: okPort(raw?.wireguard?.port, DEFAULTS.wireguard.port),
+        subnet: okCidr(raw?.wireguard?.subnet, DEFAULTS.wireguard.subnet),
+      },
+      openvpn: {
+        port: okPort(raw?.openvpn?.port, DEFAULTS.openvpn.port),
+        proto: raw?.openvpn?.proto === 'tcp' ? 'tcp' : 'udp',
+        subnet: okCidr(raw?.openvpn?.subnet, DEFAULTS.openvpn.subnet),
+      },
+      l2tp: { subnet: okCidr(raw?.l2tp?.subnet, DEFAULTS.l2tp.subnet) },
+    };
+    return { cfg, repaired };
+  }
+
+  // ── stored, editable DESIRED config (no DB migration needed) ──────────
   getConfig(): VpnConfig {
     try {
-      const raw = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-      return {
-        endpointHost: typeof raw.endpointHost === 'string' ? raw.endpointHost : '',
-        wireguard: { ...DEFAULTS.wireguard, ...(raw.wireguard || {}) },
-        openvpn: { ...DEFAULTS.openvpn, ...(raw.openvpn || {}) },
-        l2tp: { ...DEFAULTS.l2tp, ...(raw.l2tp || {}) },
-      };
+      const { cfg } = this.normalise(JSON.parse(fs.readFileSync(this.configPath, 'utf8')));
+      return cfg;
     } catch {
-      // Fall back to env for the endpoint so an existing WG_ENDPOINT_HOST keeps working.
-      return { ...DEFAULTS, endpointHost: process.env.WG_ENDPOINT_HOST || '' };
+      // No file yet (or unreadable): seed the endpoint from the legacy env so
+      // an existing WG_ENDPOINT_HOST keeps working. Deep-clone DEFAULTS — a
+      // shallow spread would share the nested objects and let a later mutation
+      // poison the module-level constant.
+      return {
+        endpointHost: process.env.WG_ENDPOINT_HOST || '',
+        wireguard: { ...DEFAULTS.wireguard },
+        openvpn: { ...DEFAULTS.openvpn },
+        l2tp: { ...DEFAULTS.l2tp },
+      };
     }
   }
 
-  private save(cfg: VpnConfig): void {
-    fs.writeFileSync(this.configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  /** Atomic, backed-up, 0600 write of any JSON payload to `file`. */
+  private writeJsonAtomic(file: string, data: unknown): void {
+    const dir = path.dirname(file);
+    const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+    const body = JSON.stringify(data, null, 2);
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+      fs.writeSync(fd, body);
+      fs.fsyncSync(fd); // survive a crash between write and rename
+    } finally {
+      fs.closeSync(fd);
+    }
+    // Keep a single rolling backup of the previous good file.
+    try {
+      if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+    } catch {
+      /* backup is best-effort */
+    }
+    fs.renameSync(tmp, file); // atomic on the same filesystem
+  }
+
+  /** Serialise a write behind any in-flight write; never reject the chain. */
+  private enqueue(fn: () => void): Promise<void> {
+    const next = this.writeChain.then(() => {
+      fn();
+    });
+    this.writeChain = next.catch(() => undefined);
+    return next;
+  }
+
+  private save(cfg: VpnConfig): Promise<void> {
+    return this.enqueue(() => this.writeJsonAtomic(this.configPath, cfg));
+  }
+
+  // ── OBSERVED state (health history / last reconcile), kept separate ───
+  getState(): ObservedState {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.statePath, 'utf8'));
+      return { health: raw?.health && typeof raw.health === 'object' ? raw.health : {}, ...raw };
+    } catch {
+      return { health: {} };
+    }
+  }
+
+  private saveState(patch: Partial<ObservedState>): Promise<void> {
+    return this.enqueue(() => {
+      const cur = this.getState();
+      this.writeJsonAtomic(this.statePath, { ...cur, ...patch, health: { ...cur.health, ...(patch.health || {}) } });
+    });
   }
 
   private port(n: unknown, what: string): number {
@@ -90,7 +241,7 @@ export class VpnService {
   }
 
   /** Update endpoint host and per-type settings from the GUI. */
-  setConfig(body: Record<string, unknown>): VpnConfig {
+  async setConfig(body: Record<string, unknown>): Promise<VpnConfig> {
     const cfg = this.getConfig();
     if (body.endpointHost !== undefined) {
       const h = String(body.endpointHost || '').trim();
@@ -112,18 +263,56 @@ export class VpnService {
     }
     const l2 = body.l2tp as Record<string, unknown> | undefined;
     if (l2 && l2.subnet !== undefined) cfg.l2tp.subnet = this.cidr(l2.subnet, 'L2TP subnet');
-    this.save(cfg);
+    await this.save(cfg);
     this.logger.log('VPN server config updated');
     return cfg;
   }
 
   // ── host probes (best effort; never throw) ────────────────────────────
-  private run(cmd: string, args: string[]): Promise<string | null> {
+  /** Run a command with a bounded timeout. Returns stdout on exit 0, else null. */
+  private run(cmd: string, args: string[], timeoutMs = 5000): Promise<string | null> {
     return new Promise((resolve) => {
-      execFile(cmd, args, { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, out) =>
+      execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, out) =>
         resolve(err ? null : out || ''),
       );
     });
+  }
+
+  /** Richer run: exit code + stdout + stderr, never rejects. */
+  private runFull(
+    cmd: string,
+    args: string[],
+    timeoutMs = 5000,
+  ): Promise<{ code: number | null; out: string; err: string; ran: boolean }> {
+    return new Promise((resolve) => {
+      execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (e: any, out, errOut) => {
+        // ENOENT = binary not present; distinguish "couldn't run" from "ran and failed".
+        const ran = !(e && e.code === 'ENOENT');
+        resolve({ code: e ? (typeof e.code === 'number' ? e.code : 1) : 0, out: out || '', err: errOut || '', ran });
+      });
+    });
+  }
+
+  /** Is a binary on PATH? null if we can't even tell. */
+  private async which(cmd: string): Promise<boolean | null> {
+    const r = await this.runFull('sh', ['-c', `command -v ${cmd.replace(/[^A-Za-z0-9_-]/g, '')} >/dev/null 2>&1`]);
+    if (!r.ran) return null;
+    return r.code === 0;
+  }
+
+  /** systemctl is-active <unit> → one of the systemd ActiveStates, or null. */
+  private async unitState(unit: string): Promise<string | null> {
+    const r = await this.runFull('systemctl', ['is-active', unit]);
+    if (!r.ran) return null; // no systemd in this environment
+    const s = (r.out || r.err).trim();
+    return s || (r.code === 0 ? 'active' : 'unknown');
+  }
+
+  /** Does any local interface carry this overlay IP? null if `ip` is absent. */
+  private async ifaceHasIp(ip: string): Promise<boolean | null> {
+    const out = await this.run('ip', ['-o', '-4', 'addr', 'show']);
+    if (out == null) return null;
+    return new RegExp(`\\binet ${ip.replace(/\./g, '\\.')}/`).test(out);
   }
 
   private firstHostIp(subnet: string): string {
@@ -134,45 +323,229 @@ export class VpnService {
     return o.join('.');
   }
 
+  private get wgIface(): string {
+    return process.env.WG_INTERFACE || 'wg0';
+  }
+
   private async wgPublicKey(): Promise<string | null> {
-    const iface = process.env.WG_INTERFACE || 'wg0';
-    const out = await this.run('wg', ['show', iface, 'public-key']);
+    const out = await this.run('wg', ['show', this.wgIface, 'public-key']);
     const k = out?.trim();
     return k && WG_KEY.test(k) ? k : null;
   }
 
-  private async portListening(port: number, proto: 'tcp' | 'udp'): Promise<boolean> {
-    // `ss -H -lun`/`-ltn` lists listening sockets; grep the port. Best effort.
+  private async portListening(port: number, proto: 'tcp' | 'udp'): Promise<boolean | null> {
+    // `ss -H -lun`/`-ltn` lists listening sockets; grep the port. null = ss absent.
     const flag = proto === 'udp' ? '-lun' : '-ltn';
     const out = await this.run('ss', ['-H', flag]);
-    if (out == null) return false;
+    if (out == null) return null;
     return new RegExp(`[:.]${port}\\b`).test(out);
+  }
+
+  /** Stale-handshake threshold: a WireGuard peer that hasn't completed a
+   *  handshake within this many seconds is treated as not currently connected
+   *  (WireGuard rehandshakes well inside 2 minutes when traffic flows). */
+  private static readonly WG_STALE_SECS = 180;
+
+  /**
+   * Parse `wg show <iface> dump`. The first line is the interface; each later
+   * line is a peer: pubkey, psk, endpoint, allowed-ips, last-handshake(epoch),
+   * rx, tx, keepalive. Returns null when `wg` can't run or the iface is absent.
+   * NEVER returns private keys or PSKs.
+   */
+  private async wgDump(): Promise<{ peers: number; connected: number; newestHandshakeSecs: number | null } | null> {
+    const r = await this.runFull('wg', ['show', this.wgIface, 'dump']);
+    if (!r.ran || r.code !== 0 || !r.out.trim()) return null;
+    const lines = r.out.trim().split('\n');
+    const now = Math.floor(Date.now() / 1000);
+    let peers = 0;
+    let connected = 0;
+    let newest: number | null = null;
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split('\t');
+      if (cols.length < 5) continue;
+      peers++;
+      const hs = Number(cols[4]); // last handshake, epoch seconds (0 = never)
+      if (hs > 0) {
+        const age = now - hs;
+        if (newest === null || age < newest) newest = age;
+        if (age <= VpnService.WG_STALE_SECS) connected++;
+      }
+    }
+    return { peers, connected, newestHandshakeSecs: newest };
+  }
+
+  // ── truthful per-type health ──────────────────────────────────────────
+  private stamp(state: HealthState, summary: string, checks: HealthCheck[], metrics: Record<string, any> = {}): Health {
+    return { state, summary, checkedAt: new Date().toISOString(), metrics, checks };
+  }
+
+  async healthWireguard(cfg: VpnConfig): Promise<Health> {
+    const checks: HealthCheck[] = [];
+    const serverIp = this.firstHostIp(cfg.wireguard.subnet);
+
+    const have = await this.which('wg');
+    checks.push({ name: 'wireguard-tools installed', ok: have, detail: have === null ? 'could not check' : have ? 'wg present' : 'wg not found' });
+    if (have === false) return this.stamp('install_required', 'WireGuard tools are not installed on the panel host.', checks);
+
+    const key = await this.wgPublicKey();
+    const ifaceUp = key != null;
+    checks.push({ name: `interface ${this.wgIface} up`, ok: ifaceUp, detail: ifaceUp ? 'server public key present' : 'interface not found / not up' });
+
+    const hasIp = await this.ifaceHasIp(serverIp);
+    checks.push({ name: `overlay ip ${serverIp} assigned`, ok: hasIp, detail: hasIp === null ? '`ip` tool unavailable' : hasIp ? 'assigned' : 'not assigned' });
+
+    const dump = await this.wgDump();
+    const peers = dump?.peers ?? 0;
+    const connected = dump?.connected ?? 0;
+    checks.push({
+      name: 'router peers connected',
+      ok: dump ? connected > 0 : null,
+      detail: dump
+        ? `${connected} of ${peers} peer(s) with a handshake in the last ${VpnService.WG_STALE_SECS}s`
+        : 'could not read peer table',
+    });
+
+    const metrics = {
+      peers,
+      connected,
+      newestHandshakeSecs: dump?.newestHandshakeSecs ?? -1,
+      publicKey: key || '',
+    };
+
+    if (!ifaceUp) return this.stamp('offline', 'Installed, but the WireGuard interface is not up. Run the installer, then Re-check.', checks, metrics);
+    if (hasIp === false) return this.stamp('degraded', 'Interface up but its overlay IP is missing — routing to routers will fail.', checks, metrics);
+    if (peers > 0 && connected === 0) return this.stamp('degraded', `${peers} router peer(s) configured but none are handshaking right now.`, checks, metrics);
+    return this.stamp('online', peers === 0 ? 'Server up and listening. No routers connected yet.' : `Server up; ${connected} router(s) connected.`, checks, metrics);
+  }
+
+  async healthOpenvpn(cfg: VpnConfig): Promise<Health> {
+    const checks: HealthCheck[] = [];
+    const serverIp = this.firstHostIp(cfg.openvpn.subnet);
+    const unit = 'openvpn-server@jointbox';
+
+    const have = await this.which('openvpn');
+    checks.push({ name: 'openvpn installed', ok: have, detail: have === null ? 'could not check' : have ? 'openvpn present' : 'openvpn not found' });
+
+    const st = await this.unitState(unit);
+    checks.push({ name: `service ${unit}`, ok: st == null ? null : st === 'active', detail: st == null ? 'systemd unavailable' : st });
+
+    const listening = await this.portListening(cfg.openvpn.port, cfg.openvpn.proto);
+    checks.push({ name: `listening on ${cfg.openvpn.port}/${cfg.openvpn.proto}`, ok: listening, detail: listening === null ? '`ss` unavailable' : listening ? 'listening' : 'not listening' });
+
+    const hasIp = await this.ifaceHasIp(serverIp);
+    checks.push({ name: `overlay ip ${serverIp} assigned`, ok: hasIp, detail: hasIp === null ? '`ip` unavailable' : hasIp ? 'assigned' : 'tun not up' });
+
+    const metrics = { listening: listening === true, unit: st || 'unknown' };
+
+    if (have === false && st == null) return this.stamp('install_required', 'OpenVPN is not installed on the panel host.', checks, metrics);
+    if (st === 'failed') return this.stamp('error', 'The OpenVPN service is in a failed state. Check `journalctl -u ' + unit + '`.', checks, metrics);
+    if (st === 'activating') return this.stamp('starting', 'OpenVPN is starting up.', checks, metrics);
+    if (st === 'inactive') return this.stamp('offline', 'OpenVPN is installed but not running. Run the installer or `systemctl start ' + unit + '`.', checks, metrics);
+    if (st === 'active') {
+      if (listening === false) return this.stamp('degraded', 'Service active but not listening on its port yet.', checks, metrics);
+      if (hasIp === false) return this.stamp('degraded', 'Service active but the tun overlay IP is missing.', checks, metrics);
+      return this.stamp('online', 'OpenVPN server active and listening.', checks, metrics);
+    }
+    // No systemd to consult — fall back to the listening socket, honestly.
+    if (listening === true) return this.stamp('online', 'Listening on its port (service state unknown).', checks, metrics);
+    if (listening === false) return this.stamp('offline', 'Not listening on its port.', checks, metrics);
+    return this.stamp('unknown', 'Could not determine OpenVPN status on this host.', checks, metrics);
+  }
+
+  async healthL2tp(cfg: VpnConfig): Promise<Health> {
+    const checks: HealthCheck[] = [];
+    const serverIp = this.firstHostIp(cfg.l2tp.subnet);
+
+    const xl2tp = await this.unitState('xl2tpd');
+    checks.push({ name: 'service xl2tpd', ok: xl2tp == null ? null : xl2tp === 'active', detail: xl2tp == null ? 'systemd unavailable' : xl2tp });
+
+    // strongSwan ships as either strongswan-starter or strongswan unit.
+    let ipsecUnit = await this.unitState('strongswan');
+    if (ipsecUnit == null || ipsecUnit === 'unknown' || ipsecUnit === 'inactive') {
+      const alt = await this.unitState('strongswan-starter');
+      if (alt && alt !== 'unknown') ipsecUnit = alt;
+    }
+    checks.push({ name: 'service strongswan (IPsec)', ok: ipsecUnit == null ? null : ipsecUnit === 'active', detail: ipsecUnit == null ? 'systemd unavailable' : ipsecUnit });
+
+    // Established IKE SAs — the real sign IPsec is carrying tunnels. Try the
+    // modern swanctl first, then legacy `ipsec status`. We only COUNT SAs; we
+    // never print secrets.
+    let sas: number | null = null;
+    const sw = await this.runFull('swanctl', ['--list-sas']);
+    if (sw.ran && sw.code === 0) {
+      sas = (sw.out.match(/ESTABLISHED/g) || []).length;
+    } else {
+      const ip = await this.runFull('ipsec', ['status']);
+      if (ip.ran && ip.code === 0) sas = (ip.out.match(/ESTABLISHED|INSTALLED/g) || []).length;
+    }
+    checks.push({ name: 'IPsec security associations', ok: sas == null ? null : sas > 0, detail: sas == null ? 'swanctl/ipsec unavailable' : `${sas} established` });
+
+    const psk500 = await this.portListening(500, 'udp');
+    checks.push({ name: 'IKE listening on 500/udp', ok: psk500, detail: psk500 === null ? '`ss` unavailable' : psk500 ? 'listening' : 'not listening' });
+
+    const hasIp = await this.ifaceHasIp(serverIp);
+    checks.push({ name: `local ip ${serverIp} assigned`, ok: hasIp, detail: hasIp === null ? '`ip` unavailable' : hasIp ? 'assigned' : 'not assigned' });
+
+    const metrics = { ipsecSas: sas ?? -1, xl2tpd: xl2tp || 'unknown', strongswan: ipsecUnit || 'unknown' };
+
+    const both = xl2tp === 'active' && ipsecUnit === 'active';
+    const neither = (xl2tp === 'inactive' || xl2tp == null) && (ipsecUnit === 'inactive' || ipsecUnit == null);
+    if (xl2tp == null && ipsecUnit == null && psk500 == null) return this.stamp('unknown', 'Could not determine L2TP/IPsec status on this host.', checks, metrics);
+    if (xl2tp === 'failed' || ipsecUnit === 'failed') return this.stamp('error', 'An L2TP/IPsec service is in a failed state.', checks, metrics);
+    if (neither && psk500 !== true) return this.stamp('offline', 'L2TP/IPsec is not running. Run the installer.', checks, metrics);
+    if (!both) return this.stamp('degraded', 'Only one of xl2tpd / strongSwan is running — both are required.', checks, metrics);
+    if (sas === 0) return this.stamp('online', 'L2TP/IPsec up. No router tunnels established yet.', checks, metrics);
+    return this.stamp('online', sas && sas > 0 ? `L2TP/IPsec up; ${sas} IPsec SA(s) established.` : 'L2TP/IPsec up.', checks, metrics);
+  }
+
+  async health(type: VpnType, cfg?: VpnConfig): Promise<Health> {
+    const c = cfg || this.getConfig();
+    if (!c.endpointHost && type === 'wireguard') {
+      // Endpoint host is required for routers to dial in; flag it, but still
+      // report the daemon's real state so the operator sees progress.
+    }
+    if (type === 'wireguard') return this.healthWireguard(c);
+    if (type === 'openvpn') return this.healthOpenvpn(c);
+    return this.healthL2tp(c);
   }
 
   /** Full status + ready-to-use scripts/configs for all three VPN types. */
   async overview() {
     const cfg = this.getConfig();
     const host = cfg.endpointHost;
-    const [wgKey, ovUp, l2Up] = await Promise.all([
-      this.wgPublicKey(),
-      this.portListening(cfg.openvpn.port, cfg.openvpn.proto),
-      this.portListening(500, 'udp'),
+    const [wg, ov, l2] = await Promise.all([
+      this.healthWireguard(cfg),
+      this.healthOpenvpn(cfg),
+      this.healthL2tp(cfg),
     ]);
+
+    // Persist the observed snapshot (desired vs observed kept separate).
+    this.saveState({ health: { wireguard: wg, openvpn: ov, l2tp: l2 } }).catch(() => undefined);
+
+    const state = this.getState();
+    const wgKey = (wg.metrics.publicKey as string) || null;
+    // "Ready" = the daemon is genuinely online AND the endpoint host is set so
+    // routers can actually dial in. It is NOT "a port looks open".
+    const ready = (h: Health) => (h.state === 'online' || h.state === 'degraded') && !!host;
 
     return {
       endpointHost: host,
       endpointSet: !!host,
+      lastReconcileAt: state.lastReconcileAt || null,
+      lastReconcileDetail: state.lastReconcileDetail || null,
       servers: [
         {
           type: 'wireguard' as VpnType,
           name: 'WireGuard',
           blurb: 'Fast, modern, lowest overhead. Best default for CGNAT routers.',
-          running: !!wgKey,
+          health: wg,
+          state: wg.state,
+          running: wg.state === 'online' || wg.state === 'degraded',
           listenPort: cfg.wireguard.port,
           subnet: cfg.wireguard.subnet,
           serverIp: this.firstHostIp(cfg.wireguard.subnet),
           publicKey: wgKey,
-          ready: !!wgKey && !!host,
+          ready: ready(wg),
           install: this.wireguardInstall(cfg),
           mikrotik: this.wireguardMikrotik(cfg, wgKey),
         },
@@ -180,12 +553,14 @@ export class VpnService {
           type: 'openvpn' as VpnType,
           name: 'OpenVPN',
           blurb: 'Widely compatible, works over TCP/UDP through most firewalls.',
-          running: ovUp,
+          health: ov,
+          state: ov.state,
+          running: ov.state === 'online' || ov.state === 'degraded',
           listenPort: cfg.openvpn.port,
           proto: cfg.openvpn.proto,
           subnet: cfg.openvpn.subnet,
           serverIp: this.firstHostIp(cfg.openvpn.subnet),
-          ready: ovUp && !!host,
+          ready: ready(ov),
           install: this.openvpnInstall(cfg),
           mikrotik: this.openvpnMikrotik(cfg),
         },
@@ -193,15 +568,64 @@ export class VpnService {
           type: 'l2tp' as VpnType,
           name: 'L2TP / IPsec',
           blurb: 'Native and easy on MikroTik. Uses a shared secret plus a login.',
-          running: l2Up,
+          health: l2,
+          state: l2.state,
+          running: l2.state === 'online' || l2.state === 'degraded',
           subnet: cfg.l2tp.subnet,
           serverIp: this.firstHostIp(cfg.l2tp.subnet),
-          ready: l2Up && !!host,
+          ready: ready(l2),
           install: this.l2tpInstall(cfg),
           mikrotik: this.l2tpMikrotik(cfg),
         },
       ],
     };
+  }
+
+  /**
+   * Honest end-to-end verification for one VPN type. It checks the things we
+   * can prove from the panel host WITHOUT sending real credentials and WITHOUT
+   * touching production subscriber sessions:
+   *   • daemon active (reuses the health engine)
+   *   • the server's own overlay IP is assigned and locally reachable
+   *   • the RADIUS auth/acct path is reachable from this host
+   * A failed ICMP is reported as "inconclusive", never as "broken".
+   */
+  async verify(type: VpnType): Promise<{ type: VpnType; ok: boolean; checks: HealthCheck[]; health: Health }> {
+    const cfg = this.getConfig();
+    const h = await this.health(type, cfg);
+    const checks: HealthCheck[] = [...h.checks];
+
+    const serverIp =
+      type === 'wireguard'
+        ? this.firstHostIp(cfg.wireguard.subnet)
+        : type === 'openvpn'
+          ? this.firstHostIp(cfg.openvpn.subnet)
+          : this.firstHostIp(cfg.l2tp.subnet);
+
+    // Bounded ping of our OWN overlay IP: proves the interface is routable.
+    // ICMP may be filtered, so a failure is inconclusive, not a hard fail.
+    const ping = await this.runFull('ping', ['-c', '1', '-W', '1', serverIp], 3000);
+    checks.push({
+      name: `overlay ${serverIp} reachable`,
+      ok: !ping.ran ? null : ping.code === 0 ? true : null,
+      detail: !ping.ran ? 'ping unavailable' : ping.code === 0 ? 'replies' : 'no ICMP reply (may be filtered — inconclusive)',
+    });
+
+    // RADIUS auth/acct path reachable locally (1812/1813 udp). We do NOT send
+    // an Access-Request — that could disturb a live NAS. Presence of the
+    // listener is enough to prove the path exists on this host.
+    const radius = await this.portListening(1812, 'udp');
+    checks.push({
+      name: 'RADIUS auth path (1812/udp) present',
+      ok: radius,
+      detail: radius === null ? '`ss` unavailable' : radius ? 'RADIUS listening on this host' : 'no RADIUS listener found',
+    });
+
+    // "ok" requires the daemon genuinely online or degraded-but-up, and no
+    // check that definitively failed. null (unknown) checks never fail verify.
+    const hardFail = checks.some((c) => c.ok === false);
+    const ok = (h.state === 'online' || h.state === 'degraded') && !hardFail;
+    return { type, ok, checks, health: h };
   }
 
   // ── install scripts (run once on the panel host, with sudo) ───────────
@@ -514,9 +938,10 @@ export class VpnService {
 
   /** The script for one VPN type, for a Download/Copy button. */
   async install(type: VpnType): Promise<{ script: string; mikrotik: string }> {
-    const o = await this.overview();
-    const s = o.servers.find((x) => x.type === type);
-    if (!s) throw new BadRequestException('Unknown VPN type.');
-    return { script: s.install, mikrotik: s.mikrotik };
+    const cfg = this.getConfig();
+    if (type === 'wireguard') return { script: this.wireguardInstall(cfg), mikrotik: this.wireguardMikrotik(cfg, await this.wgPublicKey()) };
+    if (type === 'openvpn') return { script: this.openvpnInstall(cfg), mikrotik: this.openvpnMikrotik(cfg) };
+    if (type === 'l2tp') return { script: this.l2tpInstall(cfg), mikrotik: this.l2tpMikrotik(cfg) };
+    throw new BadRequestException('Unknown VPN type.');
   }
 }

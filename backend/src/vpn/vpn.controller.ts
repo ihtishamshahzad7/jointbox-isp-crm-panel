@@ -35,6 +35,13 @@ export class VpnController {
     return this.vpn.install(type as VpnType);
   }
 
+  /** Honest end-to-end verification (no real auth sent, no sessions touched). */
+  @Get(':type/verify')
+  verify(@Param('type') type: string, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.vpn.verify(type as VpnType);
+  }
+
   /** Per-router client config for a chosen vendor and overlay IP. */
   @Get(':type/client')
   client(

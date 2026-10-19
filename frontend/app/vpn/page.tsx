@@ -15,10 +15,17 @@
 import React from "react";
 import API from "../components/api";
 
+type HealthState =
+  | "unconfigured" | "install_required" | "starting" | "online"
+  | "degraded" | "offline" | "error" | "unknown";
+type HealthCheck = { name: string; ok: boolean | null; detail: string };
+type Health = { state: HealthState; summary: string; checkedAt: string; metrics: Record<string, unknown>; checks: HealthCheck[] };
 type Server = {
   type: "wireguard" | "openvpn" | "l2tp";
   name: string;
   blurb: string;
+  state: HealthState;
+  health: Health;
   running: boolean;
   ready: boolean;
   listenPort?: number;
@@ -29,7 +36,24 @@ type Server = {
   install: string;
   mikrotik: string;
 };
-type Overview = { endpointHost: string; endpointSet: boolean; servers: Server[] };
+type Overview = {
+  endpointHost: string;
+  endpointSet: boolean;
+  lastReconcileAt?: string | null;
+  servers: Server[];
+};
+
+/** Map a truthful health state to badge colour + label. */
+const STATE_UI: Record<HealthState, { tone: "ok" | "warn" | "bad"; label: string }> = {
+  online: { tone: "ok", label: "Online" },
+  degraded: { tone: "warn", label: "Degraded" },
+  starting: { tone: "warn", label: "Starting" },
+  unknown: { tone: "warn", label: "Unknown" },
+  unconfigured: { tone: "bad", label: "Not configured" },
+  install_required: { tone: "bad", label: "Install required" },
+  offline: { tone: "bad", label: "Offline" },
+  error: { tone: "bad", label: "Error" },
+};
 
 const G = "#16a34a";
 const G2 = "#22c55e";
@@ -76,7 +100,21 @@ export default function VpnPage() {
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
   const [open, setOpen] = React.useState<string | null>(null);
+  const [verifying, setVerifying] = React.useState<string | null>(null);
+  const [verifyResult, setVerifyResult] = React.useState<Record<string, { ok: boolean; checks: HealthCheck[] }>>({});
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+
+  const verify = async (type: string) => {
+    setVerifying(type);
+    try {
+      const r = await fetch(`${API}/vpn/${type}/verify`, { headers: { Authorization: `Bearer ${token}` } });
+      const b = await r.json().catch(() => ({}));
+      if (r.ok) setVerifyResult((v) => ({ ...v, [type]: { ok: !!b.ok, checks: b.checks || [] } }));
+      await load();
+    } finally {
+      setVerifying(null);
+    }
+  };
 
   const load = React.useCallback(async () => {
     try {
@@ -173,11 +211,18 @@ export default function VpnPage() {
         <div key={s.type} style={card}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <h2 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: "var(--text,#111)" }}>{s.name}</h2>
-            {s.ready ? <Badge ok>Ready</Badge> : s.running ? <Badge warn>Running · set endpoint</Badge> : <Badge>Not running</Badge>}
-            <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {(() => {
+              const ui = STATE_UI[s.state] || STATE_UI.unknown;
+              return <Badge ok={ui.tone === "ok"} warn={ui.tone === "warn"}>{ui.label}{s.ready ? "" : s.running ? " · set endpoint" : ""}</Badge>;
+            })()}
+            <span style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button type="button" onClick={() => setOpen(open === s.type ? null : s.type)}
                 style={{ border: `1px solid ${G}`, background: "transparent", color: G, borderRadius: 8, padding: "5px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
                 {open === s.type ? "Hide setup" : "Setup"}
+              </button>
+              <button type="button" onClick={() => void verify(s.type)} disabled={verifying === s.type}
+                style={{ border: `1px solid ${G}`, background: "transparent", color: G, borderRadius: 8, padding: "5px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: verifying === s.type ? 0.6 : 1 }}>
+                {verifying === s.type ? "Verifying…" : "Verify"}
               </button>
               <button type="button" onClick={() => void load()}
                 style={{ border: "1px solid var(--border,#E2E8F0)", background: "transparent", color: "var(--text,#111)", borderRadius: 8, padding: "5px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
@@ -185,7 +230,29 @@ export default function VpnPage() {
               </button>
             </span>
           </div>
-          <p style={{ color: "var(--muted,#64748B)", fontSize: 13, margin: "6px 0 0" }}>{s.blurb}</p>
+          <p style={{ color: "var(--muted,#64748B)", fontSize: 13, margin: "6px 0 2px" }}>{s.blurb}</p>
+          {s.health?.summary && (
+            <p style={{ fontSize: 12.5, margin: "4px 0 0", color: "var(--text,#111)" }}>
+              <b>Status:</b> {s.health.summary}
+            </p>
+          )}
+          {(verifyResult[s.type]?.checks || s.health?.checks)?.length ? (
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", fontSize: 12.5, color: G, fontWeight: 700 }}>
+                {verifyResult[s.type] ? `Verification ${verifyResult[s.type].ok ? "passed" : "incomplete"} — checks` : "Health checks"}
+              </summary>
+              <ul style={{ margin: "6px 0 0", padding: "0 0 0 2px", listStyle: "none", fontSize: 12.5 }}>
+                {(verifyResult[s.type]?.checks || s.health.checks).map((c, i) => (
+                  <li key={i} style={{ display: "flex", gap: 8, padding: "2px 0", color: "var(--muted,#64748B)" }}>
+                    <span style={{ color: c.ok === true ? G : c.ok === false ? "#b02a37" : "#b45309", fontWeight: 800 }}>
+                      {c.ok === true ? "✓" : c.ok === false ? "✕" : "?"}
+                    </span>
+                    <span><b style={{ color: "var(--text,#111)" }}>{c.name}</b> — {c.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5, color: "var(--muted,#64748B)", marginTop: 8 }}>
             <span>Overlay: <b style={{ color: "var(--text,#111)" }}>{s.subnet}</b> (panel {s.serverIp})</span>
             {s.listenPort ? <span>Port: <b style={{ color: "var(--text,#111)" }}>{s.listenPort}{s.proto ? "/" + s.proto : ""}</b></span> : null}
