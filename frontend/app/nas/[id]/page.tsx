@@ -18,6 +18,7 @@ import { NasDetailProvider, useNasDetail, RefreshMode } from "./context";
 import { Session, buildServiceHealth } from "./lib";
 import { NasDetailStyles, RefreshControl, StatusChip, Btn, Spinner } from "./ui";
 import { SessionDrawer } from "./session-drawer";
+import API from "../../components/api";
 import { OverviewTab, OverviewCss } from "./tabs-overview";
 import { PermCss } from "./permissions";
 import { SessionCss } from "./session-drawer";
@@ -111,6 +112,30 @@ function DevicePage() {
 
   const nasId = useNasDetailId();
 
+  // Live management-tunnel status for the header chip — real data from the same
+  // endpoint the Tunnel tab uses, so we never invent a connection state.
+  const [tunnel, setTunnel] = useState<{ exists: boolean; online: boolean; lastHandshake: string | null } | null>(null);
+  React.useEffect(() => {
+    if (!nasId) return;
+    let alive = true;
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+    const load = async () => {
+      try {
+        const r = await fetch(`${API}/nas/${nasId}/tunnel`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!alive) return;
+        if (r.ok) {
+          const d = await r.json();
+          setTunnel(d ? { exists: true, online: !!d.online, lastHandshake: d.lastHandshake ?? null } : { exists: false, online: false, lastHandshake: null });
+        } else {
+          setTunnel({ exists: false, online: false, lastHandshake: null });
+        }
+      } catch { /* leave previous reading */ }
+    };
+    void load();
+    const iv = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [nasId]);
+
   // Remember the last tab per device (session storage, never persisted to disk).
   // A `?tab=` in the URL wins — it lets other screens deep-link to a tab
   // (e.g. the NAS list's "VPN" button jumps straight to the Tunnel tab).
@@ -173,6 +198,7 @@ function DevicePage() {
           <h1>{title}</h1>
           <div className="nd-meta">
             <code>{nas?.nasIp ?? "no IP configured"}</code>
+            {nas?.owner?.name && <span>🏢 {nas.owner.name}</span>}
             {nas?.deviceType && <span>{nas.deviceType}</span>}
             <span>{nas?.type ?? "router"}</span>
             {reach?.identity && <span className="nd-mono">{reach.identity}</span>}
@@ -183,6 +209,14 @@ function DevicePage() {
               <StatusChip key={h.key} level={h.level} text={`${h.label}: ${h.text}`} detail={h.detail} dotPulse={h.level === "ok" || h.level === "bad"} />
             ))}
             {radiusStats && <StatusChip level={radiusStats.alive ? "ok" : "bad"} text={`Sessions: ${radiusStats.activeSessionCount}`} dotPulse={false} />}
+            {tunnel && (
+              <StatusChip
+                level={!tunnel.exists ? "warn" : tunnel.online ? "ok" : "warn"}
+                text={`VPN: ${!tunnel.exists ? "no tunnel" : tunnel.online ? "connected" : tunnel.lastHandshake ? "not responding" : "waiting"}`}
+                detail={!tunnel.exists ? "Configure it on the Tunnel tab" : undefined}
+                dotPulse={tunnel.exists && tunnel.online}
+              />
+            )}
           </div>
         </div>
 
@@ -197,6 +231,7 @@ function DevicePage() {
               <button onClick={() => { setMenuOpen(false); void runAllTests(); goTab("diagnostics"); }}>⚡ Run all tests</button>
               <button onClick={() => { setMenuOpen(false); clearTests(); }}>✕ Clear test results</button>
               <div className="nd-menu-sep" />
+              <button onClick={() => { setMenuOpen(false); goTab("tunnel"); }}>🛰️ VPN / tunnel</button>
               <button onClick={() => { setMenuOpen(false); goTab("configuration"); }}>⚙ Edit configuration</button>
               <button className="danger" onClick={() => { setMenuOpen(false); goTab("logs"); }}>📄 Device logs</button>
             </div>
