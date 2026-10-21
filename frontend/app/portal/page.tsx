@@ -350,21 +350,18 @@ export default function PortalPage() {
         </div>
       )}
 
-      {/* Tabs */}
-      <nav style={{ position: "relative", zIndex: 2, maxWidth: 880, margin: "0 auto", padding: "18px 18px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {TABS.map((name) => (
-          <button
-            key={name}
-            onClick={() => setTab(name)}
-            style={{
-              ...(tab === name ? btn(NOVA) : btn(T.card)),
-              ...(tab === name ? {} : { background: "transparent", border: `1px solid ${T.border}`, color: T.muted }),
-              borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 700,
-            }}
-          >
-            {t(name)}
-          </button>
-        ))}
+      {/* Tabs → dropdown (top-right) */}
+      <nav style={{ position: "relative", zIndex: 2, maxWidth: 880, margin: "0 auto", padding: "18px 18px 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+        <label style={{ fontSize: 12, fontWeight: 700, color: T.muted }}>View:</label>
+        <select
+          value={tab}
+          onChange={(e) => setTab(e.target.value as Tab)}
+          style={{ background: T.card, color: "inherit", border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", minWidth: 170 }}
+        >
+          {TABS.map((name) => (
+            <option key={name} value={name}>{t(name)}</option>
+          ))}
+        </select>
       </nav>
 
       {/* Content */}

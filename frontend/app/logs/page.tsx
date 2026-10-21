@@ -389,16 +389,19 @@ export default function LogsPage() {
             )}
           </div>
 
-          {/* ═══════════════ TABS ═══════════════ */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: `1px solid ${t.cardBorder}`, paddingBottom: 10, flexWrap: "wrap" }}>
-            {tabs.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                style={{ padding: "6px 14px", background: activeTab === tab.id ? t.accent : "transparent",
-                  color: activeTab === tab.id ? "#fff" : t.textSub, border: activeTab === tab.id ? "none" : `1px solid ${t.cardBorder}`,
-                  borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 500, transition: "all .15s" }}>
-                {tab.label}
-              </button>
-            ))}
+          {/* ═══════════════ VIEW SELECTOR (dropdown, top-right) ═══════════════ */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginBottom: 14, borderBottom: `1px solid ${t.cardBorder}`, paddingBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: t.textSub, marginRight: "auto" }}>
+              {tabs.find(x => x.id === activeTab)?.label || "View"}
+            </span>
+            <label style={{ fontSize: 11, fontWeight: 600, color: t.textSub }}>View:</label>
+            <select value={activeTab} onChange={e => setActiveTab(e.target.value)}
+              style={{ padding: "7px 12px", background: t.card, color: t.text, border: `1px solid ${t.cardBorder}`,
+                borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, minWidth: 190 }}>
+              {tabs.map(tab => (
+                <option key={tab.id} value={tab.id}>{tab.label}</option>
+              ))}
+            </select>
           </div>
 
           {/* ═══════════════ LOADING ═══════════════ */}

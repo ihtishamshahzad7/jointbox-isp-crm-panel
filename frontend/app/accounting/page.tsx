@@ -640,21 +640,18 @@ export default function AccountingPage() {
         </div>
       )}
 
-      {/* tabs */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {TABS.filter((name) => canSeeLedger() || (name !== "Ledger" && name !== "Automation")).map((name) => (
-          <button
-            key={name}
-            onClick={() => setTab(name)}
-            style={{
-              ...btn(tab === name ? T.accent : T.card),
-              border: `1px solid ${tab === name ? T.accent : T.border}`,
-              color: tab === name ? "#fff" : T.sub,
-            }}
-          >
-            {name}
-          </button>
-        ))}
+      {/* tabs → dropdown (top-right) */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginBottom: 14 }}>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.sub }}>View:</label>
+        <select
+          value={tab}
+          onChange={(e) => setTab(e.target.value as Tab)}
+          style={{ padding: "7px 12px", background: T.card, color: T.text, border: `1px solid ${T.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, minWidth: 170 }}
+        >
+          {TABS.filter((name) => canSeeLedger() || (name !== "Ledger" && name !== "Automation")).map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
       </div>
 
       {/* ── LEDGER ── */}
