@@ -35,16 +35,24 @@ export class VpnController {
     return this.vpn.install(type as VpnType);
   }
 
-  /** Per-router client config for a chosen vendor and overlay IP. */
+  /**
+   * Per-router client config for a chosen vendor and overlay IP.
+   *
+   * Allowed for ANY authenticated operator (not platform-owner-only): a company
+   * admin needs this to connect their own routers. The output carries no
+   * secrets and no tenant data — only the panel's PUBLIC endpoint and WireGuard
+   * PUBLIC key (both meant to be handed to routers) plus `<password>` /
+   * `<shared-secret>` placeholders the operator fills in themselves. Managing
+   * the VPN *server* (overview/setConfig/install) stays platform-owner-only.
+   */
   @Get(':type/client')
   client(
     @Param('type') type: string,
     @Query('vendor') vendor: string,
     @Query('name') name: string,
     @Query('ip') ip: string,
-    @Req() req: any,
+    @Req() _req: any,
   ) {
-    this.scope.assertPlatformOwner(req.user);
     return {
       vendors: VPN_VENDORS,
       config: this.vpn.clientConfig(type as VpnType, vendor || 'mikrotik', name || 'router', ip || ''),
