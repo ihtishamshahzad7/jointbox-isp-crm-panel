@@ -341,7 +341,7 @@ export default function VouchersPage() {
           {showOverview ? "▲ Hide overview" : "▼ Show overview"}
         </button>
       </div>
-      {showOverview && (
+      {showOverview && (<>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 24 }}>
             {statCards.map((card, idx) => (
               <div key={idx} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "16px", transition: "transform .15s" }}
@@ -357,13 +357,13 @@ export default function VouchersPage() {
               </div>
             ))}
           </div>
-      )}
 
           {/* Total Redeemed Card */}
           <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: t.textMuted }}>💰 Total Redeemed Value</span>
             <span style={{ fontSize: 22, fontWeight: 800, color: t.green }}>{money(stats.totalRedeemed || 0)}</span>
           </div>
+      </>)}
 
           {/* Vouchers Table */}
           {loading ? (

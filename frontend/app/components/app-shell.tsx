@@ -240,6 +240,40 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [date, setDate] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  /**
+   * After a deploy, Next rebuilds with new hashed chunk filenames. A tab still
+   * holding the old page HTML then fails to fetch a now-missing chunk and shows
+   * a ChunkLoadError. Recover automatically: on such an error, reload ONCE
+   * (guarded in sessionStorage so a genuinely broken chunk can't loop). A
+   * successful load clears the guard so the next stale-deploy can recover too.
+   */
+  useEffect(() => {
+    const KEY = 'jbx-chunk-reload';
+    const isChunkError = (m?: string) =>
+      !!m && (/ChunkLoadError/i.test(m) || /Loading chunk [\w-]+ failed/i.test(m) || /Failed to load chunk/i.test(m) || /error loading dynamically imported module/i.test(m));
+    const recover = (msg?: string) => {
+      if (!isChunkError(msg)) return;
+      let already = '0';
+      try { already = sessionStorage.getItem(KEY) || '0'; } catch { /* private mode */ }
+      if (already === '1') return; // already tried once — let the error show
+      try { sessionStorage.setItem(KEY, '1'); } catch { /* ignore */ }
+      window.location.reload();
+    };
+    const onError = (e: ErrorEvent) => recover(e?.message || (e?.error && String(e.error)));
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const r: any = e?.reason;
+      recover(typeof r === 'string' ? r : r?.message || r?.name);
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    // Clear the guard once a page has loaded cleanly.
+    try { if (sessionStorage.getItem(KEY) === '1') sessionStorage.removeItem(KEY); } catch { /* ignore */ }
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
   /**
    * Uploaded files need a media token (see image-upload.tsx). Fetched once and
    * renewed every half hour while it has under an hour left. If there was no

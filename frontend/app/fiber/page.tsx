@@ -351,17 +351,15 @@ export default function FiberPage() {
             </div>
           )}
 
-          {/* ── Tab Bar ── */}
-          <div style={{display:"flex",gap:4,marginBottom:12,borderBottom:`1px solid ${t.cardBorder}`,paddingBottom:0}}>
-            {([{id:"olts",label:"OLTs"},{id:"ports",label:"PON Ports"},{id:"onus",label:"ONUs"}]).map(tab=>(
-              <button key={tab.id} onClick={()=>setActiveTab(tab.id as any)} style={{
-                padding:"8px 16px",borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,
-                background:activeTab===tab.id?t.card:"transparent",
-                color:activeTab===tab.id?t.accent:t.textMuted,
-                borderBottom:activeTab===tab.id?`2px solid ${t.accent}`:"2px solid transparent",
-                transition:"all .15s",
-              }}>{tab.label}</button>
-            ))}
+          {/* ── View selector (dropdown, top-right) ── */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:8,marginBottom:12,borderBottom:`1px solid ${t.cardBorder}`,paddingBottom:10}}>
+            <label style={{fontSize:11,fontWeight:600,color:t.textMuted}}>View:</label>
+            <select value={activeTab} onChange={e=>setActiveTab(e.target.value as any)}
+              style={{padding:"7px 12px",background:t.card,color:t.text,border:`1px solid ${t.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:600,minWidth:150}}>
+              {([{id:"olts",label:"OLTs"},{id:"ports",label:"PON Ports"},{id:"onus",label:"ONUs"}]).map(tab=>(
+                <option key={tab.id} value={tab.id}>{tab.label}</option>
+              ))}
+            </select>
           </div>
 
           {loading ? (

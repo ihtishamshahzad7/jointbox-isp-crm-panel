@@ -358,7 +358,7 @@ const [reverseReason, setReverseReason] = useState("");
           {showOverview ? "▲ Hide overview" : "▼ Show overview"}
         </button>
       </div>
-      {showOverview && (
+      {showOverview && (<>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 24 }}>
             {statCards.map((card, idx) => (
               <div key={idx} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "16px", transition: "transform .15s" }}
@@ -374,7 +374,6 @@ const [reverseReason, setReverseReason] = useState("");
               </div>
             ))}
           </div>
-      )}
 
           {/* Financial Summary Cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12, marginBottom: 24 }}>
@@ -391,6 +390,7 @@ const [reverseReason, setReverseReason] = useState("");
               <span style={{ fontSize: 20, fontWeight: 800, color: t.amber }}>{money(stats.totalDue || totalDue)}</span>
             </div>
           </div>
+      </>)}
 
           {/* Invoices Table */}
           {loading ? (
