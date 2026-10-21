@@ -28,13 +28,14 @@ const HOST = /^[A-Za-z0-9.-]{1,253}$/; // hostname or IPv4, for the endpoint
 const CIDR = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/;
 const WG_KEY = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
 
-export type VpnType = 'wireguard' | 'openvpn' | 'l2tp';
+export type VpnType = 'wireguard' | 'openvpn' | 'l2tp' | 'sstp';
 
 export interface VpnConfig {
   endpointHost: string;
   wireguard: { port: number; subnet: string };
   openvpn: { port: number; proto: 'udp' | 'tcp'; subnet: string };
   l2tp: { subnet: string };
+  sstp: { port: number; subnet: string };
 }
 
 const DEFAULTS: VpnConfig = {
@@ -42,6 +43,8 @@ const DEFAULTS: VpnConfig = {
   wireguard: { port: 51820, subnet: '10.66.0.0/24' },
   openvpn: { port: 1194, proto: 'udp', subnet: '10.67.0.0/24' },
   l2tp: { subnet: '10.68.0.0/24' },
+  // SSTP rides TLS on 443 so it traverses almost any firewall/proxy.
+  sstp: { port: 443, subnet: '10.69.0.0/24' },
 };
 
 @Injectable()
@@ -61,10 +64,19 @@ export class VpnService {
         wireguard: { ...DEFAULTS.wireguard, ...(raw.wireguard || {}) },
         openvpn: { ...DEFAULTS.openvpn, ...(raw.openvpn || {}) },
         l2tp: { ...DEFAULTS.l2tp, ...(raw.l2tp || {}) },
+        sstp: { ...DEFAULTS.sstp, ...(raw.sstp || {}) },
       };
     } catch {
-      // Fall back to env for the endpoint so an existing WG_ENDPOINT_HOST keeps working.
-      return { ...DEFAULTS, endpointHost: process.env.WG_ENDPOINT_HOST || '' };
+      // Fall back to env for the endpoint so an existing WG_ENDPOINT_HOST keeps
+      // working. Deep-clone DEFAULTS so a later setConfig mutation can't poison
+      // the module-level constant.
+      return {
+        endpointHost: process.env.WG_ENDPOINT_HOST || '',
+        wireguard: { ...DEFAULTS.wireguard },
+        openvpn: { ...DEFAULTS.openvpn },
+        l2tp: { ...DEFAULTS.l2tp },
+        sstp: { ...DEFAULTS.sstp },
+      };
     }
   }
 
@@ -112,6 +124,11 @@ export class VpnService {
     }
     const l2 = body.l2tp as Record<string, unknown> | undefined;
     if (l2 && l2.subnet !== undefined) cfg.l2tp.subnet = this.cidr(l2.subnet, 'L2TP subnet');
+    const ss = body.sstp as Record<string, unknown> | undefined;
+    if (ss) {
+      if (ss.port !== undefined) cfg.sstp.port = this.port(ss.port, 'SSTP port');
+      if (ss.subnet !== undefined) cfg.sstp.subnet = this.cidr(ss.subnet, 'SSTP subnet');
+    }
     this.save(cfg);
     this.logger.log('VPN server config updated');
     return cfg;
@@ -153,10 +170,11 @@ export class VpnService {
   async overview() {
     const cfg = this.getConfig();
     const host = cfg.endpointHost;
-    const [wgKey, ovUp, l2Up] = await Promise.all([
+    const [wgKey, ovUp, l2Up, ssUp] = await Promise.all([
       this.wgPublicKey(),
       this.portListening(cfg.openvpn.port, cfg.openvpn.proto),
       this.portListening(500, 'udp'),
+      this.portListening(cfg.sstp.port, 'tcp'),
     ]);
 
     return {
@@ -199,6 +217,18 @@ export class VpnService {
           ready: l2Up && !!host,
           install: this.l2tpInstall(cfg),
           mikrotik: this.l2tpMikrotik(cfg),
+        },
+        {
+          type: 'sstp' as VpnType,
+          name: 'SSTP',
+          blurb: 'TLS over TCP 443 — gets through almost any firewall or proxy. Needs a server certificate.',
+          running: ssUp,
+          listenPort: cfg.sstp.port,
+          subnet: cfg.sstp.subnet,
+          serverIp: this.firstHostIp(cfg.sstp.subnet),
+          ready: ssUp && !!host,
+          install: this.sstpInstall(cfg),
+          mikrotik: this.sstpMikrotik(cfg),
         },
       ],
     };
@@ -357,6 +387,66 @@ export class VpnService {
     ].join('\n');
   }
 
+  private sstpInstall(cfg: VpnConfig): string {
+    const ip = this.firstHostIp(cfg.sstp.subnet);
+    const base = cfg.sstp.subnet.split('/')[0].split('.').slice(0, 3).join('.');
+    const host = cfg.endpointHost || '<panel-host>';
+    return (
+      this.header('SSTP panel server (TLS on TCP ' + cfg.sstp.port + ')') +
+      [
+        'apt-get update -y && apt-get install -y ppp certbot',
+        '# SSTP needs a TLS server certificate whose name matches the public host',
+        `# routers dial (${host}). The simplest is a public Let's Encrypt cert:`,
+        `#   certbot certonly --standalone -d ${host}`,
+        '# then point the SSTP server at /etc/letsencrypt/live/<host>/{fullchain,privkey}.pem',
+        '#',
+        '# Ubuntu has no packaged SSTP server; the supported one is sstp-server (pip)',
+        '# or accel-ppp. Example with accel-ppp (recommended for production):',
+        'apt-get install -y accel-ppp || true',
+        'cat > /etc/accel-ppp.conf <<EOF',
+        '[modules]',
+        'log_file',
+        'sstp',
+        'auth_mschap_v2',
+        'chap-secrets',
+        'ippool',
+        '[sstp]',
+        `port=${cfg.sstp.port}`,
+        `ssl-pemfile=/etc/letsencrypt/live/${host}/fullchain.pem`,
+        `ssl-keyfile=/etc/letsencrypt/live/${host}/privkey.pem`,
+        'verbose=1',
+        '[ip-pool]',
+        `gw-ip-address=${ip}`,
+        `${base}.10-${base}.240`,
+        '[chap-secrets]',
+        'chap-secrets=/etc/ppp/chap-secrets',
+        'EOF',
+        'systemctl enable --now accel-ppp 2>/dev/null || true',
+        `ufw allow ${cfg.sstp.port}/tcp 2>/dev/null || true`,
+        'echo "SSTP up on TCP ' + cfg.sstp.port + ' (TLS). Add a login per router in"',
+        'echo "  /etc/ppp/chap-secrets:  <routername> * <password> *"',
+        'echo "The router must trust the server certificate (public CA = automatic)."',
+      ].join('\n') +
+      '\n'
+    );
+  }
+
+  private sstpMikrotik(cfg: VpnConfig): string {
+    const host = cfg.endpointHost || '<panel-host>';
+    return [
+      '# RouterOS 7 — SSTP client to the panel (TLS on TCP ' + cfg.sstp.port + ').',
+      '# The panel needs a server certificate whose name matches ' + host + '.',
+      '# Public cert → default verify works. Private CA → import it first:',
+      '#   /certificate import file-name=panel-ca.crt',
+      '/interface/sstp-client',
+      `add name=jointbox-sstp connect-to=${host} http-port=${cfg.sstp.port} \\`,
+      '    user=<routername> password=<password> profile=default-encryption \\',
+      '    add-default-route=no verify-server-certificate=no \\',
+      '    comment="Jointbox management tunnel"',
+      '# Set verify-server-certificate=yes (and certificate=<ca>) once trusted.',
+    ].join('\n');
+  }
+
   private maskFor(cidr: string): string {
     const bits = Number(cidr.split('/')[1]);
     const m = [0, 0, 0, 0];
@@ -380,7 +470,41 @@ export class VpnService {
 
     if (type === 'wireguard') return this.wgClient(v, nm, ip, host, cfg);
     if (type === 'openvpn') return this.ovpnClient(v, nm, host, cfg);
+    if (type === 'sstp') return this.sstpClient(v, nm, host, cfg);
     return this.l2tpClient(v, nm, host);
+  }
+
+  private sstpClient(vendor: string, nm: string, host: string, cfg: VpnConfig): string {
+    const port = cfg.sstp.port;
+    switch (vendor) {
+      case 'linux':
+      case 'generic':
+        return [
+          `# ${nm} — SSTP client (sstp-client / NetworkManager)`,
+          `# server = ${host}:${port}  (HTTPS/TLS)  user = ${nm}  password = <password>`,
+          `# The server's TLS certificate must be trusted (public CA, or import the CA).`,
+          `sstpc --user ${nm} --password <password> ${host}:${port} usepeerdns require-mschap-v2 noauth`,
+        ].join('\n');
+      case 'cisco':
+      case 'juniper':
+        return [
+          `! ${nm} — SSTP is a Microsoft/MikroTik protocol and is not native on this vendor.`,
+          `! Use WireGuard, OpenVPN or L2TP/IPsec here, or an SSTP-capable host behind the device.`,
+        ].join('\n');
+      default: // mikrotik
+        return [
+          `# RouterOS 7 — SSTP client ${nm} to the panel.`,
+          `# SSTP is TLS on TCP ${port}; the panel needs a server certificate whose name`,
+          `# matches ${host}. If it is a public cert the default verify works; for a`,
+          `# private CA, import it first and set certificate=<ca> verify-server-certificate=yes.`,
+          '/interface/sstp-client',
+          `add name=jointbox-sstp connect-to=${host} http-port=${port} user=${nm} password=<password> \\`,
+          '    profile=default-encryption add-default-route=no \\',
+          '    verify-server-certificate=no \\',
+          '    comment="Jointbox management tunnel"',
+          '# Tighten verify-server-certificate=yes once the panel cert is trusted on the router.',
+        ].join('\n');
+    }
   }
 
   private assertIpStr(ip: string): string {

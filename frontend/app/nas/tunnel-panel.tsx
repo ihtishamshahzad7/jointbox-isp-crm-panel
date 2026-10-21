@@ -66,7 +66,7 @@ export function TunnelPanel({ nasId, nasName }: { nasId: number; nasName?: strin
   // Which VPN type to set up for this router. WireGuard is the fully-integrated
   // path (keys issued + tracked here). OpenVPN / L2/IPsec generate the config to
   // paste, served by the panel VPN server for that type.
-  const [vpnType, setVpnType] = React.useState<"wireguard" | "openvpn" | "l2tp">("wireguard");
+  const [vpnType, setVpnType] = React.useState<"wireguard" | "openvpn" | "l2tp" | "sstp">("wireguard");
   const [vendor, setVendor] = React.useState("mikrotik");
   const [overlayIp, setOverlayIp] = React.useState("");
   const [genCfg, setGenCfg] = React.useState<string | null>(null);
@@ -235,6 +235,7 @@ export function TunnelPanel({ nasId, nasName }: { nasId: number; nasName?: strin
           ["wireguard", "WireGuard (recommended)"],
           ["openvpn", "OpenVPN"],
           ["l2tp", "L2TP / IPsec"],
+          ["sstp", "SSTP"],
         ] as const).map(([id, label]) => (
           <button key={id} className={vpnType === id ? "on" : ""} onClick={() => { setVpnType(id); setGenCfg(null); setGenErr(null); }}>
             {label}
@@ -242,14 +243,24 @@ export function TunnelPanel({ nasId, nasName }: { nasId: number; nasName?: strin
         ))}
       </div>
 
-      {/* ── OpenVPN / L2TP: generate the per-router config to paste ── */}
+      {/* ── OpenVPN / L2TP / SSTP: generate the per-router config to paste ── */}
       {vpnType !== "wireguard" && (
         <>
-          <p className="tp-lead">
-            Generate the {vpnType === "openvpn" ? "OpenVPN" : "L2TP/IPsec"} config for this router. The
-            panel’s {vpnType === "openvpn" ? "OpenVPN" : "L2TP/IPsec"} server must be installed first
-            (Network → <b>VPN Servers</b>). Keys/secrets are placeholders you fill from the server install output.
-          </p>
+          {(() => {
+            const info: Record<string, { name: string; needs: string }> = {
+              openvpn: { name: "OpenVPN", needs: "Import this router’s client certificate + key on the MikroTik first; the config references them." },
+              l2tp: { name: "L2TP / IPsec", needs: "On the MikroTik you set: the panel address, the router’s login/password, and the shared IPsec secret from the server install." },
+              sstp: { name: "SSTP", needs: "SSTP is TLS on TCP 443. The panel needs a server certificate matching its public name; the router uses a login/password and (for a private CA) imports the CA." },
+            };
+            const i = info[vpnType] || info.l2tp;
+            return (
+              <p className="tp-lead">
+                Generate the <b>{i.name}</b> config for this router, then paste it on the device. The panel’s {i.name} server
+                must be installed first (Network → <b>VPN Servers</b> → {i.name} → Setup). {i.needs} Secrets shown are
+                placeholders you fill from the server install output.
+              </p>
+            );
+          })()}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
             <select value={vendor} onChange={(e) => setVendor(e.target.value)} className="tp-btn" style={{ cursor: "pointer" }}>
               <option value="mikrotik">MikroTik</option>

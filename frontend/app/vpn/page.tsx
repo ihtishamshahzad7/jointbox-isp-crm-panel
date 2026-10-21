@@ -16,7 +16,7 @@ import React from "react";
 import API from "../components/api";
 
 type Server = {
-  type: "wireguard" | "openvpn" | "l2tp";
+  type: "wireguard" | "openvpn" | "l2tp" | "sstp";
   name: string;
   blurb: string;
   running: boolean;
@@ -229,7 +229,7 @@ function ClientConfigMaker({
 }: {
   card: React.CSSProperties; input: React.CSSProperties; pre: React.CSSProperties; token: string | null;
 }) {
-  const [type, setType] = React.useState<"wireguard" | "openvpn" | "l2tp">("wireguard");
+  const [type, setType] = React.useState<"wireguard" | "openvpn" | "l2tp" | "sstp">("wireguard");
   const [vendor, setVendor] = React.useState("mikrotik");
   const [name, setName] = React.useState("");
   const [ip, setIp] = React.useState("");
@@ -267,6 +267,7 @@ function ClientConfigMaker({
           <option value="wireguard">WireGuard</option>
           <option value="openvpn">OpenVPN</option>
           <option value="l2tp">L2TP/IPsec</option>
+          <option value="sstp">SSTP</option>
         </select>
         <select style={sel} value={vendor} onChange={(e) => setVendor(e.target.value)}>
           <option value="mikrotik">MikroTik</option>
