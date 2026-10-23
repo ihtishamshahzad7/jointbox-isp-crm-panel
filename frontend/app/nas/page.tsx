@@ -5,9 +5,36 @@ import { Wizard, Field } from "../components/wizard";
 import ImportWizard from "../components/import-wizard";
 import { downloadCsv } from "../components/csv-export";
 import { DeviceHealth } from './device-health';
-import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { Expandable } from "../components/expandable";
 import { GroupPanel } from "../components/group-panel";
+
+const NAS_TOOLBAR_CSS = `
+.nas-tb{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-subtle,#F4F5F7);border:1px solid var(--border,#E6E9EF);border-radius:12px;padding:8px 10px;margin-bottom:14px}
+.nas-tb-search{display:flex;align-items:center;gap:8px;background:var(--surface,#fff);border:1px solid var(--border,#E2E6EC);border-radius:999px;padding:7px 14px;min-width:220px;flex:1 1 220px;max-width:360px}
+.nas-tb-search input{all:unset;flex:1;font-size:13px;color:var(--text,#121826);min-width:0}
+.nas-tb-sel{appearance:none;-webkit-appearance:none;background:rgba(120,128,140,.08);border:1px solid transparent;border-radius:9px;padding:7px 12px;font-size:12.5px;font-weight:600;color:var(--text,#374151);cursor:pointer;transition:background .12s,border-color .12s;font-family:inherit}
+.nas-tb-sel:hover{background:rgba(120,128,140,.16);border-color:var(--border,#D7DCE3)}
+.nas-tb-pill{border:1px solid var(--border,#D7DCE3);background:var(--surface,#fff);border-radius:999px;padding:6px 13px;font-size:12px;font-weight:700;color:var(--text,#374151);cursor:pointer;transition:all .12s}
+.nas-tb-pill:hover{border-color:#6C3CE1}
+.nas-tb-pill.on{background:#6C3CE1;border-color:#6C3CE1;color:#fff}
+.nas-tb-spacer{margin-left:auto}
+.nas-tb-add{border:none;background:#6C3CE1;color:#fff;border-radius:9px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;transition:background .12s}
+.nas-tb-add:hover{background:#5b2fc9}
+.nas-tb-btn{border:1px solid var(--border,#D7DCE3);background:var(--surface,#fff);color:var(--text,#374151);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:600;cursor:pointer;transition:border-color .12s}
+.nas-tb-btn:hover{border-color:#6C3CE1}
+@media (prefers-color-scheme:dark){
+ :root:not([data-theme="light"]) .nas-tb{background:var(--surface,#14181f);border-color:var(--border,#262b36)}
+ :root:not([data-theme="light"]) .nas-tb-search{background:var(--bg,#1b2029);border-color:var(--border,#2b313d)}
+ :root:not([data-theme="light"]) .nas-tb-search input{color:var(--text,#E6E9EE)}
+ :root:not([data-theme="light"]) .nas-tb-sel{color:var(--text,#cdd3dd)}
+ :root:not([data-theme="light"]) .nas-tb-pill,:root:not([data-theme="light"]) .nas-tb-btn{background:var(--bg,#1b2029);color:var(--text,#cdd3dd);border-color:var(--border,#2b313d)}
+}
+:root[data-theme="dark"] .nas-tb{background:var(--surface,#14181f);border-color:var(--border,#262b36)}
+:root[data-theme="dark"] .nas-tb-search{background:var(--bg,#1b2029);border-color:var(--border,#2b313d)}
+:root[data-theme="dark"] .nas-tb-search input{color:var(--text,#E6E9EE)}
+:root[data-theme="dark"] .nas-tb-sel{color:var(--text,#cdd3dd)}
+:root[data-theme="dark"] .nas-tb-pill,:root[data-theme="dark"] .nas-tb-btn{background:var(--bg,#1b2029);color:var(--text,#cdd3dd);border-color:var(--border,#2b313d)}
+`;
 import { NasTraffic } from "./nas-traffic";
 import { SkeletonTable } from "../components/skeleton";
 import { NasAccordion } from "./nas-accordion";
@@ -181,6 +208,7 @@ export default function NasPage() {
   const [typeFilter, setTypeFilter] = useState<'ALL'|'MIKROTIK'|'CISCO'|'HUAWEI'|'OTHER'>('ALL');
   const [siteFilter, setSiteFilter] = useState('ALL');
   const [groupFilter, setGroupFilter] = useState('ALL');
+  const [showGroups, setShowGroups] = useState(false);
   const [groupOptions, setGroupOptions] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
   const [showRadiusSecret, setShowRadiusSecret] = useState(false);
   const [showApiPassword, setShowApiPassword] = useState(false);
@@ -946,70 +974,66 @@ export default function NasPage() {
           </div>
           </>)}
 
-          <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
-            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search by NAS name or IP address" style={{ ...inputSt, maxWidth:320 }} />
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
-              <option value="ALL">All Status</option>
-              <option value="ACTIVE">Active</option>
-              <option value="INACTIVE">Inactive</option>
-            </select>
-            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as any)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
-              <option value="ALL">All Types</option>
-              <option value="MIKROTIK">MikroTik</option>
-              <option value="CISCO">Cisco</option>
-              <option value="HUAWEI">Huawei</option>
-              <option value="OTHER">Other</option>
-            </select>
-            <select value={groupFilter} onChange={e => { if (e.target.value === '__new__') { void createGroup(); return; } setGroupFilter(e.target.value); }} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
-              <option value="ALL">All Groups</option>
-              <option value="UNGROUPED">Ungrouped</option>
-              {groupOptions.map((g) => (
-                <option key={g.id} value={String(g.id)}>{g.name}</option>
-              ))}
-              <option value="__new__">＋ Create group…</option>
-            </select>
-            <button onClick={() => void createGroup()} title="Create a new group" style={{ ...inputSt, width:'auto', cursor:'pointer', fontWeight:700 }}>＋ New group</button>
-            <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{ ...inputSt, width:'auto', cursor:'pointer' }}>
-              <option value="ALL">All Sites</option>
-              {[...new Set(nasList.map(n => n.description || n.shortname || '').filter(Boolean))].map(s => (
-                <option key={s} value={s}>{s.slice(0, 30)}</option>
-              ))}
-            </select>
-            <span style={{ fontSize:11, color:t.textMuted }}>{filteredNasList.length} result{filteredNasList.length !== 1 ? 's' : ''}</span>
-          </div>
+          {/* ── Unified SaaS toolbar ── */}
+          <style>{NAS_TOOLBAR_CSS}</style>
+          {(() => {
+            const canAdd = !me || isAdminRole(me.role) || me.canAddNas;
+            return (
+              <div className="nas-tb">
+                <div className="nas-tb-search">
+                  <span aria-hidden style={{ opacity: 0.5, fontSize: 13 }}>🔎</span>
+                  <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search routers by name or IP" />
+                </div>
+                <button type="button" className={`nas-tb-pill${showGroups ? " on" : ""}`} onClick={() => setShowGroups(v => !v)} title="Group routers by owner, type or site">
+                  Group NAS
+                </button>
+                <select className="nas-tb-sel" value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)}>
+                  <option value="ALL">All Status</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
+                </select>
+                <select className="nas-tb-sel" value={typeFilter} onChange={e => setTypeFilter(e.target.value as any)}>
+                  <option value="ALL">All Types</option>
+                  <option value="MIKROTIK">MikroTik</option>
+                  <option value="CISCO">Cisco</option>
+                  <option value="HUAWEI">Huawei</option>
+                  <option value="OTHER">Other</option>
+                </select>
+                <select className="nas-tb-sel" value={groupFilter} onChange={e => { if (e.target.value === '__new__') { void createGroup(); return; } setGroupFilter(e.target.value); }}>
+                  <option value="ALL">All Groups</option>
+                  <option value="UNGROUPED">Ungrouped</option>
+                  {groupOptions.map((g) => (<option key={g.id} value={String(g.id)}>{g.name}</option>))}
+                  <option value="__new__">＋ Create group…</option>
+                </select>
+                <select className="nas-tb-sel" value={siteFilter} onChange={e => setSiteFilter(e.target.value)}>
+                  <option value="ALL">All Sites</option>
+                  {[...new Set(nasList.map(n => n.description || n.shortname || '').filter(Boolean))].map(s => (
+                    <option key={s} value={s}>{s.slice(0, 30)}</option>
+                  ))}
+                </select>
 
-          {/* Grouping / classification panel */}
-          <GroupPanel
-            endpoint="/nas/grouped"
-            title="Group NAS"
-            dims={[{ id: "owner", label: "Owner" }, { id: "type", label: "Type" }, { id: "site", label: "Site" }]}
-            onPick={(dim, key, label) => { if (dim === "type") setTypeFilter(String(key) as any); else setSearchQ(String(label || "")); }}
-          />
-
-          {/* WinBox toolbar strip */}
-          <Expandable label="NAS list">
-          <WinBoxToolbar
-            find={searchQ}
-            onFind={setSearchQ}
-            findPlaceholder="Find NAS name or IP…"
-            groups={[
-              // Add/Import are hidden for an account that may only use routers
-              // handed down to it — showing them would offer an action that
-              // always fails at save time.
-              ...((!me || isAdminRole(me.role) || me.canAddNas)
-                ? [[{ label: "Add", icon: "＋", tone: "primary" as const, title: "Add NAS / router", onClick: () => { resetForm(); setEditItem(null); setShowForm(true); } }]]
-                : []),
-              [
-                ...((!me || isAdminRole(me.role) || me.canAddNas)
-                  ? [{ label: "Import", icon: "⬆", onClick: () => setShowImport(true) }]
-                  : []),
-                { label: "Export", icon: "⬇", onClick: () => downloadCsv("nas.csv", nasList.map((n:any)=>({ nasName:n.shortname||n.nasname, nasIp:n.nasIp||n.nasname, secret:n.secret, apiPort:n.apiPort, nasType:n.type, deviceType:(n as any).deviceType })), [
+                <span className="nas-tb-spacer" />
+                {canAdd && <button type="button" className="nas-tb-add" onClick={() => { resetForm(); setEditItem(null); setShowForm(true); }}>＋ Add</button>}
+                {canAdd && <button type="button" className="nas-tb-btn" onClick={() => setShowImport(true)}>Import</button>}
+                <button type="button" className="nas-tb-btn" onClick={() => downloadCsv("nas.csv", nasList.map((n:any)=>({ nasName:n.shortname||n.nasname, nasIp:n.nasIp||n.nasname, secret:n.secret, apiPort:n.apiPort, nasType:n.type, deviceType:(n as any).deviceType })), [
                   { key:"nasName", label:"NAS Name" }, { key:"nasIp", label:"NAS IP" }, { key:"secret", label:"Secret" }, { key:"apiPort", label:"API Port" }, { key:"nasType", label:"Type" }, { key:"deviceType", label:"Device" },
-                ]) },
-              ],
-              [{ label: "Refresh", icon: "⟳", onClick: loadData }],
-            ]}
-          />
+                ])}>Export</button>
+                <button type="button" className="nas-tb-btn" onClick={loadData}>Refresh</button>
+              </div>
+            );
+          })()}
+
+          {/* Grouping panel — toggled by the Group NAS pill */}
+          {showGroups && (
+            <GroupPanel
+              endpoint="/nas/grouped"
+              title="Group NAS"
+              dims={[{ id: "owner", label: "Owner" }, { id: "type", label: "Type" }, { id: "site", label: "Site" }]}
+              onPick={(dim, key, label) => { if (dim === "type") setTypeFilter(String(key) as any); else setSearchQ(String(label || "")); }}
+            />
+          )}
+
+          <Expandable label="NAS list">
 
           {/* NAS Table */}
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
