@@ -7,21 +7,18 @@
 import React from "react";
 import { useNasDetail } from "./context";
 import { Panel } from "./ui";
-import { NasTraffic } from "../nas-traffic";
 import { InterfaceTraffic } from "./interface-traffic";
 
 export function TrafficTab() {
-  const { nasId } = useNasDetail();
+  const { nasId, reach, sessions, radiusStats } = useNasDetail();
+  // Total active PPPoE users — real, from the router /ppp/active (reach) with a
+  // RADIUS accounting fallback. VLANs are deliberately NOT shown as a separate
+  // dropdown: they are logical and flow through the physical interfaces below.
+  const activePppoe = reach?.activeConnections ?? sessions?.length ?? radiusStats?.activeSessionCount ?? 0;
   return (
     <div className="nd-root">
-      <Panel title="Per-interface traffic" sub="Individual SNMP ports — toggle interfaces in the legend">
-        <InterfaceTraffic nasId={nasId} />
-      </Panel>
-
-      <Panel title="Traffic" sub="Whole router (all interfaces & VLANs combined)" actions={
-        <span className="nd-updated">sampled every 5 min</span>
-      }>
-        <NasTraffic nasId={nasId} />
+      <Panel title="Per-interface traffic" sub="Individual SNMP ports — toggle interfaces in the legend. VLANs flow through these physical ports.">
+        <InterfaceTraffic nasId={nasId} activePppoe={activePppoe} />
       </Panel>
     </div>
   );

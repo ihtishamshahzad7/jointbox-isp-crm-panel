@@ -42,7 +42,7 @@ function niceMax(v: number) {
 }
 const rangeSeconds: Record<string, number> = { "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800 };
 
-export function InterfaceTraffic({ nasId }: { nasId: number }) {
+export function InterfaceTraffic({ nasId, activePppoe }: { nasId: number; activePppoe?: number }) {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const H = React.useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -178,6 +178,26 @@ export function InterfaceTraffic({ nasId }: { nasId: number }) {
             )}
           </div>
 
+          {/* Summary — total active PPPoE users (real) + active interfaces */}
+          <div className="itf-summary">
+            <div className="itf-sumcard">
+              <span className="itf-sum-n">{activePppoe ?? 0}</span>
+              <span className="itf-sum-l">Active PPPoE users</span>
+            </div>
+            <div className="itf-sumcard">
+              <span className="itf-sum-n">{ifaces.filter((i) => i.up).length}</span>
+              <span className="itf-sum-l">Interfaces up</span>
+            </div>
+            <div className="itf-sumcard">
+              <span className="itf-sum-n">{fmtBps(ifaces.reduce((a, i) => a + i.rxBps, 0))}</span>
+              <span className="itf-sum-l">Total ↓ now</span>
+            </div>
+            <div className="itf-sumcard">
+              <span className="itf-sum-n">{fmtBps(ifaces.reduce((a, i) => a + i.txBps, 0))}</span>
+              <span className="itf-sum-l">Total ↑ now</span>
+            </div>
+          </div>
+
           {/* Port Summary */}
           <table className="itf-table">
             <thead><tr><th>Interface</th><th>Current ↓ / ↑</th><th>Peak ↓ / ↑</th><th>≈ Total ({range})</th><th>Link</th></tr></thead>
@@ -234,6 +254,10 @@ const CSS = `
 .itf-table tr.sel{background:rgba(47,111,237,.05)}
 .itf-table td b{font-weight:700}
 .itf-table .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.itf-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:0 0 14px}
+.itf-sumcard{background:var(--surface,#fff);border:1px solid var(--border,#EAEDF1);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.itf-sum-n{font-size:20px;font-weight:800;color:var(--text,#111827);font-variant-numeric:tabular-nums}
+.itf-sum-l{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#9aa3af)}
 `;
 
 export default InterfaceTraffic;

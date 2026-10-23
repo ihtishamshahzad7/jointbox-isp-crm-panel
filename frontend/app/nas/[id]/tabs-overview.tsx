@@ -124,34 +124,16 @@ export function OverviewTab({ onOpenSession, onGoto }: {
         </Panel>
       )}
 
-      {/* ── Live sessions preview ── */}
-      <Panel title={`Active sessions${sessions.length ? ` (${sessions.length})` : ""}`} sub="Router first, RADIUS accounting fallback" actions={
-        sessions.length ? <Btn size="xs" variant="ghost" onClick={() => onGoto("subscribers")}>View all</Btn> : undefined
-      }>
-        {sessions.length === 0 ? (
-          <div className="nd-empty" style={{ padding: 16 }}>
-            <div className="nd-empty-title">No active sessions</div>
-            <div className="nd-empty-hint">When subscribers connect, their sessions appear here from the router's /ppp/active (or radacct when accounting is enabled).</div>
-          </div>
-        ) : (
-          <table className="nd-table">
-            <thead><tr><th>User</th><th>IP</th><th>MAC</th><th>Connected</th><th>Duration</th><th>↓ / ↑</th><th></th></tr></thead>
-            <tbody>
-              {sessions.slice(0, 8).map((s) => (
-                <tr key={s.acctsessionid ?? s.username} className="nd-row-click" onClick={() => onOpenSession(s)}>
-                  <td className="nd-mono" style={{ fontWeight: 700 }}>{s.username}</td>
-                  <td className="nd-mono">{show(s.framedipaddress)}</td>
-                  <td className="nd-mono">{show(s.callingstationid)}</td>
-                  <td>{fmtDateTime(s.acctstarttime)}</td>
-                  <td className="num">{fmtDuration(s.duration_seconds)}</td>
-                  <td className="num nd-mono">{fmtBytesShort(s.download_bytes)} / {fmtBytesShort(s.upload_bytes)}</td>
-                  <td><Btn size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); onOpenSession(s); }}>Details</Btn></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Panel>
+      {/* ── Subscribers summary — single source of truth lives on the
+             Subscribers tab; here we only show the count and a link, never a
+             second subscriber/session table. ── */}
+      <div className="ov-subsum">
+        <div className="ov-subsum-l">
+          <span className="ov-subsum-n">{nas?._count?.subscribers ?? nas?.subscribers?.length ?? 0}</span>
+          <span className="ov-subsum-t">accounts assigned to this router · {reach?.activeConnections ?? sessions.length} online now</span>
+        </div>
+        <Btn size="xs" variant="ghost" onClick={() => onGoto("subscribers")}>Open Subscribers →</Btn>
+      </div>
 
       <div className="nd-two-col">
         <Panel title="Recent events" sub="Telemetry event log">
@@ -237,6 +219,13 @@ export const OverviewCss = `
 .ov-int-l{flex:1;min-width:0}
 .ov-int-l b{display:block;font-size:12.5px;color:#111827;font-weight:700}
 .ov-int-l span{font-size:11px;color:#6B7280}
+.ov-subsum{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid #EAEDF1;border-radius:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);padding:14px 18px;margin-bottom:14px}
+.ov-subsum-l{display:flex;align-items:baseline;gap:10px;min-width:0}
+.ov-subsum-n{font-size:24px;font-weight:800;color:#111827;font-variant-numeric:tabular-nums}
+.ov-subsum-t{font-size:12.5px;color:#6B7280}
+:root[data-theme="dark"] .ov-subsum{background:#161a22;border-color:#262b36;box-shadow:none}
+:root[data-theme="dark"] .ov-subsum-n{color:#E6E9EE}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .ov-subsum{background:#161a22;border-color:#262b36;box-shadow:none}:root:not([data-theme="light"]) .ov-subsum-n{color:#E6E9EE}}
 @media (prefers-color-scheme:dark){
  :root:not([data-theme="light"]) .ov-card{background:#161a22;border-color:#262b36;box-shadow:none}
  :root:not([data-theme="light"]) .ov-card-h h3{color:#aab2bf}
