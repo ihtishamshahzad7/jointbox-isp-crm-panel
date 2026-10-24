@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
-import { motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
-import { SPRING } from "../../lib/motion";
 import { publishSection, clearSection } from "./section-nav";
 import styles from "./advanced-ui.module.css";
 
@@ -82,69 +80,101 @@ function HubInner({
     select(tabs[next].id);
   };
 
+  const [navOpen, setNavOpen] = useState(false);
+
   return (
     <div className={styles.workspace}>
-      <div
-        className="hub-tabs"
-        role="tablist"
-        aria-label="Section navigation"
-        onKeyDown={(e) => {
-          if (e.key === "ArrowRight") { e.preventDefault(); selectByOffset(1); }
-          if (e.key === "ArrowLeft") { e.preventDefault(); selectByOffset(-1); }
-          if (e.key === "Home") { e.preventDefault(); if (tabs[0]) select(tabs[0].id); }
-          if (e.key === "End") { e.preventDefault(); if (tabs.at(-1)) select(tabs.at(-1)!.id); }
-        }}
-        style={{
-          display: "flex",
-          gap: 4,
-          flexWrap: "nowrap",
-          alignItems: "center",
-          overflowX: "auto",
-          overscrollBehaviorX: "contain",
-          WebkitOverflowScrolling: "touch",
-          scrollbarWidth: "none",
-          borderBottom: "1px solid var(--border)",
-          marginBottom: 18,
-          position: "relative",
-          padding: "2px 2px 0",
-        }}
-      >
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={t.id === current?.id}
-            tabIndex={t.id === current?.id ? 0 : -1}
-            className={`hub-tab ${t.id === current?.id ? "on" : ""}`}
-            onClick={() => select(t.id)}
-            onFocus={(e) => e.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })}
-          >
-            {t.label}
-            {t.id === current?.id && (
-              <motion.span
-                className="hub-underline"
-                layoutId="hub-underline"
-                transition={SPRING}
-              />
-            )}
-          </button>
-        ))}
+      <div className="hub-layout">
+        {/* Mobile: the section sidebar collapses behind this trigger. */}
+        <button
+          type="button"
+          className="hub-navtrigger"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen((v) => !v)}
+        >
+          <span>{current?.label ?? "Sections"}</span>
+          <span className={`hub-navchev${navOpen ? " open" : ""}`}>▾</span>
+        </button>
+
+        {/* Left vertical navigation sidebar. */}
+        <nav
+          className={`hub-side${navOpen ? " open" : ""}`}
+          role="tablist"
+          aria-label="Section navigation"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); selectByOffset(1); }
+            if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); selectByOffset(-1); }
+            if (e.key === "Home") { e.preventDefault(); if (tabs[0]) select(tabs[0].id); }
+            if (e.key === "End") { e.preventDefault(); if (tabs.at(-1)) select(tabs.at(-1)!.id); }
+          }}
+        >
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={t.id === current?.id}
+              tabIndex={t.id === current?.id ? 0 : -1}
+              className={`hub-side-tab${t.id === current?.id ? " on" : ""}`}
+              onClick={() => { select(t.id); setNavOpen(false); }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Right content area. */}
+        <div className="hub-body">
+          {current?.hint && (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+              {current.hint}
+            </div>
+          )}
+          {tabs.map((t) =>
+            seen.has(t.id) ? (
+              <div key={t.id} style={{ display: t.id === current?.id ? "block" : "none" }}>
+                {t.render()}
+              </div>
+            ) : null,
+          )}
+        </div>
       </div>
 
-      {current?.hint && (
-        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14, marginTop: -6 }}>
-          {current.hint}
-        </div>
-      )}
-
-      {tabs.map((t) =>
-        seen.has(t.id) ? (
-          <div key={t.id} style={{ display: t.id === current?.id ? "block" : "none" }}>
-            {t.render()}
-          </div>
-        ) : null,
-      )}
+      <style jsx global>{`
+        .hub-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; align-items: start; }
+        .hub-body { min-width: 0; }
+        .hub-side {
+          position: sticky; top: 12px; display: flex; flex-direction: column; gap: 3px;
+          background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+          padding: 9px; box-shadow: 0 1px 2px rgba(0,0,0,.05);
+        }
+        .hub-side-tab {
+          border: none; background: transparent; padding: 9px 13px; border-radius: 9px;
+          font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer;
+          font-family: inherit; white-space: nowrap; text-align: left; width: 100%;
+          transition: background .12s, color .12s;
+        }
+        .hub-side-tab:hover { color: var(--text); background: var(--surface-2); }
+        .hub-side-tab.on {
+          background: var(--accent); color: #fff;
+          box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
+        }
+        .hub-navtrigger {
+          display: none; align-items: center; justify-content: space-between; gap: 10px;
+          width: 100%; padding: 11px 14px; border: 1px solid var(--border); border-radius: 12px;
+          background: var(--surface); color: var(--text); font-size: 13px; font-weight: 700;
+          font-family: inherit; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.05);
+        }
+        .hub-navchev { transition: transform .18s; color: var(--muted); }
+        .hub-navchev.open { transform: rotate(180deg); }
+        @media (max-width: 900px) {
+          .hub-layout { grid-template-columns: 1fr; gap: 12px; }
+          .hub-navtrigger { display: flex; }
+          .hub-side { position: static; display: none; padding: 7px; }
+          .hub-side.open { display: flex; }
+          .hub-side-tab { padding: 11px 13px; }
+        }
+      `}</style>
     </div>
   );
 }
