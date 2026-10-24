@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { NovaArea, NovaBars, NovaDonut, dailySeries } from "../components/nova-charts";
 import useSWR from "swr";
@@ -768,12 +769,10 @@ export default function DashboardPage() {
 
   const tabRailStyle: React.CSSProperties = {
     display: "flex",
-    gap: 10,
-    padding: 8,
-    background: "#FFFFFF",
-    border: "1px solid #E2E8F0",
-    borderRadius: 12,
-    boxShadow: "0 1px 3px rgba(0,0,0,.05)",
+    gap: 7,
+    padding: 0,
+    background: "transparent",
+    border: "none",
     // On phones the section tabs scroll sideways instead of overflowing the page.
     overflowX: "auto",
     maxWidth: "100%",
@@ -782,24 +781,24 @@ export default function DashboardPage() {
   };
 
   const tabButtonStyle = (active: boolean): React.CSSProperties => ({
-    minWidth: 138,
     flexShrink: 0,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: 3,
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: active ? "1px solid #3C50E0" : "1px solid #E2E8F0",
-    background: active ? "#EEF1FE" : "#F7F9FC",
-    color: active ? "#3C50E0" : "#64748B",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "7px 14px",
+    borderRadius: 999,
+    fontSize: 12.5,
+    fontWeight: 700,
+    border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
+    background: active ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "transparent",
+    color: active ? "var(--accent)" : "var(--muted)",
     cursor: "pointer",
-    textAlign: "left",
+    whiteSpace: "nowrap",
     transition: "all 0.18s ease",
   });
 
   return (
-    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, paddingBottom: 100, display: "flex", flexDirection: "column", gap: 14 }}>
       {!mounted ? (
         <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ width: "100%", maxWidth: 420, background: "var(--surface)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 18 }}>
@@ -823,8 +822,7 @@ export default function DashboardPage() {
             const active = tab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} style={tabButtonStyle(active)}>
-                <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em", fontStyle: "normal" }}>{t.label}</span>
-                <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: active ? "#3C50E0" : "#64748B", fontStyle: "normal" }}>{t.caption}</span>
+                <span style={{ letterSpacing: "-0.01em" }}>{t.label}</span>
               </button>
             );
           })}
@@ -834,69 +832,111 @@ export default function DashboardPage() {
 
       {tab === "home" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* KPI cards — icon chip, big figure, plain-English caption, trend
-              badge and a mini sparkline. Uses only homeStats (already loaded);
-              no new data fetch, component or route. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
-            {(() => {
-              const activePct = homeStats.totalSubscribers ? Math.round((homeStats.activeSubscribers / homeStats.totalSubscribers) * 100) : 0;
-              const onlinePct = homeStats.activeSubscribers ? Math.round((homeStats.onlineNow / homeStats.activeSubscribers) * 100) : 0;
-              const expiredPct = homeStats.totalSubscribers ? Math.round((homeStats.expired / homeStats.totalSubscribers) * 100) : 0;
-              const expiringPct = homeStats.totalSubscribers ? Math.round((homeStats.expiringSoon / homeStats.totalSubscribers) * 100) : 0;
-              const sys = systemStats;
-              // Lifecycle metrics (online → expired → expiring) are grouped one
-              // after another; signups + revenue move to the very end.
-              return [
-                { icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", glow: "rgba(233,64,139,.30)", scolor: "#8B5CF6", tag: "base", good: true, spark: "0,24 25,20 50,15 75,10 100,6" },
-                { icon: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, grad: "linear-gradient(135deg,#00C9FF,#22c55e)", glow: "rgba(34,197,94,.26)", scolor: "#22c55e", tag: `${activePct}%`, good: activePct >= 70, spark: "0,16 25,18 50,12 75,10 100,13" },
-                { icon: "M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01", label: "Online now", value: homeStats.onlineNow, cap: "Users connected right now in your account", grad: "linear-gradient(135deg,#06b6d4,#3b82f6)", glow: "rgba(59,130,246,.28)", scolor: "#38bdf8", tag: `${onlinePct}% of active`, good: homeStats.onlineNow > 0, spark: "0,16 25,10 50,18 75,9 100,15" },
-                { icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expired", value: homeStats.expired, cap: "Accounts past their expiry date", grad: "linear-gradient(135deg,#f97316,#ef4444)", glow: "rgba(239,68,68,.28)", scolor: "#ef4444", tag: `${expiredPct}% of base`, good: homeStats.expired === 0, spark: "0,14 25,16 50,12 75,15 100,10" },
-                // Connected but past expiry: service being given away right now.
-                // The nightly integrity job cuts these; this tile is how you
-                // know it is working, and shows the leak between runs.
-                ...(homeStats.expiredOnline !== null
-                  ? [{ icon: "M18.36 6.64A9 9 0 1 1 5.64 6.64 M12 2v10", label: "Expired but online", value: homeStats.expiredOnline, cap: "Connected right now with no active subscription — unbilled usage", grad: "linear-gradient(135deg,#dc2626,#7f1d1d)", glow: "rgba(220,38,38,.30)", scolor: "#ef4444", tag: homeStats.expiredOnline === 0 ? "clean" : "leaking", good: homeStats.expiredOnline === 0, spark: "0,10 25,14 50,11 75,15 100,9" }]
-                  : []),
-                // Renewal windows, shortest first — a 1-day list is today's
-                // phone calls, a 2-week list is a forecast.
-                ...(homeStats.expiring1d !== null
-                  ? [{ icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expiring tomorrow", value: homeStats.expiring1d, cap: "Call these first — service stops within 24 hours", grad: "linear-gradient(135deg,#f97316,#dc2626)", glow: "rgba(249,115,22,.30)", scolor: "#f97316", tag: "call today", good: homeStats.expiring1d === 0, spark: "0,12 25,15 50,11 75,14 100,9" }]
-                  : []),
-                ...(homeStats.expiring3d !== null
-                  ? [{ icon: "M8 2v4 M16 2v4 M3 10h18 M8 14h.01 M12 14h.01 M16 14h.01", label: "Expiring in 3 days", value: homeStats.expiring3d, cap: "This week's collections queue", grad: "linear-gradient(135deg,#f59e0b,#ea580c)", glow: "rgba(245,158,11,.28)", scolor: "#f59e0b", tag: "this week", good: homeStats.expiring3d === 0, spark: "0,13 25,16 50,12 75,15 100,10" }]
-                  : []),
-                { icon: "M8 2v4 M16 2v4 M3 10h18 M9 16l2 2 4-4", label: "Expiring in 1 week", value: homeStats.expiringSoon, cap: "ACTIVE accounts expiring within 7 days", grad: "linear-gradient(135deg,#fbbf24,#f59e0b)", glow: "rgba(245,158,11,.28)", scolor: "#fbbf24", tag: `${expiringPct}% of base`, good: homeStats.expiringSoon === 0, spark: "0,14 25,18 50,13 75,16 100,11" },
-                ...(homeStats.expiring2w !== null
-                  ? [{ icon: "M8 2v4 M16 2v4 M3 10h18 M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", label: "Expiring in 2 weeks", value: homeStats.expiring2w, cap: "Renewal forecast — plan capacity and cash", grad: "linear-gradient(135deg,#eab308,#ca8a04)", glow: "rgba(234,179,8,.24)", scolor: "#eab308", tag: "forecast", good: true, spark: "0,16 25,19 50,15 75,17 100,13" }]
-                  : []),
-                { icon: "M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z M9 6h.01 M9 15h.01", label: "Total NAS", value: homeStats.totalNas, cap: "Routers visible to your account", grad: "linear-gradient(135deg,#0ea5e9,#6366f1)", glow: "rgba(14,165,233,.28)", scolor: "#0ea5e9", tag: "routers", good: homeStats.totalNas > 0, spark: "0,18 25,14 50,10 75,12 100,8" },
-                ...(sys
-                  ? [
-                      { icon: "M9 9h6v6H9z M9 1v4 M15 1v4 M9 19v4 M15 19v4 M1 9h4 M1 15h4 M19 9h4 M19 15h4", label: "CPU usage", value: `${sys.cpu ?? 0}%`, cap: "Server processor load", grad: "linear-gradient(135deg,#8b5cf6,#6366f1)", glow: "rgba(99,102,241,.28)", scolor: "#8b5cf6", tag: (sys.cpu ?? 0) < 60 ? "healthy" : "busy", good: (sys.cpu ?? 0) < 60, spark: "0,16 25,18 50,15 75,17 100,14" },
-                      { icon: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M9 10h6v4H9z M2 10v4 M22 10v4", label: "RAM usage", value: `${sys.ramPct ?? 0}%`, cap: sys.ramTotalGb ? `${sys.ramUsedGb ?? 0} / ${sys.ramTotalGb} GB used` : "Server memory load", grad: "linear-gradient(135deg,#f59e0b,#f97316)", glow: "rgba(249,115,22,.28)", scolor: "#f59e0b", tag: "server", good: (sys.ramPct ?? 0) < 80, spark: "0,15 25,17 50,13 75,15 100,12" },
-                    ]
-                  : []),
-                { icon: "M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6", label: "Signups today", value: homeStats.todaySignups, cap: "New activations since midnight", grad: "linear-gradient(135deg,#F7971E,#FFD200)", glow: "rgba(247,151,30,.28)", scolor: "#F7971E", tag: "today", good: true, spark: "0,20 25,22 50,17 75,18 100,12" },
-                { icon: "M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6", label: "Revenue today", value: toCurrency(homeStats.revenueToday), cap: "Payments received today", grad: "linear-gradient(135deg,#E9408B,#F27121)", glow: "rgba(242,113,33,.28)", scolor: "#E9408B", tag: "today", good: true, spark: "0,24 25,20 50,17 75,12 100,7" },
-              ];
-            })().map((c) => (
-              <div key={c.label} className="kpi-card" style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10, transition: "border-color .18s ease, box-shadow .18s ease, transform .18s ease" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ width: 42, height: 42, borderRadius: 12, background: c.grad, boxShadow: `0 8px 22px ${c.glow}`, display: "grid", placeItems: "center" }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={c.icon} /></svg>
+          {/* KPI cards — every tile is a clickable gateway into the matching
+              list page. Icon chip uses a soft tint (red reserved for the one
+              critical metric), tags are a uniform neutral chip, and the arrow
+              at top-right + hover-lift signal "this goes somewhere". Grouped
+              into Overview / Needs attention / Infrastructure rows. */}
+          {(() => {
+            const activePct = homeStats.totalSubscribers ? Math.round((homeStats.activeSubscribers / homeStats.totalSubscribers) * 100) : 0;
+            const onlinePct = homeStats.activeSubscribers ? Math.round((homeStats.onlineNow / homeStats.activeSubscribers) * 100) : 0;
+            const expiredPct = homeStats.totalSubscribers ? Math.round((homeStats.expired / homeStats.totalSubscribers) * 100) : 0;
+            const expiringPct = homeStats.totalSubscribers ? Math.round((homeStats.expiringSoon / homeStats.totalSubscribers) * 100) : 0;
+            const sys = systemStats;
+
+            // Muted icon tints — soft background + readable foreground. These
+            // rgba tints hold up in both light and dark themes.
+            const T = {
+              purple: { tint: "rgba(124,77,255,.12)", fg: "#7c4dff" },
+              green: { tint: "rgba(34,197,94,.13)", fg: "#16a34a" },
+              blue: { tint: "rgba(59,130,246,.12)", fg: "#3b82f6" },
+              amber: { tint: "rgba(245,158,11,.14)", fg: "#d97706" },
+              slate: { tint: "rgba(100,116,139,.13)", fg: "#64748b" },
+              indigo: { tint: "rgba(99,102,241,.12)", fg: "#6366f1" },
+              teal: { tint: "rgba(13,148,136,.12)", fg: "#0d9488" },
+              red: { tint: "rgba(239,68,68,.13)", fg: "#ef4444" },
+            };
+
+            type Kpi = { icon: string; label: string; value: React.ReactNode; cap: string; tag: string; href: string; critical?: boolean } & { tint: string; fg: string };
+            const overview: Kpi[] = [
+              { icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", tag: "base", href: "/subscribers", ...T.purple },
+              { icon: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, tag: `${activePct}% of base`, href: "/subscribers?status=ACTIVE", ...T.green },
+              { icon: "M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01", label: "Online now", value: homeStats.onlineNow, cap: "Users connected right now in your account", tag: `${onlinePct}% of active`, href: "/subscribers?online=1", ...T.blue },
+              { icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expired", value: homeStats.expired, cap: "Accounts past their expiry date", tag: `${expiredPct}% of base`, href: "/subscribers?status=EXPIRED", ...T.amber },
+            ];
+
+            const urgent: Kpi[] = [
+              ...(homeStats.expiredOnline !== null
+                ? [{ icon: "M18.36 6.64A9 9 0 1 1 5.64 6.64 M12 2v10", label: "Expired but online", value: homeStats.expiredOnline, cap: "Connected right now with no active subscription — unbilled usage", tag: homeStats.expiredOnline === 0 ? "clean" : "leaking", href: "/subscribers?status=EXPIRED&online=1", critical: true, ...T.red } as Kpi]
+                : []),
+              ...(homeStats.expiring1d !== null
+                ? [{ icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expiring tomorrow", value: homeStats.expiring1d, cap: "Call these first — service stops within 24 hours", tag: "call today", href: "/renewals?window=1d", ...T.amber } as Kpi]
+                : []),
+              ...(homeStats.expiring3d !== null
+                ? [{ icon: "M8 2v4 M16 2v4 M3 10h18 M8 14h.01 M12 14h.01 M16 14h.01", label: "Expiring in 3 days", value: homeStats.expiring3d, cap: "This week's collections queue", tag: "this week", href: "/renewals?window=3d", ...T.amber } as Kpi]
+                : []),
+              { icon: "M8 2v4 M16 2v4 M3 10h18 M9 16l2 2 4-4", label: "Expiring in 1 week", value: homeStats.expiringSoon, cap: "ACTIVE accounts expiring within 7 days", tag: `${expiringPct}% of base`, href: "/renewals?window=1w", ...T.amber },
+              ...(homeStats.expiring2w !== null
+                ? [{ icon: "M8 2v4 M16 2v4 M3 10h18 M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", label: "Expiring in 2 weeks", value: homeStats.expiring2w, cap: "Renewal forecast — plan capacity and cash", tag: "forecast", href: "/renewals?window=2w", ...T.slate } as Kpi]
+                : []),
+            ];
+
+            const infra: Kpi[] = [
+              { icon: "M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z M9 6h.01 M9 15h.01", label: "Total NAS", value: homeStats.totalNas, cap: "Routers visible to your account", tag: "routers", href: "/nas", ...T.indigo },
+              ...(sys
+                ? [
+                    { icon: "M9 9h6v6H9z M9 1v4 M15 1v4 M9 19v4 M15 19v4 M1 9h4 M1 15h4 M19 9h4 M19 15h4", label: "CPU usage", value: `${sys.cpu ?? 0}%`, cap: "Server processor load", tag: (sys.cpu ?? 0) < 60 ? "healthy" : "busy", href: "/monitoring", ...T.slate } as Kpi,
+                    { icon: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M9 10h6v4H9z M2 10v4 M22 10v4", label: "RAM usage", value: `${sys.ramPct ?? 0}%`, cap: sys.ramTotalGb ? `${sys.ramUsedGb ?? 0} / ${sys.ramTotalGb} GB used` : "Server memory load", tag: "server", href: "/monitoring", ...T.slate } as Kpi,
+                  ]
+                : []),
+              { icon: "M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6", label: "Signups today", value: homeStats.todaySignups, cap: "New activations since midnight", tag: "today", href: "/subscribers?created=today", ...T.teal },
+              { icon: "M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6", label: "Revenue today", value: toCurrency(homeStats.revenueToday), cap: "Payments received today", tag: "today", href: "/invoices", ...T.green },
+            ];
+
+            const renderCard = (c: Kpi) => (
+              <Link key={c.label} href={c.href} className={`kpi-card${c.critical ? " critical" : ""}`}
+                style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10, textDecoration: "none", color: "inherit" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, background: c.tint, display: "grid", placeItems: "center" }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c.fg} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={c.icon} /></svg>
                   </div>
-                  <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, color: c.good ? "#22c55e" : "#f59e0b", background: c.good ? "rgba(34,197,94,.14)" : "rgba(245,158,11,.14)" }}>{c.tag}</span>
+                  {/* Affordance arrow — recolors on hover (critical cards go red). */}
+                  <svg className="kpi-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <line x1="7" y1="17" x2="17" y2="7" /><polyline points="7 7 17 7 17 17" />
+                  </svg>
                 </div>
                 <div>
-                  <div style={{ fontSize: 28, fontWeight: 850, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)" }}>{c.value}</div>
-                  <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 5, fontWeight: 600 }}>{c.label}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", opacity: 0.75, marginTop: 7 }}>{c.cap}</div>
+                  <div style={{ fontSize: 28, fontWeight: 850, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{c.value}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--text)", marginTop: 5, fontWeight: 700 }}>{c.label}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, lineHeight: 1.45 }}>{c.cap}</div>
                 </div>
-                {/* Sparkline removed — it was a hardcoded decorative polyline, not
-                    real per-metric history, so it implied a trend that didn't exist. */}
+                {/* Uniform neutral tag — no more rainbow of status colors. */}
+                <span className="kpi-tag">{c.tag}</span>
+              </Link>
+            );
+
+            const gridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 12 };
+            const groupLabel: React.CSSProperties = { fontSize: 11, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--muted)", margin: "2px 2px 2px" };
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                <section style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                  <div style={groupLabel}>Overview</div>
+                  <div style={gridStyle}>{overview.map(renderCard)}</div>
+                </section>
+                {urgent.length > 0 && (
+                  <section style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                    <div style={groupLabel}>Needs attention</div>
+                    <div style={gridStyle}>{urgent.map(renderCard)}</div>
+                  </section>
+                )}
+                <section style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                  <div style={groupLabel}>Infrastructure</div>
+                  <div style={gridStyle}>{infra.map(renderCard)}</div>
+                </section>
               </div>
-            ))}
-          </div>
+            );
+          })()}
 
           {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
           <OverviewCharts refreshKey={refreshKey} />
