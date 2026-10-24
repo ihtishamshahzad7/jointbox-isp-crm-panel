@@ -36,6 +36,7 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
 
   // ── Data ───────────────────────────────────────────────────────
   const [loginLogs, setLoginLogs] = useState<any[]>([]);
@@ -291,13 +292,34 @@ export default function LogsPage() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
         <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
 
+          {/* Layout styles: left vertical view sidebar + content. */}
+          <style>{`
+            .logs-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:18px;align-items:start}
+            .logs-main{min-width:0}
+            .logs-side{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;
+              background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:9px;
+              box-shadow:0 1px 2px rgba(0,0,0,.05)}
+            .logs-side-tab{border:none;background:transparent;padding:9px 12px;border-radius:9px;
+              font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
+              text-align:left;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+              transition:background .12s,color .12s}
+            .logs-side-tab:hover{color:var(--text);background:var(--surface-2)}
+            .logs-side-tab.on{background:var(--accent);color:#fff;
+              box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 40%,transparent)}
+            .logs-navtrigger{display:none;align-items:center;justify-content:space-between;gap:10px;width:100%;
+              padding:11px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);
+              color:var(--text);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+            .logs-navchev{transition:transform .18s;color:var(--muted)}
+            .logs-navchev.open{transform:rotate(180deg)}
+            @media (max-width:900px){
+              .logs-layout{grid-template-columns:1fr;gap:12px}
+              .logs-navtrigger{display:flex}
+              .logs-side{position:static;display:none;padding:7px}
+              .logs-side.open{display:flex}
+            }
+          `}</style>
+
           {/* ═══════════════ TOP KPI CARDS ═══════════════ */}
-          {/* Overview toggle — keeps the list on the first screen. */}
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-          {showOverview ? "▲ Hide overview" : "▼ Show overview"}
-        </button>
-      </div>
       {showOverview && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 18 }}>
             {[
@@ -318,6 +340,10 @@ export default function LogsPage() {
           {/* ═══════════════ FILTER BAR ═══════════════ */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {/* Overview toggle — sits with the search for a clean single bar. */}
+              <button onClick={() => setShowOverview(v => !v)} style={{ background: showOverview ? `${t.accent}15` : "transparent", border: `1px solid ${showOverview ? t.accent : t.cardBorder}`, color: showOverview ? t.accent : t.textSub, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+              </button>
               {/* Search */}
               <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
                 <input value={search} onChange={e => setSearch(e.target.value)}
@@ -389,20 +415,32 @@ export default function LogsPage() {
             )}
           </div>
 
-          {/* ═══════════════ VIEW SELECTOR (dropdown, top-right) ═══════════════ */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginBottom: 14, borderBottom: `1px solid ${t.cardBorder}`, paddingBottom: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: t.textSub, marginRight: "auto" }}>
-              {tabs.find(x => x.id === activeTab)?.label || "View"}
-            </span>
-            <label style={{ fontSize: 11, fontWeight: 600, color: t.textSub }}>View:</label>
-            <select value={activeTab} onChange={e => setActiveTab(e.target.value)}
-              style={{ padding: "7px 12px", background: t.card, color: t.text, border: `1px solid ${t.cardBorder}`,
-                borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, minWidth: 190 }}>
+          {/* ═══════════════ VIEW SIDEBAR + CONTENT ═══════════════ */}
+          <div className="logs-layout">
+            {/* Mobile: the view list collapses behind this trigger. */}
+            <button type="button" className="logs-navtrigger" aria-expanded={navOpen} onClick={() => setNavOpen(v => !v)}>
+              <span>{tabs.find(x => x.id === activeTab)?.label || "View"}</span>
+              <span className={`logs-navchev${navOpen ? " open" : ""}`}>▾</span>
+            </button>
+
+            {/* Left vertical view navigation. */}
+            <nav className={`logs-side${navOpen ? " open" : ""}`} role="tablist" aria-label="Log views">
               {tabs.map(tab => (
-                <option key={tab.id} value={tab.id}>{tab.label}</option>
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
+                  className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
+                  onClick={() => { setActiveTab(tab.id); setNavOpen(false); }}
+                >
+                  {tab.label}
+                </button>
               ))}
-            </select>
-          </div>
+            </nav>
+
+            {/* Right content area. */}
+            <div className="logs-main">
 
           {/* ═══════════════ LOADING ═══════════════ */}
           {loading && activeTab !== "timeline" && activeTab !== "console" && activeTab !== "actrec" && activeTab !== "authrec" && (
@@ -826,6 +864,9 @@ export default function LogsPage() {
               </div>
             </div>
           )}
+
+            </div>{/* .logs-main */}
+          </div>{/* .logs-layout */}
 
           {/* Footer */}
           <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${t.cardBorder}`, fontSize: 11, color: t.textMuted, textAlign: "center" }}>
