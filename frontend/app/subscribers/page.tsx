@@ -356,7 +356,13 @@ export default function SubscribersPage() {
   const t = {
     bg: d ? "var(--bg)" : "#f0f4fa",
     sidebar: d ? "var(--surface)" : "var(--border)",
-    card: d ? "var(--surface)" : "#ffffff",
+    // Overlays (the detail drawer + every modal below) sit ON TOP of other
+    // content, so their background must be SOLID. --surface is a translucent
+    // glass token in dark mode (rgba white 5%), which let the table bleed
+    // through. --bg-elev is the solid elevated surface in BOTH themes (white in
+    // light, near-black in dark), and — unlike the `d` flag, which is hardwired
+    // true — it tracks the real active theme.
+    card: "var(--bg-elev, #ffffff)",
     cardBorder: d ? "var(--border)" : "var(--text)",
     header: d ? "var(--surface)" : "var(--border)",
     text: d ? "var(--text)" : "var(--surface)",
@@ -2439,7 +2445,7 @@ export default function SubscribersPage() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                background: d ? "var(--surface)" : "#f8fafc",
+                background: "color-mix(in srgb, var(--bg-elev, #fff) 94%, var(--text, #000) 6%)",
                 flexShrink: 0,
               }}
             >

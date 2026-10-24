@@ -6201,13 +6201,24 @@ html .main .recharts-responsive-container { width: 100% !important; }
 .jb-detail-backdrop {
   position: fixed; inset: 0; z-index: 2000;
   display: flex; justify-content: flex-end; align-items: stretch;
-  background: transparent; pointer-events: none;   /* list stays clickable */
+  /* A soft dim separates the panel from the data behind it. pointer-events
+     stays off on desktop so the list is still clickable (master–detail:
+     click another row to switch the panel). The dim passes clicks through. */
+  background: rgba(15, 23, 42, .32);
+  pointer-events: none;
 }
 .jb-detail-drawer {
   pointer-events: auto;                             /* the panel itself is live */
   width: 620px; max-width: 92vw; height: 100%;
-  box-shadow: -18px 0 44px rgba(15, 23, 42, .18);
+  /* SOLID background so table data never bleeds through. The inline style sets
+     the themed color; these are a safety net in case it is ever dropped. */
+  background: #ffffff;
+  box-shadow: -18px 0 44px rgba(15, 23, 42, .28);
   animation: jbDrawerIn .16s ease-out;
+}
+html[data-theme="dark"] .jb-detail-drawer { background: #111827; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .jb-detail-drawer { background: #111827; }
 }
 @keyframes jbDrawerIn { from { transform: translateX(18px); opacity: .6 } to { transform: none; opacity: 1 } }
 
