@@ -407,12 +407,28 @@ const CSS = `
 .nd-alert b{color:#92400E}
 .nd-alert .nd-alert-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 
-/* ── Tabs (sticky) ── */
-.nd-tabs{position:sticky;top:0;z-index:300;background:var(--bg);padding:6px 0;display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--border);scrollbar-width:none}
-.nd-tabs::-webkit-scrollbar{display:none}
-.nd-tab{border:none;background:transparent;padding:6px 11px;border-radius:6px;font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+/* ── Body layout: vertical nav sidebar + main content ── */
+.nd-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:18px;align-items:start}
+.nd-main{min-width:0}
+
+/* Vertical navigation sidebar. */
+.nd-tabs{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;
+  background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  padding:9px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.nd-tab{border:none;background:transparent;padding:9px 13px;border-radius:9px;
+  font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
+  white-space:nowrap;display:flex;align-items:center;gap:8px;text-align:left;width:100%;
+  transition:background .12s,color .12s}
 .nd-tab:hover{color:var(--text);background:var(--surface-2)}
-.nd-tab.on{background:var(--accent);color:#fff}
+.nd-tab.on{background:var(--accent);color:#fff;box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 40%,transparent)}
+
+/* Mobile dropdown trigger — hidden on desktop. */
+.nd-navtrigger{display:none;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:12px;
+  background:var(--surface);color:var(--text);font-size:13px;font-weight:700;
+  font-family:inherit;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.nd-navchev{transition:transform .18s;color:var(--muted)}
+.nd-navchev.open{transform:rotate(180deg)}
 
 /* ── Test center ── */
 .nd-tests{display:flex;flex-direction:column;gap:6px}
@@ -443,6 +459,12 @@ const CSS = `
 @media (max-width:900px){
   .nd-top{flex-direction:column}
   .nd-two-col{grid-template-columns:1fr !important}
+  /* Sidebar collapses to a dropdown. */
+  .nd-layout{grid-template-columns:1fr;gap:12px}
+  .nd-navtrigger{display:flex}
+  .nd-tabs{position:static;display:none;gap:2px;padding:7px}
+  .nd-tabs.open{display:flex}
+  .nd-tab{padding:11px 13px}
 }
 @media (max-width:640px){
   .nd-title h1{font-size:16px}
@@ -463,7 +485,6 @@ const CSS = `
   .nd-sub-q{width:100%}
   .nd-panel-a{width:100%}
   .nd-refresh{width:100%;justify-content:space-between}
-  .nd-tabs{padding:6px 0 8px}
 }
 @media (max-width:400px){
   .nd-kpi-grid{grid-template-columns:1fr}

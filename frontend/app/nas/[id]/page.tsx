@@ -107,6 +107,7 @@ function DevicePage() {
 
   const [tab, setTab] = useState<string>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [openSession, setOpenSession] = useState<Session | null>(null);
   const [syncing, setSyncing] = useState(false);
 
@@ -239,45 +240,61 @@ function DevicePage() {
         </div>
       </div>
 
-      {/* ── Sticky tabs ── */}
-      <nav className="nd-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`nd-tab${tab === t.id ? " on" : ""}`}
-            onClick={() => goTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      {/* ── Body: vertical nav sidebar + main content ── */}
+      <div className="nd-layout">
+        {/* Mobile: the sidebar collapses behind this trigger. */}
+        <button
+          type="button"
+          className="nd-navtrigger"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen((v) => !v)}
+        >
+          <span>{TABS.find((t) => t.id === tab)?.label ?? "Menu"}</span>
+          <span className={`nd-navchev${navOpen ? " open" : ""}`}>▾</span>
+        </button>
 
-      {/* ── Tab body (lazy) ── */}
-      <Suspense fallback={<div className="nd-root"><Spinner label="Loading…" /></div>}>
-        {tab === "overview" && <OverviewTab onOpenSession={setOpenSession} onGoto={goTab} />}
-        {tab === "health" && <HealthTab />}
-        {tab === "traffic" && <TrafficTab />}
-        {tab === "interfaces" && <InterfacesTab />}
-        {tab === "pppoe" && <PppoeTab />}
-        {tab === "subscribers" && <SubscribersTab onOpenSession={setOpenSession} />}
-        {tab === "radius" && <RadiusTab />}
-        {tab === "snmp" && <SnmpTab />}
-        {tab === "ip" && <IpAddrTab />}
-        {tab === "vlans" && <VlansTab />}
-        {tab === "logs" && <LogsTab />}
-        {tab === "audit" && <AuditTab />}
-        {tab === "diagnostics" && (
-          <div className="nd-root" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <PermissionPanel onEditCredentials={() => goTab("configuration")} onGoto={goTab} />
-            <TestCenter />
-            <AlertRules />
-          </div>
-        )}
-        {tab === "configuration" && <ConfigTab />}
-        {tab === "tunnel" && <TunnelPanel nasId={nasId} nasName={nas?.shortname || nas?.nasname} />}
-      </Suspense>
+        <nav className={`nd-tabs${navOpen ? " open" : ""}`} role="tablist" aria-label="Router sections">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`nd-tab${tab === t.id ? " on" : ""}`}
+              onClick={() => { goTab(t.id); setNavOpen(false); }}
+              title={t.group}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* ── Tab body (lazy) ── */}
+        <div className="nd-main">
+          <Suspense fallback={<div className="nd-root"><Spinner label="Loading…" /></div>}>
+            {tab === "overview" && <OverviewTab onOpenSession={setOpenSession} onGoto={goTab} />}
+            {tab === "health" && <HealthTab />}
+            {tab === "traffic" && <TrafficTab />}
+            {tab === "interfaces" && <InterfacesTab />}
+            {tab === "pppoe" && <PppoeTab />}
+            {tab === "subscribers" && <SubscribersTab onOpenSession={setOpenSession} />}
+            {tab === "radius" && <RadiusTab />}
+            {tab === "snmp" && <SnmpTab />}
+            {tab === "ip" && <IpAddrTab />}
+            {tab === "vlans" && <VlansTab />}
+            {tab === "logs" && <LogsTab />}
+            {tab === "audit" && <AuditTab />}
+            {tab === "diagnostics" && (
+              <div className="nd-root" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <PermissionPanel onEditCredentials={() => goTab("configuration")} onGoto={goTab} />
+                <TestCenter />
+                <AlertRules />
+              </div>
+            )}
+            {tab === "configuration" && <ConfigTab />}
+            {tab === "tunnel" && <TunnelPanel nasId={nasId} nasName={nas?.shortname || nas?.nasname} />}
+          </Suspense>
+        </div>
+      </div>
 
       {openSession && (
         <SessionDrawer
@@ -301,7 +318,4 @@ export const PageCss = `
 .nd-top-right{margin-left:auto}
 .nd-menu-sep{height:1px;background:var(--border);margin:5px 4px}
 .nd-menu button:disabled{opacity:.5;cursor:not-allowed}
-@media (max-width:640px){
-  .nd-tabs{padding-top:4px}
-}
 `;
