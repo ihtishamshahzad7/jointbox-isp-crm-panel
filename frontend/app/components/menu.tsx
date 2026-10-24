@@ -100,7 +100,7 @@ const CSS = `
 .jmenu-caret.up{transform:rotate(180deg)}
 
 .jmenu-pop{position:absolute;top:calc(100% + 6px);left:0;z-index:60;min-width:210px;padding:6px;
-  background:var(--surface);border:1px solid var(--border);border-radius:11px;
+  background:var(--bg-elev,var(--surface));border:1px solid var(--border);border-radius:11px;
   box-shadow:0 14px 40px rgba(0,0,0,.45);animation:jmenuIn .13s ease}
 .jmenu-pop.right{left:auto;right:0}
 @keyframes jmenuIn{from{opacity:0;transform:translateY(-4px)}}

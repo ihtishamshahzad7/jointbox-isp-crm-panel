@@ -77,7 +77,7 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
           onClick={(e) => e.stopPropagation()}
           style={{
             position: "absolute", top: 0, right: 0, height: "100%", width: "min(680px, 94vw)",
-            background: "var(--surface)", borderLeft: "1px solid var(--border)",
+            background: "var(--bg-elev, var(--surface))", borderLeft: "1px solid var(--border)",
             display: "flex", flexDirection: "column", boxShadow: "-18px 0 50px rgba(0,0,0,.5)",
           }}>
           {/* Header */}

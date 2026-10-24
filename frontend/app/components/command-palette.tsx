@@ -169,7 +169,7 @@ export default function CommandPalette() {
     <Portal><div onClick={() => setOpen(false)}
       style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "12vh" }}>
       <div onClick={(e) => e.stopPropagation()}
-        style={{ width: 560, maxWidth: "92vw", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", boxShadow: "0 30px 70px rgba(0,0,0,.5)" }}>
+        style={{ width: 560, maxWidth: "92vw", background: "var(--bg-elev, var(--surface))", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", boxShadow: "0 30px 70px rgba(0,0,0,.5)" }}>
         <input
           ref={inputRef}
           value={q}

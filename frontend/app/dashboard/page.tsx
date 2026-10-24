@@ -796,7 +796,7 @@ export default function DashboardPage() {
   });
 
   return (
-    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, paddingBottom: 100, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
       {!mounted ? (
         <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ width: "100%", maxWidth: 420, background: "var(--surface)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 18 }}>

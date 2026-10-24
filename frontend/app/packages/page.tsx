@@ -1033,7 +1033,7 @@ export default function PackagesPage() {
         >
           <div 
             style={{ 
-              background: "var(--surface)", 
+              background: "var(--bg-elev, var(--surface))", 
               border: "1px solid rgba(255,255,255,0.06)", 
               borderRadius: "20px", 
               padding: "28px", 
@@ -1237,7 +1237,7 @@ export default function PackagesPage() {
       {/* ============================================================ */}
       {showTaxModal && (
         <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowTaxModal(false)}>
-          <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ background: "var(--bg-elev, var(--surface))", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>➕ Add Tax/Extra Fee</h2>
               <button style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.3)", fontSize: "20px", cursor: "pointer" }} onClick={() => setShowTaxModal(false)}>✕</button>
@@ -1288,7 +1288,7 @@ export default function PackagesPage() {
       {/* ============================================================ */}
       {showPolicyModal && (
         <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowPolicyModal(false)}>
-          <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ background: "var(--bg-elev, var(--surface))", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>➕ Add Policy</h2>
               <button style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.3)", fontSize: "20px", cursor: "pointer" }} onClick={() => setShowPolicyModal(false)}>✕</button>
@@ -1345,7 +1345,7 @@ export default function PackagesPage() {
       {/* ============================================================ */}
       {showAllocationModal && (
         <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowAllocationModal(false)}>
-          <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ background: "var(--bg-elev, var(--surface))", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>➕ Add Allocation</h2>
               <button style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.3)", fontSize: "20px", cursor: "pointer" }} onClick={() => setShowAllocationModal(false)}>✕</button>
@@ -1424,7 +1424,7 @@ export default function PackagesPage() {
       {/* ============================================================ */}
       {showSubscribersModal && selectedPackage && (
         <Portal><div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }} onClick={() => setShowSubscribersModal(false)}>
-          <div style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "800px", width: "100%", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ background: "var(--bg-elev, var(--surface))", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "20px", padding: "28px", maxWidth: "800px", width: "100%", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>Subscribers on {selectedPackage.name}</h2>
               <button style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.3)", fontSize: "20px", cursor: "pointer" }} onClick={() => setShowSubscribersModal(false)}>✕</button>

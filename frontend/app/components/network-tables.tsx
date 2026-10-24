@@ -28,9 +28,11 @@ function useCtxMenu() {
   React.useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
     window.addEventListener("click", close);
     window.addEventListener("scroll", close, true);
-    return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); window.removeEventListener("keydown", onKey); };
   }, [menu]);
   const open = (e: React.MouseEvent, items: CtxItem[]) => {
     e.preventDefault();
@@ -249,7 +251,7 @@ ${COL_RESIZE_CSS}
 
 /* WinBox right-click context menu. */
 .nt-ctx{position:fixed;z-index:200;min-width:170px;padding:4px;
-  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-elev,var(--surface-2));border:1px solid var(--border);border-radius:8px;
   box-shadow:0 12px 34px rgba(0,0,0,.5);display:flex;flex-direction:column}
 .nt-ctx button{text-align:left;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;
   background:transparent;border:none;color:var(--text);border-radius:5px;font-family:inherit}

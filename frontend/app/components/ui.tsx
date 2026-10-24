@@ -587,7 +587,10 @@ html:not([data-theme="light"]) .nv-callout{background:rgba(255,255,255,.04);back
   padding:20px;background:rgba(2,6,23,.62);backdrop-filter:blur(4px);animation:nvFade .18s ease}
 .nv-scrim.right{align-items:stretch;justify-content:flex-end;padding:0}
 @keyframes nvFade{from{opacity:0}to{opacity:1}}
-.nv-modal{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:20px;
+/* Overlays use --bg-elev (opaque in BOTH themes: #FFFFFF light, #0D121A dark)
+   rather than --surface, which is a translucent glass token in dark mode and
+   let the content behind bleed through. The scrim (.nv-scrim) stays blurred. */
+.nv-modal{width:100%;background:var(--bg-elev,var(--surface));border:1px solid var(--border);border-radius:20px;
   display:flex;flex-direction:column;max-height:90vh;overflow:hidden;
   box-shadow:0 30px 80px rgba(0,0,0,.5);animation:nvPop .24s cubic-bezier(.2,.8,.2,1)}
 @keyframes nvPop{from{transform:scale(.96) translateY(10px);opacity:0}to{transform:none;opacity:1}}
@@ -602,7 +605,7 @@ html:not([data-theme="light"]) .nv-callout{background:rgba(255,255,255,.04);back
 .nv-modal-b{padding:20px 22px;overflow-y:auto}
 .nv-modal>footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 22px;
   border-top:1px solid var(--border);flex-shrink:0}
-.nv-drawer{background:var(--surface);border-left:1px solid var(--border);display:flex;
+.nv-drawer{background:var(--bg-elev,var(--surface));border-left:1px solid var(--border);display:flex;
   flex-direction:column;box-shadow:-24px 0 70px rgba(0,0,0,.45);
   animation:nvSlide .26s cubic-bezier(.2,.8,.2,1)}
 @keyframes nvSlide{from{transform:translateX(34px);opacity:.4}to{transform:none;opacity:1}}

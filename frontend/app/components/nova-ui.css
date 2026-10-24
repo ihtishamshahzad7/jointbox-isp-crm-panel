@@ -408,7 +408,9 @@
 }
 
 .nv-modal {
-  background: var(--surface);
+  /* Overlay surface: opaque in both themes (--surface is translucent glass
+     in dark mode and let content bleed through). */
+  background: var(--bg-elev, var(--surface));
   border: 1px solid var(--border);
   border-radius: 20px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.5);
@@ -505,7 +507,8 @@
   position: absolute;
   top: 100%;
   right: 0;
-  background: var(--surface);
+  /* Overlay surface: opaque in both themes (see .nv-modal note). */
+  background: var(--bg-elev, var(--surface));
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.3);

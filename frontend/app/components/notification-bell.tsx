@@ -86,8 +86,13 @@ export default function NotificationBell() {
     const onDoc = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   const toggle = () => {
@@ -144,7 +149,7 @@ export default function NotificationBell() {
           style={{
             position: "absolute", right: 0, top: 48, zIndex: 999,
             width: 340, maxWidth: "calc(100vw - 32px)",
-            background: "var(--surface)", border: "1px solid var(--border)",
+            background: "var(--bg-elev, var(--surface))", border: "1px solid var(--border)",
             borderRadius: 8, boxShadow: "0px 8px 13px -3px rgba(0,0,0,0.07)",
             overflow: "hidden",
           }}

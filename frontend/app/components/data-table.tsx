@@ -772,7 +772,7 @@ const CSS = `
 /* ── Menus ── */
 .jdt-menuwrap{position:relative}
 .jdt-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:40;min-width:200px;max-height:340px;
-  overflow:auto;padding:5px;background:var(--surface-2);border:1px solid var(--border);
+  overflow:auto;padding:5px;background:var(--bg-elev,var(--surface-2));border:1px solid var(--border);
   border-radius:11px;box-shadow:0 12px 34px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:1px}
 .jdt-menu-item{display:flex;align-items:center;gap:9px;padding:7px 10px;font-size:12.5px;font-weight:600;
   cursor:pointer;color:var(--text);border-radius:7px;background:transparent;border:none;font-family:inherit;text-align:left}

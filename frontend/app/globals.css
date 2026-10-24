@@ -680,9 +680,15 @@ body {
 
 .app-shell-page-content {
   flex: 1;
-  padding: 24px 28px;
+  /* Extra bottom clearance so the fixed "How to use" FAB (bottom:18px, z:50)
+     never covers the last row of content. This is the real scroll container
+     for every route, so the clearance lives here once rather than per page. */
+  padding: 24px 28px 104px;
   overflow-y: auto;
   background: linear-gradient(180deg, #F7F9FC, transparent 35%);
+}
+@media (max-width: 640px) {
+  .app-shell-page-content { padding: 14px 14px 76px; }
 }
 
 .app-shell-page-content::-webkit-scrollbar {
@@ -1270,10 +1276,11 @@ body {
 .nv-menu {
   position: absolute; right: 0; top: calc(100% + 10px);
   width: 300px; z-index: 200;
-  background: var(--surface); border: 1px solid var(--border);
+  /* Opaque in every theme (incl. implicit dark with no data-theme). --surface
+     is translucent glass in dark, which let page content bleed through. */
+  background: var(--bg-elev, var(--surface)); border: 1px solid var(--border);
   border-radius: 16px; overflow: hidden;
   box-shadow: 0 24px 60px rgba(0,0,0,.55), 0 0 0 1px rgba(140,90,255,.10);
-  backdrop-filter: blur(24px);
   animation: nv-menu-in .2s cubic-bezier(.2,.8,.2,1);
   transform-origin: top right;
 }
