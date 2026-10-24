@@ -178,6 +178,7 @@ export class LogsService {
     // that capture existed, fall back to the user's most recent session.
     const rowsSql = `
       SELECT p.id::text AS id, p.authdate, p.username, p.pass, p.reply,
+             s.password AS subpass, s.status AS substatus,
              COALESCE(p.callingstationid, a.callingstationid) AS mac,
              COALESCE(p.nasportid, a.nasportid) AS port,
              COALESCE(p.nasipaddress, host(a.nasipaddress)) AS nasip,
@@ -189,6 +190,7 @@ export class LogsService {
         ORDER BY r.acctstarttime DESC LIMIT 1
       ) a ON true
       LEFT JOIN nas n ON n.nasname = COALESCE(p.nasipaddress, host(a.nasipaddress))
+      LEFT JOIN "Subscriber" s ON s.username = p.username
       ${whereSql}
       ORDER BY p.id DESC
       LIMIT ${limit} OFFSET ${offset}`;
@@ -201,7 +203,35 @@ export class LogsService {
         this.prisma.$queryRawUnsafe<any[]>(countSql, ...params),
       ]);
       const total = Number(cnt?.[0]?.n ?? 0);
-      return { logs, total };
+      // Derive a human reason and surface the subscriber's configured password
+      // (plaintext) so the operator can see WHY an attempt was accepted/rejected.
+      // `pass` from radpostauth is the CHAP response (a hash, not the password),
+      // so it is never useful on its own — we expose the real account password.
+      const mapped = (logs as any[]).map((r) => {
+        const accepted = typeof r.reply === 'string' && /accept/i.test(r.reply);
+        let reason: string;
+        if (accepted) {
+          reason = 'Authenticated';
+        } else if (r.subpass == null) {
+          reason = 'Unknown username (no such subscriber)';
+        } else {
+          switch (String(r.substatus || '')) {
+            case 'SUSPENDED': reason = 'Account suspended'; break;
+            case 'EXPIRED': reason = 'Subscription expired'; break;
+            case 'INACTIVE': reason = 'Account inactive'; break;
+            default: reason = 'Wrong password or policy (CHAP mismatch)';
+          }
+        }
+        return {
+          id: r.id, authdate: r.authdate, username: r.username,
+          password: r.subpass ?? null,          // real account password (plaintext)
+          chap: r.pass ?? null,                  // CHAP response hash (for reference)
+          reply: r.reply, accepted, reason,
+          status: r.substatus ?? null,
+          mac: r.mac, port: r.port, nasip: r.nasip, nas: r.nas,
+        };
+      });
+      return { logs: mapped, total };
     } catch (e: any) {
       this.logger?.warn?.(`RADIUS auth log query failed: ${e?.message || e}`);
       return { logs: [], total: 0 };

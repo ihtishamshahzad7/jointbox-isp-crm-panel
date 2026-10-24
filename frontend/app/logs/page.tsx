@@ -271,7 +271,7 @@ export default function LogsPage() {
   const tabs = [
     { id: "console",    label: "🖥️ Console" },
     { id: "actrec",     label: "🧾 Activity Logs" },
-    { id: "authrec",    label: "🔑 Login Logs" },
+    { id: "authrec",    label: "🔑 Subscriber Auth" },
     { id: "timeline",   label: "📋 Timeline" },
     { id: "login",      label: "🔐 Login" },
     { id: "activity",   label: "📝 Activity" },
@@ -451,11 +451,14 @@ export default function LogsPage() {
                 { key: "id", label: "ID", nowrap: true, mono: true },
                 { key: "authdate", label: "Datetime", nowrap: true, render: (r) => r.authdate ? new Date(r.authdate).toLocaleString() : "—" },
                 { key: "username", label: "Username", nowrap: true, render: (r) => <b>{r.username}</b> },
-                { key: "pass", label: "Password", mono: true, render: (r) => r.pass || "—" },
-                { key: "reply", label: "Reply", nowrap: true, render: (r) => {
-                    const ok = String(r.reply || "").toLowerCase().includes("accept");
-                    return <span style={{ color: ok ? "#4caf50" : "#f44336", fontWeight: 700 }}>{r.reply || "—"}</span>;
+                // Real account password (plaintext). radpostauth.pass is only the
+                // CHAP response hash, so we show the configured password instead.
+                { key: "password", label: "Password", mono: true, render: (r) => r.password || "—" },
+                { key: "reply", label: "Result", nowrap: true, render: (r) => {
+                    const ok = r.accepted ?? String(r.reply || "").toLowerCase().includes("accept");
+                    return <span style={{ color: ok ? "#4caf50" : "#f44336", fontWeight: 700 }}>{ok ? "Accept" : "Reject"}</span>;
                   } },
+                { key: "reason", label: "Reason", render: (r) => <span style={{ color: (r.accepted ? "#4caf50" : "#e0a030") }}>{r.reason || "—"}</span> },
                 { key: "mac", label: "MAC", mono: true, nowrap: true, render: (r) => r.mac || "—" },
                 { key: "port", label: "Port", nowrap: true, render: (r) => r.port || "—" },
                 { key: "nas", label: "NAS", nowrap: true, render: (r) => r.nas || "—" },
