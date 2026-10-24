@@ -389,6 +389,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [switchList, setSwitchList] = useState<any[]>([]);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  // The account menu (and its switch/notice sub-panels) all live in this wrap.
+  // A document-level mousedown listener closes them on any outside click —
+  // more reliable than an overlay, which sat below higher-z chrome so clicks
+  // on the sidebar never reached it.
+  const acctWrapRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
   const [imp, setImp] = useState<any>(null); // { by, byName, byRole } when acting as someone
   const [myRole, setMyRole] = useState<string | null>(null);
@@ -408,6 +413,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [switchExpanded, setSwitchExpanded] = useState<Record<number, boolean>>({});
   const [latestNotice, setLatestNotice] = useState<any | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
+
+  // Close the account menu on any click outside its wrapper, and on Escape.
+  useEffect(() => {
+    if (!accountOpen && !switchOpen && !noticeOpen) return;
+    const closeAll = () => { setAccountOpen(false); setSwitchOpen(false); setNoticeOpen(false); };
+    const onDown = (e: MouseEvent) => {
+      if (acctWrapRef.current && !acctWrapRef.current.contains(e.target as Node)) closeAll();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeAll(); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [accountOpen, switchOpen, noticeOpen]);
+
+  // Any route change closes the menu (the shell persists across navigation).
+  useEffect(() => {
+    setAccountOpen(false); setSwitchOpen(false); setNoticeOpen(false);
+  }, [pathname]);
 
   const activeMenu = useMemo(
     () => getActiveMenu(pathname || '/dashboard', myRole === 'SUPER_ADMIN'),
@@ -1003,7 +1029,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 the latest notice) lives in the account menu below. */}
             <NotificationBell />
 
-            <div className="nv-menu-wrap" style={{ position: 'relative' }}>
+            <div className="nv-menu-wrap" ref={acctWrapRef} style={{ position: 'relative' }}>
               <button
                 type="button"
                 className={`acct-trigger ${accountOpen ? 'open' : ''}`}
@@ -1033,7 +1059,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
               {accountOpen && (
                 <>
-                  <div className="nv-menu-catch" onClick={() => setAccountOpen(false)} />
                   <div className="nv-menu acct-menu" role="menu">
                     <div className="acct-head">
                       <span className="acct-av lg">
@@ -1130,9 +1155,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
                 {switchOpen && (
                   <>
-                    {/* Click-away layer. Sits below the menu but above the page
-                        so a stray click anywhere closes it. */}
-                    <div className="nv-menu-catch" onClick={() => setSwitchOpen(false)} />
                     <div className="nv-menu" role="menu">
                       <div className="nv-menu-head">
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>

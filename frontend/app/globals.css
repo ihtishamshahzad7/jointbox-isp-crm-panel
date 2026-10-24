@@ -6930,8 +6930,54 @@ html[data-theme="dark"] tbody tr:nth-child(even) { background: rgba(255, 255, 25
   .acct-trigger, .acct-trigger .chev { transition: none; }
 }
 html .main .acct-menu span:not([class]), html .main .acct-menu label, html .main .acct-trigger span:not([class]) { color: inherit; }
-/* Menus are solid, not glass: page text showed through the dark-theme menus. */
-.nv-menu { background: var(--bg-elev, var(--surface)); }
+
+/* ── Account / switch dropdown: follow the ACTIVE theme exactly ──
+   The menu must never be a dark panel on a light page (or vice-versa). It is
+   pinned to the same surface/text/border tokens the page itself uses, with an
+   explicit hard-coded light-mode style so it can't drift, and a matching
+   dark-mode style. Solid (not glass) so page text never shows through. */
+.nv-menu {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  backdrop-filter: none;
+}
+.nv-menu .acct-id b, .nv-menu .acct-head b, .nv-menu .nv-menu-head b { color: var(--text); }
+.nv-menu .acct-row { color: var(--text); }
+
+/* Light mode — white panel, light-gray border, dark text, soft shadow. */
+html[data-theme="light"] .nv-menu {
+  background: #FFFFFF;
+  color: #1C2434;
+  border-color: #E2E8F0;
+  box-shadow: 0 10px 34px rgba(15, 23, 42, .14), 0 0 0 1px rgba(15, 23, 42, .03);
+}
+html[data-theme="light"] .nv-menu .acct-row,
+html[data-theme="light"] .nv-menu .acct-id b,
+html[data-theme="light"] .nv-menu .acct-head b { color: #1C2434; }
+html[data-theme="light"] .nv-menu .acct-row:hover:not(.static):not(:disabled),
+html[data-theme="light"] .nv-menu .nv-menu-item:hover { background: #F1F5F9; }
+
+/* Dark mode — elevated dark panel. */
+html[data-theme="dark"] .nv-menu {
+  background: var(--bg-elev, #0D121A);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+
+/* System preference (no explicit choice) tracks the OS. */
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) .nv-menu {
+    background: #FFFFFF; color: #1C2434; border-color: #E2E8F0;
+    box-shadow: 0 10px 34px rgba(15, 23, 42, .14), 0 0 0 1px rgba(15, 23, 42, .03);
+  }
+  html:not([data-theme]) .nv-menu .acct-row,
+  html:not([data-theme]) .nv-menu .acct-id b,
+  html:not([data-theme]) .nv-menu .acct-head b { color: #1C2434; }
+  html:not([data-theme]) .nv-menu .acct-row:hover:not(.static):not(:disabled),
+  html:not([data-theme]) .nv-menu .nv-menu-item:hover { background: #F1F5F9; }
+}
 /* Dark theme: the top bar and its title were left on light-palette literals. */
 html[data-theme="dark"] .topbar { background: var(--bg-elev); box-shadow: 0 1px 0 var(--border); }
 html[data-theme="dark"] .topbar-title { color: var(--text); }
