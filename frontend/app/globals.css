@@ -6208,24 +6208,31 @@ html .main .recharts-responsive-container { width: 100% !important; }
 .jb-detail-backdrop {
   position: fixed; inset: 0; z-index: 2000;
   display: flex; justify-content: flex-end; align-items: stretch;
-  /* A soft dim separates the panel from the data behind it. pointer-events
-     stays off on desktop so the list is still clickable (master–detail:
-     click another row to switch the panel). The dim passes clicks through. */
-  background: rgba(15, 23, 42, .32);
-  pointer-events: none;
+  /* A real dark dim over the whole page so the table behind the panel is
+     visibly separated and can never read as bleeding through. It captures
+     clicks (clicking the dim closes the panel). */
+  background: rgba(0, 0, 0, .6);
+  pointer-events: auto;
 }
 .jb-detail-drawer {
-  pointer-events: auto;                             /* the panel itself is live */
+  pointer-events: auto;
   width: 620px; max-width: 92vw; height: 100%;
-  /* SOLID background so table data never bleeds through. The inline style sets
-     the themed color; these are a safety net in case it is ever dropped. */
+  /* SOLID, opaque background — set here (not inline) so it always wins and the
+     table can never bleed through. Light = white, dark = near-black. */
   background: #ffffff;
-  box-shadow: -18px 0 44px rgba(15, 23, 42, .28);
+  color: var(--text, #1A1714);
+  box-shadow: -18px 0 60px rgba(0, 0, 0, .5);
   animation: jbDrawerIn .16s ease-out;
 }
-html[data-theme="dark"] .jb-detail-drawer { background: #111827; }
+html[data-theme="dark"] .jb-detail-drawer { background: #111827; color: #e5e7eb; }
 @media (prefers-color-scheme: dark) {
-  html:not([data-theme]) .jb-detail-drawer { background: #111827; }
+  html:not([data-theme]) .jb-detail-drawer { background: #111827; color: #e5e7eb; }
+}
+/* Drawer header — a slightly distinct solid band on the same opaque surface. */
+.jb-detail-head { background: #f8fafc; }
+html[data-theme="dark"] .jb-detail-head { background: #0f172a; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .jb-detail-head { background: #0f172a; }
 }
 @keyframes jbDrawerIn { from { transform: translateX(18px); opacity: .6 } to { transform: none; opacity: 1 } }
 

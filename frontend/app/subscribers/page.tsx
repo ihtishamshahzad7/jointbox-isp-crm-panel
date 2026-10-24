@@ -2429,7 +2429,9 @@ export default function SubscribersPage() {
           <div
             className="jb-detail-drawer"
             style={{
-              background: t.card,
+              /* Background is set by the .jb-detail-drawer CSS class (solid,
+                 per-theme) — NOT inline — so it is always opaque and can't be
+                 defeated by a soft custom-property value. */
               borderLeft: `1px solid ${t.cardBorder}`,
               display: "flex",
               flexDirection: "column",
@@ -2439,13 +2441,13 @@ export default function SubscribersPage() {
           >
             {/* Header */}
             <div
+              className="jb-detail-head"
               style={{
                 padding: "16px 20px",
                 borderBottom: `1px solid ${t.cardBorder}`,
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                background: "color-mix(in srgb, var(--bg-elev, #fff) 94%, var(--text, #000) 6%)",
                 flexShrink: 0,
               }}
             >
@@ -2525,7 +2527,7 @@ export default function SubscribersPage() {
               {detailActiveTab === "Profile" && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                   <div>
-                    <div style={{ fontWeight: 700, marginBottom: 12, color: t.accent }}>Personal Information</div>
+                    <div style={{ fontWeight: 700, marginBottom: 12, color: "#60a5fa" }}>Personal Information</div>
                     <InfoRow label="Full Name" value={detailSub.fullName} />
                     <InfoRow label="CNIC / Identity" value={detailSub.identity} />
                     <InfoRow label="Phone" value={detailSub.phone} />
@@ -2535,7 +2537,7 @@ export default function SubscribersPage() {
                     <InfoRow label="Created At" value={fmtDate(detailSub.createdAt, true)} />
                   </div>
                   <div>
-                    <div style={{ fontWeight: 700, marginBottom: 12, color: t.accent }}>Package & Network</div>
+                    <div style={{ fontWeight: 700, marginBottom: 12, color: "#60a5fa" }}>Package & Network</div>
                     <InfoRow label="Package" value={detailSub.package?.name} />
                     <InfoRow label="Speed" value={detailSub.package ? `${detailSub.package.downloadSpeed}/${detailSub.package.uploadSpeed} Mbps` : "—"} />
                     <InfoRow label="IP Pool" value={detailSub.package?.pool?.name || "—"} />
@@ -2545,17 +2547,17 @@ export default function SubscribersPage() {
                     <InfoRow label="Connection Type" value={detailSub.connectionType} />
                   </div>
                   <div style={{ gridColumn: "1 / -1" }}>
-                    <div style={{ fontWeight: 700, marginBottom: 12, color: t.accent }}>Identity Documents (CNIC)</div>
+                    <div style={{ fontWeight: 700, marginBottom: 12, color: "#60a5fa" }}>Identity Documents (CNIC)</div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
                       {[["CNIC — Front", (detailSub as any).cnicFrontUrl], ["CNIC — Back", (detailSub as any).cnicBackUrl]].map(([lbl, url]: any) => (
                         <div key={lbl} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <span style={{ fontSize: 11, color: t.textMuted, textTransform: "uppercase" }}>{lbl}</span>
+                          <span style={{ fontSize: 11, color: "#9ca3af", textTransform: "uppercase" }}>{lbl}</span>
                           {url ? (
                             <a href={fileUrl(url)} target="_blank" rel="noreferrer">
                               <img src={fileUrl(url)} alt={lbl} style={{ width: 220, height: 140, objectFit: "cover", borderRadius: 8, border: `1px solid ${t.cardBorder}` }} />
                             </a>
                           ) : (
-                            <div style={{ width: 220, height: 140, borderRadius: 8, border: `1px dashed ${t.cardBorder}`, background: "var(--surface-2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: t.textMuted }}>Not uploaded</div>
+                            <div style={{ width: 220, height: 140, borderRadius: 8, border: "1px solid #374151", background: "#1f2937", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#d1d5db" }}>Not uploaded</div>
                           )}
                         </div>
                       ))}
@@ -3584,9 +3586,10 @@ export default function SubscribersPage() {
 // Helper components for detail tabs
 function InfoRow({ label, value, mono = false }: { label: string; value: string | null | undefined; mono?: boolean }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid rgba(148,163,184,0.2)" }}>
-      <span style={{ fontSize: 11, color: "var(--muted)" }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 500, fontFamily: mono ? "monospace" : "inherit", color: mono ? "#34d399" : "inherit" }}>{value || "—"}</span>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "5px 0", borderBottom: "1px solid rgba(148,163,184,0.2)" }}>
+      {/* Explicit contrast: muted-gray label, off-white value (mono stays green). */}
+      <span style={{ fontSize: 11, color: "var(--muted, #9ca3af)" }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 500, textAlign: "right", fontFamily: mono ? "monospace" : "inherit", color: mono ? "#34d399" : "var(--text, #f3f4f6)" }}>{value || "—"}</span>
     </div>
   );
 }
