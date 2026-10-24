@@ -346,7 +346,7 @@ export default function UsersPage() {
   };
 
   const Badge = ({ children, color, bg }: { children: React.ReactNode; color: string; bg: string }) => (
-    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, color, background: bg, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+    <span style={{ display: "inline-block", padding: "4px 11px", borderRadius: 999, fontSize: 11, fontWeight: 700, color, background: bg, letterSpacing: "0.02em", whiteSpace: "nowrap", lineHeight: 1.4 }}>
       {children}
     </span>
   );
@@ -534,7 +534,32 @@ export default function UsersPage() {
           ) : (
             <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+                <style>{`
+                  /* Nothing wraps — every cell stays on one line; the table
+                     scrolls horizontally instead of breaking words. */
+                  .utbl th, .utbl td { white-space: nowrap; padding: 12px 16px; vertical-align: middle; }
+                  .utbl td.u-email { min-width: 200px; }
+                  .utbl td.u-phone, .utbl td.u-subs, .utbl td.u-downline { white-space: nowrap; }
+                  /* Icon action buttons — square, subtle gray hover. */
+                  .utbl .u-actions { display: inline-flex; gap: 4px; justify-content: center; }
+                  .utbl .iconbtn { display: inline-flex; align-items: center; justify-content: center;
+                    width: 32px; height: 32px; padding: 0; border: none; background: transparent;
+                    color: var(--muted); border-radius: 8px; cursor: pointer;
+                    transition: background .12s, color .12s; }
+                  .utbl .iconbtn:hover { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--text); }
+                  .utbl .iconbtn.edit:hover { background: rgba(245,158,11,.16); color: #d97706; }
+                  .utbl .iconbtn.topup:hover { background: rgba(16,185,129,.16); color: #059669; }
+                  .utbl .iconbtn.price:hover { background: rgba(124,77,255,.16); color: #7c4dff; }
+                  .utbl .iconbtn.del:hover { background: rgba(239,68,68,.16); color: #ef4444; }
+                  /* Pill status badge — soft colors, fixed padding, never clipped. */
+                  .utbl .u-status { display: inline-block; padding: 4px 12px; border-radius: 999px;
+                    font-size: 11px; font-weight: 700; white-space: nowrap; border: none; cursor: pointer; line-height: 1.4; }
+                  .utbl .u-status.on { background: rgba(16,185,129,.15); color: #059669; }
+                  .utbl .u-status.off { background: rgba(239,68,68,.14); color: #dc2626; }
+                  html[data-theme="dark"] .utbl .u-status.on { color: #4ade80; }
+                  html[data-theme="dark"] .utbl .u-status.off { color: #f87171; }
+                `}</style>
+                <table className="utbl" style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
                   <thead>
                     <tr style={{ background: d ? "var(--bg)" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
                       <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>User</th>
@@ -578,7 +603,7 @@ export default function UsersPage() {
                               </div>
                             </div>
                           </td>
-                          <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{u.email}</td>
+                          <td className="u-email" style={{ fontSize: 11.5, color: t.textSub }}>{u.email}</td>
                           <td style={{ padding: "10px 14px", textAlign: "center" }}>
                             <Badge color={roleBadge.color} bg={roleBadge.bg}>{roleBadge.label}</Badge>
                           </td>
@@ -591,39 +616,31 @@ export default function UsersPage() {
                           <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.children ?? 0}</td>
                           <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{u.parent?.name || "—"}</td>
                           <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{u.lastLogin ? new Date(u.lastLogin).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "—"}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+                          <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                             <button
                               onClick={() => handleToggleStatus(u.id, u.isActive)}
-                              style={{
-                                padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600,
-                                background: u.isActive ? "#14532d" : "#450a0a",
-                                color: u.isActive ? "#4ade80" : "#f87171",
-                                border: "none", cursor: "pointer"
-                              }}>
+                              className={`u-status ${u.isActive ? "on" : "off"}`}
+                              title={u.isActive ? "Active — click to deactivate" : "Inactive — click to activate"}>
                               {u.isActive ? "Active" : "Inactive"}
                             </button>
                           </td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
-                            <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                              <Btn onClick={() => openEdit(u)} variant="warning" size="xs"><Icons.Edit /> Edit</Btn>
-                              {/* Top up this account's wallet without leaving
-                                  the list. Staff accounts have no wallet of
-                                  their own, so the action is not offered. */}
+                          <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+                            {/* Icon-only actions — tooltips name each one; a
+                                tinted hover makes them read as clickable. */}
+                            <div className="u-actions">
+                              <button className="iconbtn edit" onClick={() => openEdit(u)} title="Edit" aria-label="Edit"><Icons.Edit /></button>
+                              {/* Top up this account's wallet without leaving the
+                                  list. Staff accounts have no wallet, so it's hidden. */}
                               {u.role !== 'SALES' && u.role !== 'AUDITOR' && (
-                                <Btn onClick={() => openTopUp(u)} variant="success" size="xs" title="Transfer balance to this account">
-                                  <Icons.Payments /> Top up
-                                </Btn>
+                                <button className="iconbtn topup" onClick={() => openTopUp(u)} title="Top up balance" aria-label="Top up balance"><Icons.Payments /></button>
                               )}
-                              {/* Reseller pricing for this account — same tool as
-                                  the Pricing page, opened focused on this user.
-                                  Only when the current operator may set prices;
-                                  each parent thus prices its OWN downline. */}
+                              {/* Reseller pricing for this account. */}
                               {(user?.canSetPackagePrice || isAdmin) && (
-                                <Btn onClick={() => router.push(`/pricing?account=${u.id}`)} variant="primary" size="xs" title="Set this account's pricing">
-                                  <Icons.Payments /> Pricing
-                                </Btn>
+                                <button className="iconbtn price" onClick={() => router.push(`/pricing?account=${u.id}`)} title="Set pricing" aria-label="Set pricing">
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+                                </button>
                               )}
-                              <Btn onClick={() => handleDelete(u.id, u.name)} variant="danger" size="xs"><Icons.Trash /></Btn>
+                              <button className="iconbtn del" onClick={() => handleDelete(u.id, u.name)} title="Delete" aria-label="Delete"><Icons.Trash /></button>
                             </div>
                           </td>
                         </tr>
