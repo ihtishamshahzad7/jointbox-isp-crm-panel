@@ -238,7 +238,12 @@ export function PackageTable({
 
 const CSS = `
 ${COL_RESIZE_CSS}
-.nt{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:auto;position:relative}
+/* Solid, theme-aware surface (not var(--surface), which was rendering light in
+   dark mode here). Hard-coded per theme so the table is always the right shade
+   and its text stays readable. */
+.nt{background:#ffffff;color:var(--text);border:1px solid var(--border);border-radius:14px;overflow:auto;position:relative}
+html[data-theme="dark"] .nt{background:#111827}
+@media (prefers-color-scheme: dark){ html:not([data-theme]) .nt{background:#111827} }
 .nt table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px}
 
 /* WinBox flags column. */
@@ -260,8 +265,10 @@ ${COL_RESIZE_CSS}
 
 .nt thead th{position:sticky;top:0;z-index:2;padding:10px 14px;text-align:left;
   font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
-  color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--border);
+  color:var(--muted);background:#f1f5f9;border-bottom:1px solid var(--border);
   white-space:nowrap}
+html[data-theme="dark"] .nt thead th{background:#0f172a}
+@media (prefers-color-scheme: dark){ html:not([data-theme]) .nt thead th{background:#0f172a} }
 
 .nt tbody tr{cursor:pointer;transition:background .12s ease}
 .nt tbody tr:hover{background:rgba(108,60,225,.07)}
