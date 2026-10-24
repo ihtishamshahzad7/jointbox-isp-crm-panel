@@ -201,11 +201,10 @@ export function SubscriberTable({
               {r.photoUrl ? "" : initials}
             </span>
             <span className="whoTxt">
+              {/* Name is the anchor; it already falls back to the username when
+                  no full name exists, so the username is not repeated below. */}
               <span className="nm">{r.fullName || r.username}</span>
-              <span className="sub">
-                <code>{r.username}</code>
-                {r.phone && <span className="ph"> {r.phone}</span>}
-              </span>
+              {r.phone && <span className="sub"><span className="ph">{r.phone}</span></span>}
             </span>
           </div>
         );
@@ -636,5 +635,45 @@ const CSS = `
   .st .act .seg{flex:1 1 auto}
   .st .act .seg .segbtn{flex:1 1 0;justify-content:center;padding:11px 4px;font-size:12.5px;min-height:40px}
   .st .act .del,.st .act .ib{width:44px;height:40px}
+}
+
+/* ── Dark mode: high-contrast but glare-free ──────────────────────────────
+   Pure white (var(--text) ≈ #F2F5F8) on dark reads as a foggy glow. Step the
+   primary text down to a soft off-white and secondary text to a muted gray.
+   No text-shadow is used anywhere. Dates are plain text — no box. Status
+   badges get a darker transparent fill with a brighter label. */
+html[data-theme="dark"] .st .nm{color:#E2E8F0}
+html[data-theme="dark"] .st .nm.sm{color:#CBD5E1}
+html[data-theme="dark"] .st .sub,
+html[data-theme="dark"] .st .ph,
+html[data-theme="dark"] .st .svcmeta{color:#94A3B8}
+html[data-theme="dark"] .st .balance b{color:#E2E8F0}
+/* Monospace date/number cells: never a background box. */
+html[data-theme="dark"] .st .mono{background:transparent}
+/* Inline code chips (e.g. the Service IP) were a faint white box that looked
+   foggy — give them a calm slate fill instead. */
+html[data-theme="dark"] .st code{background:rgba(148,163,184,.12);color:#CBD5E1}
+/* Status pills: bg-*-500/10 + text-*-400, no glare. */
+html[data-theme="dark"] .st .pill.lg{box-shadow:none}
+html[data-theme="dark"] .st .pill.ok,html[data-theme="dark"] .st .pill.up{color:#4ADE80;background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.22)}
+html[data-theme="dark"] .st .pill.warn{color:#FBBF24;background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.22)}
+html[data-theme="dark"] .st .pill.bad{color:#F87171;background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.22)}
+html[data-theme="dark"] .st .pill.down,html[data-theme="dark"] .st .pill.neutral{color:#94A3B8;background:rgba(148,163,184,.12);border-color:rgba(148,163,184,.2)}
+
+/* Same treatment when the viewer is on the 'system' theme with a dark OS. */
+@media (prefers-color-scheme: dark){
+  html:not([data-theme]) .st .nm{color:#E2E8F0}
+  html:not([data-theme]) .st .nm.sm{color:#CBD5E1}
+  html:not([data-theme]) .st .sub,
+  html:not([data-theme]) .st .ph,
+  html:not([data-theme]) .st .svcmeta{color:#94A3B8}
+  html:not([data-theme]) .st .balance b{color:#E2E8F0}
+  html:not([data-theme]) .st .mono{background:transparent}
+  html:not([data-theme]) .st code{background:rgba(148,163,184,.12);color:#CBD5E1}
+  html:not([data-theme]) .st .pill.lg{box-shadow:none}
+  html:not([data-theme]) .st .pill.ok,html:not([data-theme]) .st .pill.up{color:#4ADE80;background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.22)}
+  html:not([data-theme]) .st .pill.warn{color:#FBBF24;background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.22)}
+  html:not([data-theme]) .st .pill.bad{color:#F87171;background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.22)}
+  html:not([data-theme]) .st .pill.down,html:not([data-theme]) .st .pill.neutral{color:#94A3B8;background:rgba(148,163,184,.12);border-color:rgba(148,163,184,.2)}
 }
 `;
