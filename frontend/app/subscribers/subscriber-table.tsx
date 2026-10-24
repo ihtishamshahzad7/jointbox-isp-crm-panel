@@ -69,6 +69,9 @@ const IC_POWER = (
 const IC_DOTS = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" /></svg>
 );
+const IC_TRASH = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>
+);
 
 export function SubscriberTable({
   rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, onActivate, money,
@@ -229,55 +232,36 @@ export function SubscriberTable({
       sortValue: (r) => String(r.status ?? "").toUpperCase().replace(/[^A-Z]/g, ""),
       render: (r) => {
         const s = statusOf(r);
-        return <span className={`pill ${s.kind}`}><span className={`dot ${s.kind}`} />{s.label}</span>;
+        return <span className={`pill lg ${s.kind}`}><span className={`dot ${s.kind}`} />{s.label}</span>;
       },
     },
     {
-      key: "connection",
-      header: "Connection",
+      key: "package",
+      header: "Service",
       sortable: true,
-      sortValue: (r) => (onlineOf(r) ? 1 : 0),
+      sortValue: (r) => (r.package?.name || "").toLowerCase(),
       render: (r) => {
-        const online = onlineOf(r);
+        const ip = r.framedIp || r.leasedIp;
         const dur = fmtDuration(r.acctsessiontime);
         return (
           <div className="nowrapcell">
-            <span className={`pill ${online ? "up" : "down"}`}>
-              <span className={`dot ${online ? "up" : "down"}`} />
-              {online ? "Online" : "Offline"}
-            </span>
-            <div className="sub mt">
-              {r.framedIp || r.leasedIp
-                ? <code>{r.framedIp || r.leasedIp}</code>
-                : (r.connectionType || "—")}
-              {dur && <span className="ph"> · {dur}</span>}
+            <span className="chip">{r.package?.name ?? "—"}</span>
+            <div className="sub mt svcmeta">
+              {r.package && (
+                <span className="mono">{r.package.downloadSpeed}/{r.package.uploadSpeed} Mbps</span>
+              )}
+              {ip && <><span className="sep">·</span><code>{ip}</code></>}
+              {dur && <><span className="sep">·</span><span className="ph mono">{dur}</span></>}
             </div>
           </div>
         );
       },
     },
     {
-      key: "package",
-      header: "Package",
-      sortable: true,
-      sortValue: (r) => (r.package?.name || "").toLowerCase(),
-      render: (r) => (
-        <div className="nowrapcell">
-          <span className="chip">{r.package?.name ?? "—"}</span>
-          {r.package && (
-            <div className="sub mt">
-              {r.package.downloadSpeed}/{r.package.uploadSpeed} Mbps
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
       key: "balance",
       header: "Balance",
       headerTip: "Outstanding balance (PKR)",
       sortable: true,
-      align: "right",
       sortValue: (r) => {
         const b = r.balance ?? r.outstandingBalance;
         return b == null ? Number.MAX_SAFE_INTEGER : Number(b);
@@ -304,7 +288,7 @@ export function SubscriberTable({
         const e = expiryInfo(r);
         return (
           <>
-            <div className={`nm sm ${e.kind === "bad" ? "down" : e.kind === "warn" ? "warn" : ""}`}>{e.date}</div>
+            <div className={`nm sm mono ${e.kind === "bad" ? "down" : e.kind === "warn" ? "warn" : ""}`}>{e.date}</div>
             {e.kind !== "none" && (
               <span className={`badge ${e.kind === "bad" ? "bad" : e.kind === "warn" ? "warnb" : "okb"}`}>{e.label}</span>
             )}
@@ -390,18 +374,24 @@ export function SubscriberTable({
     },
     {
       key: "actions",
-      header: "",
+      header: "Actions",
       sortable: false,
       exportable: false,
-      width: 118,
+      width: 230,
       render: (r) => {
         const active = String(r.status ?? "").toUpperCase() === "ACTIVE";
         return (
           <span className="act" onClick={(e) => e.stopPropagation()}>
-            <button className="ib" onClick={() => onEdit(r)} title="Edit" aria-label="Edit">{IC_PENCIL}</button>
-            {active
-              ? <button className="ib" onClick={() => onDeactivate(r)} title="Disable" aria-label="Disable">{IC_POWER}</button>
-              : <button className="ib on" onClick={() => onActivate(r)} title="Activate" aria-label="Activate">{IC_POWER}</button>}
+            {/* Segmented control: the two safe, everyday actions grouped
+                together; Delete is held apart with a red hover so it cannot
+                be clicked by reflex. */}
+            <span className="seg">
+              {active
+                ? <button className="segbtn" onClick={() => onDeactivate(r)} title="Disable this subscriber">{IC_POWER}<span>Disable</span></button>
+                : <button className="segbtn go" onClick={() => onActivate(r)} title="Activate this subscriber">{IC_POWER}<span>Activate</span></button>}
+              <button className="segbtn" onClick={() => onEdit(r)} title="Edit subscriber">{IC_PENCIL}<span>Edit</span></button>
+            </span>
+            <button className="del" onClick={() => onDelete(r)} title="Delete subscriber" aria-label="Delete">{IC_TRASH}</button>
             <button className="ib" title="More" aria-label="More actions" onClick={(e) => openMenu(e as any, r)}>{IC_DOTS}</button>
           </span>
         );
@@ -513,9 +503,24 @@ const CSS = `
 .st code{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;
   background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;letter-spacing:-.02em}
 
+/* Monospaced numerals / dates for scannable columns. */
+.st .mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+/* Left-aligned, muted-gray column headers (single, calm header style). */
+.st thead th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;
+  letter-spacing:.03em;text-transform:uppercase}
+
+/* Service cell meta line. */
+.st .svcmeta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.st .svcmeta .sep{opacity:.4}
+
 /* Status / connection pills — soft pastel, readable in light + dark. */
 .st .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   font-size:11px;font-weight:700;line-height:1;border:1px solid transparent;white-space:nowrap}
+/* Prominent single status badge. */
+.st .pill.lg{padding:6px 13px;font-size:12px;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.st .pill.lg .dot{width:7px;height:7px}
 .st .pill.ok,.st .pill.up{color:#15803D;background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.28)}
 .st .pill.down{color:#64748B;background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.24)}
 .st .pill.warn{color:#B45309;background:rgba(245,158,11,.15);border-color:rgba(245,158,11,.3)}
@@ -545,8 +550,10 @@ const CSS = `
 .st .down{color:#FCA5A5}
 
 /* Balance. */
-.st .balance{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
-.st .balance b{font-size:12.5px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.st .balance{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.st .balance b{font-size:12.5px;font-weight:700;color:var(--text);
+  font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .st .balance.bad b{color:#FCA5A5}
 .st .balance .badge{margin-top:0}
 
@@ -562,14 +569,32 @@ const CSS = `
 .st .fl.d{color:#FCD34D}
 .st .fl.off{opacity:.28}
 
-/* Action icons — borderless, hover state. Destructive actions live in ⋮ More. */
-.st .act{display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
-.st .act .ib{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+/* Row actions — a segmented control groups the two safe everyday actions;
+   Delete is held apart with a red hover so it is never clicked by reflex. */
+.st .act{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+
+.st .seg{display:inline-flex;align-items:stretch;border:1px solid var(--border);
+  border-radius:8px;overflow:hidden;background:var(--surface-2)}
+.st .seg .segbtn{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;
+  border:none;background:transparent;color:var(--text);font-size:11.5px;font-weight:600;
+  font-family:inherit;cursor:pointer;line-height:1;transition:background .12s,color .12s}
+.st .seg .segbtn + .segbtn{border-left:1px solid var(--border)}
+.st .seg .segbtn:hover{background:rgba(124,77,255,.12);color:#7C4DFF}
+.st .seg .segbtn.go{color:#16a34a}
+.st .seg .segbtn.go:hover{background:rgba(22,163,74,.14);color:#16a34a}
+.st .seg .segbtn svg{flex:none}
+
+/* Delete — quiet by default, unmistakably red on hover. */
+.st .act .del{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  padding:0;border:1px solid var(--border);background:transparent;color:var(--muted);
+  border-radius:8px;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.st .act .del:hover{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.45);color:#EF4444}
+
+/* "More" overflow button. */
+.st .act .ib{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
   padding:0;border:none;background:transparent;color:var(--muted);border-radius:8px;cursor:pointer;
   transition:background .12s,color .12s}
 .st .act .ib:hover{background:rgba(124,77,255,.12);color:#7C4DFF}
-.st .act .ib.on{color:#16a34a}
-.st .act .ib.on:hover{background:rgba(22,163,74,.14);color:#16a34a}
 
 /* Alternating row colors for readability. */
 .st .jdt-scroll tbody tr:nth-child(even) td{background:rgba(148,163,184,.055)}
@@ -606,9 +631,10 @@ const CSS = `
 @media (max-width:760px){
   .st{border:none;background:transparent;box-shadow:none;overflow:visible}
   .st .statusbar{border:1px solid var(--border);border-radius:14px;background:var(--surface);margin-top:4px}
-  .st td .act{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;width:100%;padding-top:11px;
+  .st td .act{display:flex;flex-wrap:wrap;gap:8px;width:100%;padding-top:11px;
     margin-top:5px;border-top:1px solid var(--border)}
-  .st .act button{margin:0;width:100%;padding:9px 4px;font-size:12px;min-height:38px}
-  .st .act .act-badge{margin:0;width:100%;text-align:center;padding:9px 4px}
+  .st .act .seg{flex:1 1 auto}
+  .st .act .seg .segbtn{flex:1 1 0;justify-content:center;padding:11px 4px;font-size:12.5px;min-height:40px}
+  .st .act .del,.st .act .ib{width:44px;height:40px}
 }
 `;
