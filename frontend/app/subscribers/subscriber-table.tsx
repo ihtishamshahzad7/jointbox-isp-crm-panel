@@ -59,6 +59,17 @@ export interface SubscriberRow extends Subscriber {
 
 export type Row = SubscriberRow;
 
+// Minimal inline icons for the row actions (no icon-font dependency).
+const IC_PENCIL = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+);
+const IC_POWER = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v10" /><path d="M18.4 6.6a9 9 0 1 1-12.8 0" /></svg>
+);
+const IC_DOTS = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" /></svg>
+);
+
 export function SubscriberTable({
   rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, onActivate, money,
   onRefresh, fetchPage, filters, refreshToken, totalCount, defaultPageSize = 50, pageSizes = [25, 50, 100, 200],
@@ -230,7 +241,7 @@ export function SubscriberTable({
         const online = onlineOf(r);
         const dur = fmtDuration(r.acctsessiontime);
         return (
-          <>
+          <div className="nowrapcell">
             <span className={`pill ${online ? "up" : "down"}`}>
               <span className={`dot ${online ? "up" : "down"}`} />
               {online ? "Online" : "Offline"}
@@ -241,7 +252,7 @@ export function SubscriberTable({
                 : (r.connectionType || "—")}
               {dur && <span className="ph"> · {dur}</span>}
             </div>
-          </>
+          </div>
         );
       },
     },
@@ -251,14 +262,14 @@ export function SubscriberTable({
       sortable: true,
       sortValue: (r) => (r.package?.name || "").toLowerCase(),
       render: (r) => (
-        <>
+        <div className="nowrapcell">
           <span className="chip">{r.package?.name ?? "—"}</span>
           {r.package && (
             <div className="sub mt">
               {r.package.downloadSpeed}/{r.package.uploadSpeed} Mbps
             </div>
           )}
-        </>
+        </div>
       ),
     },
     {
@@ -382,20 +393,19 @@ export function SubscriberTable({
       header: "",
       sortable: false,
       exportable: false,
-      width: 230,
-      render: (r) => (
-        <span className="act" onClick={(e) => e.stopPropagation()}>
-          {String(r.status ?? "").toUpperCase() === "ACTIVE" ? (
-            <span className="act-badge" title="Subscriber is active">● Active</span>
-          ) : (
-            <button className="ok" onClick={() => onActivate(r)} title="Activate this subscriber">Activate</button>
-          )}
-          <button onClick={() => onEdit(r)} title="Edit">Edit</button>
-          <button onClick={() => onMove(r)} title="Move">Move</button>
-          <button className="warn" onClick={() => onDeactivate(r)} title="Deactivate">Off</button>
-          <button className="bad" onClick={() => onDelete(r)} title="Delete">Del</button>
-        </span>
-      ),
+      width: 118,
+      render: (r) => {
+        const active = String(r.status ?? "").toUpperCase() === "ACTIVE";
+        return (
+          <span className="act" onClick={(e) => e.stopPropagation()}>
+            <button className="ib" onClick={() => onEdit(r)} title="Edit" aria-label="Edit">{IC_PENCIL}</button>
+            {active
+              ? <button className="ib" onClick={() => onDeactivate(r)} title="Disable" aria-label="Disable">{IC_POWER}</button>
+              : <button className="ib on" onClick={() => onActivate(r)} title="Activate" aria-label="Activate">{IC_POWER}</button>}
+            <button className="ib" title="More" aria-label="More actions" onClick={(e) => openMenu(e as any, r)}>{IC_DOTS}</button>
+          </span>
+        );
+      },
     },
   ];
 
@@ -503,20 +513,23 @@ const CSS = `
 .st code{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;
   background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;letter-spacing:-.02em}
 
-/* Status pill. */
+/* Status / connection pills — soft pastel, readable in light + dark. */
 .st .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
-  font-size:11px;font-weight:700;line-height:1;border:1px solid transparent}
-.st .pill.up{color:#6EE7B7;background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35)}
-.st .pill.down{color:#94A3B8;background:rgba(148,163,184,.10);border-color:rgba(148,163,184,.22)}
-.st .pill.warn{color:#FCD34D;background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.35)}
-.st .pill.bad{color:#FCA5A5;background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.35)}
-.st .pill.neutral{color:#94A3B8;background:rgba(148,163,184,.10);border-color:rgba(148,163,184,.22)}
+  font-size:11px;font-weight:700;line-height:1;border:1px solid transparent;white-space:nowrap}
+.st .pill.ok,.st .pill.up{color:#15803D;background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.28)}
+.st .pill.down{color:#64748B;background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.24)}
+.st .pill.warn{color:#B45309;background:rgba(245,158,11,.15);border-color:rgba(245,158,11,.3)}
+.st .pill.bad{color:#B91C1C;background:rgba(239,68,68,.13);border-color:rgba(239,68,68,.28)}
+.st .pill.neutral{color:#64748B;background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.24)}
 .st .dot{display:inline-block;width:6px;height:6px;border-radius:50%}
-.st .dot.up{background:#10B981;box-shadow:0 0 7px rgba(16,185,129,.9)}
-.st .dot.down{background:#64748B}
+.st .dot.ok,.st .dot.up{background:#22C55E}
+.st .dot.down{background:#94A3B8}
 .st .dot.warn{background:#F59E0B}
 .st .dot.bad{background:#EF4444}
-.st .dot.neutral{background:#64748B}
+.st .dot.neutral{background:#94A3B8}
+/* Connection / Package: never wrap. */
+.st .nowrapcell{white-space:nowrap}
+.st td .nowrapcell{padding-right:6px}
 
 /* Package chip. */
 .st .chip{display:inline-block;padding:3px 10px;border-radius:8px;font-size:12px;font-weight:700;
@@ -549,18 +562,17 @@ const CSS = `
 .st .fl.d{color:#FCD34D}
 .st .fl.off{opacity:.28}
 
-/* Action buttons. */
-.st .act{display:inline-flex;align-items:center;gap:0;white-space:nowrap}
-.st .act button{margin-left:6px;padding:5px 11px;border-radius:8px;font-size:11px;
-  font-weight:700;cursor:pointer;font-family:inherit;
-  background:var(--surface-2);border:1px solid var(--border);color:var(--text);
-  transition:all .13s ease}
-.st .act button:hover{border-color:#7C4DFF;color:#C4B5FD;background:rgba(124,77,255,.12);transform:translateY(-1px)}
-.st .act button.warn:hover{color:#FCD34D;border-color:#F59E0B;background:rgba(245,158,11,.12)}
-.st .act button.bad:hover{color:#FCA5A5;border-color:#EF4444;background:rgba(239,68,68,.12)}
-.st .act button.ok{color:#10B981;border-color:rgba(16,185,129,.5)}
-.st .act button.ok:hover{color:#34D399;border-color:#10B981;background:rgba(16,185,129,.12)}
-.st .act .act-badge{display:inline-block;margin-left:6px;padding:5px 11px;border-radius:8px;font-size:11px;font-weight:700;color:#10B981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.35)}
+/* Action icons — borderless, hover state. Destructive actions live in ⋮ More. */
+.st .act{display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
+.st .act .ib{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+  padding:0;border:none;background:transparent;color:var(--muted);border-radius:8px;cursor:pointer;
+  transition:background .12s,color .12s}
+.st .act .ib:hover{background:rgba(124,77,255,.12);color:#7C4DFF}
+.st .act .ib.on{color:#16a34a}
+.st .act .ib.on:hover{background:rgba(22,163,74,.14);color:#16a34a}
+
+/* Alternating row colors for readability. */
+.st .jdt-scroll tbody tr:nth-child(even) td{background:rgba(148,163,184,.055)}
 
 /* WinBox status bar. */
 .st .statusbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
