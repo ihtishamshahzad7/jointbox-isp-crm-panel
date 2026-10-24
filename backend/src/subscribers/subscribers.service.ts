@@ -10,7 +10,7 @@ import { CacheService } from '../common/cache.service';
 import { QueueService } from '../common/queue.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ScopeService, Actor } from '../common/scope.service';
+import { ScopeService, Actor } from '../common/scope.service';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { ResellerPricingService } from '../organization/reseller-pricing.service';
 import { InvoicesService } from '../invoices/invoices.service';
@@ -1035,11 +1035,22 @@ export class SubscribersService implements OnModuleInit {
           COALESCE(acctupdatetime, acctstarttime) AS lastactivity,
           (
             acctstoptime IS NULL
-            AND COALESCE(acctupdatetime, acctstarttime) > NOW() - INTERVAL '15 minutes'
+            AND (
+              -- No interim updates configured on the router (MikroTik default is
+              -- interim-update=0): acctupdatetime stays NULL, so we trust the
+              -- open session — the router still sends a reliable Accounting-Stop
+              -- on disconnect. Otherwise a connected user would wrongly flip to
+              -- OFFLINE 15 minutes after connecting.
+              acctupdatetime IS NULL
+              -- Interim updates ARE arriving: a gap means the router went silent,
+              -- so require a recent one.
+              OR acctupdatetime > NOW() - INTERVAL '15 minutes'
+            )
           ) AS is_online,
           (
             acctstoptime IS NULL
-            AND COALESCE(acctupdatetime, acctstarttime) <= NOW() - INTERVAL '15 minutes'
+            AND acctupdatetime IS NOT NULL
+            AND acctupdatetime <= NOW() - INTERVAL '15 minutes'
           ) AS is_stale
         FROM radacct
         WHERE username = ANY(${usernames})
@@ -1051,7 +1062,9 @@ export class SubscribersService implements OnModuleInit {
       return rows;
     }
 
-    const byUser = new Map(live.map((l) => [l.username, l]));
+    // Key by lower-case username: RADIUS usernames are case-insensitive in
+    // practice and a router may report a different case than we stored.
+    const byUser = new Map(live.map((l) => [String(l.username).toLowerCase(), l]));
 
     /**
      * ROUTER-API PRESENCE — the accounting-independent source of truth.
@@ -1071,7 +1084,7 @@ export class SubscribersService implements OnModuleInit {
 
     return rows.map((r) => {
       const uname = r?.username ? String(r.username) : '';
-      const l = uname ? byUser.get(uname) : null;
+      const l = uname ? byUser.get(uname.toLowerCase()) : null;
       const onAcct = !!l && l.is_online === true;
       const onRouter = uname ? routerOnline.has(uname.toLowerCase()) : false;
       const online = onAcct || onRouter;
