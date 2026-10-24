@@ -419,12 +419,28 @@ const CSS = `
 .sd-banner b{font-weight:800}
 .sd-alert-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 
-/* ── Tabs (sticky) ── */
-.sd-tabs{position:sticky;top:0;z-index:300;background:var(--bg);padding:6px 0;display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--border);scrollbar-width:none}
-.sd-tabs::-webkit-scrollbar{display:none}
-.sd-tab{border:none;background:transparent;padding:6px 11px;border-radius:6px;font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+/* ── Body layout: vertical nav sidebar + main content ── */
+.sd-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:18px;align-items:start}
+.sd-main{min-width:0}
+
+/* Vertical navigation sidebar. */
+.sd-tabs{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;
+  background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  padding:9px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.sd-tab{border:none;background:transparent;padding:9px 13px;border-radius:9px;
+  font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
+  white-space:nowrap;display:flex;align-items:center;gap:8px;text-align:left;width:100%;
+  transition:background .12s,color .12s}
 .sd-tab:hover{color:var(--text);background:var(--surface-2)}
-.sd-tab.on{background:var(--accent);color:#fff}
+.sd-tab.on{background:var(--accent);color:#fff;box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 40%,transparent)}
+
+/* Mobile dropdown trigger — hidden on desktop. */
+.sd-navtrigger{display:none;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:12px;
+  background:var(--surface);color:var(--text);font-size:13px;font-weight:700;
+  font-family:inherit;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.sd-navchev{transition:transform .18s;color:var(--muted)}
+.sd-navchev.open{transform:rotate(180deg)}
 
 /* ── Alert banner (static IP mismatch, duplicate login, flapping) ── */
 .sd-alert{display:flex;gap:11px;padding:10px 12px;border-radius:9px;border:1px solid rgba(211,64,83,.4);background:rgba(211,64,83,.07);font-size:12px;line-height:1.55}
@@ -457,6 +473,12 @@ const CSS = `
 @media (max-width:900px){
   .sd-top{flex-direction:column}
   .sd-two-col{grid-template-columns:1fr !important}
+  /* Sidebar collapses to a dropdown. */
+  .sd-layout{grid-template-columns:1fr;gap:12px}
+  .sd-navtrigger{display:flex}
+  .sd-tabs{position:static;display:none;gap:2px;padding:7px}
+  .sd-tabs.open{display:flex}
+  .sd-tab{padding:11px 13px}
 }
 @media (max-width:640px){
   .sd-title h1{font-size:16px}
@@ -471,7 +493,6 @@ const CSS = `
   .sd-def dd{text-align:left;word-break:break-word}
   .sd-panel-a{width:100%}
   .sd-refresh{width:100%;justify-content:space-between}
-  .sd-tabs{padding:6px 0 8px}
 }
 @media (max-width:400px){
   .sd-kpi-grid{grid-template-columns:1fr}

@@ -84,6 +84,7 @@ function DeviceShell() {
 
   const [tab, setTab] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
 
   // Verified disconnect — the backend does the full chain (CoA/API → NAS →
   // re-check real active session) and reports what ACTUALLY happened.
@@ -247,36 +248,51 @@ function DeviceShell() {
         </div>
       )}
 
-      {/* ── Sticky tabs ── */}
-      <nav className="sd-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`sd-tab${tab === t.id ? " on" : ""}`}
-            onClick={() => goTab(t.id)}
-            title={t.group}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      {/* ── Body: vertical nav sidebar + main content ── */}
+      <div className="sd-layout">
+        {/* Mobile: the sidebar collapses behind this trigger. */}
+        <button
+          type="button"
+          className="sd-navtrigger"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen((v) => !v)}
+        >
+          <span>{TABS.find((t) => t.id === tab)?.label ?? "Menu"}</span>
+          <span className={`sd-navchev${navOpen ? " open" : ""}`}>▾</span>
+        </button>
 
-      {/* ── Tab body (lazy) ── */}
-      <Suspense fallback={<div className="sd-root"><div className="sd-spinner"><span className="sd-spinner-ring" /><span>Loading…</span></div></div>}>
-        {tab === "overview" && <OverviewTab onGoto={goTab} />}
-        {tab === "connection" && <ConnectionTab />}
-        {tab === "service" && <ServiceTab />}
-        {tab === "usage" && <UsageTab />}
-        {tab === "sessions" && <SessionsTab />}
-        {tab === "radius" && <RadiusTab />}
-        {tab === "router" && <RouterTab />}
-        {tab === "billing" && <BillingTab />}
-        {tab === "diagnostics" && <DiagnosticsTab />}
-        {tab === "login-log" && <LoginLogTab />}
-        {tab === "activities" && <ActivitiesTab />}
-      </Suspense>
+        <nav className={`sd-tabs${navOpen ? " open" : ""}`} role="tablist" aria-label="Subscriber sections">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`sd-tab${tab === t.id ? " on" : ""}`}
+              onClick={() => { goTab(t.id); setNavOpen(false); }}
+              title={t.group}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* ── Tab body (lazy) ── */}
+        <div className="sd-main">
+          <Suspense fallback={<div className="sd-root"><div className="sd-spinner"><span className="sd-spinner-ring" /><span>Loading…</span></div></div>}>
+            {tab === "overview" && <OverviewTab onGoto={goTab} />}
+            {tab === "connection" && <ConnectionTab />}
+            {tab === "service" && <ServiceTab />}
+            {tab === "usage" && <UsageTab />}
+            {tab === "sessions" && <SessionsTab />}
+            {tab === "radius" && <RadiusTab />}
+            {tab === "router" && <RouterTab />}
+            {tab === "billing" && <BillingTab />}
+            {tab === "diagnostics" && <DiagnosticsTab />}
+            {tab === "login-log" && <LoginLogTab />}
+            {tab === "activities" && <ActivitiesTab />}
+          </Suspense>
+        </div>
+      </div>
     </div>
   );
 }
