@@ -26,13 +26,42 @@ const timeAgo = (ts: string | Date) => {
 
 const money = (n: number) => n.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
+// ── Log views (exported so the Insights hub can build its accordion) ──
+export const LOG_VIEWS = [
+  { id: "console",    label: "🖥️ Console" },
+  { id: "actrec",     label: "🧾 Activity Logs" },
+  { id: "authrec",    label: "🔑 Subscriber Auth" },
+  { id: "timeline",   label: "📋 Timeline" },
+  { id: "login",      label: "🔐 Login" },
+  { id: "activity",   label: "📝 Activity" },
+  { id: "network",    label: "🖧 Network" },
+  { id: "system",     label: "⚙️ System" },
+  { id: "sessions",   label: "🟢 Sessions" },
+  { id: "radsess",    label: "📶 RADIUS Sessions" },
+  { id: "disconnects", label: "🔌 Disconnect Reasons" },
+  { id: "failed",     label: "⛔ Failed" },
+  { id: "radius",     label: "🩺 RADIUS" },
+];
+
 // ── Component ─────────────────────────────────────────────────────
 
-export default function LogsPage() {
+/**
+ * Props let the page be EMBEDDED inside the Insights hub: there, the hub's
+ * accordion is the view switcher, so Logs hides its own sidebar and is driven
+ * by the `view` prop instead. Standalone (no props) it keeps its own sidebar.
+ */
+export default function LogsPage({ embedded = false, view, onViewChange }: {
+  embedded?: boolean; view?: string; onViewChange?: (id: string) => void;
+} = {}) {
   const router = useRouter();
   const [darkMode, setDarkMode] = useState(true);
   const [user, setUser] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState("timeline");
+  const [internalTab, setInternalTab] = useState("timeline");
+  // When embedded, the active view is controlled by the parent hub.
+  const activeTab = embedded ? (view || "timeline") : internalTab;
+  const setActiveTab = (id: string) => {
+    if (embedded) { onViewChange?.(id); } else { setInternalTab(id); }
+  };
   const [loading, setLoading] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
@@ -172,6 +201,7 @@ export default function LogsPage() {
   // Deep link: /logs?tab=disconnects (only this page's own tab ids — inside the
   // Insights hub the same parameter names the hub tab, and is ignored here).
   useEffect(() => {
+    if (embedded) return; // the hub controls the active view when embedded
     try {
       const q = new URLSearchParams(window.location.search);
       const want = q.get("logTab") || q.get("tab");
@@ -269,32 +299,19 @@ export default function LogsPage() {
 
   // ── Tabs ───────────────────────────────────────────────────────
 
-  const tabs = [
-    { id: "console",    label: "🖥️ Console" },
-    { id: "actrec",     label: "🧾 Activity Logs" },
-    { id: "authrec",    label: "🔑 Subscriber Auth" },
-    { id: "timeline",   label: "📋 Timeline" },
-    { id: "login",      label: "🔐 Login" },
-    { id: "activity",   label: "📝 Activity" },
-    { id: "network",    label: "🖧 Network" },
-    { id: "system",     label: "⚙️ System" },
-    { id: "sessions",   label: "🟢 Sessions" },
-    { id: "radsess",    label: "📶 RADIUS Sessions" },
-    { id: "disconnects", label: "🔌 Disconnect Reasons" },
-    { id: "failed",     label: "⛔ Failed" },
-    { id: "radius",     label: "🩺 RADIUS" },
-  ];
+  const tabs = LOG_VIEWS;
 
   // ── Render ─────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: t.bg, color: t.text, fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", fontSize: 13 }}>
+    <div style={{ display: "flex", minHeight: embedded ? "auto" : "100vh", background: embedded ? "transparent" : t.bg, color: t.text, fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", fontSize: 13 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-        <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
+        <div style={{ flex: 1, padding: embedded ? 0 : "16px 20px", overflowY: embedded ? "visible" : "auto" }}>
 
           {/* Layout styles: left vertical view sidebar + content. */}
           <style>{`
             .logs-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:18px;align-items:start}
+            .logs-layout.embedded{grid-template-columns:1fr}
             .logs-main{min-width:0}
             .logs-side{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;
               background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:9px;
@@ -416,28 +433,34 @@ export default function LogsPage() {
           </div>
 
           {/* ═══════════════ VIEW SIDEBAR + CONTENT ═══════════════ */}
-          <div className="logs-layout">
-            {/* Mobile: the view list collapses behind this trigger. */}
-            <button type="button" className="logs-navtrigger" aria-expanded={navOpen} onClick={() => setNavOpen(v => !v)}>
-              <span>{tabs.find(x => x.id === activeTab)?.label || "View"}</span>
-              <span className={`logs-navchev${navOpen ? " open" : ""}`}>▾</span>
-            </button>
-
-            {/* Left vertical view navigation. */}
-            <nav className={`logs-side${navOpen ? " open" : ""}`} role="tablist" aria-label="Log views">
-              {tabs.map(tab => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === tab.id}
-                  className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
-                  onClick={() => { setActiveTab(tab.id); setNavOpen(false); }}
-                >
-                  {tab.label}
+          {/* When embedded in the Insights hub, the hub's accordion is the view
+              switcher, so the own sidebar is dropped and content spans full width. */}
+          <div className={`logs-layout${embedded ? " embedded" : ""}`}>
+            {!embedded && (
+              <>
+                {/* Mobile: the view list collapses behind this trigger. */}
+                <button type="button" className="logs-navtrigger" aria-expanded={navOpen} onClick={() => setNavOpen(v => !v)}>
+                  <span>{tabs.find(x => x.id === activeTab)?.label || "View"}</span>
+                  <span className={`logs-navchev${navOpen ? " open" : ""}`}>▾</span>
                 </button>
-              ))}
-            </nav>
+
+                {/* Left vertical view navigation. */}
+                <nav className={`logs-side${navOpen ? " open" : ""}`} role="tablist" aria-label="Log views">
+                  {tabs.map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
+                      onClick={() => { setActiveTab(tab.id); setNavOpen(false); }}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </nav>
+              </>
+            )}
 
             {/* Right content area. */}
             <div className="logs-main">
@@ -868,10 +891,12 @@ export default function LogsPage() {
             </div>{/* .logs-main */}
           </div>{/* .logs-layout */}
 
-          {/* Footer */}
-          <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${t.cardBorder}`, fontSize: 11, color: t.textMuted, textAlign: "center" }}>
-            © {new Date().getFullYear()} <strong style={{ color: t.accent }}>JointBox</strong> ISP CRM Platform. All rights reserved.
-          </div>
+          {/* Footer — only standalone (the hub provides page chrome when embedded). */}
+          {!embedded && (
+            <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${t.cardBorder}`, fontSize: 11, color: t.textMuted, textAlign: "center" }}>
+              © {new Date().getFullYear()} <strong style={{ color: t.accent }}>JointBox</strong> ISP CRM Platform. All rights reserved.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -897,13 +922,23 @@ function LogTable({ data, headers, render, emptyMsg = "No data found.", d, t }: 
     return <div style={{ padding: 30, textAlign: "center", color: t.textMuted, fontSize: 12, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>{emptyMsg}</div>;
   }
   return (
-    <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
+    <div style={{ background: "var(--bg-elev, var(--surface))", border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
+      {/* Nothing wraps — IPs, dates and ids stay on one line; the table scrolls
+          sideways instead. Solid surfaces for readable dark-mode contrast. */}
+      <style>{`
+        .logtbl{width:100%;border-collapse:collapse;min-width:700px}
+        .logtbl th,.logtbl td{white-space:nowrap;padding:9px 14px}
+        .logtbl thead th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.04em;
+          text-transform:uppercase;color:var(--muted)}
+        .logtbl tbody tr{border-bottom:1px solid var(--border)}
+        html[data-theme="dark"] .logtbl tbody tr:nth-child(odd){background:rgba(255,255,255,.02)}
+      `}</style>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+        <table className="logtbl">
           <thead>
-            <tr style={{ background: d ? "var(--bg)" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
+            <tr style={{ background: d ? "#0f172a" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
               {headers.map((h: string) => (
-                <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
+                <th key={h}>{h}</th>
               ))}
             </tr>
           </thead>

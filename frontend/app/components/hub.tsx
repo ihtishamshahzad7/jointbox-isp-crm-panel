@@ -10,7 +10,10 @@ export type HubTab = {
   label: string;
   /** One line explaining what this tab is for — shown under the title. */
   hint?: string;
-  render: () => React.ReactNode;
+  /** Optional accordion sub-items. When present, the sidebar expands this tab
+     inline and `render` receives the active sub-item id. */
+  children?: Array<{ id: string; label: string }>;
+  render: (activeSubId?: string) => React.ReactNode;
 };
 
 function HubInner({
@@ -24,29 +27,39 @@ function HubInner({
   const params = useSearchParams();
   const urlTab = params.get("tab");
 
+  // An id is valid if it matches a top-level tab OR any tab's accordion child.
+  const isValidId = (id?: string | null) =>
+    !!id && tabs.some((t) => t.id === id || t.children?.some((c) => c.id === id));
+  // The top-level tab that owns an id (the id itself, or the parent of a child).
+  const topTabOf = (id?: string) =>
+    tabs.find((t) => t.id === id) ??
+    tabs.find((t) => t.children?.some((c) => c.id === id)) ??
+    tabs[0];
+
   const [active, setActive] = useState(() => {
-    if (urlTab && tabs.some((t) => t.id === urlTab)) return urlTab;
+    if (isValidId(urlTab)) return urlTab as string;
     return tabs[0]?.id;
   });
   // A deep link (?tab=nas) opens on that tab, so it must count as seen from the
   // start — otherwise only the first tab is ever rendered and the linked one
   // shows its title over an empty page.
-  const [seen, setSeen] = useState<Set<string>>(() => new Set([active]));
+  const [seen, setSeen] = useState<Set<string>>(() => new Set([topTabOf(active)?.id ?? active]));
   useEffect(() => {
-    if (active && !seen.has(active)) setSeen((p) => new Set(p).add(active));
+    const top = topTabOf(active)?.id ?? active;
+    if (top && !seen.has(top)) setSeen((p) => new Set(p).add(top));
   }, [active, seen]);
 
   useEffect(() => {
     if (urlTab || !storageKey) return;
     const saved = localStorage.getItem(`hub:${storageKey}`);
-    if (saved && tabs.some((t) => t.id === saved)) {
-      setActive(saved);
-      setSeen((p) => new Set(p).add(saved));
+    if (isValidId(saved)) {
+      setActive(saved as string);
+      setSeen((p) => new Set(p).add(saved as string));
     }
   }, []);
 
   useEffect(() => {
-    if (urlTab && urlTab !== active && tabs.some((t) => t.id === urlTab)) {
+    if (urlTab && urlTab !== active && isValidId(urlTab)) {
       setActive(urlTab);
       setSeen((p) => new Set(p).add(urlTab));
     }
@@ -71,13 +84,16 @@ function HubInner({
     router.replace(url.pathname + url.search, { scroll: false });
   };
 
-  const current = tabs.find((t) => t.id === active) ?? tabs[0];
+  // The top-level tab currently shown (owns the active id).
+  const current = topTabOf(active);
 
   const selectByOffset = (offset: number) => {
     if (!tabs.length || !current) return;
     const index = tabs.findIndex((t) => t.id === current.id);
     const next = (index + offset + tabs.length) % tabs.length;
-    select(tabs[next].id);
+    const t = tabs[next];
+    // Landing on a tab with children opens its first child.
+    select(t.children?.[0]?.id ?? t.id);
   };
 
   const [navOpen, setNavOpen] = useState(false);
@@ -108,19 +124,43 @@ function HubInner({
             if (e.key === "End") { e.preventDefault(); if (tabs.at(-1)) select(tabs.at(-1)!.id); }
           }}
         >
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={t.id === current?.id}
-              tabIndex={t.id === current?.id ? 0 : -1}
-              className={`hub-side-tab${t.id === current?.id ? " on" : ""}`}
-              onClick={() => { select(t.id); setNavOpen(false); }}
-            >
-              {t.label}
-            </button>
-          ))}
+          {tabs.map((t) => {
+            const hasChildren = !!t.children?.length;
+            const expanded = current?.id === t.id;      // active id is this tab or its child
+            const topActive = active === t.id;           // the top tab itself is the active id
+            return (
+              <div key={t.id}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={expanded}
+                  aria-expanded={hasChildren ? expanded : undefined}
+                  tabIndex={expanded ? 0 : -1}
+                  className={`hub-side-tab${topActive ? " on" : ""}${hasChildren && expanded ? " expanded" : ""}`}
+                  onClick={() => { select(hasChildren ? (t.children![0].id) : t.id); setNavOpen(false); }}
+                >
+                  <span>{t.label}</span>
+                  {hasChildren && <span className={`hub-caret${expanded ? " open" : ""}`}>▸</span>}
+                </button>
+                {hasChildren && expanded && (
+                  <div className="hub-subnav">
+                    {t.children!.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active === c.id}
+                        className={`hub-side-sub${active === c.id ? " on" : ""}`}
+                        onClick={() => { select(c.id); setNavOpen(false); }}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
 
         {/* Right content area. */}
@@ -131,9 +171,9 @@ function HubInner({
             </div>
           )}
           {tabs.map((t) =>
-            seen.has(t.id) ? (
+            (seen.has(t.id) || current?.id === t.id) ? (
               <div key={t.id} style={{ display: t.id === current?.id ? "block" : "none" }}>
-                {t.render()}
+                {t.render(t.children ? active : undefined)}
               </div>
             ) : null,
           )}
@@ -154,8 +194,28 @@ function HubInner({
           font-family: inherit; white-space: nowrap; text-align: left; width: 100%;
           transition: background .12s, color .12s;
         }
+        .hub-side-tab { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .hub-side-tab:hover { color: var(--text); background: var(--surface-2); }
         .hub-side-tab.on {
+          background: var(--accent); color: #fff;
+          box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
+        }
+        /* A parent tab that is expanded (a child is active) stays highlighted,
+           but softer than the purple of the active child. */
+        .hub-side-tab.expanded:not(.on) { color: var(--text); background: var(--surface-2); font-weight: 700; }
+        .hub-caret { font-size: 10px; color: var(--muted); transition: transform .15s; }
+        .hub-side-tab.expanded .hub-caret, .hub-caret.open { transform: rotate(90deg); color: inherit; }
+        /* Accordion children — indented under their parent. */
+        .hub-subnav { display: flex; flex-direction: column; gap: 2px; margin: 3px 0 4px 10px;
+          padding-left: 8px; border-left: 2px solid var(--border); }
+        .hub-side-sub {
+          border: none; background: transparent; padding: 7px 11px; border-radius: 8px;
+          font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer;
+          font-family: inherit; white-space: nowrap; text-align: left; width: 100%;
+          overflow: hidden; text-overflow: ellipsis; transition: background .12s, color .12s;
+        }
+        .hub-side-sub:hover { color: var(--text); background: var(--surface-2); }
+        .hub-side-sub.on {
           background: var(--accent); color: #fff;
           box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
         }
