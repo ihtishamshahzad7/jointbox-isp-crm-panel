@@ -4,9 +4,10 @@ import React from "react";
 import { BRAND } from "../../lib/brand";
 
 /**
- * Brand mark — two interlocking rounded boxes ("joint" of "boxes"),
- * one woven over the other, on a Nova-gradient tile. Rendered inline as SVG so
- * it stays crisp at any size and needs no image request.
+ * Brand mark — Uplinko: a bold "U" that rises into an up-arrow (an "uplink").
+ * Indigo U, magenta arrowhead accent, drawn inline as SVG so it stays crisp at
+ * any size (favicon → app header) with no image request, and reads on both
+ * light and dark backgrounds.
  *
  * <Logo />           → mark only
  * <Logo withText />  → mark + brand name / subtitle wordmark
@@ -27,17 +28,17 @@ export function Logo({
   const mark = (
     <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
       <defs>
-        <linearGradient id={`g${id}`} x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={`u${id}`} x1="0" y1="1" x2="1" y2="0">
           <stop offset="0" stopColor="#6C3CE1" />
-          <stop offset="0.55" stopColor="#E9408B" />
-          <stop offset="1" stopColor="#F27121" />
+          <stop offset="1" stopColor="#7C4DFF" />
         </linearGradient>
       </defs>
-      <rect x="4" y="4" width="92" height="92" rx="24" fill={`url(#g${id})`} />
-      <rect x="4" y="4" width="92" height="46" rx="24" fill="#ffffff" opacity="0.1" />
-      <rect x="24" y="26" width="34" height="34" rx="11" fill="none" stroke="#fff" strokeWidth="6.5" opacity="0.9" />
-      <rect x="38" y="40" width="26" height="26" rx="10" fill={`url(#g${id})`} />
-      <rect x="42" y="40" width="34" height="34" rx="11" fill="none" stroke="#fff" strokeWidth="6.5" />
+      {/* The "U" — thick rounded stroke, open at the top. */}
+      <path d="M28 20 L28 52 A22 22 0 0 0 72 52 L72 36"
+        fill="none" stroke={`url(#u${id})`} strokeWidth="15" strokeLinecap="round" strokeLinejoin="round" />
+      {/* The uplink arrow rising from the right arm (magenta accent). */}
+      <path d="M72 40 L72 12" fill="none" stroke="#E9408B" strokeWidth="15" strokeLinecap="round" />
+      <path d="M58 24 L72 9 L86 24" fill="none" stroke="#E9408B" strokeWidth="15" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 

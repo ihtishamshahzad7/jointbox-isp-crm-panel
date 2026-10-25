@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { BRAND } from "../../lib/brand";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API from "../components/api";
@@ -898,7 +899,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           {/* Footer — only standalone (the hub provides page chrome when embedded). */}
           {!embedded && (
             <div style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${t.cardBorder}`, fontSize: 11, color: t.textMuted, textAlign: "center" }}>
-              © {new Date().getFullYear()} <strong style={{ color: t.accent }}>JointBox</strong> ISP CRM Platform. All rights reserved.
+              © {new Date().getFullYear()} <strong style={{ color: t.accent }}>{BRAND.name}</strong> ISP CRM Platform. All rights reserved.
             </div>
           )}
         </div>

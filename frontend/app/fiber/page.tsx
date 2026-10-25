@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { BRAND } from "../../lib/brand";
 import { useRouter } from "next/navigation";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
@@ -593,7 +594,7 @@ export default function FiberPage() {
 
           {/* Footer */}
           <div style={{marginTop:24,paddingTop:16,borderTop:`1px solid ${t.cardBorder}`,fontSize:11,color:t.textMuted,textAlign:"center"}}>
-            © {new Date().getFullYear()} <strong style={{color:t.accent}}>JointBox</strong> ISP CRM Platform. All rights reserved.
+            © {new Date().getFullYear()} <strong style={{color:t.accent}}>{BRAND.name}</strong> ISP CRM Platform. All rights reserved.
           </div>
         </div>
       </div>

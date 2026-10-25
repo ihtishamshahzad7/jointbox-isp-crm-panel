@@ -17,9 +17,9 @@
 
 export const BRAND = {
   /** Company / product name shown in the shell, login, and landing footer. */
-  name: process.env.NEXT_PUBLIC_BRAND_NAME || "Jointbox",
+  name: process.env.NEXT_PUBLIC_BRAND_NAME || "Uplinko",
   /** Short descriptor below the logo mark. */
-  subtitle: process.env.NEXT_PUBLIC_BRAND_SUBTITLE || "ISP Management",
+  subtitle: process.env.NEXT_PUBLIC_BRAND_SUBTITLE || "ISP CRM & Network Monitoring",
   /** Fallback support inbox for "Need help?" links. */
   supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "ehtisham@jointbox.net",
   /** Hero headline for the public landing page. */

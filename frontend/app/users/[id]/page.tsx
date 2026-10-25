@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BRAND } from "../../../lib/brand";
 import { useParams, useRouter } from "next/navigation";
 import { fileUrl } from "../../components/image-upload";
 import { RecordNotes } from "../../components/record-notes";
@@ -515,7 +516,7 @@ export default function UserProfilePage() {
             }}>
               {invShowLogo && (
                 <div style={{ fontSize: 20, fontWeight: 800, color: T.accent, marginBottom: 12, letterSpacing: "-0.02em" }}>
-                  {u.branch?.isp?.name || "JointBox ISP"}
+                  {u.branch?.isp?.name || `${BRAND.name} ISP`}
                 </div>
               )}
               <div style={{ fontSize: 18, fontWeight: 700, color: T.text, marginBottom: 4 }}>INVOICE</div>

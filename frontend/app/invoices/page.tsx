@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BRAND } from "../../lib/brand";
 import { useRouter } from "next/navigation";
 import { money, currencySymbol } from "../components/currency";
 import { Icons as SIcons } from "../components/icons";
@@ -482,7 +483,7 @@ const [reverseReason, setReverseReason] = useState("");
 
           {/* Footer */}
           <div className="page-footer" style={{ marginTop: 24, paddingTop: 16, borderTop: `1px solid ${t.cardBorder}`, fontSize: 11, color: t.textMuted, textAlign: "center" }}>
-            © {new Date().getFullYear()} <strong style={{ color: t.accent }}>JointBox</strong> ISP CRM Platform. All rights reserved.
+            © {new Date().getFullYear()} <strong style={{ color: t.accent }}>{BRAND.name}</strong> ISP CRM Platform. All rights reserved.
           </div>
         </div>
       </div>
@@ -616,7 +617,7 @@ const [reverseReason, setReverseReason] = useState("");
             <div style={{ marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 20, paddingBottom: 16, borderBottom: `2px solid ${t.cardBorder}`, flexWrap: "wrap", gap: 16 }}>
                 <div>
-                  <h3 style={{ fontSize: 16, fontWeight: 700, color: t.accent, margin: 0 }}>JointBox</h3>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, color: t.accent, margin: 0 }}>{BRAND.name}</h3>
                   <p style={{ fontSize: 11, color: t.textMuted, margin: "4px 0 0" }}>ISP CRM Platform</p>
                 </div>
                 <div style={{ textAlign: "right" }}>
