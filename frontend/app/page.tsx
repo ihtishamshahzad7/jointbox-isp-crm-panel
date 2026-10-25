@@ -70,7 +70,7 @@ export default function HomePage() {
       <div className={s.wrap}>
         <nav className={s.nav} aria-label="Main">
           <Link href="/" aria-label={`${BRAND.name} home`} style={{ textDecoration: "none" }}>
-            <LogoAssemble src="/brand/uplinko-logo-white.png" height={52} alt={`${BRAND.name} home`} />
+            <LogoAssemble src="/brand/uplinko-logo-white.png" height={92} alt={`${BRAND.name} home`} />
           </Link>
           <div className={s.navLinks}>
             <a className={`${s.navLink} ${s.hideSm}`} href="#modules">{t("Features")}</a>
