@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL is required}"
+cd "$(dirname "$0")/.."
+
+# Load backend/.env when this script is run standalone (db-deploy.sh already
+# exports these, in which case load_env_file simply refreshes them from .env).
+# shellcheck source=scripts/lib/load-env.sh
+source "scripts/lib/load-env.sh"
+load_env_file ".env"
+
+: "${DATABASE_URL:?DATABASE_URL is required (set it in backend/.env)}"
 
 # NAS is shared application configuration in Jointbox and is referenced by
 # foreign keys from public tables (Subscriber, IpPool, NetworkLog, etc.).
 # Moving it behind a public view would break future Prisma FK migrations.
 # Keep the NAS config table public; expose radius.nas as a read-only RADIUS view.
 
-RADIUS_DB_USER="${RADIUS_DB_USER:-$(node -e "const u=new URL(process.env.RADIUS_DATABASE_URL || process.env.DATABASE_URL); process.stdout.write(decodeURIComponent(u.username))")}" 
-ADMIN_DB_URL="${ADMIN_DATABASE_URL:-$DATABASE_URL}"
+RADIUS_DB_USER="${RADIUS_DB_USER:-$(node -e "const u=new URL(process.env.RADIUS_DATABASE_URL || process.env.DATABASE_URL); process.stdout.write(decodeURIComponent(u.username))")}"
+
+# Build a libpq/psql-safe URL. Prisma URLs may carry `?connection_limit=…` and
+# other engine-only params that psql rejects; pg-url.js parses the URL and keeps
+# only libpq-valid query keys (sslmode, sslrootcert, …) rather than blindly
+# stripping the query string. Prefer an explicit admin URL if provided.
+PSQL_URL="$(ADMIN_DATABASE_URL="${ADMIN_DATABASE_URL:-$DATABASE_URL}" node scripts/lib/pg-url.js)" || {
+  echo "✗ Could not derive a psql-safe database URL" >&2
+  exit 1
+}
 
 if [[ ! "$RADIUS_DB_USER" =~ ^[A-Za-z0-9_]+$ ]]; then
   echo "✗ Invalid RADIUS_DB_USER"
   exit 1
 fi
 
-psql "$ADMIN_DB_URL" -v ON_ERROR_STOP=1 <<SQL
+psql "$PSQL_URL" -v ON_ERROR_STOP=1 <<SQL
 SET lock_timeout = '5s';
 CREATE SCHEMA IF NOT EXISTS radius;
 

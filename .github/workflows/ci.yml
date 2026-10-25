@@ -115,6 +115,14 @@ jobs:
       - name: typecheck
         run: npm run typecheck
 
+      # Regression guard for the one-command install DB-deploy chain: proves the
+      # `connection_limit` psql failure and the missing-DATABASE_URL failure
+      # cannot recur. Pure tests always run; the integration test spins up a
+      # disposable cluster when server binaries are present (they are on the
+      # GitHub ubuntu runners) and self-skips otherwise. Never touches a real DB.
+      - name: db-script regression tests
+        run: npm run test:db-scripts
+
       - name: unit + security tests
         run: npm test -- --ci
 

@@ -79,13 +79,51 @@ fi
 log "Generating Prisma client..."
 (cd backend && npx prisma generate)
 
-log "Applying database migrations..."
+# --- safety backup BEFORE any schema change ---------------------------------
+# Back up config (.env) and the database before migrations run. Forward-only
+# migrations should never need a rollback, but a client's billing data warrants
+# a restore point regardless. Backups are best-effort: a backup-infra problem
+# must not block a security update, but it is logged loudly. Files are 0600,
+# directory 0700, and only the last 7 DB dumps are kept.
+BACKUP_DIR="/var/backups/jointbox"
+if mkdir -p "$BACKUP_DIR" 2>/dev/null; then
+  chmod 700 "$BACKUP_DIR" 2>/dev/null || true
+  STAMP="$(date -u '+%Y%m%d-%H%M%S')"
+  if [[ -f backend/.env ]]; then
+    install -m 600 backend/.env "$BACKUP_DIR/env-${STAMP}.bak" 2>/dev/null \
+      && log "Config backed up: $BACKUP_DIR/env-${STAMP}.bak (0600)" \
+      || log "WARNING: could not back up backend/.env"
+  fi
+  # Derive a libpq-safe URL (drops Prisma-only params) for pg_dump.
+  SAFE_DB_URL="$(cd backend && node -r dotenv/config scripts/lib/pg-url.js 2>/dev/null || true)"
+  if command -v pg_dump >/dev/null 2>&1 && [[ -n "$SAFE_DB_URL" ]]; then
+    DB_BACKUP="$BACKUP_DIR/db-${DEPLOY_SHORT}-${STAMP}.sql.gz"
+    if ( umask 077; pg_dump "$SAFE_DB_URL" 2>/dev/null | gzip > "$DB_BACKUP" ) \
+         && [[ -s "$DB_BACKUP" ]]; then
+      chmod 600 "$DB_BACKUP" 2>/dev/null || true
+      log "Database backed up: $DB_BACKUP (0600)"
+      # retain only the 7 most recent dumps
+      ls -1t "$BACKUP_DIR"/db-*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
+    else
+      rm -f "$DB_BACKUP" 2>/dev/null || true
+      log "WARNING: database backup did not complete; continuing (migrations are forward-only)."
+    fi
+  else
+    log "WARNING: pg_dump unavailable or DATABASE_URL unreadable; skipping DB backup."
+  fi
+else
+  log "WARNING: could not create $BACKUP_DIR; skipping pre-update backups."
+fi
+
+log "Applying database migrations (safe, forward-only via db:deploy)..."
 # A failed migration MUST fail the deployment. There is deliberately no
 # schema-sync fallback here: bypassing the migration chain on a production
-# database can silently destroy data. If migrate deploy fails, the ERR trap
-# stops the update and leaves the previous build running (verification-phase
-# Priority 1).
-(cd backend && npx prisma migrate deploy)
+# database can silently destroy data. `npm run db:deploy` runs `prisma migrate
+# deploy` (never db push, never --accept-data-loss) plus the idempotent RADIUS
+# schema separation, and loads backend/.env so every child sees DATABASE_URL.
+# If it fails, the ERR trap stops the update and leaves the previous build
+# running (verification-phase Priority 1).
+(cd backend && npm run db:deploy)
 
 log "Building backend..."
 (cd backend && npm run build)

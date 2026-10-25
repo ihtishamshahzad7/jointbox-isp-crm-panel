@@ -13,6 +13,7 @@
     "db:fix-ownership": "node scripts/fix-db-ownership.js",
     "db:push": "node scripts/db-push-safe.js",
     "db:deploy": "bash scripts/db-deploy.sh",
+  "test:db-scripts": "bash scripts/lib/__tests__/run.sh",
     "db:setup": "npm run db:push",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",

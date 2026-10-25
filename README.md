@@ -9,12 +9,22 @@ Jointbox is a self-hosted CRM, billing, and network-operations panel for interne
 
 ## Getting started
 
+**Fresh Ubuntu 22.04/24.04 server — one command:**
+
 ```bash
-git clone https://github.com/ihtishamshahzad7/jointbox-isp-crm-panel.git
-cd jointbox-isp-crm-panel
+curl -fsSL https://raw.githubusercontent.com/ihtishamshahzad7/jointbox-isp-crm-panel/main/install.sh -o /tmp/uplinko-install.sh && sudo bash /tmp/uplinko-install.sh
 ```
 
-For a fresh Ubuntu server install (Postgres + FreeRADIUS + Redis + Nginx + PM2), run `install.sh`. For local development setup, see `SETUP.md`. To deploy an update to an existing server, run `update-jointbox.sh` from the repo root — it pulls, migrates, rebuilds, and reloads both apps via `ecosystem.config.js`.
+**Update an existing server:**
+
+```bash
+sudo bash /opt/jointbox/update-jointbox.sh
+```
+
+Both are idempotent, take backups before schema changes, and health-check the
+API and panel before reporting success. Full details — requirements, ports,
+backup/restore, verification, and troubleshooting — are in
+[`docs/INSTALL.md`](docs/INSTALL.md). For local development setup, see `SETUP.md`.
 
 ## Where to look next
 

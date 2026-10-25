@@ -442,6 +442,9 @@ else
   err "BACKEND BUILD FAILED — the API will not start. Full log: $BUILD_LOG"
   tail -25 "$BUILD_LOG"
   [ -f dist/main.js ] || err "dist/main.js was not produced"
+  err "Deployment stopped: a server that cannot start the API is not a working"
+  err "install. Fix the build (see $BUILD_LOG) and re-run."
+  exit 1
 fi
 
 # Create the uploads dirs (CNIC/photos/documents) writable by the app, or the
@@ -464,12 +467,16 @@ if [ -d "$APP_DIR/frontend" ]; then
   if ! { npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund; } >"$FE_LOG" 2>&1; then
     err "Frontend dependency install FAILED — see $FE_LOG"
     tail -20 "$FE_LOG"
+    err "Deployment stopped: the panel cannot be built without its dependencies."
+    exit 1
   fi
   if npm run build >>"$FE_LOG" 2>&1 && [ -d .next ]; then
     ok "Frontend built"
   else
     err "FRONTEND BUILD FAILED — the panel will not load. Full log: $FE_LOG"
     tail -25 "$FE_LOG"
+    err "Deployment stopped: fix the frontend build (see $FE_LOG) and re-run."
+    exit 1
   fi
   # Assemble the standalone server bundle (output:'standalone').
   if [ -d "$APP_DIR/frontend/.next/standalone" ]; then
@@ -581,7 +588,36 @@ systemctl restart freeradius && sleep 2
 systemctl is-active --quiet freeradius && ok "FreeRADIUS running" || err "FreeRADIUS failed — run: freeradius -XC"
 ss -ulnp 2>/dev/null | grep -q ':1812' && ok "Listening on 1812 (auth)" || warn "Not listening on 1812"
 ss -ulnp 2>/dev/null | grep -q ':1813' && ok "Listening on 1813 (accounting)" || warn "Not listening on 1813"
-curl -fsS "http://localhost:$API_PORT/health" >/dev/null 2>&1 && ok "API responding" || warn "API not responding yet — pm2 logs jointbox-backend"
+
+# Wait for the API to actually answer /health, not merely for pm2 to report the
+# process as "online" — a process can be up while the app is still booting or
+# crash-looping. Poll for up to ~90s. The backend refuses to start without
+# ADMIN_PASSWORD, so a persistent failure here is a real, reportable problem.
+API_HEALTHY=0
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 5 "http://localhost:$API_PORT/health" >/dev/null 2>&1 \
+     || curl -fsS --max-time 5 "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
+    API_HEALTHY=1; break
+  fi
+  sleep 3
+done
+if [ "$API_HEALTHY" = "1" ]; then
+  ok "API healthy (/health responding)"
+else
+  err "API did not become healthy within ~90s. Check: pm2 logs jointbox-backend"
+  warn "The install finished the earlier steps; the API is not yet answering."
+fi
+
+# Wait for the frontend to serve, too — a running pm2 process is not a loaded panel.
+FE_HEALTHY=0
+for _ in $(seq 1 20); do
+  if curl -fsS --max-time 5 "http://localhost:$WEB_PORT" >/dev/null 2>&1; then
+    FE_HEALTHY=1; break
+  fi
+  sleep 3
+done
+[ "$FE_HEALTHY" = "1" ] && ok "Panel responding on port $WEB_PORT" \
+  || warn "Panel not responding yet on port $WEB_PORT — check: pm2 logs"
 
 # -----------------------------------------------------------------------------
 step "10/10  Licence activation"
@@ -612,8 +648,7 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
 
   Database   $DB_NAME
   DB user    $DB_USER
-  DB pass    $DB_PASS
-  ${Y}Save that password — it is also written to $APP_DIR/backend/.env${N}
+  DB pass    ${Y}stored in $APP_DIR/backend/.env (inside DATABASE_URL) — not printed here${N}
 
   Next, on each router:
     /radius add address=$SERVER_IP secret=<same as panel> service=ppp \\
