@@ -451,7 +451,7 @@ body {
 }
 
 .brand-meta {
-  overflow: hidden;
+  min-width: 0;
 }
 
 .brand-title {
@@ -463,12 +463,13 @@ body {
 }
 
 .brand-subtitle {
-  font-size: 9px;
+  font-size: 8.5px;
   color: #64748b;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  white-space: nowrap;
+  white-space: normal;      /* wrap instead of clipping "…MONITORI" */
+  line-height: 1.3;
 }
 
 .sidebar-toggle {

@@ -113,7 +113,7 @@ export default function LoginPage() {
         <div className={s.loginStory}>
           <div className={s.loginCopy}>
             <Link href="/" className={s.back}>← {t("Back to home")}</Link>
-            <div style={{ marginTop: 22 }}><Logo size={44} withText subtitle={BRAND.subtitle} /></div>
+            <div style={{ marginTop: 22 }}><Logo size={44} withText subtitle={BRAND.subtitle} tone="onDark" /></div>
             <h1 className={s.loginH1}>
               {t("Command Center")} {t("for")} <span className={s.lit}>{BRAND.subtitle}</span>
             </h1>

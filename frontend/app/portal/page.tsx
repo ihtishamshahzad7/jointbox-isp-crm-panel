@@ -249,7 +249,7 @@ export default function PortalPage() {
 
         <div style={{ ...card, width: 380, position: "relative", zIndex: 2, background: "#0c0f17", border: `1px solid ${T.border}`, boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)", borderRadius: 22, padding: "36px 32px" }}>
           <div style={{ textAlign: "center", marginBottom: 24 }}>
-            <div style={{ display: "inline-flex" }}><Logo size={46} withText subtitle={BRAND.subtitle} /></div>
+            <div style={{ display: "inline-flex" }}><Logo size={46} withText subtitle={BRAND.subtitle} tone="onDark" /></div>
             <div style={{ fontSize: 12, color: T.sub, marginTop: 14, letterSpacing: "0.2em", textTransform: "uppercase", fontWeight: 600 }}>
               {t("Customer Portal")}
             </div>
@@ -312,7 +312,7 @@ export default function PortalPage() {
       {/* Header */}
       <header style={{ position: "relative", zIndex: 2, maxWidth: 880, margin: "0 auto", padding: "22px 18px 6px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-          <Logo size={36} withText subtitle={BRAND.subtitle} />
+          <Logo size={36} withText subtitle={BRAND.subtitle} tone="onDark" />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <LangSwitch />
