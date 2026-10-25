@@ -870,12 +870,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div className="sidebar-brand">
-          <div className="brand-mark" aria-hidden="true">
-            {/* Linked-boxes glyph, matching the favicon/logo mark. */}
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
-              <rect x="4" y="5" width="12" height="12" rx="3.6" fill="none" stroke="#fff" strokeWidth="2.2" opacity="0.85" />
-              <rect x="9" y="8" width="12" height="12" rx="3.6" fill="none" stroke="#fff" strokeWidth="2.2" />
-            </svg>
+          <div className="brand-mark" aria-hidden="true" style={{ background: "transparent", width: 30, height: 30 }}>
+            {/* The Uplinko mark (the exact logo artwork, icon crop). */}
+            <img src="/brand/uplinko-icon.png" alt="" width={30} height={30} style={{ display: "block", objectFit: "contain" }} />
           </div>
           {!rail && (
             <div className="brand-meta">

@@ -24,51 +24,42 @@ export function Logo({
   withText?: boolean;
   subtitle?: string | null;
 }) {
-  const id = React.useId();
-  const mark = (
-    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
-      <defs>
-        <linearGradient id={`u${id}`} x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0" stopColor="#6C3CE1" />
-          <stop offset="1" stopColor="#7C4DFF" />
-        </linearGradient>
-      </defs>
-      {/* The "U" — thick rounded stroke, open at the top. */}
-      <path d="M28 20 L28 52 A22 22 0 0 0 72 52 L72 36"
-        fill="none" stroke={`url(#u${id})`} strokeWidth="15" strokeLinecap="round" strokeLinejoin="round" />
-      {/* The uplink arrow rising from the right arm (magenta accent). */}
-      <path d="M72 40 L72 12" fill="none" stroke="#E9408B" strokeWidth="15" strokeLinecap="round" />
-      <path d="M58 24 L72 9 L86 24" fill="none" stroke="#E9408B" strokeWidth="15" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  // Mark only — the exact Uplinko icon artwork (U + uplink arrow).
+  if (!withText) {
+    return (
+      <img
+        src="/brand/uplinko-icon.png"
+        alt={BRAND.name}
+        width={size}
+        height={size}
+        style={{ display: "block", objectFit: "contain", flexShrink: 0 }}
+      />
+    );
+  }
 
-  if (!withText) return mark;
-
+  // With text — the exact full Uplinko lockup (wordmark + tagline baked in).
+  // Two variants so the navy tagline stays readable on either background:
+  // the original on light, a light-tagline version on dark.
+  void subtitle;
+  const h = size * 1.55;
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-      {mark}
-      <div style={{ lineHeight: 1.15 }}>
-        <div style={{ fontSize: size * 0.5, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text, #fff)" }}>
-          {BRAND.name}
-        </div>
-        {subtitle && (
-          <div
-            style={{
-              fontSize: Math.max(9, size * 0.24),
-              fontWeight: 600,
-              letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              background: "linear-gradient(90deg,#C4B5FD,#F9A8D4)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
-              marginTop: 2,
-            }}
-          >
-            {subtitle}
-          </div>
-        )}
-      </div>
-    </div>
+    <span className="ulogo" style={{ display: "inline-block", lineHeight: 0 }}>
+      <style>{`
+        .ulogo .ul-dark{display:none}
+        .ulogo .ul-light{display:block}
+        html[data-theme="dark"] .ulogo .ul-dark{display:block}
+        html[data-theme="dark"] .ulogo .ul-light{display:none}
+        @media(prefers-color-scheme:dark){
+          html:not([data-theme]) .ulogo .ul-dark{display:block}
+          html:not([data-theme]) .ulogo .ul-light{display:none}
+        }
+      `}</style>
+      <img className="ul-light" src="/brand/uplinko-logo.png"
+        alt={`${BRAND.name} — ${BRAND.subtitle}`}
+        style={{ height: h, width: "auto", objectFit: "contain" }} />
+      <img className="ul-dark" src="/brand/uplinko-logo-dark.png"
+        alt={`${BRAND.name} — ${BRAND.subtitle}`}
+        style={{ height: h, width: "auto", objectFit: "contain" }} />
+    </span>
   );
 }
