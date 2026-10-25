@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { loadCurrencyFromApi, money } from './currency';
 import StaticIpBanner from './static-ip-banner';
 import CommandPalette from './command-palette';
+import { Logo } from './logo';
 import { NovaStyles } from './ui';
 import { usePathname, useRouter } from 'next/navigation';
 import { silent } from './silent';
@@ -871,8 +872,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       >
         <div className="sidebar-brand">
           <div className="brand-mark" aria-hidden="true" style={{ background: "transparent", width: 30, height: 30 }}>
-            {/* The Uplinko mark (the exact logo artwork, icon crop). */}
-            <img src="/brand/uplinko-icon.png" alt="" width={30} height={30} style={{ display: "block", objectFit: "contain" }} />
+            {/* The Uplinko mark — theme-aware (white on dark, colour on light). */}
+            <Logo size={30} />
           </div>
           {!rail && (
             <div className="brand-meta">

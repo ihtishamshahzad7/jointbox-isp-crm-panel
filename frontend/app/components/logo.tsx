@@ -24,40 +24,43 @@ export function Logo({
   withText?: boolean;
   subtitle?: string | null;
 }) {
-  // Mark only — the exact Uplinko icon artwork (U + uplink arrow).
+  // Theme-aware switching: on LIGHT backgrounds the purple/navy artwork; on DARK
+  // backgrounds a WHITE version (white wordmark, magenta arrow, light tagline)
+  // so it never blends into a dark/purple surface. One shared stylesheet.
+  const themeCss = `
+    .ulogo .ul-dk{display:none}
+    .ulogo .ul-lt{display:block}
+    html[data-theme="dark"] .ulogo .ul-dk{display:block}
+    html[data-theme="dark"] .ulogo .ul-lt{display:none}
+    @media(prefers-color-scheme:dark){
+      html:not([data-theme]) .ulogo .ul-dk{display:block}
+      html:not([data-theme]) .ulogo .ul-lt{display:none}
+    }
+  `;
+  void subtitle;
+
+  // Mark only — the exact Uplinko icon (U + uplink arrow).
   if (!withText) {
     return (
-      <img
-        src="/brand/uplinko-icon.png"
-        alt={BRAND.name}
-        width={size}
-        height={size}
-        style={{ display: "block", objectFit: "contain", flexShrink: 0 }}
-      />
+      <span className="ulogo" style={{ display: "inline-block", lineHeight: 0, flexShrink: 0 }}>
+        <style>{themeCss}</style>
+        <img className="ul-lt" src="/brand/uplinko-icon.png" alt={BRAND.name}
+          width={size} height={size} style={{ display: "block", objectFit: "contain" }} />
+        <img className="ul-dk" src="/brand/uplinko-icon-white.png" alt={BRAND.name}
+          width={size} height={size} style={{ display: "block", objectFit: "contain" }} />
+      </span>
     );
   }
 
   // With text — the exact full Uplinko lockup (wordmark + tagline baked in).
-  // Two variants so the navy tagline stays readable on either background:
-  // the original on light, a light-tagline version on dark.
-  void subtitle;
   const h = size * 1.55;
   return (
     <span className="ulogo" style={{ display: "inline-block", lineHeight: 0 }}>
-      <style>{`
-        .ulogo .ul-dark{display:none}
-        .ulogo .ul-light{display:block}
-        html[data-theme="dark"] .ulogo .ul-dark{display:block}
-        html[data-theme="dark"] .ulogo .ul-light{display:none}
-        @media(prefers-color-scheme:dark){
-          html:not([data-theme]) .ulogo .ul-dark{display:block}
-          html:not([data-theme]) .ulogo .ul-light{display:none}
-        }
-      `}</style>
-      <img className="ul-light" src="/brand/uplinko-logo.png"
+      <style>{themeCss}</style>
+      <img className="ul-lt" src="/brand/uplinko-logo.png"
         alt={`${BRAND.name} — ${BRAND.subtitle}`}
         style={{ height: h, width: "auto", objectFit: "contain" }} />
-      <img className="ul-dark" src="/brand/uplinko-logo-dark.png"
+      <img className="ul-dk" src="/brand/uplinko-logo-white.png"
         alt={`${BRAND.name} — ${BRAND.subtitle}`}
         style={{ height: h, width: "auto", objectFit: "contain" }} />
     </span>
