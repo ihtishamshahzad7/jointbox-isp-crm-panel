@@ -160,6 +160,12 @@ function csvCell(value: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest(
+    'a, button, input, select, textarea, [role="button"], [role="menuitem"], [role="checkbox"], [data-row-click-ignore]',
+  );
+}
+
 /** True when the header checkbox should be checked / indeterminate. */
 function pageSelectionState<T>(
   items: T[],
@@ -544,9 +550,11 @@ export function DataTable<T>(props: DataTableProps<T>) {
           <button className="jdt-btn" onClick={doExport} title="Export visible columns as CSV">
             ⬇ Export
           </button>
-          <button className="jdt-btn" onClick={refresh} title="Refresh" aria-label="Refresh">
-            ⟳
-          </button>
+          {(serverMode || props.onRefresh) && (
+            <button className="jdt-btn" onClick={refresh} title="Refresh" aria-label="Refresh">
+              ⟳
+            </button>
+          )}
           {actions}
         </div>
       </div>
@@ -640,13 +648,16 @@ export function DataTable<T>(props: DataTableProps<T>) {
               : visibleItems.map((r) => (
                   <tr
                     key={String(rowKey(r))}
-                    onClick={rowClick ? () => rowClick(r) : undefined}
+                    onClick={rowClick ? (e) => {
+                      if (!isInteractiveTarget(e.target)) rowClick(r);
+                    } : undefined}
                     onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(e, r) : undefined}
                     className={`${selected.has(rowKey(r)) ? "on" : ""} ${rowClass?.(r) ?? ""}`}
                     tabIndex={rowClick ? 0 : undefined}
                     onKeyDown={
                       rowClick
                         ? (e) => {
+                            if (e.target !== e.currentTarget && isInteractiveTarget(e.target)) return;
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
                               rowClick(r);
@@ -746,8 +757,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
 
 const CSS = `
 .jdt{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);
-  border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.18);
-  font-size:13px;color:var(--text)}
+  border-radius:8px;overflow:hidden;font-size:13px;color:var(--text)}
 
 /* ── Toolbar ── */
 .jdt-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;
@@ -776,7 +786,7 @@ const CSS = `
   border-radius:11px;box-shadow:0 12px 34px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:1px}
 .jdt-menu-item{display:flex;align-items:center;gap:9px;padding:7px 10px;font-size:12.5px;font-weight:600;
   cursor:pointer;color:var(--text);border-radius:7px;background:transparent;border:none;font-family:inherit;text-align:left}
-.jdt-menu-item:hover{background:rgba(124,77,255,.12)}
+.jdt-menu-item:hover{background:color-mix(in srgb,var(--accent) 9%,transparent)}
 .jdt-menu-item.on{color:var(--accent)}
 .jdt-menu-item input{accent-color:#7C4DFF;width:14px;height:14px;cursor:pointer}
 .jdt-menu-off{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
@@ -793,12 +803,11 @@ const CSS = `
 .jdt table{width:100%;border-collapse:separate;border-spacing:0}
 .jdt thead th{position:sticky;top:0;z-index:3;padding:10px 14px;text-align:left;
   font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
-  background:linear-gradient(180deg,var(--surface-2),color-mix(in srgb,var(--surface-2) 88%,transparent));
-  border-bottom:1px solid var(--border);white-space:nowrap;backdrop-filter:blur(6px)}
+  background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap}
 .jdt th{position:relative}
 .jdt th.jdt-pick{width:40px;padding-right:4px}
 .jdt td.jdt-pick{width:40px;padding-right:4px}
-.jdt .jdt-pick input{width:15px;height:15px;accent-color:#7C4DFF;cursor:pointer}
+.jdt .jdt-pick input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 .jdt .jdt-sticky{position:sticky;left:0;z-index:4;background:inherit}
 
 .jdt .jdt-srtbtn{background:none;border:none;padding:0;font:inherit;font-size:inherit;font-weight:inherit;
@@ -818,9 +827,9 @@ const CSS = `
 
 .jdt tbody tr{cursor:default;transition:background .14s ease}
 .jdt tbody tr[tabindex]{cursor:pointer}
-.jdt tbody tr:hover{background:linear-gradient(90deg,rgba(124,77,255,.09),rgba(124,77,255,.01))}
-.jdt tbody tr.on{background:rgba(124,77,255,.14)}
-.jdt tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 #7C4DFF}
+.jdt tbody tr:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.jdt tbody tr.on{background:color-mix(in srgb,var(--accent) 11%,transparent)}
+.jdt tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .jdt tbody td{padding:11px 14px;border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
   vertical-align:middle}
 .jdt tbody tr:last-child td{border-bottom:none}
@@ -865,7 +874,7 @@ const CSS = `
   .jdt thead{display:none}
   .jdt tbody{display:block}
   .jdt tbody tr{display:block;margin-bottom:12px;padding:12px 14px;border:1px solid var(--border);
-    border-radius:14px;background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.20)}
+    border-radius:8px;background:var(--surface)}
   .jdt tbody tr:hover td:first-child{box-shadow:none}
   .jdt tbody td{display:flex;align-items:center;justify-content:space-between;gap:14px;
     border:none;padding:7px 0;text-align:right}

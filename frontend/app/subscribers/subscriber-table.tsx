@@ -75,7 +75,7 @@ const IC_TRASH = (
 
 export function SubscriberTable({
   rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, onActivate, money,
-  onRefresh, fetchPage, filters, refreshToken, totalCount, defaultPageSize = 50, pageSizes = [25, 50, 100, 200],
+  onRefresh, fetchPage, filters, refreshToken, totalCount, selectable = true, canWrite = true, defaultPageSize = 50, pageSizes = [25, 50, 100, 200],
 }: {
   rows: Row[];
   selectedIds: number[];
@@ -98,6 +98,10 @@ export function SubscriberTable({
   refreshToken?: number | string;
   /** SERVER MODE: total rows across all pages (statusbar count). */
   totalCount?: number;
+  /** Hide row selection when the current account is read-only. */
+  selectable?: boolean;
+  /** Hide row mutation actions and context menu for read-only accounts. */
+  canWrite?: boolean;
   /** Default page size (server mode). */
   defaultPageSize?: number;
   /** Page-size choices (server mode). */
@@ -134,7 +138,13 @@ export function SubscriberTable({
   }, [live, onRefresh]);
 
   const onlineOf = (r: Row) =>
-    String(r.onlineStatus ?? r.status).toUpperCase() === "ONLINE" || r.isOnline === true;
+    String(r.onlineStatus ?? r.liveStatus ?? "").toUpperCase() === "ONLINE" || r.isOnline === true;
+
+  const liveStateOf = (r: Row): "ONLINE" | "OFFLINE" | null => {
+    const state = String(r.onlineStatus ?? r.liveStatus ?? "").toUpperCase();
+    if (state === "ONLINE" || state === "OFFLINE") return state;
+    return typeof r.isOnline === "boolean" ? (r.isOnline ? "ONLINE" : "OFFLINE") : null;
+  };
 
   const expiryInfo = (r: Row): { date: string; label: string; kind: "ok" | "warn" | "bad" | "none" } => {
     const raw = r.serviceSettings?.expiryDate;
@@ -207,6 +217,7 @@ export function SubscriberTable({
               {/* Name is the anchor; it already falls back to the username when
                   no full name exists, so the username is not repeated below. */}
               <span className="nm">{r.fullName || r.username}</span>
+              <span className="sub"><code>#{r.id}</code></span>
               {r.phone && <span className="sub"><span className="ph">{r.phone}</span></span>}
             </span>
           </div>
@@ -234,7 +245,13 @@ export function SubscriberTable({
       sortValue: (r) => String(r.status ?? "").toUpperCase().replace(/[^A-Z]/g, ""),
       render: (r) => {
         const s = statusOf(r);
-        return <span className={`pill lg ${s.kind}`}><span className={`dot ${s.kind}`} />{s.label}</span>;
+        const live = liveStateOf(r);
+        return (
+          <div className="status-stack">
+            {live && <span className={`pill ${live === "ONLINE" ? "up" : "down"}`}><span className={`dot ${live === "ONLINE" ? "up" : "down"}`} />{live === "ONLINE" ? "Online" : "Offline"}</span>}
+            <span className={`pill ${s.kind}`}><span className={`dot ${s.kind}`} />{s.label}</span>
+          </div>
+        );
       },
     },
     {
@@ -381,6 +398,7 @@ export function SubscriberTable({
       exportable: false,
       width: 230,
       render: (r) => {
+        if (!canWrite) return <span className="sub">Read only</span>;
         const active = String(r.status ?? "").toUpperCase() === "ACTIVE";
         return (
           <span className="act" onClick={(e) => e.stopPropagation()}>
@@ -413,7 +431,8 @@ export function SubscriberTable({
         filters={filters}
         refreshToken={refreshToken}
         rowKey={(r) => r.id}
-        selectable
+        selectable={selectable}
+        onRowContextMenu={canWrite ? (e, r) => openMenu(e, r) : undefined}
         selectedKeys={selectedIds}
         onToggleKey={(key) => onToggle(Number(key))}
         onTogglePage={() => onToggleAll()}
@@ -427,7 +446,6 @@ export function SubscriberTable({
         disablePagination={!server}
         exportName="subscribers"
         rowClick={(r) => onOpen(r)}
-        onRowContextMenu={(e, r) => openMenu(e, r)}
         onRefresh={onRefresh}
         emptySlot={
           <>
@@ -479,8 +497,7 @@ function fmtBytes(n: number): string {
 }
 
 const CSS = `
-.st{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;
-  box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.st{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
 
 /* Cell content primitives — layout (padding/height) lives in the DataTable
    engine so density control stays consistent across every list. */
@@ -494,6 +511,7 @@ const CSS = `
 .st .av.on::after{content:"";position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;
   border-radius:50%;background:#10B981;border:2px solid var(--surface);box-shadow:0 0 8px rgba(16,185,129,.9)}
 .st .whoTxt{display:flex;flex-direction:column;min-width:0}
+.st .status-stack{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
 .st .ph{color:var(--muted)}
 
 .st .idp{display:flex;flex-direction:column;gap:2px}

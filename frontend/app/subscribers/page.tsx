@@ -1745,9 +1745,11 @@ export default function SubscribersPage() {
                 { label: "Export", onClick: () => setShowExportModal(true) },
                 { label: "Sync all to RADIUS", onClick: bulkSyncToRadius, disabled: bulkSyncing },
                 "divider",
-                { label: "Mass delete", note: `${selectedIds.length} selected`, danger: true, disabled: selectedIds.length === 0, onClick: () => setShowMassDeleteModal(true) },
-                { label: "Mass service settings", note: `${selectedIds.length} selected`, disabled: selectedIds.length === 0, onClick: () => setShowMassSettingsModal(true) },
-                { label: "Move to another account", note: `${selectedIds.length} selected`, disabled: selectedIds.length === 0, onClick: () => openTransfer() },
+                ...(user?.role === "AUDITOR" ? [] : [
+                  { label: "Mass delete", note: `${selectedIds.length} selected`, danger: true, disabled: selectedIds.length === 0, onClick: () => setShowMassDeleteModal(true) },
+                  { label: "Mass service settings", note: `${selectedIds.length} selected`, disabled: selectedIds.length === 0, onClick: () => setShowMassSettingsModal(true) },
+                  { label: "Move to another account", note: `${selectedIds.length} selected`, disabled: selectedIds.length === 0, onClick: () => openTransfer() },
+                ]),
               ]}
             />
             <Btn onClick={loadAll} variant="ghost">
@@ -1799,7 +1801,7 @@ export default function SubscribersPage() {
            * that do nothing 95% of the time. This replaces the old duplicate
            * WinBox icon strip.
            */}
-          {selectedIds.length > 0 && (
+          {selectedIds.length > 0 && user?.role !== "AUDITOR" && (
             <div className="jb-selbar">
               <span className="jb-selbar-count">{selectedIds.length} selected</span>
               <Btn size="xs" variant="primary" onClick={() => bulkAction("activate")}>✓ Activate</Btn>
@@ -1830,7 +1832,7 @@ export default function SubscribersPage() {
                 const expiryRaw = s.serviceSettings?.expiryDate || null;
                 const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
                 const daysLeft = expiryDate ? Math.ceil((expiryDate.getTime() - Date.now()) / 86400000) : null;
-                return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
+                return { ...s, daysLeft };
               })}
               onOpen={openDetail}
               onEdit={openEdit}
@@ -1845,13 +1847,15 @@ export default function SubscribersPage() {
               filters={serverFilters}
               refreshToken={listToken}
               totalCount={serverTotal}
+              selectable={user?.role !== "AUDITOR"}
+              canWrite={user?.role !== "AUDITOR"}
               rows={serverItems.map((s) => {
                 const expiryRaw = s.serviceSettings?.expiryDate || null;
                 const expiryDate = expiryRaw ? new Date(expiryRaw) : null;
                 const daysLeft = expiryDate
                   ? Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
                   : null;
-                return { ...s, isOnline: s.liveStatus === "ONLINE", daysLeft };
+                return { ...s, daysLeft };
               })}
               selectedIds={selectedIds}
               onToggle={toggleSelected}

@@ -2,6 +2,7 @@
 
 import React from "react";
 import { COL_RESIZE_CSS } from "./use-col-resize";
+import { DataTable, type DtColumn } from "./data-table";
 
 /**
  * Composed tables for NAS, IP Pools and Packages.
@@ -51,72 +52,91 @@ function useCtxMenu() {
 /* ═══════════════════════════════════════════════════════════════════
    IP POOLS
    ═══════════════════════════════════════════════════════════════════ */
+interface PoolRow {
+  id: number;
+  name: string;
+  network: string;
+  subnet: string;
+  nasId: number | null;
+  createdAt: string;
+  ownerId?: number | null;
+  _count: { packages: number };
+  packages: { id: number; name: string; isActive: boolean }[];
+  assignments?: unknown[];
+}
+
 export function PoolTable({
   rows, me, onView, onEdit, onShare, onDelete,
 }: {
-  rows: Row[]; me?: any;
-  onView: (r: Row) => void; onEdit: (r: Row) => void;
-  onShare: (r: Row) => void; onDelete: (r: Row) => void;
+  rows: PoolRow[]; me?: { id?: number; role?: string };
+  onView: (r: PoolRow) => void; onEdit: (r: PoolRow) => void;
+  onShare: (r: PoolRow) => void; onDelete: (r: PoolRow) => void;
 }) {
   const isIsp = !me || me.role === "ADMIN" || me.role === "SUPER_ADMIN";
+  const columns: DtColumn<PoolRow>[] = [
+    {
+      key: "name", header: "Pool", sortable: true, width: 220,
+      sortValue: (pool) => String(pool.name ?? "").toLowerCase(),
+      render: (pool) => (
+        <>
+          <div className="nm">{pool.name}</div>
+          {!isIsp && <div className="sub">{pool.ownerId === me?.id ? "Yours" : "Shared with you"}</div>}
+        </>
+      ),
+    },
+    {
+      key: "range", header: "Range", sortable: true, width: 190,
+      sortValue: (pool) => `${pool.network ?? ""}/${pool.subnet ?? ""}`.toLowerCase(),
+      render: (pool) => <code className="wide">{pool.network}/{pool.subnet}</code>,
+    },
+    {
+      key: "usage", header: "In use by", sortable: true, width: 120,
+      sortValue: (pool) => pool._count?.packages ?? pool.packages?.length ?? 0,
+      render: (pool) => {
+        const used = pool._count?.packages ?? pool.packages?.length ?? 0;
+        return <><div className={`big ${used > 0 ? "up" : ""}`}>{used}</div><div className="sub">{used === 1 ? "package" : "packages"}</div></>;
+      },
+    },
+    {
+      key: "sharing", header: "Sharing", sortable: true,
+      sortValue: (pool) => pool.assignments?.length ?? 0,
+      render: (pool) => pool.assignments?.length
+        ? <span className="tag ok">shared with {pool.assignments.length}</span>
+        : <span className="sub">not shared</span>,
+    },
+    {
+      key: "actions", header: "Actions", sortable: false, exportable: false, width: 220,
+      render: (pool) => {
+        const mine = isIsp || pool.ownerId === me?.id;
+        const used = pool._count?.packages ?? pool.packages?.length ?? 0;
+        return mine ? (
+          <span className="pool-actions">
+            <button onClick={() => onShare(pool)}>Share</button>
+            <button onClick={() => onEdit(pool)}>Edit</button>
+            <button className="bad" disabled={used > 0}
+              title={used > 0 ? "In use by a package — reassign it first" : "Delete pool"}
+              onClick={() => onDelete(pool)}>Delete</button>
+          </span>
+        ) : <span className="sub">Read only</span>;
+      },
+    },
+  ];
 
   return (
-    <div className="nt">
+    <div className="pool-list">
       <style>{CSS}</style>
-      <table>
-        <thead>
-          <tr><th>Pool</th><th>Range</th><th>In use by</th><th>Sharing</th><th /></tr>
-        </thead>
-        <tbody>
-          {rows.map((p) => {
-            const mine = isIsp || p.ownerId === me?.id;
-            const used = p._count?.packages ?? p.packages?.length ?? 0;
-            return (
-              <tr key={p.id} onClick={() => onView(p)}>
-                <td>
-                  <div className="nm">{p.name}</div>
-                  <div className="sub">
-                    {!isIsp && (mine
-                      ? <span className="tag ok">yours</span>
-                      : <span className="tag warn">shared with you</span>)}
-                  </div>
-                </td>
-
-                {/* The CIDR is what has to match the router, so it gets the
-                    monospace treatment and sits on its own. */}
-                <td><code className="wide">{p.network}/{p.subnet}</code></td>
-
-                <td>
-                  <div className={`big ${used > 0 ? "up" : ""}`}>{used}</div>
-                  <div className="sub">{used === 1 ? "package" : "packages"}</div>
-                </td>
-
-                <td>
-                  {p.assignments?.length
-                    ? <span className="tag ok">shared with {p.assignments.length}</span>
-                    : <span className="sub">not shared</span>}
-                </td>
-
-                <td className="act" onClick={(e) => e.stopPropagation()}>
-                  {mine && <button onClick={() => onShare(p)}>Share</button>}
-                  {mine && <button onClick={() => onEdit(p)}>Edit</button>}
-                  {mine && (
-                    <button className="bad" disabled={used > 0}
-                      title={used > 0 ? "In use by a package — reassign it first" : "Delete pool"}
-                      onClick={() => onDelete(p)}>Del</button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          {rows.length === 0 && (
-            <tr className="empty"><td colSpan={5}>
-              <b>No IP pools.</b>
-              <span>Create one that matches a pool name on your router, or use a pool shared with you.</span>
-            </td></tr>
-          )}
-        </tbody>
-      </table>
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(pool) => pool.id}
+        rowClick={onView}
+        searchable={false}
+        storageKey="jb_ip_pool_table"
+        exportName="ip-pools"
+        defaultPageSize={25}
+        pageSizes={[10, 25, 50, 100]}
+        emptySlot={<><b>No IP pools.</b><span>Create one that matches a pool name on your router, or use a pool shared with you.</span></>}
+      />
     </div>
   );
 }
@@ -246,7 +266,7 @@ ${COL_RESIZE_CSS}
 /* Solid, theme-aware surface (not var(--surface), which was rendering light in
    dark mode here). Hard-coded per theme so the table is always the right shade
    and its text stays readable. */
-.nt{background:#ffffff;color:var(--text);border:1px solid var(--border);border-radius:14px;overflow:auto;position:relative}
+.nt{background:#ffffff;color:var(--text);border:1px solid var(--border);border-radius:8px;overflow:auto;position:relative}
 html[data-theme="dark"] .nt{background:#111827}
 @media (prefers-color-scheme: dark){ html:not([data-theme]) .nt{background:#111827} }
 .nt table{width:100%;border-collapse:separate;border-spacing:0;min-width:520px}
@@ -347,6 +367,13 @@ html[data-theme="dark"] .nt thead th{background:#0f172a}
 .nt td.act button.warn:hover:not(:disabled){color:#FCD34D;border-color:#F59E0B}
 .nt td.act button.bad:hover:not(:disabled){color:#FCA5A5;border-color:#EF4444}
 .nt td.act button:disabled{opacity:.28;cursor:not-allowed}
+
+.pool-list .pool-actions{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.pool-list .pool-actions button{padding:5px 9px;border:1px solid var(--border);border-radius:6px;
+  background:var(--surface-2);color:var(--text);font:600 11px inherit;cursor:pointer}
+.pool-list .pool-actions button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.pool-list .pool-actions button.bad:hover:not(:disabled){border-color:#ef4444;color:#ef4444}
+.pool-list .pool-actions button:disabled{opacity:.45;cursor:not-allowed}
 
 .nt tr.empty td{padding:38px;text-align:center;border:none}
 .nt tr.empty b{display:block;font-size:13px;color:var(--text);margin-bottom:5px}
