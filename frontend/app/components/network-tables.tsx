@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { useColResize, COL_RESIZE_CSS } from "./use-col-resize";
+import { COL_RESIZE_CSS } from "./use-col-resize";
 
 /**
  * Composed tables for NAS, IP Pools and Packages.
@@ -134,97 +134,102 @@ export function PackageTable({
   onShare?: (r: Row) => void;
 }) {
   const ctx = useCtxMenu();
-  const col = useColResize("jb_pkgcols");
+  const [open, setOpen] = React.useState<Set<number>>(new Set());
+  const toggleOpen = (id: number) => setOpen((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const COLS = 5; // Package, Speed, Base price, Status, chevron
   return (
     <div className="nt">
       <style>{CSS}</style>
       <table>
         <thead>
           <tr>
-            <th className="flg" title="R: active · X: inactive">Flags</th>
-            <th style={col.style("pkg")}>Package{col.handle("pkg")}</th>
-            <th style={col.style("speed")}>Speed{col.handle("speed")}</th>
-            <th style={col.style("price")}>{isIsp ? "Base price" : "You pay"}{col.handle("price")}</th>
-            <th style={col.style("allow")}>Allowance{col.handle("allow")}</th>
-            <th style={col.style("cust")}>Customers{col.handle("cust")}</th><th />
+            <th>Package</th>
+            <th>Speed</th>
+            <th>{isIsp ? "Base price" : "You pay"}</th>
+            <th>Status</th>
+            <th aria-label="Details" />
           </tr>
         </thead>
         <tbody>
           {rows.map((p) => {
             const subs = p._count?.subscribers ?? 0;
+            const isOpen = open.has(p.id);
             return (
-              <tr key={p.id}
-                onClick={() => onView ? onView(p) : undefined}
-                onContextMenu={(e) => ctx.open(e, [
-                  { label: "Details…", onClick: () => onView ? onView(p) : undefined },
-                  { label: "Edit…", onClick: () => onEdit(p) },
-                  { label: p.isActive ? "Disable" : "Enable", onClick: () => onToggle(p) },
-                  ...(onDuplicate ? [{ label: "Duplicate", onClick: () => onDuplicate(p) }] : []),
-                  { label: "View subscribers", onClick: () => onViewSubs(p) },
-                  { label: "Delete", onClick: () => onDelete(p), danger: true },
-                ])}>
-                <td className="flg">
-                  <span className={`fl ${p.isActive ? "r" : ""}`} title="Active">R</span>
-                  <span className={`fl ${!p.isActive ? "x" : "off"}`} title="Inactive">X</span>
-                </td>
-                <td>
-                  <div className="nm">{p.name}</div>
-                  <div className="sub">
-                    <span className={`dot ${p.isActive ? "up" : "down"}`} />
-                    {p.isActive ? "Active" : "Inactive"} · {p.serviceType || "RESIDENTIAL"}
-                  </div>
-                </td>
+              <React.Fragment key={p.id}>
+                {/* Collapsed row — click to expand. */}
+                <tr className={`pk-click${isOpen ? " pk-open" : ""}`}
+                  onClick={() => toggleOpen(p.id)}
+                  onContextMenu={(e) => ctx.open(e, [
+                    { label: "Details…", onClick: () => onView ? onView(p) : undefined },
+                    { label: "Edit…", onClick: () => onEdit(p) },
+                    { label: p.isActive ? "Disable" : "Enable", onClick: () => onToggle(p) },
+                    ...(onDuplicate ? [{ label: "Duplicate", onClick: () => onDuplicate(p) }] : []),
+                    { label: "View subscribers", onClick: () => onViewSubs(p) },
+                    { label: "Delete", onClick: () => onDelete(p), danger: true },
+                  ])}>
+                  <td>
+                    <div className="nm">{p.name}</div>
+                    <div className="sub">{p.serviceType || "RESIDENTIAL"}</div>
+                  </td>
+                  <td className="nw">
+                    <div className="nm sm">{p.downloadSpeed}/{p.uploadSpeed} <span className="unit">Mbps</span></div>
+                  </td>
+                  <td className="nw">
+                    <div className="nm sm money">{money(p.price)}</div>
+                  </td>
+                  <td className="nw">
+                    <span className={`pk-status ${p.isActive ? "on" : "off"}`}>{p.isActive ? "Active" : "Inactive"}</span>
+                  </td>
+                  <td className="nw pk-chevcell">
+                    <span className={`pk-chev${isOpen ? " up" : ""}`} aria-hidden>▾</span>
+                  </td>
+                </tr>
 
-                <td>
-                  <div className="nm sm">{p.downloadSpeed}/{p.uploadSpeed} <span className="unit">Mbps</span></div>
-                  <div className="sub">{p.duration || 30} {(p.durationType || "MONTHLY").toLowerCase()}</div>
-                </td>
-
-                <td>
-                  <div className="nm sm money">{money(p.price)}</div>
-                  {p.pool?.name && <div className="sub">pool <code>{p.pool.name}</code></div>}
-                </td>
-
-                {/* Quota/FUP. The enforcement sweep only throttles packages
-                    WITH fup speeds set (fup.service filters fupDownloadSpeed
-                    not null), so "quota, no FUP speeds" means the quota is NOT
-                    enforced — showing "then blocked" was misleading. */}
-                <td>
-                  {p.dataQuotaGb
-                    ? <><div className="nm sm">{p.dataQuotaGb} <span className="unit">GB</span></div>
-                        <div className="sub">{p.fupDownloadSpeed
-                          ? `then ↓${p.fupDownloadSpeed} ↑${p.fupUploadSpeed ?? "—"} Mbps`
-                          : "no FUP speeds — not enforced"}</div></>
-                    : <span className="sub">unlimited</span>}
-                </td>
-
-                <td>
-                  <div className={`big ${subs > 0 ? "up" : ""}`}>{subs}</div>
-                  <div className="sub">on this plan</div>
-                </td>
-
-                <td className="act">
-                  {onView && <button onClick={() => onView(p)}>Details</button>}
-                  <button onClick={() => onViewSubs(p)}>Subs</button>
-                  {isIsp ? (
-                    <>
-                      <button onClick={() => onEdit(p)}>Edit</button>
-                      {onDuplicate && <button onClick={() => onDuplicate(p)}>Copy</button>}
-                      {onShare && <button onClick={() => onShare(p)} className="warn">Share</button>}
-                      <button onClick={() => onToggle(p)}>{p.isActive ? "Off" : "On"}</button>
-                      <button className="bad" disabled={subs > 0}
-                        title={subs > 0 ? "Customers are on this plan — move them first" : "Delete package"}
-                        onClick={() => onDelete(p)}>Del</button>
-                    </>
-                  ) : (
-                    <button onClick={onPrice}>Set my price</button>
-                  )}
-                </td>
-              </tr>
+                {/* Expanded detail — allowance, FUP, duration, description + actions. */}
+                {isOpen && (
+                  <tr className="pk-detail">
+                    <td colSpan={COLS}>
+                      <div className="pk-dgrid">
+                        <div className="pk-dfield"><span className="pk-dlabel">Allowance</span>
+                          <span className="pk-dval">{p.dataQuotaGb ? `${p.dataQuotaGb} GB` : "Unlimited"}</span></div>
+                        <div className="pk-dfield"><span className="pk-dlabel">FUP</span>
+                          <span className="pk-dval">{p.dataQuotaGb
+                            ? (p.fupDownloadSpeed ? `then ↓${p.fupDownloadSpeed} ↑${p.fupUploadSpeed ?? "—"} Mbps` : "no FUP speeds — not enforced")
+                            : "—"}</span></div>
+                        <div className="pk-dfield"><span className="pk-dlabel">Duration</span>
+                          <span className="pk-dval">{p.duration || 30} {(p.durationType || "MONTHLY").toLowerCase()}</span></div>
+                        <div className="pk-dfield"><span className="pk-dlabel">IP Pool</span>
+                          <span className="pk-dval">{p.pool?.name || "—"}</span></div>
+                        <div className="pk-dfield"><span className="pk-dlabel">Customers</span>
+                          <span className="pk-dval">{subs} on this plan</span></div>
+                        <div className="pk-dfield wide"><span className="pk-dlabel">Description</span>
+                          <span className="pk-dval">{(p as any).description || "—"}</span></div>
+                      </div>
+                      <div className="pk-dactions" onClick={(e) => e.stopPropagation()}>
+                        {onView && <button onClick={() => onView(p)}>Details</button>}
+                        <button onClick={() => onViewSubs(p)}>Subs</button>
+                        {isIsp ? (
+                          <>
+                            <button onClick={() => onEdit(p)}>Edit</button>
+                            {onDuplicate && <button onClick={() => onDuplicate(p)}>Copy</button>}
+                            {onShare && <button onClick={() => onShare(p)} className="warn">Share</button>}
+                            <button onClick={() => onToggle(p)}>{p.isActive ? "Disable" : "Enable"}</button>
+                            <button className="bad" disabled={subs > 0}
+                              title={subs > 0 ? "Customers are on this plan — move them first" : "Delete package"}
+                              onClick={() => onDelete(p)}>Delete</button>
+                          </>
+                        ) : (
+                          <button onClick={onPrice}>Set my price</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             );
           })}
           {rows.length === 0 && (
-            <tr className="empty"><td colSpan={7}>
+            <tr className="empty"><td colSpan={COLS}>
               <b>No packages.</b>
               <span>{isIsp ? "Create one to start selling." : "Ask the ISP to assign a package to your account."}</span>
             </td></tr>
@@ -244,7 +249,33 @@ ${COL_RESIZE_CSS}
 .nt{background:#ffffff;color:var(--text);border:1px solid var(--border);border-radius:14px;overflow:auto;position:relative}
 html[data-theme="dark"] .nt{background:#111827}
 @media (prefers-color-scheme: dark){ html:not([data-theme]) .nt{background:#111827} }
-.nt table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px}
+.nt table{width:100%;border-collapse:separate;border-spacing:0;min-width:520px}
+
+/* Inline expandable package rows. */
+.nt tr.pk-click{cursor:pointer}
+.nt tr.pk-open > td{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.nt .pk-status{display:inline-block;padding:4px 12px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.4}
+.nt .pk-status.on{background:rgba(16,185,129,.15);color:#059669}
+.nt .pk-status.off{background:rgba(148,163,184,.16);color:#64748b}
+html[data-theme="dark"] .nt .pk-status.on{color:#4ade80}
+.nt .pk-chevcell{width:34px;text-align:center}
+.nt .pk-chev{display:inline-block;color:var(--muted);transition:transform .18s;font-size:12px}
+.nt .pk-chev.up{transform:rotate(180deg)}
+.nt tr.pk-detail > td{padding:0;background:#f8fafc;border-bottom:1px solid var(--border)}
+html[data-theme="dark"] .nt tr.pk-detail > td{background:#0d1420}
+@media(prefers-color-scheme:dark){html:not([data-theme]) .nt tr.pk-detail > td{background:#0d1420}}
+.nt .pk-dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px 22px;padding:14px 16px}
+.nt .pk-dfield{display:flex;flex-direction:column;gap:3px;min-width:0}
+.nt .pk-dfield.wide{grid-column:1/-1}
+.nt .pk-dlabel{font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.nt .pk-dval{font-size:12.5px;color:var(--text);line-height:1.5;word-break:break-word}
+.nt .pk-dactions{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 14px;border-top:1px solid var(--border);padding-top:12px}
+.nt .pk-dactions button{padding:7px 13px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.nt .pk-dactions button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.nt .pk-dactions button.warn:hover{border-color:#f59e0b;color:#f59e0b}
+.nt .pk-dactions button.bad{margin-left:auto}
+.nt .pk-dactions button.bad:hover:not(:disabled){border-color:#ef4444;color:#ef4444}
+.nt .pk-dactions button:disabled{opacity:.45;cursor:not-allowed}
 
 /* WinBox flags column. */
 .nt th.flg,.nt td.flg{width:52px;white-space:nowrap}

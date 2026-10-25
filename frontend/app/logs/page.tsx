@@ -491,13 +491,14 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             <LogRecordsTable
               endpoint="/logs/activity"
               columns={[
-                { key: "id", label: "ID", nowrap: true },
-                { key: "type", label: "Log Type", nowrap: true, render: (r) => <b>{r.action}{r.entity ? ` · ${r.entity}` : ""}</b> },
-                { key: "details", label: "Description", render: (r) => r.details || r.action || "—" },
-                { key: "subject", label: "Subject", nowrap: true, render: (r) => r.entityId ? `${r.entity || ""} #${r.entityId}` : "—" },
-                { key: "causer", label: "Causer", nowrap: true, render: (r) => r.user ? `${r.user.name} (${r.user.role || "Staff"})` : "System" },
-                { key: "ipAddress", label: "IP Address", mono: true, nowrap: true },
-                { key: "createdAt", label: "Datetime", nowrap: true, render: (r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : "—" },
+                { key: "id", label: "ID", nowrap: true, primary: true },
+                { key: "type", label: "Log Type", nowrap: true, primary: true, render: (r) => <b>{r.action}{r.entity ? ` · ${r.entity}` : ""}</b> },
+                { key: "subject", label: "Subject", nowrap: true, primary: true, render: (r) => r.entityId ? `${r.entity || ""} #${r.entityId}` : "—" },
+                { key: "createdAt", label: "Datetime", nowrap: true, primary: true, render: (r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : "—" },
+                // Expanded detail — the long raw payload is here, not in the row.
+                { key: "details", label: "Description / Raw", mono: true, wide: true, render: (r) => r.details || r.action || "—" },
+                { key: "causer", label: "Causer", render: (r) => r.user ? `${r.user.name} (${r.user.role || "Staff"})` : "System" },
+                { key: "ipAddress", label: "IP Address", mono: true },
               ]}
             />
           )}
@@ -509,20 +510,21 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
               days={7}
               daysOptions={[{ label: "Last 24 hours", value: 1 }, { label: "Last 7 days", value: 7 }, { label: "Last 30 days", value: 30 }, { label: "All time", value: 0 }]}
               columns={[
-                { key: "id", label: "ID", nowrap: true, mono: true },
-                { key: "authdate", label: "Datetime", nowrap: true, render: (r) => r.authdate ? new Date(r.authdate).toLocaleString() : "—" },
-                { key: "username", label: "Username", nowrap: true, render: (r) => <b>{r.username}</b> },
-                // Real account password (plaintext). radpostauth.pass is only the
-                // CHAP response hash, so we show the configured password instead.
-                { key: "password", label: "Password", mono: true, render: (r) => r.password || "—" },
-                { key: "reply", label: "Result", nowrap: true, render: (r) => {
+                { key: "id", label: "ID", nowrap: true, mono: true, primary: true },
+                { key: "authdate", label: "Datetime", nowrap: true, primary: true, render: (r) => r.authdate ? new Date(r.authdate).toLocaleString() : "—" },
+                { key: "username", label: "Username", nowrap: true, primary: true, render: (r) => <b>{r.username}</b> },
+                { key: "reply", label: "Result", nowrap: true, primary: true, render: (r) => {
                     const ok = r.accepted ?? String(r.reply || "").toLowerCase().includes("accept");
                     return <span style={{ color: ok ? "#4caf50" : "#f44336", fontWeight: 700 }}>{ok ? "Accept" : "Reject"}</span>;
                   } },
+                // Expanded detail.
+                // Real account password (plaintext). radpostauth.pass is only the
+                // CHAP response hash, so we show the configured password instead.
+                { key: "password", label: "Password", mono: true, render: (r) => r.password || "—" },
                 { key: "reason", label: "Reason", render: (r) => <span style={{ color: (r.accepted ? "#4caf50" : "#e0a030") }}>{r.reason || "—"}</span> },
-                { key: "mac", label: "MAC", mono: true, nowrap: true, render: (r) => r.mac || "—" },
-                { key: "port", label: "Port", nowrap: true, render: (r) => r.port || "—" },
-                { key: "nas", label: "NAS", nowrap: true, render: (r) => r.nas || "—" },
+                { key: "mac", label: "MAC Address", mono: true, render: (r) => r.mac || "—" },
+                { key: "port", label: "Port", render: (r) => r.port || "—" },
+                { key: "nas", label: "NAS", render: (r) => r.nas || "—" },
               ]}
             />
           )}
@@ -643,21 +645,23 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
           {/* ═══════════════ TAB: LOGIN LOGS ═══════════════ */}
           {activeTab === "login" && (
-            <LogTable data={filterData(loginLogs, ["email", "ipAddress", "user.name"])} d={d} t={t}
-              headers={["User", "Email", "IP", "Status", "Time"]}
-              render={(log: any) => (
-                <tr key={log.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
-                  <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 500 }}>{log.user?.name || "—"}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textSub }}>{log.email}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>{log.ipAddress}</td>
-                  <td style={{ padding: "8px 12px" }}>
-                    <Badge color={log.status === "SUCCESS" ? "#4ade80" : "#f87171"} bg={log.status === "SUCCESS" ? "#14532d" : "#450a0a"}>
-                      {log.status === "SUCCESS" ? "✅ Success" : "❌ Failed"}{log.failReason ? ` · ${log.failReason}` : ""}
-                    </Badge>
-                  </td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{new Date(log.createdAt).toLocaleString()}</td>
-                </tr>
-              )} />
+            <LogRecordsTable
+              endpoint="/logs/login"
+              columns={[
+                { key: "user", label: "User", nowrap: true, primary: true, render: (r) => r.user?.name || "—" },
+                { key: "email", label: "Email", nowrap: true, primary: true, render: (r) => r.email || "—" },
+                { key: "ipAddress", label: "IP", mono: true, nowrap: true, primary: true },
+                { key: "status", label: "Status", nowrap: true, primary: true, render: (r) => (
+                    <span style={{ color: r.status === "SUCCESS" ? "#16a34a" : "#dc2626", fontWeight: 700 }}>
+                      {r.status === "SUCCESS" ? "Success" : "Failed"}
+                    </span>
+                  ) },
+                // Expanded detail.
+                { key: "createdAt", label: "Timestamp", render: (r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : "—" },
+                { key: "failReason", label: "Reason", render: (r) => r.failReason || "—" },
+                { key: "userAgent", label: "Device / Browser", wide: true, render: (r) => r.userAgent || r.device || "—" },
+              ]}
+            />
           )}
 
           {/* ═══════════════ TAB: ACTIVITY LOGS ═══════════════ */}

@@ -9,7 +9,18 @@ import API from "./api";
  * shows a "Showing X to Y of N records" line like a classic ISP panel.
  */
 
-export type Col = { key: string; label: string; render?: (row: any) => React.ReactNode; mono?: boolean; nowrap?: boolean };
+export type Col = {
+  key: string;
+  label: string;
+  render?: (row: any) => React.ReactNode;
+  mono?: boolean;
+  nowrap?: boolean;
+  /** Shown in the collapsed row. If ANY column sets this, the rest move into
+     the inline expanded detail grid behind a chevron. */
+  primary?: boolean;
+  /** In the expanded grid, span the full width (for long raw payloads). */
+  wide?: boolean;
+};
 
 export function LogRecordsTable({
   endpoint, columns, days, daysOptions, searchable = true, pageSize = 50,
@@ -30,6 +41,14 @@ export function LogRecordsTable({
   const [dayR, setDayR] = React.useState(days ?? 0);
   const [loading, setLoading] = React.useState(false);
   const [expanded, setExpanded] = React.useState(false);
+  const [openRow, setOpenRow] = React.useState<number | null>(null);
+
+  // Inline expandable rows: if any column is marked primary, the collapsed row
+  // shows only those and the rest appear in a detail grid under a chevron.
+  const hasPrimary = columns.some((c) => c.primary);
+  const collapsedCols = hasPrimary ? columns.filter((c) => c.primary) : columns;
+  const detailCols = hasPrimary ? columns.filter((c) => !c.primary) : [];
+  const totalCols = collapsedCols.length + (detailCols.length ? 1 : 0);
 
   // Esc closes the expanded (fullscreen) view.
   React.useEffect(() => {
@@ -110,21 +129,53 @@ export function LogRecordsTable({
       <div className="lrt-scroll">
         <table>
           <thead>
-            <tr>{columns.map((c) => <th key={c.key} className={c.nowrap ? "nw" : ""}>{c.label}</th>)}</tr>
+            <tr>
+              {collapsedCols.map((c) => <th key={c.key} className={c.nowrap ? "nw" : ""}>{c.label}</th>)}
+              {detailCols.length > 0 && <th className="nw" aria-label="Details" />}
+            </tr>
           </thead>
           <tbody>
             {rows.length === 0 && !loading && (
-              <tr className="empty"><td colSpan={columns.length}>No records.</td></tr>
+              <tr className="empty"><td colSpan={totalCols}>No records.</td></tr>
             )}
-            {rows.map((row, i) => (
-              <tr key={i}>
-                {columns.map((c) => (
-                  <td key={c.key} className={`${c.mono ? "mono" : ""} ${c.nowrap ? "nw" : ""}`}>
-                    {c.render ? c.render(row) : (row[c.key] ?? "—")}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {rows.map((row, i) => {
+              const isOpen = openRow === i;
+              return (
+                <React.Fragment key={i}>
+                  <tr
+                    className={`${detailCols.length ? "lrt-clickable" : ""}${isOpen ? " lrt-open" : ""}`}
+                    onClick={detailCols.length ? () => setOpenRow(isOpen ? null : i) : undefined}
+                  >
+                    {collapsedCols.map((c) => (
+                      <td key={c.key} className={`${c.mono ? "mono" : ""} ${c.nowrap ? "nw" : ""}`}>
+                        {c.render ? c.render(row) : (row[c.key] ?? "—")}
+                      </td>
+                    ))}
+                    {detailCols.length > 0 && (
+                      <td className="nw lrt-chevcell">
+                        <span className={`lrt-chev${isOpen ? " up" : ""}`} aria-hidden>▾</span>
+                      </td>
+                    )}
+                  </tr>
+                  {isOpen && detailCols.length > 0 && (
+                    <tr className="lrt-detail">
+                      <td colSpan={totalCols}>
+                        <div className="lrt-dgrid">
+                          {detailCols.map((c) => (
+                            <div key={c.key} className={`lrt-dfield${c.wide ? " wide" : ""}`}>
+                              <span className="lrt-dlabel">{c.label}</span>
+                              <span className={`lrt-dval${c.mono ? " mono" : ""}`}>
+                                {c.render ? c.render(row) : (row[c.key] ?? "—")}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -183,6 +234,23 @@ html[data-theme="dark"] .lrt thead th{background:#0f172a}
 .lrt td.mono{font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11px}
 .lrt td.nw,.lrt th.nw{white-space:nowrap}
 .lrt tr.empty td{padding:26px;text-align:center;color:var(--muted)}
+
+/* Inline expandable rows. */
+.lrt tr.lrt-clickable{cursor:pointer}
+.lrt tr.lrt-open td{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.lrt-chevcell{width:34px;text-align:center}
+.lrt-chev{display:inline-block;color:var(--muted);transition:transform .18s;font-size:12px}
+.lrt-chev.up{transform:rotate(180deg)}
+.lrt tr.lrt-detail td{padding:0;border-bottom:1px solid var(--border);
+  background:#f8fafc}
+html[data-theme="dark"] .lrt tr.lrt-detail td{background:#0d1420}
+@media(prefers-color-scheme:dark){html:not([data-theme]) .lrt tr.lrt-detail td{background:#0d1420}}
+.lrt-dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px 22px;padding:14px 16px}
+.lrt-dfield{display:flex;flex-direction:column;gap:3px;min-width:0}
+.lrt-dfield.wide{grid-column:1/-1}
+.lrt-dlabel{font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.lrt-dval{font-size:12.5px;color:inherit;white-space:pre-wrap;word-break:break-word;line-height:1.5}
+.lrt-dval.mono{font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11.5px}
 
 .lrt-foot{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:8px 10px;border-top:1px solid var(--border)}
 .lrt-foot button{min-width:30px;padding:4px 9px;font-size:12px;font-family:inherit;cursor:pointer;
