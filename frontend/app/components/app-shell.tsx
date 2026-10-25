@@ -871,16 +871,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div className="sidebar-brand">
-          <div className="brand-mark" aria-hidden="true" style={{ background: "transparent", width: 30, height: 30 }}>
-            {/* The Uplinko mark — theme-aware (white on dark, colour on light). */}
-            <Logo size={30} />
-          </div>
-          {!rail && (
-            <div className="brand-meta">
-              <div className="brand-title">{BRAND.name}</div>
-              <div className="brand-subtitle">{BRAND.subtitle}</div>
-            </div>
-          )}
+          {/* ONE integrated Uplinko asset — the full white lockup when open, the
+              icon-only mark when railed. No separate text, no duplicate, no box. */}
+          {rail
+            ? <Logo tone="onDark" size={34} />
+            : <Logo tone="onDark" withText size={34} />}
         </div>
 
         <nav className="nav-section">

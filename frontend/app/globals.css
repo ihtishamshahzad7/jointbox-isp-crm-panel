@@ -7134,3 +7134,22 @@ html[data-theme="dark"] .jb-guide-tabs-head { color: #4ade80; }
   font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
   color: #fff; background: #16a34a; border-radius: 5px; padding: 2px 7px; white-space: nowrap;
 }
+
+/* ── Uplinko animated branding (login + landing hero) ──────────────────
+   Nested so the float (transform) and the hover-scale (transform) live on
+   different elements and never fight; the glow is a filter. */
+@keyframes ulFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+@keyframes ulGlowPulse {
+  0%,100% { filter: drop-shadow(0 6px 14px rgba(124,77,255,.35)) drop-shadow(0 0 18px rgba(233,64,139,.22)); }
+  50%     { filter: drop-shadow(0 10px 26px rgba(124,77,255,.6))  drop-shadow(0 0 34px rgba(233,64,139,.45)); }
+}
+.ul-float { display: inline-block; animation: ulFloat 4.2s ease-in-out infinite; }
+.ul-glow  { display: inline-block; animation: ulGlowPulse 3.2s ease-in-out infinite;
+  transition: transform .25s ease, filter .25s ease; }
+.ul-glow:hover {
+  transform: scale(1.06);
+  filter: drop-shadow(0 12px 30px rgba(124,77,255,.75)) drop-shadow(0 0 44px rgba(233,64,139,.6));
+}
+@media (prefers-reduced-motion: reduce) {
+  .ul-float, .ul-glow { animation: none; }
+}
