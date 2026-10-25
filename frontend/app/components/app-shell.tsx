@@ -874,8 +874,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {/* ONE integrated Uplinko asset — the full white lockup when open, the
               icon-only mark when railed. No separate text, no duplicate, no box. */}
           {rail
-            ? <Logo tone="onDark" size={34} />
-            : <Logo tone="onDark" withText size={34} />}
+            ? <Logo tone="onDark" size={36} />
+            : <Logo tone="onDark" withText size={46} />}
         </div>
 
         <nav className="nav-section">

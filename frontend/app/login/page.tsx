@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Logo } from "../components/logo";
+import { LogoAssemble } from "../components/logo-assemble";
 import API_BASE from "../components/api";
 import { BRAND } from "../../lib/brand";
 import { useI18n } from "../../lib/i18n";
@@ -113,8 +113,8 @@ export default function LoginPage() {
         <div className={s.loginStory}>
           <div className={s.loginCopy}>
             <Link href="/" className={s.back}>← {t("Back to home")}</Link>
-            <div style={{ marginTop: 22 }} className="ul-float">
-              <span className="ul-glow"><Logo size={68} withText subtitle={BRAND.subtitle} tone="onDark" /></span>
+            <div style={{ marginTop: 22 }}>
+              <LogoAssemble src="/brand/uplinko-logo-white.png" height={86} alt={`${BRAND.name} — ${BRAND.subtitle}`} />
             </div>
             <h1 className={s.loginH1}>
               {t("Command Center")} {t("for")} <span className={s.lit}>{BRAND.subtitle}</span>

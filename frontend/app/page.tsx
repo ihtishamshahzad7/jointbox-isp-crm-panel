@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Logo } from "./components/logo";
+import { LogoAssemble } from "./components/logo-assemble";
 import { NetworkScene } from "./components/landing/network-scene";
 import { LanguagePicker } from "./components/landing/language-picker";
 import s from "./components/landing/landing.module.css";
@@ -70,7 +70,7 @@ export default function HomePage() {
       <div className={s.wrap}>
         <nav className={s.nav} aria-label="Main">
           <Link href="/" aria-label={`${BRAND.name} home`} style={{ textDecoration: "none" }}>
-            <span className="ul-glow" style={{ display: "inline-block" }}><Logo size={46} withText tone="onDark" /></span>
+            <LogoAssemble src="/brand/uplinko-logo-white.png" height={52} alt={`${BRAND.name} home`} />
           </Link>
           <div className={s.navLinks}>
             <a className={`${s.navLink} ${s.hideSm}`} href="#modules">{t("Features")}</a>
