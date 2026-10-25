@@ -141,7 +141,12 @@ export function LogRecordsTable({
 }
 
 const CSS = `
-.lrt{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+/* Solid, theme-aware surfaces + text. --surface/--text were resolving to
+   white-on-white in dark mode here, so the table showed nothing. Hard-code the
+   surface and inherit text from it so both themes are always readable. */
+.lrt{background:#ffffff;color:#1A1714;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+html[data-theme="dark"] .lrt{background:#111827;color:#e5e7eb}
+@media(prefers-color-scheme:dark){html:not([data-theme]) .lrt{background:#111827;color:#e5e7eb}}
 
 /* Full-screen "expanded" view — fills the viewport so long log rows are easy to read. */
 .lrt-full{position:fixed;inset:12px;z-index:350;border-radius:12px;display:flex;flex-direction:column;
@@ -152,7 +157,9 @@ const CSS = `
   cursor:pointer;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px}
 .lrt-expand:hover{border-color:var(--accent);color:var(--accent)}
 .lrt-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;
-  background:var(--surface-2);border-bottom:1px solid var(--border)}
+  background:#f1f5f9;border-bottom:1px solid var(--border)}
+html[data-theme="dark"] .lrt-bar{background:#0f172a}
+@media(prefers-color-scheme:dark){html:not([data-theme]) .lrt-bar{background:#0f172a}}
 .lrt-bar select{background:var(--surface);color:var(--text);border:1px solid var(--border);
   border-radius:6px;font-size:12px;padding:4px 8px;font-family:inherit;cursor:pointer}
 .lrt-find{display:inline-flex;align-items:center;gap:5px;padding:0 8px;height:30px;
@@ -166,8 +173,10 @@ const CSS = `
 .lrt table{width:100%;border-collapse:separate;border-spacing:0;min-width:720px}
 .lrt thead th{position:sticky;top:0;z-index:1;text-align:left;padding:7px 12px;font-size:10.5px;
   font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);
-  background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap}
-.lrt tbody td{padding:6px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);
+  background:#f1f5f9;border-bottom:1px solid var(--border);white-space:nowrap}
+html[data-theme="dark"] .lrt thead th{background:#0f172a}
+@media(prefers-color-scheme:dark){html:not([data-theme]) .lrt thead th{background:#0f172a}}
+.lrt tbody td{padding:6px 12px;font-size:12px;color:inherit;border-bottom:1px solid var(--border);
   vertical-align:top}
 .lrt tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
 .lrt tbody tr:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
