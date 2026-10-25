@@ -34,6 +34,8 @@ export default function UsersPage() {
   const [greeting, setGreeting] = useState("Welcome");
   const [users, setUsers] = useState<any[]>([]);
   const [usersView, setUsersView] = useState<"table" | "tree">("table");
+  const [openRows, setOpenRows] = useState<Set<number>>(new Set());
+  const toggleRow = (id: number) => setOpenRows(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [treeExpanded, setTreeExpanded] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -532,124 +534,99 @@ export default function UsersPage() {
               </div>
             </div>
           ) : (
-            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <style>{`
-                  /* Nothing wraps — every cell stays on one line; the table
-                     scrolls horizontally instead of breaking words. */
-                  .utbl th, .utbl td { white-space: nowrap; padding: 12px 16px; vertical-align: middle; }
-                  .utbl td.u-email { min-width: 200px; }
-                  .utbl td.u-phone, .utbl td.u-subs, .utbl td.u-downline { white-space: nowrap; }
-                  /* Icon action buttons — square, subtle gray hover. */
-                  .utbl .u-actions { display: inline-flex; gap: 4px; justify-content: center; }
-                  .utbl .iconbtn { display: inline-flex; align-items: center; justify-content: center;
-                    width: 32px; height: 32px; padding: 0; border: none; background: transparent;
-                    color: var(--muted); border-radius: 8px; cursor: pointer;
-                    transition: background .12s, color .12s; }
-                  .utbl .iconbtn:hover { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--text); }
-                  .utbl .iconbtn.edit:hover { background: rgba(245,158,11,.16); color: #d97706; }
-                  .utbl .iconbtn.topup:hover { background: rgba(16,185,129,.16); color: #059669; }
-                  .utbl .iconbtn.price:hover { background: rgba(124,77,255,.16); color: #7c4dff; }
-                  .utbl .iconbtn.del:hover { background: rgba(239,68,68,.16); color: #ef4444; }
-                  /* Pill status badge — soft colors, fixed padding, never clipped. */
-                  .utbl .u-status { display: inline-block; padding: 4px 12px; border-radius: 999px;
-                    font-size: 11px; font-weight: 700; white-space: nowrap; border: none; cursor: pointer; line-height: 1.4; }
-                  .utbl .u-status.on { background: rgba(16,185,129,.15); color: #059669; }
-                  .utbl .u-status.off { background: rgba(239,68,68,.14); color: #dc2626; }
-                  html[data-theme="dark"] .utbl .u-status.on { color: #4ade80; }
-                  html[data-theme="dark"] .utbl .u-status.off { color: #f87171; }
-                `}</style>
-                <table className="utbl" style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
-                  <thead>
-                    <tr style={{ background: d ? "var(--bg)" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>User</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Email</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Role</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Phone</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>NAS</th>
-                      <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Balance</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Subs</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Downline</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Created By</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Last Login</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Status</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((u: any, idx: number) => {
-                      const roleBadge = getRoleBadge(u.role);
-                      return (
-                        <tr
-                          key={u.id}
-                          // Whole row opens the profile; action buttons stop propagation.
-                          onClick={() => router.push(`/users/${u.id}`)}
-                          title="Open profile"
-                          style={{
-                            borderBottom: `1px solid ${t.cardBorder}`,
-                            background: idx % 2 === 0 ? (d ? "var(--surface-2)" : "#f8fafc") : t.card,
-                            cursor: "pointer",
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.background = d ? "rgba(56,189,248,0.07)" : "#eef6ff")}
-                          onMouseLeave={(e) => (e.currentTarget.style.background = idx % 2 === 0 ? (d ? "var(--surface-2)" : "#f8fafc") : t.card)}
-                        >
-                          <td style={{ padding: "10px 14px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <Avatar name={u.name} photoUrl={u.photoUrl} size={34} />
+            <div>
+              {/* Accordion list — the collapsed row shows only what matters at a
+                  glance (user, role, status); the rest (email, phone, NAS,
+                  balance, subs, downline, created-by, last-login) and the actions
+                  are revealed on expand. No more cramped 12-column table. */}
+              <style>{`
+                .uacc{display:flex;flex-direction:column;gap:8px}
+                .uacc-row{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color .15s,box-shadow .15s}
+                .uacc-row.open{border-color:color-mix(in srgb,var(--accent) 55%,var(--border));box-shadow:0 6px 24px -14px color-mix(in srgb,var(--accent) 50%,transparent)}
+                .uacc-head{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:12px;width:100%;padding:11px 14px;cursor:pointer}
+                .uacc-head:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+                .uacc-id{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+                .uacc-name{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .uacc-sub{font-size:10.5px;color:var(--muted)}
+                .uacc-status{display:inline-block;padding:4px 12px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:none;cursor:pointer;line-height:1.4}
+                .uacc-status.on{background:rgba(16,185,129,.15);color:#059669}
+                .uacc-status.off{background:rgba(239,68,68,.14);color:#dc2626}
+                html[data-theme="dark"] .uacc-status.on{color:#4ade80}
+                html[data-theme="dark"] .uacc-status.off{color:#f87171}
+                .uacc-chev{color:var(--muted);transition:transform .18s;font-size:13px;flex:0 0 auto}
+                .uacc-chev.up{transform:rotate(180deg)}
+                .uacc-body{padding:4px 14px 14px;border-top:1px solid var(--border)}
+                .uacc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px 18px;padding:12px 0}
+                .uacc-field{display:flex;flex-direction:column;gap:2px;min-width:0}
+                .uacc-flabel{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+                .uacc-fval{font-size:12.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .uacc-actions{display:flex;flex-wrap:wrap;gap:8px;padding-top:12px;border-top:1px solid var(--border)}
+                .uacc-btn{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+                .uacc-btn.edit:hover{background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.4);color:#d97706}
+                .uacc-btn.topup:hover{background:rgba(16,185,129,.14);border-color:rgba(16,185,129,.4);color:#059669}
+                .uacc-btn.price:hover{background:rgba(124,77,255,.14);border-color:rgba(124,77,255,.4);color:#7c4dff}
+                .uacc-btn.del{margin-left:auto}
+                .uacc-btn.del:hover{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.45);color:#ef4444}
+              `}</style>
+              <div className="uacc">
+                {users.map((u: any) => {
+                  const roleBadge = getRoleBadge(u.role);
+                  const isOpen = openRows.has(u.id);
+                  return (
+                    <div key={u.id} className={`uacc-row${isOpen ? " open" : ""}`}>
+                      {/* Collapsed header — click to expand. */}
+                      <button type="button" className="uacc-head" aria-expanded={isOpen} onClick={() => toggleRow(u.id)}>
+                        <Avatar name={u.name} photoUrl={u.photoUrl} size={34} />
+                        <span className="uacc-id">
+                          <span className="uacc-name">{u.name || "-"}</span>
+                          <span className="uacc-sub">ID: {u.id}</span>
+                        </span>
+                        <Badge color={roleBadge.color} bg={roleBadge.bg}>{roleBadge.label}</Badge>
+                        <span
+                          className={`uacc-status ${u.isActive ? "on" : "off"}`}
+                          role="button" tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); handleToggleStatus(u.id, u.isActive); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleToggleStatus(u.id, u.isActive); } }}
+                          title={u.isActive ? "Active — click to deactivate" : "Inactive — click to activate"}>
+                          {u.isActive ? "Active" : "Inactive"}
+                        </span>
+                        <span className={`uacc-chev${isOpen ? " up" : ""}`} aria-hidden>▾</span>
+                      </button>
 
-                              <div>
-                                <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{u.name || "-"}</div>
-                                <div style={{ fontSize: 10, color: t.textMuted }}>ID: {u.id}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="u-email" style={{ fontSize: 11.5, color: t.textSub }}>{u.email}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                            <Badge color={roleBadge.color} bg={roleBadge.bg}>{roleBadge.label}</Badge>
-                          </td>
-                          <td style={{ padding: "10px 14px", fontSize: 11 }}>{u.phone || "-"}</td>
-                          <td style={{ padding: "10px 14px", fontSize: 11.5, color: u.nasGroup ? t.textSub : t.textMuted }}>
-                            {u.nasGroup || "—"}
-                          </td>
-                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>{money(u.balance || 0)}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.ownedSubscribers ?? 0}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 12, color: t.text }}>{u._count?.children ?? 0}</td>
-                          <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{u.parent?.name || "—"}</td>
-                          <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{u.lastLogin ? new Date(u.lastLogin).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "—"}</td>
-                          <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={() => handleToggleStatus(u.id, u.isActive)}
-                              className={`u-status ${u.isActive ? "on" : "off"}`}
-                              title={u.isActive ? "Active — click to deactivate" : "Inactive — click to activate"}>
-                              {u.isActive ? "Active" : "Inactive"}
-                            </button>
-                          </td>
-                          <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
-                            {/* Icon-only actions — tooltips name each one; a
-                                tinted hover makes them read as clickable. */}
-                            <div className="u-actions">
-                              <button className="iconbtn edit" onClick={() => openEdit(u)} title="Edit" aria-label="Edit"><Icons.Edit /></button>
-                              {/* Top up this account's wallet without leaving the
-                                  list. Staff accounts have no wallet, so it's hidden. */}
-                              {u.role !== 'SALES' && u.role !== 'AUDITOR' && (
-                                <button className="iconbtn topup" onClick={() => openTopUp(u)} title="Top up balance" aria-label="Top up balance"><Icons.Payments /></button>
-                              )}
-                              {/* Reseller pricing for this account. */}
-                              {(user?.canSetPackagePrice || isAdmin) && (
-                                <button className="iconbtn price" onClick={() => router.push(`/pricing?account=${u.id}`)} title="Set pricing" aria-label="Set pricing">
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
-                                </button>
-                              )}
-                              <button className="iconbtn del" onClick={() => handleDelete(u.id, u.name)} title="Delete" aria-label="Delete"><Icons.Trash /></button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      {/* Expanded detail + actions. */}
+                      {isOpen && (
+                        <div className="uacc-body">
+                          <div className="uacc-grid">
+                            <div className="uacc-field"><span className="uacc-flabel">Email</span><span className="uacc-fval" title={u.email}>{u.email || "—"}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">Phone</span><span className="uacc-fval">{u.phone || "—"}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">NAS</span><span className="uacc-fval">{u.nasGroup || "—"}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">Balance</span><span className="uacc-fval" style={{ color: t.green, fontWeight: 700 }}>{money(u.balance || 0)}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">Subscribers</span><span className="uacc-fval">{u._count?.ownedSubscribers ?? 0}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">Downline</span><span className="uacc-fval">{u._count?.children ?? 0}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">Created By</span><span className="uacc-fval">{u.parent?.name || "—"}</span></div>
+                            <div className="uacc-field"><span className="uacc-flabel">Last Login</span><span className="uacc-fval">{u.lastLogin ? new Date(u.lastLogin).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "—"}</span></div>
+                          </div>
+                          <div className="uacc-actions">
+                            <button className="uacc-btn" onClick={() => router.push(`/users/${u.id}`)} title="Open profile">Open profile</button>
+                            <button className="uacc-btn edit" onClick={() => openEdit(u)}><Icons.Edit /> Edit</button>
+                            {u.role !== 'SALES' && u.role !== 'AUDITOR' && (
+                              <button className="uacc-btn topup" onClick={() => openTopUp(u)}><Icons.Payments /> Top up</button>
+                            )}
+                            {(user?.canSetPackagePrice || isAdmin) && (
+                              <button className="uacc-btn price" onClick={() => router.push(`/pricing?account=${u.id}`)}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+                                Pricing
+                              </button>
+                            )}
+                            <button className="uacc-btn del" onClick={() => handleDelete(u.id, u.name)}><Icons.Trash /> Delete</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              <div style={{ padding: "10px 14px", borderTop: `1px solid ${t.cardBorder}`, fontSize: 10, color: t.textMuted }}>
+              <div style={{ padding: "10px 2px", fontSize: 10, color: t.textMuted }}>
                 Showing {users.length} users
               </div>
             </div>
