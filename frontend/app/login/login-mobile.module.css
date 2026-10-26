@@ -1,0 +1,119 @@
+@media (max-width: 620px) {
+  .mobileLogin {
+    min-height: 100svh;
+    background:
+      radial-gradient(90% 38% at 50% 8%, rgba(108, 60, 225, 0.2), transparent 72%),
+      #0b0a1a;
+  }
+
+  .layout {
+    min-height: 100svh;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 0;
+    padding: max(14px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+
+  .story {
+    display: contents;
+  }
+
+  .brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin-bottom: -8px;
+    text-align: center;
+  }
+
+  .brand > a {
+    align-self: flex-start;
+    padding: 6px 0;
+    font-size: 12px;
+  }
+
+  .brand h1,
+  .brand p {
+    display: none;
+  }
+
+  .logo {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+    margin: 2px 0 0 !important;
+  }
+
+  .logo > div {
+    transform: scale(0.82);
+    transform-origin: center;
+  }
+
+  .art {
+    grid-row: 2;
+    width: 100%;
+    height: 142px;
+    min-height: 0;
+    margin: -2px 0 -10px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .art::after {
+    position: absolute;
+    top: 48%;
+    left: 50%;
+    width: 132px;
+    height: 132px;
+    border: 1px solid rgba(185, 164, 255, 0.48);
+    border-radius: 50%;
+    box-shadow: 0 0 22px rgba(108, 60, 225, 0.32), inset 0 0 20px rgba(233, 64, 139, 0.14);
+    content: "";
+    pointer-events: none;
+    transform: translate(-50%, -50%) rotateX(68deg);
+    animation: hologram-float 5s ease-in-out infinite;
+  }
+
+  .card {
+    z-index: 2;
+    padding: 22px 20px;
+    border: 1px solid rgba(185, 164, 255, 0.34);
+    border-radius: 22px;
+    background: linear-gradient(155deg, rgba(37, 30, 78, 0.78), rgba(17, 15, 38, 0.76));
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset, 0 22px 52px -26px rgba(3, 2, 12, 0.95), 0 0 44px -24px rgba(108, 60, 225, 0.9);
+    animation: login-card-in 650ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .card input {
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  .card form button[type="submit"] {
+    min-height: 50px;
+  }
+
+  .card > p {
+    line-height: 1.5;
+  }
+
+  @keyframes hologram-float {
+    0%, 100% { opacity: 0.66; transform: translate(-50%, -50%) rotateX(68deg) scale(0.96); }
+    50% { opacity: 1; transform: translate(-50%, -56%) rotateX(68deg) scale(1.04); }
+  }
+
+  @keyframes login-card-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+@media (max-width: 620px) and (prefers-reduced-motion: reduce) {
+  .art::after,
+  .card {
+    animation: none;
+  }
+}

@@ -10,6 +10,7 @@ import Link from "next/link";
 import { NetworkScene } from "../components/landing/network-scene";
 import { LanguagePicker } from "../components/landing/language-picker";
 import s from "../components/landing/landing.module.css";
+import mobile from "./login-mobile.module.css";
 import { ensureMediaToken } from "../components/image-upload";
 import { isPlatformSession, PLATFORM_HOME } from "../components/platform";
 
@@ -107,13 +108,13 @@ export default function LoginPage() {
   const isError = message.includes("❌");
 
   return (
-    <main id="main" className={s.root}>
+    <main id="main" className={`${s.root} ${mobile.mobileLogin}`}>
       <div className={s.aurora} aria-hidden="true" />
-      <div className={`${s.wrap} ${s.loginGrid}`}>
-        <div className={s.loginStory}>
-          <div className={s.loginCopy}>
+      <div className={`${s.wrap} ${s.loginGrid} ${mobile.layout}`}>
+        <div className={`${s.loginStory} ${mobile.story}`}>
+          <div className={`${s.loginCopy} ${mobile.brand}`}>
             <Link href="/" className={s.back}>← {t("Back to home")}</Link>
-            <div style={{ marginTop: 22 }}>
+            <div className={mobile.logo} style={{ marginTop: 22 }}>
               <LogoAssemble src="/brand/uplinko-logo-white.png" height={86} alt={`${BRAND.name} — ${BRAND.subtitle}`} />
             </div>
             <h1 className={s.loginH1}>
@@ -123,7 +124,7 @@ export default function LoginPage() {
               {t("Secure. Fast. Always on.")} {t("Enterprise-grade infrastructure")} {t("built for modern ISPs.")}
             </p>
           </div>
-          <NetworkScene variant="login" className={s.loginScene} label={t("3D view of a healthy fiber network around a core router.")} />
+          <NetworkScene variant="login" className={`${s.loginScene} ${mobile.art}`} label={t("3D view of a healthy fiber network around a core router.")} />
           <div className={s.loginStats}>
             {/* Facts the code backs, not marketing numbers: AES-256-GCM in common/crypto-box.ts, the UserRole enum, LANGS in lib/i18n. */}
             {[["AES-256", "Encrypted router secrets"], ["7", "User Roles"], ["5", "Languages"]].map(([v, k]) => (
@@ -132,7 +133,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className={s.card}>
+        <div className={`${s.card} ${mobile.card}`}>
           <div className={s.cardTop}>
             <span className={s.label}>{t("Secure Access")}</span>
             <LanguagePicker />

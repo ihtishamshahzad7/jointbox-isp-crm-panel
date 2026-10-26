@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { money, currencySymbol } from "../components/currency";
 import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
+import { DataTable, type DtColumn } from "../components/data-table";
 
 interface Invoice {
   id: number;
@@ -283,11 +284,6 @@ const [reverseReason, setReverseReason] = useState("");
     setForm({ ...form, items: form.items.filter((_, i) => i !== index) });
   }
 
-  const getInitials = (name?: string) => {
-    if (!name) return "U";
-    return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
-  };
-
   const Btn = ({ onClick, children, variant = "default", size = "sm", disabled = false, title = "" }: any) => {
     const vs: Record<string, React.CSSProperties> = {
       default: { background: "var(--border)", color: t.textSub },
@@ -308,18 +304,57 @@ const [reverseReason, setReverseReason] = useState("");
     );
   };
 
-  const Badge = ({ children, color, bg }: { children: React.ReactNode; color: string; bg: string }) => (
-    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, color, background: bg, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
-      {children}
-    </span>
-  );
-
   const statusColors: any = {
     PAID: { bg: '#d1fae5', color: '#059669', icon: '✅' },
     UNPAID: { bg: '#fee2e2', color: '#dc2626', icon: '⚠️' },
     PARTIAL: { bg: '#fef3c7', color: '#d97706', icon: '🟡' },
     OVERDUE: { bg: '#fecaca', color: '#ef4444', icon: '🔴' },
   };
+
+  const invoiceColumns: DtColumn<Invoice>[] = [
+    {
+      key: "invoiceNo", header: "Invoice #", sortable: true, width: 140,
+      sortValue: (inv) => inv.invoiceNo.toLowerCase(),
+      render: (inv) => <code style={{ fontSize: 11, fontWeight: 600, color: t.accent }}>{inv.invoiceNo}</code>,
+    },
+    {
+      key: "customer", header: "Customer", sortable: true, width: 210,
+      sortValue: (inv) => (inv.subscriber?.fullName ?? "").toLowerCase(),
+      render: (inv) => <div><div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{inv.subscriber?.fullName || "-"}</div><div style={{ fontSize: 10, color: t.textMuted }}>{inv.subscriber?.phone}</div></div>,
+    },
+    {
+      key: "createdAt", header: "Date", sortable: true,
+      sortValue: (inv) => new Date(inv.createdAt).getTime(),
+      render: (inv) => new Date(inv.createdAt).toLocaleDateString(),
+    },
+    {
+      key: "dueDate", header: "Due Date", sortable: true,
+      sortValue: (inv) => new Date(inv.dueDate).getTime(),
+      render: (inv) => <span style={{ color: new Date(inv.dueDate) < new Date() && inv.status !== "PAID" ? t.red : t.textSub }}>{new Date(inv.dueDate).toLocaleDateString()}</span>,
+    },
+    { key: "total", header: "Total", align: "right", sortable: true, sortValue: (inv) => inv.total, render: (inv) => money(inv.total) },
+    { key: "paidAmount", header: "Paid", align: "right", sortable: true, sortValue: (inv) => inv.paidAmount, render: (inv) => <span style={{ color: t.green }}>{money(inv.paidAmount)}</span> },
+    { key: "dueAmount", header: "Due", align: "right", sortable: true, sortValue: (inv) => inv.dueAmount, render: (inv) => <span style={{ color: t.red, fontWeight: 600 }}>{money(inv.dueAmount)}</span> },
+    {
+      key: "status", header: "Status", sortable: true,
+      sortValue: (inv) => inv.status,
+      render: (inv) => {
+        const sc = statusColors[inv.status] || { bg: "#f1f5f9", color: "var(--muted)", icon: "📄" };
+        return <span style={{ padding: "3px 9px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.color, whiteSpace: "nowrap" }}>{sc.icon} {inv.status}</span>;
+      },
+    },
+    { key: "tax", header: "Tax", defaultHidden: true, sortable: true, sortValue: (inv) => inv.tax, render: (inv) => money(inv.tax) },
+    { key: "discount", header: "Discount", defaultHidden: true, sortable: true, sortValue: (inv) => inv.discount, render: (inv) => money(inv.discount) },
+    {
+      key: "actions", header: "Actions", sortable: false, exportable: false, width: 160,
+      render: (inv) => <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+        <Btn size="xs" variant="ghost" onClick={() => { setSelectedInvoice(inv); setShowDetailsModal(true); }} title="View details"><Ic.Eye /></Btn>
+        {inv.status !== "PAID" && <Btn size="xs" variant="success" onClick={() => { setSelectedInvoice(inv); setPaymentForm({ amount: inv.dueAmount?.toString(), method: "CASH", referenceNo: "", notes: "" }); setShowPaymentModal(true); }} title="Record payment">💰</Btn>}
+        {inv.paidAmount > 0 && inv.status !== "CANCELLED" && <Btn size="xs" variant="danger" onClick={() => { setSelectedInvoice(inv); setReverseReason(""); setShowReverseModal(true); }} title="Reverse invoice"><Ic.X /></Btn>}
+        <Btn size="xs" variant="default" onClick={() => window.open(`${API}/invoices/${inv.id}/print`, "_blank")} title="Print invoice"><Ic.Printer /></Btn>
+      </div>,
+    },
+  ];
 
   const statCards = [
     { label: "Total Invoices", value: stats.total || invoices.length, sub: "all invoices", icon: "📄", bg: "linear-gradient(135deg,#3b82f6,#2563eb)" },
@@ -400,85 +435,19 @@ const [reverseReason, setReverseReason] = useState("");
               <p style={{ color: t.textMuted, fontSize: 13 }}>Loading invoices...</p>
               <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             </div>
-          ) : invoices.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 50, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>📄</div>
-              <h3 style={{ fontSize: 18, color: t.text, marginBottom: 6 }}>No Invoices Yet</h3>
-              <p style={{ color: t.textMuted, fontSize: 13, marginBottom: 20 }}>Create your first invoice to start billing.</p>
-              <button onClick={() => { resetForm(); setShowForm(true); }} style={{ background: t.accent, color: "#fff", border: "none", padding: "10px 22px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
-                + Create First Invoice
-              </button>
-            </div>
           ) : (
-            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-                  <thead>
-                    <tr style={{ background: d ? "var(--bg)" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Invoice #</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Customer</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Date</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Due Date</th>
-                      <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Total</th>
-                      <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Paid</th>
-                      <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Due</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Status</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoices.map((inv, idx) => {
-                      const sc = statusColors[inv.status] || { bg: '#f1f5f9', color: 'var(--muted)', icon: '📄' };
-                      return (
-                        <tr key={inv.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: idx % 2 === 0 ? (d ? "var(--surface-2)" : "#f8fafc") : t.card }}>
-                          <td style={{ padding: "10px 14px" }}>
-                            <code style={{ fontSize: 11, fontWeight: 600, color: t.accent }}>{inv.invoiceNo}</code>
-                          </td>
-                          <td style={{ padding: "10px 14px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(14,165,233,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: t.accent }}>
-                                {getInitials(inv.subscriber?.fullName)}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 12, fontWeight: 500, color: t.text }}>{inv.subscriber?.fullName || '-'}</div>
-                                <div style={{ fontSize: 10, color: t.textMuted }}>{inv.subscriber?.phone}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td style={{ padding: "10px 14px", fontSize: 11, color: t.textSub }}>{new Date(inv.createdAt).toLocaleDateString()}</td>
-                          <td style={{ padding: "10px 14px", fontSize: 11, color: new Date(inv.dueDate) < new Date() && inv.status !== 'PAID' ? t.red : t.textSub, fontWeight: new Date(inv.dueDate) < new Date() && inv.status !== 'PAID' ? 600 : 400 }}>
-                            {new Date(inv.dueDate).toLocaleDateString()}
-                          </td>
-                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.text }}>{money(inv.total)}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, color: t.green }}>{money(inv.paidAmount)}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.red }}>{money(inv.dueAmount)}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                            <span style={{ padding: "3px 10px", borderRadius: 30, fontSize: 10, fontWeight: 500, background: sc.bg, color: sc.color, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                              {sc.icon} {inv.status}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                            <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                              <Btn size="xs" variant="ghost" onClick={() => { setSelectedInvoice(inv); setShowDetailsModal(true); }} title="View details"><Ic.Eye /></Btn>
-                              {inv.status !== 'PAID' && (
-                                <Btn size="xs" variant="success" onClick={() => { setSelectedInvoice(inv); setPaymentForm({ amount: inv.dueAmount?.toString(), method: 'CASH', referenceNo: '', notes: '' }); setShowPaymentModal(true); }} title="Record payment">💰</Btn>
-                              )}
-                              {inv.paidAmount > 0 && inv.status !== 'CANCELLED' && (
-                                <Btn size="xs" variant="danger" onClick={() => { setSelectedInvoice(inv); setReverseReason(""); setShowReverseModal(true); }} title="Reverse invoice"><Ic.X /></Btn>
-                              )}
-                              <Btn size="xs" variant="default" onClick={() => window.open(`${API}/invoices/${inv.id}/print`, '_blank')} title="Print invoice"><Ic.Printer /></Btn>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ padding: "10px 14px", borderTop: `1px solid ${t.cardBorder}`, fontSize: 10, color: t.textMuted }}>
-                Showing {invoices.length} invoices
-              </div>
-            </div>
+            <DataTable
+              columns={invoiceColumns}
+              rows={invoices}
+              rowKey={(invoice) => invoice.id}
+              searchable
+              searchPlaceholder="Search invoice number or customer…"
+              storageKey="jb_invoices_table"
+              exportName="invoices"
+              defaultPageSize={25}
+              pageSizes={[10, 25, 50, 100]}
+              emptySlot={<><b>No invoices found.</b><span>Create your first invoice to start billing.</span><button onClick={() => { resetForm(); setShowForm(true); }}>Create invoice</button></>}
+            />
           )}
 
           {/* Footer */}

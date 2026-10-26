@@ -7,6 +7,7 @@ import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import { money, currencySymbol } from "../components/currency";
 import Portal from "../components/portal";
+import { DataTable, type DtColumn } from "../components/data-table";
 
 interface Voucher {
   id: number;
@@ -95,11 +96,6 @@ export default function VouchersPage() {
     purple:      "#8b5cf6",
   };
 
-  const getInitials = (name?: string) => {
-    if (!name) return "U";
-    return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
-  };
-
   const Btn = ({ onClick, children, variant = "default", size = "sm", disabled = false, title = "" }: any) => {
     const vs: Record<string, React.CSSProperties> = {
       default: { background: "var(--border)", color: t.textSub },
@@ -119,12 +115,6 @@ export default function VouchersPage() {
       }}>{children}</button>
     );
   };
-
-  const Badge = ({ children, color, bg }: { children: React.ReactNode; color: string; bg: string }) => (
-    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, color, background: bg, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
-      {children}
-    </span>
-  );
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -300,6 +290,20 @@ export default function VouchersPage() {
     EXPIRED: { bg: '#fee2e2', color: '#dc2626', label: '🔴 Expired' },
   };
 
+  const voucherColumns: DtColumn<Voucher>[] = [
+    { key: "code", header: "Code", sortable: true, width: 150, sortValue: (voucher) => voucher.code.toLowerCase(), render: (voucher) => <code style={{ color: t.accent, fontWeight: 700 }}>{voucher.code}</code> },
+    { key: "pin", header: "PIN", sortable: true, width: 100, sortValue: (voucher) => voucher.pin, render: (voucher) => <code>{voucher.pin}</code> },
+    { key: "type", header: "Type", sortable: true, sortValue: (voucher) => voucher.type, render: (voucher) => { const style = typeColors[voucher.type] || { bg: t.cardBorder, color: t.textMuted, label: voucher.type }; return <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: style.color, background: style.bg }}>{style.label}</span>; } },
+    { key: "amount", header: "Amount", align: "right", sortable: true, sortValue: (voucher) => voucher.amount, render: (voucher) => <strong style={{ color: t.green }}>{money(voucher.amount)}</strong> },
+    { key: "validityDays", header: "Validity", align: "right", sortable: true, sortValue: (voucher) => voucher.validityDays, render: (voucher) => `${voucher.validityDays} days` },
+    { key: "status", header: "Status", sortable: true, sortValue: (voucher) => voucher.status, render: (voucher) => { const style = statusColors[voucher.status] || { bg: t.cardBorder, color: t.textMuted, label: voucher.status }; return <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: style.color, background: style.bg }}>{style.label}</span>; } },
+    { key: "usedByUser", header: "Used By", sortable: true, sortValue: (voucher) => (voucher.usedByUser?.fullName ?? "").toLowerCase(), render: (voucher) => voucher.usedByUser?.fullName || "—" },
+    { key: "actions", header: "Actions", sortable: false, exportable: false, width: 100, render: (voucher) => <div style={{ display: "flex", gap: 6 }}>
+      {voucher.status === "UNUSED" && <Btn size="xs" variant="success" onClick={() => { setRedeemForm({ code: voucher.code, pin: voucher.pin, subscriberId: "" }); setShowRedeemModal(true); }} title="Redeem">🎫</Btn>}
+      <Btn size="xs" variant="danger" onClick={() => handleDelete(voucher.id, voucher.code)} title="Delete"><Ic.Trash /></Btn>
+    </div> },
+  ];
+
   const statCards = [
     { label: "Total Vouchers", value: stats.total, sub: "all vouchers", icon: "🎫", bg: "linear-gradient(135deg,#3b82f6,#2563eb)" },
     { label: "Unused", value: stats.unused, sub: "available", icon: "🟡", bg: "linear-gradient(135deg,#f59e0b,#d97706)" },
@@ -373,75 +377,12 @@ export default function VouchersPage() {
               <p style={{ color: t.textMuted, fontSize: 13 }}>Loading vouchers...</p>
               <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             </div>
-          ) : vouchers.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 50, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>🎫</div>
-              <h3 style={{ fontSize: 18, color: t.text, marginBottom: 6 }}>No Vouchers Yet</h3>
-              <p style={{ color: t.textMuted, fontSize: 13, marginBottom: 20 }}>Create your first voucher batch to start selling prepaid cards.</p>
-              <button onClick={() => setShowForm(true)} style={{ background: t.accent, color: "#fff", border: "none", padding: "10px 22px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>+ Create First Batch</button>
-            </div>
           ) : (
-            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-                  <thead>
-                    <tr style={{ background: d ? "var(--bg)" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Code</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>PIN</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Type</th>
-                      <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Amount</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Validity</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Status</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Used By</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {vouchers.map((v, idx) => (
-                      <tr key={v.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: idx % 2 === 0 ? (d ? "var(--surface-2)" : "#f8fafc") : t.card }}>
-                        <td style={{ padding: "10px 14px" }}>
-                          <code style={{ fontSize: 11, fontWeight: 700, color: t.accent }}>{v.code}</code>
-                        </td>
-                        <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 11, color: t.textSub }}>{v.pin}</td>
-                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                          <Badge color={typeColors[v.type]?.color || t.textMuted} bg={typeColors[v.type]?.bg || t.cardBorder}>
-                            {typeColors[v.type]?.label || v.type}
-                          </Badge>
-                        </td>
-                        <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: t.green }}>{money(v.amount)}</td>
-                        <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, color: t.textSub }}>{v.validityDays} days</td>
-                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                          <Badge color={statusColors[v.status]?.color || t.textMuted} bg={statusColors[v.status]?.bg || t.cardBorder}>
-                            {statusColors[v.status]?.label || v.status}
-                          </Badge>
-                        </td>
-                        <td style={{ padding: "10px 14px" }}>
-                          {v.usedByUser ? (
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(14,165,233,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: t.accent }}>
-                                {getInitials(v.usedByUser.fullName)}
-                              </div>
-                              <span style={{ fontSize: 11, color: t.text }}>{v.usedByUser.fullName}</span>
-                            </div>
-                          ) : '—'}
-                        </td>
-                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                            {v.status === 'UNUSED' && (
-                              <Btn size="xs" variant="success" onClick={() => { setRedeemForm({ code: v.code, pin: v.pin, subscriberId: '' }); setShowRedeemModal(true); }} title="Redeem">🎫</Btn>
-                            )}
-                            <Btn size="xs" variant="danger" onClick={() => handleDelete(v.id, v.code)} title="Delete"><Ic.Trash /></Btn>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ padding: "10px 14px", borderTop: `1px solid ${t.cardBorder}`, fontSize: 10, color: t.textMuted }}>
-                Showing {vouchers.length} vouchers
-              </div>
-            </div>
+            <DataTable columns={voucherColumns} rows={vouchers} rowKey={(voucher) => voucher.id}
+              searchable searchPlaceholder="Search voucher code, PIN, or customer…"
+              storageKey="jb_vouchers_table" exportName="vouchers"
+              defaultPageSize={25} pageSizes={[10, 25, 50, 100]}
+              emptySlot={<><b>No vouchers found.</b><span>Create a voucher batch to start selling prepaid cards.</span></>} />
           )}
 
           {/* Footer */}

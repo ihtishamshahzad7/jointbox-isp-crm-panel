@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { BRAND } from "../../lib/brand";
 import { useRouter } from "next/navigation";
-import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import { money } from "../components/currency";
+import { DataTable, type DtColumn } from "../components/data-table";
 
 interface Payment {
   id: number;
@@ -20,9 +20,6 @@ interface Payment {
 }
 
 const API = API_BASE;
-
-// ─── Icons ────────────────────────────────────────────────────────────────────
-const Ic = { ...SIcons };
 
 // ✅ Complete 14 menu items (matching dashboard)
 export default function PaymentsPage() {
@@ -66,38 +63,6 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
     purple:      "#8b5cf6",
     teal:        "#14b8a6",
   };
-
-  const getInitials = (name?: string) => {
-    if (!name) return "U";
-    return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
-  };
-
-  const Btn = ({ onClick, children, variant = "default", size = "sm", disabled = false, title = "" }: any) => {
-    const vs: Record<string, React.CSSProperties> = {
-      default: { background: "var(--border)", color: t.textSub },
-      primary: { background: t.accent,  color: "#fff" },
-      success: { background: "#14532d", color: "#4ade80" },
-      danger:  { background: "#450a0a", color: "#f87171" },
-      warning: { background: "#422006", color: "#fbbf24" },
-      ghost:   { background: "transparent", color: t.textSub, border: `1px solid ${t.cardBorder}` },
-      teal:    { background: "#134e4a", color: "#2dd4bf" },
-    };
-    return (
-      <button onClick={onClick} disabled={disabled} title={title} style={{
-        display: "inline-flex", alignItems: "center", gap: 5,
-        padding: size === "xs" ? "3px 8px" : "5px 12px",
-        borderRadius: 6, border: "none", cursor: disabled ? "not-allowed" : "pointer",
-        fontSize: size === "xs" ? 11 : 12, fontWeight: 600, opacity: disabled ? 0.5 : 1,
-        transition: "all .15s", ...vs[variant],
-      }}>{children}</button>
-    );
-  };
-
-  const Badge = ({ children, color, bg }: { children: React.ReactNode; color: string; bg: string }) => (
-    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, color, background: bg, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
-      {children}
-    </span>
-  );
 
   async function loadPayments() {
     setLoading(true);
@@ -213,6 +178,18 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
     }
   };
 
+  const paymentColumns: DtColumn<Payment>[] = [
+    { key: "paymentNo", header: "Payment #", sortable: true, sortValue: (payment) => (payment.paymentNo || `PAY-${payment.id}`).toLowerCase(), render: (payment) => <code style={{ fontSize: 11, color: t.teal }}>{payment.paymentNo || `PAY-${payment.id}`}</code> },
+    { key: "invoice", header: "Invoice", sortable: true, sortValue: (payment) => (payment.invoice?.invoiceNo ?? "").toLowerCase(), render: (payment) => <code>{payment.invoice?.invoiceNo || "-"}</code> },
+    { key: "customer", header: "Customer", sortable: true, sortValue: (payment) => (payment.subscriber?.fullName ?? "").toLowerCase(), render: (payment) => <span>{payment.subscriber?.fullName || "-"}</span> },
+    { key: "amount", header: "Amount", align: "right", sortable: true, sortValue: (payment) => payment.amount, render: (payment) => <strong style={{ color: t.green }}>{formatCurrency(payment.amount)}</strong> },
+    { key: "method", header: "Method", sortable: true, sortValue: (payment) => payment.method, render: (payment) => { const style = getMethodStyle(payment.method); return <span style={{ padding: "3px 9px", borderRadius: 6, fontSize: 10, fontWeight: 600, background: style.bg, color: style.color }}>{style.label}</span>; } },
+    { key: "paymentDate", header: "Date", sortable: true, sortValue: (payment) => new Date(payment.paymentDate).getTime(), render: (payment) => new Date(payment.paymentDate).toLocaleDateString() },
+    { key: "actions", header: "Actions", sortable: false, exportable: false, render: (payment) => payment.refundedAt
+      ? <span style={{ color: t.textMuted, fontSize: 10 }}>Refunded</span>
+      : <button onClick={() => { setSelectedPayment(payment); setRefundReason(""); setRefundToBalance(true); setShowRefundModal(true); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 10, fontWeight: 600, background: "transparent", color: t.red, cursor: "pointer" }}>Refund</button> },
+  ];
+
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: t.bg, color: t.text, fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", fontSize: 13 }}>
 
@@ -260,72 +237,12 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
               <p style={{ color: t.textMuted, fontSize: 13, marginBottom: 20 }}>{error}</p>
               <button onClick={loadPayments} style={{ background: t.accent, color: "#fff", border: "none", padding: "10px 22px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>Try Again</button>
             </div>
-          ) : payments.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 50, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>💳</div>
-              <h3 style={{ fontSize: 18, color: t.text, marginBottom: 6 }}>No Payments Yet</h3>
-              <p style={{ color: t.textMuted, fontSize: 13, marginBottom: 20 }}>Payments will appear here when invoices are paid.</p>
-            </div>
           ) : (
-            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 800 }}>
-                  <thead>
-                    <tr style={{ background: d ? "var(--bg)" : "#f1f5f9", borderBottom: `1px solid ${t.cardBorder}` }}>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Payment #</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Invoice</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Customer</th>
-                      <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Amount</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Method</th>
-                      <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Date</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payments.map((p, idx) => {
-                      const methodStyle = getMethodStyle(p.method);
-                      return (
-                        <tr key={p.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: idx % 2 === 0 ? t.card : (d ? "#121d30" : "#ffffff") }}>
-                          <td style={{ padding: "10px 14px" }}>
-                            <code style={{ fontSize: 11, fontWeight: 600, color: t.teal }}>{p.paymentNo || `PAY-${p.id}`}</code>
-                          </td>
-                          <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 11, color: t.textMuted }}>{p.invoice?.invoiceNo || '-'}</td>
-                          <td style={{ padding: "10px 14px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(14,165,233,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: t.accent }}>
-                                {(p.subscriber?.fullName?.[0] || 'U').toUpperCase()}
-                              </div>
-                              <span style={{ fontSize: 12, color: t.text }}>{p.subscriber?.fullName || '-'}</span>
-                            </div>
-                          </td>
-                          <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 13, fontWeight: 700, color: t.green }}>{formatCurrency(p.amount)}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                            <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 500, background: methodStyle.bg, color: methodStyle.color }}>
-                              {methodStyle.label}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 14px", fontSize: 11, color: t.textMuted }}>{new Date(p.paymentDate).toLocaleDateString()}</td>
-                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                            <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                              {!p.refundedAt && (
-                                <button onClick={() => { setSelectedPayment(p); setRefundReason(""); setRefundToBalance(true); setShowRefundModal(true); }}
-                                  style={{ padding: "4px 10px", borderRadius: 6, border: "none", fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626", cursor: "pointer" }}>Refund</button>
-                              )}
-                              {p.refundedAt && (
-                                <span style={{ padding: "3px 8px", borderRadius: 20, fontSize: 9, background: "#f1f5f9", color: "var(--muted)" }}>Refunded</span>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ padding: "10px 14px", borderTop: `1px solid ${t.cardBorder}`, fontSize: 10, color: t.textMuted }}>
-                Showing {payments.length} payments
-              </div>
-            </div>
+            <DataTable columns={paymentColumns} rows={payments} rowKey={(payment) => payment.id}
+              searchable searchPlaceholder="Search payment, invoice, or customer…"
+              storageKey="jb_payments_table" exportName="payments"
+              defaultPageSize={25} pageSizes={[10, 25, 50, 100]}
+              emptySlot={<><b>No payments found.</b><span>Payments appear here when invoices are paid.</span></>} />
           )}
 
           {/* Footer */}
