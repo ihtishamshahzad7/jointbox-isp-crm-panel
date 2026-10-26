@@ -11,6 +11,7 @@ import OverviewCharts from "./overview-charts";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
 import { BRAND } from "../../lib/brand";
+import mobile from "./dashboard-mobile.module.css";
 
 type SubscriberStatus = "ACTIVE" | "INACTIVE" | "EXPIRED" | "SUSPENDED" | string;
 type InvoiceStatus = "PAID" | "UNPAID" | "PARTIAL" | "OVERDUE" | "CANCELLED" | string;
@@ -303,8 +304,13 @@ export default function DashboardPage() {
   // grids are collapsed to one column in JS on narrow screens. `cols(desktop)`
   // returns "1fr" on phones so nothing is squeezed.
   const [isMobile, setIsMobile] = useState(false);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+  const [mobileDeferredDataReady, setMobileDeferredDataReady] = useState(false);
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth <= 768);
+    const check = () => {
+      setIsMobile(window.innerWidth <= 768);
+      setIsCompactViewport(window.innerWidth <= 767);
+    };
     check();
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
@@ -362,8 +368,8 @@ export default function DashboardPage() {
   // list is capped, so counting from it silently under-reports on larger bases.
   type SubscriberOverview = {
     total?: number; active?: number; inactive?: number; suspended?: number;
-    expired?: number; expiring?: number; onlineNow?: number; stale?: number;
-    offline?: number; todaySignups?: number;
+    expired?: number; expiring?: number; onlineNow?: number; offline?: number; stale?: number;
+    todaySignups?: number;
     // Cumulative renewal windows (1d ⊂ 3d ⊂ 1w ⊂ 2w) — a short window is a
     // call list, a long one is a forecast.
     expiring1d?: number; expiring3d?: number; expiring1w?: number; expiring2w?: number;
@@ -393,10 +399,11 @@ export default function DashboardPage() {
     return (await res.json()) as SystemStats;
   };
 
-  const subscribersKey = mounted && token ? `${API}/subscribers` : null;
-  const invoicesKey = mounted && token ? `${API}/invoices` : null;
-  const paymentsKey = mounted && token ? `${API}/payments` : null;
-  const usersKey = mounted && token ? `${API}/users` : null;
+  const canLoadDeferredData = !isCompactViewport || mobileDeferredDataReady || tab !== "home";
+  const subscribersKey = mounted && token && canLoadDeferredData ? `${API}/subscribers` : null;
+  const invoicesKey = mounted && token && canLoadDeferredData ? `${API}/invoices` : null;
+  const paymentsKey = mounted && token && canLoadDeferredData ? `${API}/payments` : null;
+  const usersKey = mounted && token && canLoadDeferredData ? `${API}/users` : null;
   const nasKey = mounted && token ? `${API}/nas` : null;
   const overviewKey = mounted && token ? `${API}/subscribers/overview` : null;
   const systemKey = mounted && token ? `${API}/system/stats` : null;
@@ -408,6 +415,17 @@ export default function DashboardPage() {
   const { data: nasData, isLoading: nasLoading, mutate: mutateNas } = useSWR<NasDevice[]>(nasKey, swrFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
   const { data: overviewData, isLoading: ovLoading, mutate: mutateOverview } = useSWR<SubscriberOverview | null>(overviewKey, overviewFetcher, { refreshInterval: 60000, revalidateOnFocus: true });
   const { data: sysData, isLoading: sysLoading, mutate: mutateSystem } = useSWR<SystemStats | null>(systemKey, systemFetcher, { refreshInterval: 30000, revalidateOnFocus: true });
+
+  useEffect(() => {
+    if (!mounted) return;
+    if (!isCompactViewport || tab !== "home" || !ovLoading) {
+      setMobileDeferredDataReady(true);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setMobileDeferredDataReady(true), 1200);
+    return () => window.clearTimeout(timeoutId);
+  }, [mounted, isCompactViewport, tab, ovLoading]);
 
   // ── Real-time SSE — instantly revalidate SWR caches on backend events ──
   useSSE({
@@ -491,7 +509,7 @@ export default function DashboardPage() {
       .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
     return {
       totalSubscribers, activeSubscribers, todaySignups, revenueToday, onlineNow,
-      expired, expiringSoon, totalNas,
+      expired, offline: overviewData?.offline ?? null, expiringSoon, totalNas,
       expiring1d, expiring3d, expiring2w, expiredOnline,
     };
   }, [subscribers, payments, overviewData, nas.length]);
@@ -796,7 +814,7 @@ export default function DashboardPage() {
   });
 
   return (
-    <div style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className={tab === "home" ? mobile.dashboard : undefined} style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
       {!mounted ? (
         <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ width: "100%", maxWidth: 420, background: "var(--surface)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 18 }}>
@@ -814,8 +832,13 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
-        <div className="jb-dash-rail" style={tabRailStyle}>
+      {tab === "home" && <div className={mobile.mobileHeading}>
+        <span>{BRAND.name}</span>
+        <h1>Dashboard</h1>
+      </div>}
+
+      <div className={tab === "home" ? mobile.toolbar : undefined} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
+        <div className={`jb-dash-rail ${tab === "home" ? mobile.tabs : ""}`} style={tabRailStyle}>
           {sectionTabs.map((t) => {
             const active = tab === t.id;
             return (
@@ -825,11 +848,11 @@ export default function DashboardPage() {
             );
           })}
         </div>
-        <button onClick={refreshAll} style={{ ...btnStyle, marginLeft: "auto", alignSelf: "center" }}>{loading ? "Refreshing..." : "Refresh Data"}</button>
+        <button className={tab === "home" ? mobile.refreshButton : undefined} onClick={refreshAll} style={{ ...btnStyle, marginLeft: "auto", alignSelf: "center" }}>{loading ? "Refreshing..." : "Refresh Data"}</button>
       </div>
 
       {tab === "home" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className={mobile.homeContent} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {/* KPI cards — every tile is a clickable gateway into the matching
               list page. Icon chip uses a soft tint (red reserved for the one
               critical metric), tags are a uniform neutral chip, and the arrow
@@ -855,11 +878,12 @@ export default function DashboardPage() {
               red: { tint: "rgba(239,68,68,.13)", fg: "#ef4444" },
             };
 
-            type Kpi = { icon: string; label: string; value: React.ReactNode; cap: string; tag: string; href: string; critical?: boolean } & { tint: string; fg: string };
+            type Kpi = { icon: string; label: string; value: React.ReactNode; cap: string; tag: string; href: string; critical?: boolean; mobileOnly?: boolean } & { tint: string; fg: string };
             const overview: Kpi[] = [
               { icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8", label: "Total subscribers", value: homeStats.totalSubscribers, cap: "All customers on record", tag: "base", href: "/subscribers", ...T.purple },
               { icon: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3", label: "Active subscribers", value: homeStats.activeSubscribers, cap: `${activePct}% of your total base`, tag: `${activePct}% of base`, href: "/subscribers?status=ACTIVE", ...T.green },
               { icon: "M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01", label: "Online now", value: homeStats.onlineNow, cap: "Users connected right now in your account", tag: `${onlinePct}% of active`, href: "/subscribers?online=1", ...T.blue },
+              { icon: "M5 12.55a11 11 0 0 1 14.08 0 M1.42 9a16 16 0 0 1 21.16 0 M8.53 16.11a6 6 0 0 0-6.95 0 M12 20h.01", label: "Offline subscribers", value: homeStats.offline ?? "—", cap: "Not currently connected", tag: "offline", href: "/subscribers", mobileOnly: true, ...T.red },
               { icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 6v6l4 2", label: "Expired", value: homeStats.expired, cap: "Accounts past their expiry date", tag: `${expiredPct}% of base`, href: "/subscribers?status=EXPIRED", ...T.amber },
             ];
 
@@ -892,7 +916,7 @@ export default function DashboardPage() {
             ];
 
             const renderCard = (c: Kpi) => (
-              <Link key={c.label} href={c.href} className={`kpi-card${c.critical ? " critical" : ""}`}
+              <Link key={c.label} href={c.href} data-mobile-label={c.label} data-mobile-only={c.mobileOnly || undefined} className={`kpi-card${c.critical ? " critical" : ""} ${mobile.kpiCard}`}
                 style={{ ...cardStyle, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", gap: 10, textDecoration: "none", color: "inherit" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div style={{ width: 42, height: 42, borderRadius: 12, background: c.tint, display: "grid", placeItems: "center" }}>
@@ -905,7 +929,7 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <div style={{ fontSize: 28, fontWeight: 850, letterSpacing: "-0.03em", lineHeight: 1, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{c.value}</div>
-                  <div style={{ fontSize: 12.5, color: "var(--text)", marginTop: 5, fontWeight: 700 }}>{c.label}</div>
+                  <div className={mobile.kpiLabel} style={{ fontSize: 12.5, color: "var(--text)", marginTop: 5, fontWeight: 700 }}>{c.label}</div>
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, lineHeight: 1.45 }}>{c.cap}</div>
                 </div>
                 {/* Uniform neutral tag — no more rainbow of status colors. */}
@@ -917,34 +941,34 @@ export default function DashboardPage() {
             const groupLabel: React.CSSProperties = { fontSize: 11, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--muted)", margin: "2px 2px 2px" };
 
             return (
-              <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                <section style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+              <div className={mobile.kpiGroups} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                <section className={mobile.overviewGroup} style={{ display: "flex", flexDirection: "column", gap: 9 }}>
                   <div style={groupLabel}>Overview</div>
-                  <div style={gridStyle}>{overview.map(renderCard)}</div>
+                  <div className={mobile.overviewGrid} style={gridStyle}>{overview.map(renderCard)}</div>
                 </section>
                 {urgent.length > 0 && (
-                  <section style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                  <section className={mobile.kpiGroup} style={{ display: "flex", flexDirection: "column", gap: 9 }}>
                     <div style={groupLabel}>Needs attention</div>
-                    <div style={gridStyle}>{urgent.map(renderCard)}</div>
+                    <div className={mobile.kpiGrid} style={gridStyle}>{urgent.map(renderCard)}</div>
                   </section>
                 )}
-                <section style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                <section className={mobile.kpiGroup} style={{ display: "flex", flexDirection: "column", gap: 9 }}>
                   <div style={groupLabel}>Infrastructure</div>
-                  <div style={gridStyle}>{infra.map(renderCard)}</div>
+                  <div className={mobile.kpiGrid} style={gridStyle}>{infra.map(renderCard)}</div>
                 </section>
               </div>
             );
           })()}
 
           {/* Pie + goal rings: status split, online/offline, and franchise tiers */}
-          <OverviewCharts refreshKey={refreshKey} />
+          <div className={mobile.statusCharts}><OverviewCharts refreshKey={refreshKey} /></div>
 
           {/* Live traffic + whole-network bandwidth were removed from the
               dashboard: they aggregate across every router, which stops being
               meaningful once a dealer has many NASes. Per-router traffic lives
               on each NAS detail page instead. */}
 
-          <div style={{ ...cardStyle }} className="panel-card">
+          <div style={{ ...cardStyle }} className={`panel-card ${mobile.quickActions}`}>
             <div style={{ fontWeight: 800, marginBottom: 12 }}>Quick Actions</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 }}>
               {[
@@ -971,10 +995,13 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: cols("1.1fr .9fr"), gap: 12 }}>
-            <div style={cardStyle} className="panel-card">
-              <div style={{ fontWeight: 800, marginBottom: 10 }}>Recent Activity (Latest 5)</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div className={mobile.activityGrid} style={{ display: "grid", gridTemplateColumns: cols("1.1fr .9fr"), gap: 12 }}>
+            <div style={cardStyle} className={`panel-card ${mobile.activityCard}`}>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>
+                <span className={mobile.activityTitleDesktop}>Recent Activity (Latest 5)</span>
+                <span className={mobile.activityTitleMobile}>Recent Activity</span>
+              </div>
+              <div className={mobile.activityRows} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 {activityFeed.length === 0 ? (
                   <div style={{ fontSize: 12, color: "var(--muted)", padding: "10px 0" }}>No recent activity yet.</div>
                 ) : (
@@ -991,7 +1018,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div style={cardStyle} className="panel-card">
+            <div style={cardStyle} className={`panel-card ${mobile.systemStatus}`}>
               <div style={{ fontWeight: 800, marginBottom: 10 }}>System Status</div>
               {[
                 // Real signals, not placeholders:
