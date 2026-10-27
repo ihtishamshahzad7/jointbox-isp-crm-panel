@@ -2007,11 +2007,64 @@ export default function SubscribersPage() {
 
       {/* MODAL: Create / Edit Subscriber */}
       {showForm && (
-        <Portal><div
+        <Portal>
+          <style>{`
+            @media (max-width: 767px) {
+              .subscriber-form-overlay {
+                align-items: flex-start !important;
+                justify-content: center !important;
+                overflow-y: auto;
+                padding: max(8px, env(safe-area-inset-top)) 8px max(16px, env(safe-area-inset-bottom)) !important;
+              }
+              .subscriber-form-modal {
+                box-sizing: border-box;
+                width: 100%;
+                max-height: calc(100dvh - 16px);
+                overflow-y: auto;
+                padding: 14px !important;
+                margin: auto 0;
+              }
+              .subscriber-edit-grid {
+                grid-template-columns: minmax(0, 1fr) !important;
+                gap: 12px !important;
+              }
+              .subscriber-edit-grid > * {
+                grid-column: 1 / -1 !important;
+                min-width: 0;
+                overflow-wrap: anywhere;
+              }
+              .subscriber-edit-grid label {
+                position: static;
+                display: block;
+                margin: 0 0 5px;
+                line-height: 1.4;
+              }
+              .subscriber-edit-grid input,
+              .subscriber-edit-grid select,
+              .subscriber-edit-grid textarea {
+                display: block;
+                box-sizing: border-box;
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+              }
+              .subscriber-edit-actions {
+                position: sticky;
+                bottom: -14px;
+                z-index: 3;
+                flex-wrap: wrap;
+                padding: 10px 0 max(12px, env(safe-area-inset-bottom));
+                background: var(--surface);
+              }
+            }
+          `}</style>
+          <div
+          className="subscriber-form-overlay"
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setShowForm(false)}
         >
           <div
+            className="subscriber-form-modal"
             // Wider and taller with less padding: the wizard shows four or
             // five fields at a time, and at this size they all fit without
             // scrolling — which was the actual complaint.
@@ -2062,7 +2115,7 @@ export default function SubscribersPage() {
 
             {/* Form */}
             {editSub && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="subscriber-edit-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div
                 style={{
                   gridColumn: "span 2",
@@ -2466,7 +2519,7 @@ export default function SubscribersPage() {
             {/* The wizard carries its own Cancel/Finish, so these buttons
                 belong to the edit form only. */}
             {editSub && (
-            <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+            <div className="subscriber-edit-actions" style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
               <Btn onClick={() => setShowForm(false)} variant="ghost">
                 Cancel
               </Btn>

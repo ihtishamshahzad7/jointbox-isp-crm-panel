@@ -18,6 +18,7 @@ interface IpPool {
   subnet: string;
   nasId: number | null;
   createdAt: string;
+  ownerId?: number | null;
   packages: { id: number; name: string; isActive: boolean }[];
   _count: { packages: number };
 }
@@ -124,6 +125,7 @@ export default function IpPoolsPage() {
   const [detailPool, setDetailPool] = useState<IpPool | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "ok"|"err"|"warn" } | null>(null);
   const [networkError, setNetworkError] = useState("");
+  const [showVerifyDetails, setShowVerifyDetails] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
   const headers = useMemo(() => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }), [token]);
@@ -310,6 +312,8 @@ export default function IpPoolsPage() {
     p.name.toLowerCase().includes(searchQ.toLowerCase()) ||
     p.network.includes(searchQ)
   );
+  const hasVerifyIssues = Boolean(verify && !verify.ok);
+  const unreachableRouters: string[] = verify?.unreachableRouters ?? [];
 
   useEffect(() => {
     const tk = localStorage.getItem("token");
@@ -366,7 +370,54 @@ export default function IpPoolsPage() {
   );
 
   return (
-    <div style={{ display:"flex", minHeight:"100vh", background:t.bg, color:t.text, fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif", fontSize:13 }}>
+    <div className="ip-pools-page" style={{ display:"flex", minHeight:"100vh", background:t.bg, color:t.text, fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif", fontSize:13 }}>
+      <style>{`
+        .ip-pools-page{min-width:0}
+        .ip-pool-alert-anchor{position:relative;display:flex;justify-content:flex-end;margin-bottom:10px;z-index:5}
+        .ip-pool-alert-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;
+          padding:5px 9px;border:1px solid rgba(239,68,68,.55);border-radius:8px;background:rgba(239,68,68,.1);
+          color:#ef4444;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}
+        .ip-pool-alert-button svg{width:16px;height:16px;flex:none}
+        .ip-pool-alert-popover{position:absolute;top:calc(100% + 6px);right:0;width:min(400px,calc(100vw - 36px));
+          max-height:55vh;overflow:auto;padding:13px;border:1px solid rgba(239,68,68,.55);border-radius:10px;
+          background:var(--surface);color:var(--text);box-shadow:0 12px 32px rgba(0,0,0,.35)}
+        .ip-pool-alert-popover h3{margin:0 0 6px;color:#ef4444;font-size:13px}
+        .ip-pool-alert-popover p{margin:0 0 9px;color:var(--muted);font-size:11.5px;line-height:1.55}
+        .ip-pool-alert-item{margin-top:7px;padding:8px 9px;border-radius:7px;background:rgba(0,0,0,.16);
+          font-size:11.5px;line-height:1.55;overflow-wrap:anywhere}
+        .ip-pool-alert-item code{color:#f87171;font-weight:700}
+        .ip-pool-alert-unreachable{margin-top:10px;padding-top:9px;border-top:1px solid var(--border);
+          color:#fcd34d;font-size:11.5px;line-height:1.55}
+        .ip-pool-primary-toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+        .ip-pool-cards{display:none}
+        .ip-pool-card{padding:12px;border-bottom:1px solid var(--border)}
+        .ip-pool-card-main{display:block;width:100%;padding:0;text-align:left;background:transparent;border:0;color:inherit;cursor:pointer}
+        .ip-pool-card-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+        .ip-pool-card-name{min-width:0;overflow-wrap:anywhere;font-size:14px;font-weight:800}
+        .ip-pool-card-status{flex:none;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:750;
+          white-space:nowrap;background:rgba(16,185,129,.15);color:#4ade80}
+        .ip-pool-card-status.unassigned{background:rgba(148,163,184,.15);color:var(--muted)}
+        .ip-pool-card-range{display:block;margin-top:6px;color:var(--muted);font:11.5px ui-monospace,monospace}
+        .ip-pool-card-actions{display:flex;gap:7px;margin-top:10px}
+        .ip-pool-card-actions button{padding:5px 9px;border:1px solid var(--border);border-radius:6px;
+          background:var(--surface-2);color:var(--text);font-family:inherit;font-size:10.5px;font-weight:600;cursor:pointer}
+        .ip-pool-card-actions button:disabled{opacity:.45;cursor:not-allowed}
+        @media(max-width:767px){
+          .ip-pool-primary-toolbar{display:none!important}
+          .ip-pools-page .wbtb{gap:5px;padding:7px;align-items:center}
+          .ip-pools-page .wbfind{order:-1;flex:1 0 100%;box-sizing:border-box}
+          .ip-pools-page .wbfind input{width:100%;min-width:0}
+          .ip-pools-page .wbbtn{font-size:0!important;padding:7px 10px}
+          .ip-pools-page .wbico{font-size:14px}
+          .ip-pools-page .wbsep,.ip-pools-page .wbspacer{display:none}
+          .ip-pool-list-header{padding:10px 12px!important}
+          .ip-pool-list-header>span:last-child{display:none}
+          .ip-pool-desktop-list{display:none}
+          .ip-pool-cards{display:block}
+          .ip-pool-alert-anchor{margin-bottom:8px}
+          .ip-pool-alert-popover{width:min(360px,calc(100vw - 32px));max-height:58dvh}
+        }
+      `}</style>
 
       {toast && (
         <div style={{
@@ -383,61 +434,56 @@ export default function IpPoolsPage() {
 
       <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0 }}>
 
-        {/* A pool that doesn't exist on the router is the worst kind of fault:
-            RADIUS accepts the customer, then the router drops them instantly.
-            Nothing in the panel would show it, so it is checked and shown here. */}
-        {verify && !verify.ok && (
-          <div style={{
-            margin:"14px 20px 0", background:"rgba(239,68,68,.10)", border:"1px solid #ef4444",
-            borderRadius:12, padding:"13px 16px",
-          }}>
-            <div style={{ fontSize:13.5, fontWeight:800, color:"#ef4444", marginBottom:6 }}>
-              {verify.brokenCount} pool{verify.brokenCount>1?"s":""} do
-              {verify.brokenCount>1?"":"es"} not exist on the router
-              {verify.subscribersAtRisk>0 && ` — ${verify.subscribersAtRisk} subscriber${verify.subscribersAtRisk>1?"s":""} affected`}
-            </div>
-            <div style={{ fontSize:11.5, color:"var(--muted)", lineHeight:1.65, marginBottom:9 }}>
-              These customers will authenticate successfully and then be dropped
-              immediately, reconnecting in a loop. The pool name here must match
-              the router exactly — it is case-sensitive.
-            </div>
-            {verify.pools.filter((p:any)=>!p.existsOnRouter).map((p:any)=>(
-              <div key={p.id} style={{
-                background:"rgba(0,0,0,.22)", borderRadius:8, padding:"9px 11px",
-                marginTop:6, fontSize:11.5, lineHeight:1.6,
-              }}>
-                <code style={{ color:"#f87171", fontWeight:700 }}>{p.name}</code>
-                <span style={{ color:"var(--muted)" }}> — {p.problem}</span>
-                {p.suggestion && (
-                  <div style={{ marginTop:4, color:"#4ade80" }}>
-                    Rename this pool to <b>{p.suggestion}</b> to match the router.
-                  </div>
-                )}
-                {!p.suggestion && p.availableOnRouter?.length > 0 && (
-                  <div style={{ marginTop:4, color:"var(--muted)" }}>
-                    Available on the router: {p.availableOnRouter.map((n:string)=>(
-                      <code key={n} style={{ color:"#60a5fa", marginRight:7 }}>{n}</code>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {verify?.unreachableRouters?.length > 0 && (
-          <div style={{
-            margin:"14px 20px 0", background:"rgba(245,158,11,.10)", border:"1px solid #f59e0b",
-            borderRadius:12, padding:"11px 16px", fontSize:11.5, color:"#fcd34d", lineHeight:1.6,
-          }}>
-            Could not check {verify.unreachableRouters.join(", ")} — no API access.
-            Add the API username and password under Network → NAS / Routers so pools
-            can be verified there too.
-          </div>
-        )}
-
-
         <div style={{ flex:1, padding:"16px 20px", overflowY:"auto" }}>
+
+          {(hasVerifyIssues || unreachableRouters.length > 0) && (
+            <div className="ip-pool-alert-anchor">
+              <button
+                type="button"
+                className="ip-pool-alert-button"
+                aria-label="Show IP pool verification issues"
+                aria-expanded={showVerifyDetails}
+                onClick={() => setShowVerifyDetails((open) => !open)}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M10.3 3.9 1.8 18.2A2 2 0 0 0 3.5 21h17a2 2 0 0 0 1.7-2.8L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+                  <path d="M12 9v4m0 4h.01" />
+                </svg>
+                <span>{(verify?.brokenCount ?? 0) + unreachableRouters.length}</span>
+              </button>
+              {showVerifyDetails && (
+                <div className="ip-pool-alert-popover" role="region" aria-label="IP pool verification details">
+                  {hasVerifyIssues && (
+                    <>
+                      <h3>
+                        {verify.brokenCount} pool{verify.brokenCount === 1 ? "" : "s"} missing on the router
+                        {verify.subscribersAtRisk > 0 && ` · ${verify.subscribersAtRisk} subscriber${verify.subscribersAtRisk === 1 ? "" : "s"} affected`}
+                      </h3>
+                      <p>
+                        Pool names must match the router exactly, including case. Customers using a missing pool may authenticate and then be disconnected.
+                      </p>
+                      {verify.pools.filter((p: any) => !p.existsOnRouter).map((p: any) => (
+                        <div key={p.id} className="ip-pool-alert-item">
+                          <code>{p.name}</code><span> — {p.problem}</span>
+                          {p.suggestion && <div style={{ marginTop:4, color:"#4ade80" }}>Rename this pool to <b>{p.suggestion}</b> to match the router.</div>}
+                          {!p.suggestion && p.availableOnRouter?.length > 0 && (
+                            <div style={{ marginTop:4, color:"var(--muted)" }}>
+                              Available on the router: {p.availableOnRouter.map((name: string) => <code key={name} style={{ color:"#60a5fa", marginRight:7 }}>{name}</code>)}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {unreachableRouters.length > 0 && (
+                    <div className="ip-pool-alert-unreachable">
+                      Could not check {unreachableRouters.join(", ")} — no API access. Add the API username and password under Network → NAS / Routers so pools can be verified there too.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* How It Works Banner */}
           <div style={{ background: d?"#0a1525":"#eff6ff", border:`1px solid ${d?"#1e3a5f":"#bfdbfe"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, display:"flex", alignItems:"flex-start", gap:10 }}>
@@ -474,7 +520,7 @@ export default function IpPoolsPage() {
       )}
 
           {/* Toolbar - WITH ADD BUTTON */}
-          <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
+          <div className="ip-pool-primary-toolbar" style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
             <div style={{ position:"relative", flex:1, minWidth:200 }}>
               <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", color:t.textMuted, pointerEvents:"none" }}>
                 <Ic.Search />
@@ -543,7 +589,7 @@ export default function IpPoolsPage() {
 
           {/* Table */}
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderTop:"none", borderRadius:"0 0 10px 10px", overflow:"hidden" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"11px 16px", borderBottom:`1px solid ${t.cardBorder}` }}>
+            <div className="ip-pool-list-header" style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"11px 16px", borderBottom:`1px solid ${t.cardBorder}` }}>
               <span style={{ fontWeight:800, fontSize:14 }}>
                 IP Pool List
                 <span style={{ fontSize:11, color:t.textMuted, fontWeight:400, marginLeft:8 }}>{filtered.length} pools</span>
@@ -558,18 +604,49 @@ export default function IpPoolsPage() {
                 <div style={{ fontSize:32, marginBottom:8 }}>🗄️</div>
                 <div>No IP pools found.</div>
                 <div style={{ fontSize:11, marginTop:6 }}>
-                  Click <Btn variant="primary" size="xs" onClick={openCreate}><Ic.Plus /> Add IP Pool</Btn> to create one.
+                  Use Add IP Pool above to create one.
                 </div>
               </div>
             ) : (
-              <PoolTable
-                rows={filtered}
-                me={me}
-                onView={(pool) => setDetailPool(pool)}
-                onEdit={openEdit}
-                onShare={openShare}
-                onDelete={(pool) => setDeleteConfirm(pool)}
-              />
+              <>
+                <div className="ip-pool-desktop-list">
+                  <PoolTable
+                    rows={filtered}
+                    me={me}
+                    onView={(pool) => setDetailPool(pool)}
+                    onEdit={openEdit}
+                    onShare={openShare}
+                    onDelete={(pool) => setDeleteConfirm(pool)}
+                  />
+                </div>
+                <div className="ip-pool-cards">
+                  {filtered.map((pool) => {
+                    const used = pool._count?.packages ?? pool.packages?.length ?? 0;
+                    const isIsp = !me || me.role === "ADMIN" || me.role === "SUPER_ADMIN";
+                    const mine = isIsp || pool.ownerId === me?.id;
+                    return (
+                      <article key={pool.id} className="ip-pool-card">
+                        <button type="button" className="ip-pool-card-main" onClick={() => setDetailPool(pool)}>
+                          <span className="ip-pool-card-top">
+                            <span className="ip-pool-card-name">{pool.name}</span>
+                            <span className={`ip-pool-card-status${used ? "" : " unassigned"}`}>
+                              {used ? "Assigned" : "Unassigned"}
+                            </span>
+                          </span>
+                          <span className="ip-pool-card-range">{pool.network}/{pool.subnet}</span>
+                        </button>
+                        {mine && (
+                          <div className="ip-pool-card-actions">
+                            <button type="button" onClick={() => openShare(pool)}>Share</button>
+                            <button type="button" onClick={() => openEdit(pool)}>Edit</button>
+                            <button type="button" disabled={used > 0} onClick={() => setDeleteConfirm(pool)}>Delete</button>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         </div>
