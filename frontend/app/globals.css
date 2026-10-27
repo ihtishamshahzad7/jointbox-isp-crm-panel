@@ -5736,7 +5736,7 @@ html .main .recharts-responsive-container { width: 100% !important; }
 /* On a phone, the purpose-built card list (.sm-wrap) replaces the desktop
    table entirely — the old row→card fallback was cramped. Table shows on
    desktop, cards show on mobile, never both. */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   html .main .st { display: none !important; }
 }
 @media (min-width: 769px) {

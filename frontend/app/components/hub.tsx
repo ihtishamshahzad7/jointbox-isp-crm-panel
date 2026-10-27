@@ -175,7 +175,7 @@ function HubInner({
         {/* Right content area. */}
         <div className="hub-body">
           {current?.hint && (
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+            <div className="hub-current-hint" style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
               {current.hint}
             </div>
           )}

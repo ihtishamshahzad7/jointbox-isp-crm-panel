@@ -116,41 +116,41 @@ export function SubscriberMobileList({
 
 const CSS = `
 .sm-wrap{display:none}
-@media (max-width:768px){
-  .sm-wrap{display:flex;flex-direction:column;gap:12px}
+@media (max-width:767px){
+  .sm-wrap{display:flex;flex-direction:column;gap:7px}
   .sm-card{background:#fff;border:1px solid #E2E8F0;border-radius:14px;
     box-shadow:0 1px 3px rgba(0,0,0,.05);overflow:hidden}
   .sm-head{display:flex;align-items:center;gap:11px;width:100%;text-align:left;
-    background:transparent;border:none;padding:13px 14px 11px;cursor:pointer;
+    background:transparent;border:none;padding:8px 10px 7px;cursor:pointer;
     border-bottom:1px solid #EEF2F7;font-family:inherit}
-  .sm-av{width:42px;height:42px;flex:none;border-radius:50%;background:#EEF1FE;
+  .sm-av{width:34px;height:34px;flex:none;border-radius:50%;background:#EEF1FE;
     color:#3C50E0;display:flex;align-items:center;justify-content:center;
-    font-weight:600;font-size:15px;background-size:cover;background-position:center}
+    font-weight:600;font-size:13px;background-size:cover;background-position:center}
   .sm-id{display:flex;flex-direction:column;min-width:0;flex:1}
-  .sm-name{font-size:15px;font-weight:600;color:#1C2434;white-space:nowrap;
+  .sm-name{font-size:14px;font-weight:600;color:#1C2434;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
-  .sm-sub{font-size:12px;color:#64748B;white-space:nowrap;overflow:hidden;
+  .sm-sub{font-size:11px;color:#64748B;white-space:nowrap;overflow:hidden;
     text-overflow:ellipsis}
   .sm-pill{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:11px;
-    font-weight:600;padding:4px 10px;border-radius:999px;white-space:nowrap}
+    font-weight:600;padding:3px 8px;border-radius:999px;white-space:nowrap}
   .sm-pill i{width:6px;height:6px;border-radius:999px;display:inline-block}
-  .sm-facts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;padding:10px 14px}
+  .sm-facts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;padding:7px 10px}
   .sm-facts>div{display:flex;flex-direction:column;gap:2px;min-width:0}
   .sm-facts .k{font-size:10px;font-weight:600;letter-spacing:.04em;
     text-transform:uppercase;color:#94A3B8}
-  .sm-facts .v{font-size:13px;color:#1C2434;font-weight:500;white-space:nowrap;
+  .sm-facts .v{font-size:12px;color:#1C2434;font-weight:500;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
   .sm-facts .v.mono{font-family:ui-monospace,"JetBrains Mono",monospace;font-size:12px}
   .sm-days{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;
     border-radius:999px}
-  .sm-acts{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;
-    padding:0 14px 13px}
-  .sm-acts button{min-height:40px;border:1px solid #E2E8F0;background:#F7F9FC;
-    border-radius:9px;font-size:12.5px;font-weight:600;color:#1C2434;cursor:pointer;
+  .sm-acts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;
+    padding:0 10px 9px}
+  .sm-acts button{min-width:0;min-height:32px;border:1px solid #E2E8F0;background:#F7F9FC;
+    border-radius:8px;font-size:10.5px;font-weight:600;color:#1C2434;cursor:pointer;
     font-family:inherit}
   .sm-acts button:active{transform:scale(.97)}
   .sm-acts button.ok{background:#E7F6EC;border-color:#C6E9D3;color:#157F43}
-  .sm-acts .sm-active{display:flex;align-items:center;justify-content:center;min-height:40px;border-radius:9px;font-size:12.5px;font-weight:700;color:#157F43;background:#E7F6EC;border:1px solid #C6E9D3}
+  .sm-acts .sm-active{display:flex;align-items:center;justify-content:center;min-height:32px;border-radius:8px;font-size:10.5px;font-weight:700;color:#157F43;background:#E7F6EC;border:1px solid #C6E9D3}
   .sm-acts button.warn{background:#FDF3E3;border-color:#F5DFB4;color:#8A6209}
   .sm-acts button.bad{background:#FDE8EA;border-color:#F5C2C7;color:#B02A37}
   .sm-empty{padding:40px 20px;text-align:center}

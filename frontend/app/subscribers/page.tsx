@@ -1519,7 +1519,7 @@ export default function SubscribersPage() {
     fontWeight: 600,
   };
 
-  const Btn = ({ onClick, children, variant = "default", size = "sm", disabled = false, title = "" }: any) => {
+  const Btn = ({ onClick, children, variant = "default", size = "sm", disabled = false, title = "", className = "" }: any) => {
     const vs: Record<string, React.CSSProperties> = {
       default: { background: "var(--border)", color: t.textSub },
       primary: { background: t.accent, color: "#fff" },
@@ -1531,6 +1531,7 @@ export default function SubscribersPage() {
     };
     return (
       <button
+        className={className}
         onClick={onClick}
         disabled={disabled}
         title={title}
@@ -1625,7 +1626,81 @@ export default function SubscribersPage() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
         {/* Content */}
-        <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
+        <div className="subscribers-page-content" style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
+          <style jsx global>{`
+            .subscribers-page-content .subs-mobile-filter-row {
+              display: contents;
+            }
+            @media (max-width: 767px) {
+              .subscribers-page-content {
+                padding: 8px 10px calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+              }
+              .subscribers-page-content .subs-overview-toggle,
+              .subscribers-page-content .jb-kpi-row {
+                display: none !important;
+              }
+              .subscribers-page-content .subs-toolbar {
+                gap: 7px !important;
+                margin-bottom: 8px !important;
+              }
+              .subscribers-page-content .subs-mobile-filter-row {
+                display: flex;
+                flex: 1 0 100%;
+                min-width: 0;
+                gap: 6px;
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                padding: 0 0 2px;
+              }
+              .subscribers-page-content .subs-mobile-filter-row > :not(.jb-status-filters):not(.jb-exp-chips) {
+                flex: 0 0 auto;
+              }
+              .subscribers-page-content .subs-mobile-filter-row::-webkit-scrollbar {
+                display: none;
+              }
+              .subscribers-page-content .subs-mobile-filter-row .jb-status-filters,
+              .subscribers-page-content .subs-mobile-filter-row .jb-exp-chips {
+                display: flex;
+                flex: 0 0 auto;
+                flex-wrap: nowrap;
+                gap: 4px;
+                overflow: visible;
+              }
+              .subscribers-page-content .subs-mobile-filter-row .jb-status-filters button,
+              .subscribers-page-content .subs-mobile-filter-row .jb-exp-chips button {
+                flex: 0 0 auto;
+                min-height: 30px;
+                padding: 4px 9px;
+                font-size: 10px;
+              }
+              .subscribers-page-content .subs-mobile-filter-row .jb-exp-chips .jb-exp-lbl {
+                display: none;
+              }
+              .subscribers-page-content .subs-mobile-filter-row .jb-exp-chips::before {
+                content: "";
+                width: 1px;
+                min-height: 20px;
+                margin: 4px 3px;
+                background: var(--border);
+              }
+              .subscribers-page-content .subs-refresh {
+                display: none !important;
+              }
+              .subscribers-page-content .subs-mobile-filter-row > button {
+                min-height: 32px;
+                padding: 4px 9px !important;
+                font-size: 11px !important;
+              }
+              .subscribers-page-content .subs-table-heading {
+                padding: 8px 10px !important;
+              }
+              .subscribers-page-content .subs-table-heading > span:last-child {
+                display: none;
+              }
+            }
+          `}</style>
           <div style={{ marginBottom: 14 }}>
           </div>
 
@@ -1635,7 +1710,7 @@ export default function SubscribersPage() {
               neon numbers that were invisible or unreadable on a light page).
               On a phone the row scrolls sideways instead of squashing. */}
           {/* Overview toggle — keeps the list on the first screen. */}
-      <div style={{ marginBottom: 12 }}>
+      <div className="subs-overview-toggle" style={{ marginBottom: 12 }}>
         <button onClick={() => setShowOverview(v => !v)} style={{ background: "transparent", border: "1px solid rgba(128,128,128,0.4)", color: "inherit", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
           {showOverview ? "▲ Hide overview" : "▼ Show overview"}
         </button>
@@ -1672,9 +1747,10 @@ export default function SubscribersPage() {
       )}
 
           {/* Toolbar */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div className="subs-toolbar" style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
             {/* Search lives inside the table now (server-side, debounced by the
                 DataTable) — same backend q= search, one fewer duplicate input. */}
+            <div className="subs-mobile-filter-row">
             <div className="jb-status-filters" style={{ display: "flex", gap: 4 }}>
               {["ALL", "ACTIVE", "STALE", "EXPIRED", "SUSPENDED", "INACTIVE"].map((s) => (
                 <button
@@ -1752,12 +1828,13 @@ export default function SubscribersPage() {
                 ]),
               ]}
             />
-            <Btn onClick={loadAll} variant="ghost">
+            <Btn onClick={loadAll} variant="ghost" title="Refresh" className="subs-refresh">
               <Ic.Refresh /> Refresh
             </Btn>
             <Btn onClick={openCreate} variant="primary">
               <Ic.Plus /> Add Subscriber
             </Btn>
+            </div>
           </div>
 
           {showFilters && (
@@ -1818,8 +1895,8 @@ export default function SubscribersPage() {
               It owns page/pageSize/sort/search; this page owns the filters
               (serverFilters), the selection and the bulk actions. The mobile
               list mirrors the same fetched page. */}
-          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 16px", borderBottom: `1px solid ${t.cardBorder}` }}>
+          <div className="subs-table" style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
+            <div className="subs-table-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 16px", borderBottom: `1px solid ${t.cardBorder}` }}>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 Subscriber List
                 <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 400, marginLeft: 8 }}>{serverTotal.toLocaleString()} shown</span>

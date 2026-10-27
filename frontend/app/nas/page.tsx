@@ -34,6 +34,24 @@ const NAS_TOOLBAR_CSS = `
 :root[data-theme="dark"] .nas-tb-search input{color:var(--text,#E6E9EE)}
 :root[data-theme="dark"] .nas-tb-sel{color:var(--text,#cdd3dd)}
 :root[data-theme="dark"] .nas-tb-pill,:root[data-theme="dark"] .nas-tb-btn{background:var(--bg,#1b2029);color:var(--text,#cdd3dd);border-color:var(--border,#2b313d)}
+.nas-tb-filters{display:contents}
+@media (max-width:767px){
+ .nas-page-content{padding:8px 10px calc(88px + env(safe-area-inset-bottom,0px))!important}
+ .nas-page-content .nas-page-heading,.nas-page-content .nas-overview-toggle,.nas-page-content .jb-kpi-row{display:none!important}
+ .nas-page-content .nas-tb{display:block;padding:7px;margin:0 0 8px;border-radius:10px}
+ .nas-page-content .nas-tb-search{width:100%;max-width:none;min-width:0;padding:6px 10px}
+ .nas-page-content .nas-tb-filters{display:flex;align-items:center;gap:5px;margin-top:6px;max-width:100%;
+   overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+ .nas-page-content .nas-tb-filters::-webkit-scrollbar{display:none}
+ .nas-page-content .nas-tb-filters>*{flex:0 0 auto;min-height:30px}
+ .nas-page-content .nas-tb-sel{max-width:140px;padding:5px 8px;font-size:11px}
+ .nas-page-content .nas-tb-pill,.nas-page-content .nas-tb-btn{padding:5px 8px;font-size:10.5px}
+ .nas-page-content .nas-tb-add{order:-1;padding:5px 10px;font-size:11px}
+ .nas-page-content .nas-tb-spacer{display:none}
+ .nas-page-content .xpand-btn{display:none}
+ .nas-page-content .nas-list-heading{padding:8px 10px!important}
+ .nas-page-content .nas-list-heading>span:last-child{display:none}
+}
 `;
 import { NasTraffic } from "./nas-traffic";
 import { SkeletonTable } from "../components/skeleton";
@@ -856,10 +874,10 @@ export default function NasPage() {
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
 
         {/* ── CONTENT ── */}
-        <div style={{ flex:1, padding:'16px 20px', overflowY:'auto' }}>
+        <div className="nas-page-content" style={{ flex:1, padding:'16px 20px', overflowY:'auto' }}>
 
           {/* Section header — a clean subject line for the page. */}
-          <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', borderBottom:`1px solid ${t.cardBorder}`, paddingBottom:12, marginBottom:16 }}>
+          <div className="nas-page-heading" style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', borderBottom:`1px solid ${t.cardBorder}`, paddingBottom:12, marginBottom:16 }}>
             <div style={{ width:38, height:38, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', background:`${t.accent}1a`, color:t.accent, fontSize:18 }}>🛰️</div>
             <div style={{ minWidth:0 }}>
               <h1 style={{ margin:0, fontSize:19, fontWeight:800, color:t.text, letterSpacing:'-0.01em' }}>Routers &amp; RADIUS</h1>
@@ -911,7 +929,7 @@ export default function NasPage() {
           </div>
 
           {/* Overview toggle — keeps the router list on the first screen. */}
-          <div style={{ marginBottom:12 }}>
+          <div className="nas-overview-toggle" style={{ marginBottom:12 }}>
             <button onClick={() => setShowOverview(v => !v)} style={{
               background:'transparent', border:`1px solid ${t.cardBorder}`, color:t.text,
               borderRadius:8, padding:'5px 12px', fontSize:12, fontWeight:700, cursor:'pointer',
@@ -984,6 +1002,7 @@ export default function NasPage() {
                   <span aria-hidden style={{ opacity: 0.5, fontSize: 13 }}>🔎</span>
                   <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search routers by name or IP" />
                 </div>
+                <div className="nas-tb-filters">
                 <button type="button" className={`nas-tb-pill${showGroups ? " on" : ""}`} onClick={() => setShowGroups(v => !v)} title="Group routers by owner, type or site">
                   Group NAS
                 </button>
@@ -1019,6 +1038,7 @@ export default function NasPage() {
                   { key:"nasName", label:"NAS Name" }, { key:"nasIp", label:"NAS IP" }, { key:"secret", label:"Secret" }, { key:"apiPort", label:"API Port" }, { key:"nasType", label:"Type" }, { key:"deviceType", label:"Device" },
                 ])}>Export</button>
                 <button type="button" className="nas-tb-btn" onClick={loadData}>Refresh</button>
+                </div>
               </div>
             );
           })()}
@@ -1037,7 +1057,7 @@ export default function NasPage() {
 
           {/* NAS Table */}
           <div style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 16px', borderBottom:`1px solid ${t.cardBorder}` }}>
+            <div className="nas-list-heading" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 16px', borderBottom:`1px solid ${t.cardBorder}` }}>
               <div>
                 <span style={{ fontWeight:800, fontSize:14 }}>Registered NAS Devices</span>
                 <span style={{ fontSize:11, color:t.textMuted, marginLeft:10 }}>{filteredNasList.length} device{filteredNasList.length !== 1 ? 's' : ''}</span>

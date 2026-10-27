@@ -28,7 +28,7 @@ import { csvSafe } from "./csv-safe";
  *   density: compact / default / comfortable
  *   CSV export (cells sanitised via csvSafe — formula-injection safe)
  *   keyboard-accessible sort headers and toggles, live region for status
- *   mobile card layout (max-width 760px)
+ *   mobile card layout (max-width 767px)
  *
  * Row identity: `rowKey` (usually `r => r.id`). Selection is CONTROLLED —
  * the owner keeps the authoritative selection so bulk operations live where
@@ -868,21 +868,36 @@ const CSS = `
 /* ── Mobile: each row becomes a labelled card ── */
 @media (max-width:767px){
   .jdt{border:none;background:transparent;box-shadow:none}
-  .jdt-toolbar{padding:8px 10px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+  .jdt-toolbar{gap:6px;padding:7px 8px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
   .jdt-scroll{overflow:visible}
   .jdt table{min-width:0 !important;display:block}
   .jdt thead{display:none}
   .jdt tbody{display:block}
-  .jdt tbody tr{display:block;margin-bottom:12px;padding:12px 14px;border:1px solid var(--border);
+  .jdt tbody tr{display:block;margin-bottom:7px;padding:7px 9px;border:1px solid var(--border);
     border-radius:8px;background:var(--surface)}
   .jdt tbody tr:hover td:first-child{box-shadow:none}
-  .jdt tbody td{display:flex;align-items:center;justify-content:space-between;gap:14px;
-    border:none;padding:7px 0;text-align:right}
-  .jdt tbody td::before{content:attr(data-label);font-size:10px;font-weight:800;letter-spacing:.06em;
+  .jdt tbody td{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    border:none;padding:3px 0;text-align:right;font-size:12px}
+  .jdt tbody td::before{content:attr(data-label);font-size:9px;font-weight:700;letter-spacing:.04em;
     text-transform:uppercase;color:var(--muted);text-align:left}
   .jdt tbody td:first-child::before{content:""}
   .jdt td.jdt-pick{position:absolute;opacity:0;pointer-events:none}
   .jdt tbody td[data-label=""]::before{content:""}
-  .jdt-foot{flex-wrap:wrap;border:1px solid var(--border);border-radius:14px;background:var(--surface);margin-top:4px}
+  .jdt tbody td[data-label*="Name"]::before,
+  .jdt tbody td[data-label*="Subscriber"]::before,
+  .jdt tbody td[data-label*="Plan"]::before,
+  .jdt tbody td[data-label*="User"]::before{content:""}
+  .jdt tbody td[data-label*="Action"]{justify-content:flex-end;gap:5px;padding-top:5px}
+  .jdt tbody td[data-label*="Action"]::before{content:""}
+  .jdt tbody td[data-label*="Action"] :is(button,a){
+    min-height:28px;padding:4px 7px;font-size:10px;line-height:1.2
+  }
+  .jdt-tools{flex-wrap:nowrap;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .jdt-tools::-webkit-scrollbar{display:none}
+  .jdt-tools .jdt-btn{padding:5px 8px;font-size:10px}
+  .jdt-foot{gap:6px;flex-wrap:wrap;border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-top:4px;padding:6px 8px}
+  .jdt-pager{gap:4px}
+  .jdt-pager .jdt-btn{padding:5px 7px;font-size:10px}
 }
 `;
