@@ -1,116 +1,79 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Icons } from "./icons";
 import { subscribeSection, getSection, type Section } from "./section-nav";
 
 /**
- * BottomNav — the mobile navigation bar, section-aware.
- *
- * Two modes:
- *   • On a HUB page (Network, Billing, My Work…) it shows THAT section's tabs
- *     — NAS / Pools / Outages on Network, Invoices / Payments on Billing — so
- *     switching between related screens is one tap, and the bar always reflects
- *     where you are.
- *   • Everywhere else it shows the four top-level destinations plus More.
- *
- * The hub publishes its tabs through section-nav; this subscribes. Hidden on
- * desktop by CSS, where the sidebar owns navigation.
+ * The active page publishes its available sub-tabs through section-nav.
+ * Pages without contextual tabs intentionally have no dock; the hamburger
+ * remains the way to switch between major modules.
  */
 
-const TABS = [
-  { id: "dashboard",   label: "Home",    href: "/dashboard",      Icon: Icons.Dashboard },
-  { id: "subscribers", label: "Subs",    href: "/subscribers",    Icon: Icons.Subscribers },
-  { id: "network",     label: "Network", href: "/network-center", Icon: Icons.Network },
-  { id: "billing",     label: "Billing", href: "/billing-center", Icon: Icons.Payments },
-];
+function tabIcon(id: string, label: string) {
+  const key = `${id} ${label}`.toLowerCase();
+  if (/dashboard|overview|home/.test(key)) return Icons.Dashboard;
+  if (/subscriber|customer/.test(key)) return Icons.Subscribers;
+  if (/invoice/.test(key)) return Icons.Invoices;
+  if (/billing|account|payment|wallet|reversal|pricing|earning/.test(key)) return Icons.Payments;
+  if (/user|role|team|organization/.test(key)) return Icons.Users;
+  if (/report|analytics|insight|statistic/.test(key)) return Icons.Reports;
+  if (/nas|router|server/.test(key)) return Icons.NAS;
+  if (/network|monitor|traffic|operation|noc|fiber|pool|outage|gateway/.test(key)) return Icons.Network;
+  if (/package|plan|stock|catalog|inventory/.test(key)) return Icons.Packages;
+  if (/area|location|franchise/.test(key)) return Icons.Areas;
+  if (/complaint|support|job/.test(key)) return Icons.Support;
+  if (/log|activity/.test(key)) return Icons.Logs;
+  if (/setting|security|admin|config/.test(key)) return Icons.Settings;
+  return Icons.Dashboard;
+}
 
-/** useSearchParams requires a Suspense boundary or the whole app fails to build. */
-export default function BottomNav({ onMore }: { onMore: () => void }) {
+export default function BottomNav() {
   return (
     <Suspense fallback={null}>
-      <BottomNavInner onMore={onMore} />
+      <BottomNavInner />
     </Suspense>
   );
 }
 
-function BottomNavInner({ onMore }: { onMore: () => void }) {
+function BottomNavInner() {
   const pathname = usePathname() || "";
-  const params = useSearchParams();
   const router = useRouter();
   const [section, setSection] = useState<Section>(getSection());
 
   useEffect(() => subscribeSection(setSection), []);
 
-  const globalActive = (href: string) =>
-    pathname === href || pathname.startsWith(href + "/") || pathname.startsWith(href.replace("-center", ""));
+  if (!section || !pathname.startsWith(section.basePath)) return null;
 
-  // ── Section mode: the current hub's tabs fill the bar ──────────────────────
-  // Only when the published section actually belongs to the page we're on.
-  const onHub = section && pathname.startsWith(section.basePath);
-  if (onHub && section) {
-    const activeId = params.get("tab") || section.activeId;
-    const goTab = (id: string) => {
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", id);
-      router.replace(url.pathname + url.search, { scroll: false });
-    };
-    return (
-      <nav className="jb-bottomnav section" aria-label="Section">
-        {/* Section tabs scroll horizontally; More is pinned so the menu is
-            always reachable. */}
-        <div className="jb-bn-scroll">
-          {section.tabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => goTab(t.id)}
-              aria-current={activeId === t.id ? "page" : undefined}
-              className={activeId === t.id ? "on" : ""}
-            >
-              <span className="lbl">{t.label}</span>
-            </button>
-          ))}
-        </div>
-        <button className="jb-bn-more" onClick={onMore} aria-label="More menu">
-          <span className="ico"><Icons.Menu width={20} height={20} /></span>
-          <span className="lbl">Menu</span>
-        </button>
-      </nav>
-    );
-  }
-
-  // ── Global mode: four destinations + More ──────────────────────────────────
   return (
-    <nav className="jb-bottomnav" aria-label="Primary">
-      {TABS.map((t) => {
-        const on = globalActive(t.href);
-        return (
+    <nav className="jb-bottomnav section" aria-label="Section">
+      <div className="jb-bn-scroll">
+        {section.tabs.map((tab) => {
+          const Icon = tabIcon(tab.id, tab.label);
+          const active = section.activeId === tab.id;
+          return (
           <button
-            key={t.id}
-            onClick={() => router.push(t.href)}
-            aria-current={on ? "page" : undefined}
-            aria-label={t.label}
-            className={on ? "on" : ""}
+            key={tab.id}
+            onClick={() => {
+              if (section.onSelect) {
+                section.onSelect(tab.id);
+                return;
+              }
+              const url = new URL(window.location.href);
+              url.searchParams.set("tab", tab.id);
+              router.replace(url.pathname + url.search, { scroll: false });
+            }}
+            aria-current={active ? "page" : undefined}
+            aria-label={tab.label}
+            className={active ? "on" : ""}
           >
-            {/* Active icon springs 1 → 1.18 → 1 each time the tab is chosen
-                (framer replays the keyframes when the animate value flips). */}
-            <motion.span
-              className="ico"
-              animate={on ? { scale: [1, 1.18, 1] } : { scale: 1 }}
-              transition={{ duration: 0.3, ease: [0.34, 1.56, 0.64, 1] }}
-            >
-              <t.Icon width={20} height={20} />
-            </motion.span>
-            <span className="lbl">{t.label}</span>
+            <span className="ico"><Icon width={20} height={20} /></span>
+            <span className="lbl">{tab.label}</span>
           </button>
-        );
-      })}
-      <button onClick={onMore} aria-label="More menu">
-        <span className="ico"><Icons.Menu width={20} height={20} /></span>
-        <span className="lbl">More</span>
-      </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }

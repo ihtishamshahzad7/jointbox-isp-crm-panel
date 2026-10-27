@@ -1332,9 +1332,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Global feature finder — Ctrl/⌘+K on any screen. */}
         <CommandPalette />
 
-        {/* Mobile bottom navigation. Hidden on desktop by CSS; "More" opens the
-            same drawer the hamburger does. */}
-        {myRole !== 'SUPER_ADMIN' && <BottomNav onMore={() => setMobileOpen(true)} />}
+        {/* Mobile dock shows the current page's contextual tabs. */}
+        {myRole !== 'SUPER_ADMIN' && <BottomNav />}
 
         {/* Footer removed. It said nothing that changes, and it cost a strip
             of vertical space on every screen — the version number belongs in
@@ -1365,4 +1364,3 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
     </LicenceProvider>
   );
 }
-

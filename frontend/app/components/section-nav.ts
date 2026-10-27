@@ -16,7 +16,12 @@
  */
 
 export type SectionTab = { id: string; label: string };
-export type Section = { basePath: string; tabs: SectionTab[]; activeId?: string } | null;
+export type Section = {
+  basePath: string;
+  tabs: SectionTab[];
+  activeId?: string;
+  onSelect?: (id: string) => void;
+} | null;
 
 let current: Section = null;
 const listeners = new Set<(s: Section) => void>();

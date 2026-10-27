@@ -69,11 +69,15 @@ function HubInner({
     const basePath = typeof window !== "undefined" ? window.location.pathname : "";
     publishSection({
       basePath,
-      activeId: active,
+      activeId: topTabOf(active)?.id,
       tabs: tabs.map((t) => ({ id: t.id, label: t.label })),
     });
-    return () => clearSection(basePath);
   }, [tabs, active]);
+
+  useEffect(() => {
+    const basePath = typeof window !== "undefined" ? window.location.pathname : "";
+    return () => clearSection(basePath);
+  }, []);
 
   const select = (id: string) => {
     setActive(id);

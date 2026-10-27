@@ -5508,16 +5508,13 @@ html .main .recharts-responsive-container { width: 100% !important; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   MOBILE BOTTOM NAVIGATION
-   ══════════════════════════════════════════════════════════════════════════
-   The primary way to move around on a phone: a fixed bottom bar of the four
-   daily destinations plus More. Hidden on desktop, where the sidebar rules. */
+   MOBILE CONTEXTUAL BOTTOM NAVIGATION
+   ══════════════════════════════════════════════════════════════════════════ */
 .jb-bottomnav { display: none; }
 
-@media (max-width: 768px) {
-  .jb-bottomnav {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
+@media (max-width: 767px) {
+  .jb-bottomnav.section {
+    display: block;
     position: fixed;
     left: 0; right: 0; bottom: 0;
     z-index: 1500;
@@ -5526,48 +5523,41 @@ html .main .recharts-responsive-container { width: 100% !important; }
     box-shadow: 0 -2px 10px rgba(0,0,0,.06);
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
-  .jb-bottomnav button {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; padding: 8px 2px 6px; border: none; background: transparent;
-    color: #64748B; cursor: pointer; font-family: inherit; min-height: 54px;
-  }
-  .jb-bottomnav button .ico { display: inline-flex; line-height: 1; }
-  .jb-bottomnav button .lbl { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
-  .jb-bottomnav button.on { color: #3C50E0; }
-  .jb-bottomnav button.on .ico svg { color: #3C50E0; }
-
-  /* Content must not hide behind the bar — reserve its height at the bottom of
-     the scroll area. */
-  html .app-shell-page-content { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)) !important; }
-
-  /* The floating assistant is gone, but if any fixed bottom-right control
-     remains, lift it above the bar. */
-  html .jb-assist-panel { bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important; }
-}
-
-/* Section-aware bottom bar: the current hub's tabs scroll in a row, with Menu
-   pinned on the right so the full navigation is always one tap away. */
-@media (max-width: 768px) {
-  .jb-bottomnav.section { grid-template-columns: 1fr auto; align-items: stretch; }
   .jb-bottomnav.section .jb-bn-scroll {
-    display: flex; overflow-x: auto; -webkit-overflow-scrolling: touch;
-    scrollbar-width: none; gap: 2px; align-items: stretch;
+    display: flex;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
   .jb-bottomnav.section .jb-bn-scroll::-webkit-scrollbar { display: none; }
   .jb-bottomnav.section .jb-bn-scroll button {
-    flex: 0 0 auto; flex-direction: row; min-height: 54px; padding: 8px 16px;
-    border-bottom: 2px solid transparent;
-  }
-  .jb-bottomnav.section .jb-bn-scroll button .lbl { font-size: 13px; white-space: nowrap; }
-  .jb-bottomnav.section .jb-bn-scroll button.on {
-    color: #3C50E0; border-bottom-color: #3C50E0;
-  }
-  .jb-bottomnav.section .jb-bn-more {
+    flex: 0 0 auto;
+    min-width: 68px;
+    max-width: 112px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; padding: 8px 14px; border: none; border-left: 1px solid #E2E8F0;
-    background: #F7F9FC; color: #64748B; cursor: pointer; font-family: inherit;
+    gap: 3px; padding: 7px 10px 6px; border: none; background: transparent;
+    color: #64748B; cursor: pointer; font-family: inherit; min-height: 54px;
   }
-  .jb-bottomnav.section .jb-bn-more .lbl { font-size: 10.5px; font-weight: 600; }
+  .jb-bottomnav.section .jb-bn-scroll button .ico { display: inline-flex; line-height: 1; }
+  .jb-bottomnav.section .jb-bn-scroll button .lbl {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+  .jb-bottomnav.section .jb-bn-scroll button.on { color: #3C50E0; }
+  .jb-bottomnav.section .jb-bn-scroll button.on .ico svg { color: #3C50E0; }
+
+  .db-root:has(.jb-bottomnav) .app-shell-page-content {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  html .jb-assist-panel { bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -6158,7 +6148,6 @@ html .main .recharts-responsive-container { width: 100% !important; }
 [dir="rtl"] .nv-toast { right: auto !important; left: 24px; }
 
 /* ── 11. Mobile "More" rail divider ── */
-[dir="rtl"] .jb-bottomnav.section .jb-bn-more { border-left: none; border-right: 1px solid #E2E8F0; }
 
 /* ─────────────────────────────────────────────────────────────
    SUBSCRIBERS — unified toolbar, selection bar, expiring chips.

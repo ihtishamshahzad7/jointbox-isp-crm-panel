@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { NovaArea, NovaBars, NovaDonut, dailySeries } from "../components/nova-charts";
@@ -10,6 +10,8 @@ import { useSSE } from "../components/use-sse";
 import OverviewCharts from "./overview-charts";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
+import { Icons } from "../components/icons";
+import { clearSection, publishSection } from "../components/section-nav";
 import { BRAND } from "../../lib/brand";
 import mobile from "./dashboard-mobile.module.css";
 
@@ -322,7 +324,37 @@ export default function DashboardPage() {
     return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
   const [refreshKey, setRefreshKey] = useState(0);
-  const [tab, setTab] = useState<DashboardTab>("home");
+  const [tab, setTab] = useState<DashboardTab>(() => {
+    if (typeof window === "undefined") return "home";
+    return sectionTabs.find(
+      (item) => item.id === new URLSearchParams(window.location.search).get("tab"),
+    )?.id ?? "home";
+  });
+  const selectDashboardTab = useCallback((id: string) => {
+    const nextTab = sectionTabs.find((item) => item.id === id)?.id;
+    if (!nextTab) return;
+    setTab(nextTab);
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", nextTab);
+      router.replace(url.pathname + url.search, { scroll: false });
+    }
+  }, [router]);
+
+  useEffect(() => {
+    publishSection({
+      basePath: "/dashboard",
+      activeId: tab,
+      tabs: sectionTabs.map((item) => ({
+        id: item.id,
+        label: item.id === "home" ? item.caption : item.label,
+      })),
+      onSelect: selectDashboardTab,
+    });
+  }, [tab, selectDashboardTab]);
+
+  useEffect(() => () => clearSection("/dashboard"), []);
+
   const [busyAction, setBusyAction] = useState<string>("");
   const [toast, setToast] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
 
@@ -814,7 +846,7 @@ export default function DashboardPage() {
   });
 
   return (
-    <div className={tab === "home" ? mobile.dashboard : undefined} style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className={mobile.dashboard} style={{ minHeight: "100%", background: "var(--bg)", color: "var(--text)", padding: isMobile ? 10 : 18, display: "flex", flexDirection: "column", gap: 14 }}>
       {!mounted ? (
         <div style={{ minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ width: "100%", maxWidth: 420, background: "var(--surface)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 18 }}>
@@ -837,18 +869,27 @@ export default function DashboardPage() {
         <h1>Dashboard</h1>
       </div>}
 
-      <div className={tab === "home" ? mobile.toolbar : undefined} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
-        <div className={`jb-dash-rail ${tab === "home" ? mobile.tabs : ""}`} style={tabRailStyle}>
+      <div className={mobile.toolbar} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
+        <div className={`jb-dash-rail ${mobile.tabs}`} style={tabRailStyle}>
           {sectionTabs.map((t) => {
             const active = tab === t.id;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} style={tabButtonStyle(active)}>
+              <button key={t.id} onClick={() => selectDashboardTab(t.id)} style={tabButtonStyle(active)}>
                 <span style={{ letterSpacing: "-0.01em" }}>{t.label}</span>
               </button>
             );
           })}
         </div>
-        <button className={tab === "home" ? mobile.refreshButton : undefined} onClick={refreshAll} style={{ ...btnStyle, marginLeft: "auto", alignSelf: "center" }}>{loading ? "Refreshing..." : "Refresh Data"}</button>
+        <button
+          className={mobile.refreshButton}
+          onClick={refreshAll}
+          aria-label={loading ? "Refreshing data" : "Refresh data"}
+          title={loading ? "Refreshing data" : "Refresh data"}
+          style={{ ...btnStyle, marginLeft: "auto", alignSelf: "center" }}
+        >
+          <span className={mobile.refreshLabel}>{loading ? "Refreshing..." : "Refresh Data"}</span>
+          <Icons.Refresh className={mobile.refreshIcon} aria-hidden="true" />
+        </button>
       </div>
 
       {tab === "home" && (
@@ -974,7 +1015,7 @@ export default function DashboardPage() {
               {[
                 { label: "Add Subscriber", hint: "Create a new customer", grad: "linear-gradient(135deg,#6C3CE1,#E9408B)", onClick: () => router.push("/subscribers"), icon: "M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M20 8v6 M23 11h-6" },
                 { label: "Generate Invoice", hint: "Bill a customer", grad: "linear-gradient(135deg,#00C9FF,#22c55e)", onClick: () => setShowInvoiceQuick(true), icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M12 18v-6 M9 15h6" },
-                { label: "View Reports", hint: "Revenue & growth", grad: "linear-gradient(135deg,#F7971E,#FFD200)", onClick: () => setTab("reports"), icon: "M12 20V10 M18 20V4 M6 20v-4" },
+                { label: "View Reports", hint: "Revenue & growth", grad: "linear-gradient(135deg,#F7971E,#FFD200)", onClick: () => selectDashboardTab("reports"), icon: "M12 20V10 M18 20V4 M6 20v-4" },
                 { label: "Manage NAS", hint: "Routers & pools", grad: "linear-gradient(135deg,#E9408B,#F27121)", onClick: () => router.push("/nas"), icon: "M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z" },
               ].map((t) => (
                 <button key={t.label} type="button" className="task-tile" onClick={t.onClick}>
