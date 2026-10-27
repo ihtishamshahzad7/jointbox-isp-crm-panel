@@ -84,8 +84,9 @@ export function RecordNotes({
       {!compact && <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>{title}</div>}
 
       {/* Composer */}
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+      <div className="sd-notes-composer" style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
         <textarea
+          className="sd-notes-input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) add(); }}
@@ -93,7 +94,7 @@ export function RecordNotes({
           rows={compact ? 2 : 3}
           style={{ flex: 1, resize: "vertical", background: "var(--bg,#0b0e1a)", border: `1px solid ${C.border}`, borderRadius: 9, padding: "9px 11px", color: C.text, fontSize: 12.5, fontFamily: "inherit", outline: "none", lineHeight: 1.6 }}
         />
-        <button onClick={add} disabled={busy || !draft.trim()}
+        <button className="sd-notes-add" onClick={add} disabled={busy || !draft.trim()}
           style={{ border: "none", cursor: draft.trim() ? "pointer" : "not-allowed", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, color: "#fff", background: draft.trim() ? "linear-gradient(135deg,#6C3CE1,#E9408B,#F27121)" : C.surface2, fontFamily: "inherit", whiteSpace: "nowrap", opacity: busy ? 0.6 : 1 }}>
           {busy ? "…" : "Add"}
         </button>

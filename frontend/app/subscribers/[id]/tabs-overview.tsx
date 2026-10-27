@@ -34,7 +34,7 @@ export function OverviewTab({ onGoto }: { onGoto: (t: string) => void }) {
   const daysLeft = expiry ? Math.ceil((expiry.getTime() - Date.now()) / 86400000) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div className="sd-overview" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Live connection strip */}
       <div className={`sd-banner ${conn.level === "online" ? "ok" : conn.level === "offline" ? "" : ""}`}
         style={{ borderColor: conn.level === "online" ? "rgba(33,150,83,.4)" : conn.level === "offline" ? "rgba(211,64,83,.4)" : "var(--border)",

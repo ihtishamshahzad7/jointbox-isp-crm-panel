@@ -498,4 +498,42 @@ const CSS = `
   .sd-kpi-grid{grid-template-columns:1fr}
   .sd-avatar{display:none}
 }
+
+@media (max-width:767px){
+  .sd-root{width:100%;min-width:0;gap:9px;padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+  .sd-title-block{gap:9px;align-items:flex-start}
+  .sd-avatar{width:34px;height:34px;font-size:13px}
+  .sd-title{min-width:0}
+  .sd-title h1{font-size:16px;gap:6px;line-height:1.15}
+  .sd-title h1 code{font-size:10px}
+  .sd-title .sd-meta{gap:4px 7px;margin-top:3px;font-size:10px;line-height:1.3}
+  .sd-status-row{gap:4px;margin-top:5px}
+  .sd-menu-wrap{width:100%}
+  .sd-menu-wrap>div:first-child{justify-content:flex-start!important}
+  .sd-alert{gap:7px;padding:6px 8px;border-radius:7px;font-size:10.5px;line-height:1.35}
+  .sd-alert .sd-alert-ic{font-size:12px}
+  .sd-layout{display:block}
+  .sd-layout>.sd-navtrigger,.sd-layout>.sd-tabs{display:none!important}
+  .sd-layout>.sd-main{width:100%;min-width:0}
+  .sd-overview{min-width:0;gap:9px!important}
+  .sd-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .sd-kpi{padding:8px;min-width:0}
+  .sd-kpi-value{font-size:15px;overflow-wrap:anywhere}
+  .sd-two-col{grid-template-columns:minmax(0,1fr)!important;gap:9px!important}
+  .sd-two-col>div{gap:9px!important;min-width:0}
+  .sd-panel{min-width:0;border-radius:9px}
+  .sd-panel-h{gap:7px;padding:8px 11px}
+  .sd-panel-h h3{font-size:10px}
+  .sd-panel-h p{font-size:9.5px}
+  .sd-panel>.sd-panel-b{padding:9px 11px}
+  .sd-panel-a{width:auto;flex:none}
+  .sd-def-row{flex-direction:row;align-items:flex-start;gap:8px;padding:5px 0;font-size:11px}
+  .sd-def dt{flex:0 0 36%;font-size:9px;line-height:1.35}
+  .sd-def dd{flex:1;text-align:right;min-width:0;word-break:break-word;overflow-wrap:anywhere}
+  .sd-banner{gap:7px;padding:8px 9px;font-size:10.5px;line-height:1.4;overflow-wrap:anywhere}
+  .sd-overview .sd-kpi-grid code{word-break:break-all}
+  .sd-overview .sd-notes-composer{align-items:stretch;gap:6px}
+  .sd-overview .sd-notes-input{flex:1 1 0;min-width:0;resize:vertical;font-size:11px!important;padding:8px!important}
+  .sd-overview .sd-notes-add{flex:0 0 auto;padding:9px 12px!important;font-size:11px!important}
+}
 `;

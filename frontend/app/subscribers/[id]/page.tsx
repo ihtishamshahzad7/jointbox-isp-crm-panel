@@ -20,6 +20,7 @@ import { SubscriberDetailProvider, useSubscriberDetail } from "./context";
 import { SubDetailStyles, RefreshControl, StatusChip, Btn, accountLevel } from "./ui";
 import { connLevel, apiSend, fmtDateTime, fmtDuration } from "./lib";
 import BoostButton from "./boost-button";
+import { Icons } from "../../components/icons";
 
 // Heavy tabs load lazily — opening the page never pulls every graph at once.
 const OverviewTab = lazy(() => import("./tabs-overview").then((m) => ({ default: m.OverviewTab })));
@@ -47,6 +48,20 @@ const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "login-log", label: "Login Log", group: "History" },
   { id: "activities", label: "Activities", group: "History" },
 ];
+
+const TAB_ICONS: Record<string, (props: React.SVGProps<SVGSVGElement>) => React.ReactNode> = {
+  overview: Icons.Dashboard,
+  connection: Icons.Network,
+  service: Icons.Packages,
+  usage: Icons.Reports,
+  billing: Icons.Payments,
+  diagnostics: Icons.Support,
+  sessions: Icons.Logs,
+  radius: Icons.NAS,
+  router: Icons.NAS,
+  "login-log": Icons.Logs,
+  activities: Icons.Reports,
+};
 
 export default function SubscriberDetailPage() {
   const params = useParams();
@@ -293,6 +308,29 @@ function DeviceShell() {
           </Suspense>
         </div>
       </div>
+
+      <nav className="jb-bottomnav section sd-profile-dock" role="tablist" aria-label="Subscriber profile tabs">
+        <div className="jb-bn-scroll">
+          {TABS.map((t) => {
+            const Icon = TAB_ICONS[t.id];
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-label={t.label}
+                className={active ? "on" : ""}
+                onClick={() => goTab(t.id)}
+              >
+                <span className="ico"><Icon width={20} height={20} /></span>
+                <span className="lbl">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
