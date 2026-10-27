@@ -69,6 +69,17 @@
   }
 }
 
+@media (max-width: 767px) {
+  .workspace :global(.hub-navtrigger),
+  .workspace :global(.hub-side) {
+    display: none !important;
+  }
+
+  .workspace :global(.hub-layout) {
+    display: block !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .workspace :global(*) {
     scroll-behavior: auto !important;

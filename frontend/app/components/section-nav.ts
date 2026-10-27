@@ -7,8 +7,8 @@
  * On a phone, "where can I go from here" matters more than "where can I go in
  * the whole app". A hub page (Network, Billing, My Work…) publishes its tabs
  * here; the bottom bar renders them so a NAS screen shows NAS tabs and a
- * billing screen shows billing tabs. When no hub is mounted, the bar falls
- * back to the four top-level destinations.
+ * billing screen shows billing tabs. Pages without contextual tabs have no
+ * dock; the hamburger remains the way to switch between major modules.
  *
  * Deliberately a plain pub/sub, not React context: the publisher (Hub) and the
  * subscriber (BottomNav) live in different branches of the tree, and a context

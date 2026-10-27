@@ -866,7 +866,7 @@ const CSS = `
 .jdt-pg{min-width:26px;text-align:center;font-weight:700;color:var(--text)}
 
 /* ── Mobile: each row becomes a labelled card ── */
-@media (max-width:760px){
+@media (max-width:767px){
   .jdt{border:none;background:transparent;box-shadow:none}
   .jdt-toolbar{padding:8px 10px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
   .jdt-scroll{overflow:visible}

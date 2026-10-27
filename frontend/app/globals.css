@@ -7001,6 +7001,105 @@ html[data-theme="dark"] .topbar-title { color: var(--text); }
   html:not([data-theme]) .topbar-title { color: var(--text); }
 }
 
+/* Phone-only shell and shared control sizing. Tablet and desktop rules above
+   keep their existing breakpoint and layout. */
+@media (max-width: 767px) {
+  html .db-root .topbar {
+    height: 56px;
+    min-height: 56px;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 0 12px;
+  }
+
+  html .db-root .topbar-left {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  html .db-root .topbar-left > div {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  html .db-root .topbar-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+  }
+
+  html .db-root .topbar-sub {
+    display: none;
+  }
+
+  html .db-root .topbar-left > button[title="Find any feature or action"] {
+    flex: 0 0 38px;
+    width: 38px;
+    height: 38px;
+    justify-content: center;
+    margin-left: 0 !important;
+    padding: 0 !important;
+  }
+
+  html .db-root .topbar-left > button[title="Find any feature or action"] > span {
+    font-size: 0;
+  }
+
+  html .db-root .topbar-left > button[title="Find any feature or action"] > span::before {
+    content: "🔎";
+    font-size: 15px;
+  }
+
+  html .db-root .topbar-left > button[title="Find any feature or action"] kbd {
+    display: none;
+  }
+
+  html .db-root .topbar-right {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  html .app-shell-page-content {
+    padding: 10px 12px 72px;
+  }
+
+  html .app-shell-page-content :is(input, select, textarea) {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+    font-size: 16px;
+  }
+
+  html .app-shell-page-content :is(form, fieldset, .jdt, .jdt-toolbar, .jdt-search) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  html .app-shell-page-content .jdt-toolbar {
+    align-items: stretch;
+  }
+
+  html .app-shell-page-content .jdt-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  html .app-shell-page-content .jdt-tools {
+    max-width: 100%;
+  }
+
+  html .app-shell-page-content .jdt-foot {
+    align-items: flex-start;
+  }
+
+  html .main .jb-network-hero,
+  html .main .jb-network-strip {
+    display: none !important;
+  }
+}
+
 /* The original company's pointer to the super admin login. */
 .platform-note {
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap;

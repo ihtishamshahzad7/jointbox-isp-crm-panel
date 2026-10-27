@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { publishSection, clearSection } from "./section-nav";
 import styles from "./advanced-ui.module.css";
@@ -65,28 +65,33 @@ function HubInner({
     }
   }, [urlTab]);
 
-  useEffect(() => {
-    const basePath = typeof window !== "undefined" ? window.location.pathname : "";
-    publishSection({
-      basePath,
-      activeId: topTabOf(active)?.id,
-      tabs: tabs.map((t) => ({ id: t.id, label: t.label })),
-    });
-  }, [tabs, active]);
-
-  useEffect(() => {
-    const basePath = typeof window !== "undefined" ? window.location.pathname : "";
-    return () => clearSection(basePath);
-  }, []);
-
-  const select = (id: string) => {
+  const select = useCallback((id: string) => {
     setActive(id);
     setSeen((p) => new Set(p).add(id));
     if (storageKey) localStorage.setItem(`hub:${storageKey}`, id);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", id);
     router.replace(url.pathname + url.search, { scroll: false });
-  };
+  }, [router, storageKey]);
+
+  useEffect(() => {
+    const basePath = typeof window !== "undefined" ? window.location.pathname : "";
+    publishSection({
+      basePath,
+      activeId: active,
+      tabs: tabs.flatMap((tab) =>
+        tab.children?.length
+          ? tab.children.map((child) => ({ id: child.id, label: child.label }))
+          : [{ id: tab.id, label: tab.label }],
+      ),
+      onSelect: select,
+    });
+  }, [tabs, active, select]);
+
+  useEffect(() => {
+    const basePath = typeof window !== "undefined" ? window.location.pathname : "";
+    return () => clearSection(basePath);
+  }, []);
 
   // The top-level tab currently shown (owns the active id).
   const current = topTabOf(active);
