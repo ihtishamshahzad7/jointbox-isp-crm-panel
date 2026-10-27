@@ -513,7 +513,7 @@ const CSS = `
   .sd-alert{gap:7px;padding:6px 8px;border-radius:7px;font-size:10.5px;line-height:1.35}
   .sd-alert .sd-alert-ic{font-size:12px}
   .sd-layout{display:block}
-  .sd-layout>.sd-navtrigger,.sd-layout>.sd-tabs{display:none!important}
+  .sd-layout>.sd-navtrigger,body:has(.sd-root) .sd-layout>.sd-tabs{display:none!important}
   .sd-layout>.sd-main{width:100%;min-width:0}
   .sd-overview{min-width:0;gap:9px!important}
   .sd-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
