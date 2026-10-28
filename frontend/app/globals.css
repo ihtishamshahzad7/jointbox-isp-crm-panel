@@ -5513,6 +5513,14 @@ html .main .recharts-responsive-container { width: 100% !important; }
 .jb-bottomnav { display: none; }
 
 @media (max-width: 767px) {
+  .subscribers-page-content .subs-mobile-filter-row .jb-status-filters.mobile-hide-status-tabs {
+    display: none !important;
+  }
+  body:has(.nd-root) .nd-layout > .mobile-hide-vertical-tabs,
+  body:has(.sd-root) .sd-layout > .mobile-hide-vertical-tabs {
+    display: none !important;
+  }
+
   .jb-bottomnav.section {
     display: block;
     position: fixed;

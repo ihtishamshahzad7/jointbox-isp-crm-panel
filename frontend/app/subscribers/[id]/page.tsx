@@ -276,7 +276,7 @@ function DeviceShell() {
           <span className={`sd-navchev${navOpen ? " open" : ""}`}>▾</span>
         </button>
 
-        <nav className={`sd-tabs${navOpen ? " open" : ""}`} role="tablist" aria-label="Subscriber sections">
+        <nav className={`sd-tabs mobile-hide-vertical-tabs${navOpen ? " open" : ""}`} role="tablist" aria-label="Subscriber sections">
           {TABS.map((t) => (
             <button
               key={t.id}

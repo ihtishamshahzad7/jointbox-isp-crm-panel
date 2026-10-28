@@ -28,6 +28,7 @@ import { ServicesCss } from "./tabs-services";
 import { NetCss } from "./tabs-network";
 import { ConfigCss } from "./tabs-config";
 import { ChartCss } from "./charts";
+import { Icons } from "../../components/icons";
 
 // Heavy tabs load lazily so opening the page never pulls every graph at once.
 const HealthTab = lazy(() => import("./tabs-health").then((m) => ({ default: m.HealthTab })));
@@ -68,6 +69,24 @@ const TABS: Array<{ id: string; label: string; group: string }> = [
   // router, alongside RADIUS and SNMP — not a property of the hardware.
   { id: "tunnel", label: "Tunnel", group: "Services" },
 ];
+
+const TAB_ICONS: Record<string, (props: React.SVGProps<SVGSVGElement>) => React.ReactNode> = {
+  overview: Icons.Dashboard,
+  health: Icons.Reports,
+  traffic: Icons.Network,
+  interfaces: Icons.Network,
+  pppoe: Icons.Network,
+  subscribers: Icons.Subscribers,
+  radius: Icons.NAS,
+  snmp: Icons.NAS,
+  ip: Icons.Network,
+  vlans: Icons.Network,
+  logs: Icons.Logs,
+  audit: Icons.Logs,
+  diagnostics: Icons.Support,
+  configuration: Icons.Settings,
+  tunnel: Icons.Network,
+};
 
 export default function NasDetailPage() {
   const params = useParams();
@@ -253,7 +272,7 @@ function DevicePage() {
           <span className={`nd-navchev${navOpen ? " open" : ""}`}>▾</span>
         </button>
 
-        <nav className={`nd-tabs${navOpen ? " open" : ""}`} role="tablist" aria-label="Router sections">
+        <nav className={`nd-tabs mobile-hide-vertical-tabs${navOpen ? " open" : ""}`} role="tablist" aria-label="Router sections">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -296,6 +315,29 @@ function DevicePage() {
         </div>
       </div>
 
+      <nav className="jb-bottomnav section nd-profile-dock" role="tablist" aria-label="NAS detail tabs">
+        <div className="jb-bn-scroll">
+          {TABS.map((t) => {
+            const Icon = TAB_ICONS[t.id];
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-label={t.label}
+                className={active ? "on" : ""}
+                onClick={() => { goTab(t.id); setNavOpen(false); }}
+              >
+                <span className="ico"><Icon width={20} height={20} /></span>
+                <span className="lbl">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
       {openSession && (
         <SessionDrawer
           session={openSession}
@@ -318,4 +360,29 @@ export const PageCss = `
 .nd-top-right{margin-left:auto}
 .nd-menu-sep{height:1px;background:var(--border);margin:5px 4px}
 .nd-menu button:disabled{opacity:.5;cursor:not-allowed}
+@media(max-width:767px){
+  .nd-root{width:100%;min-width:0;padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+  .nd-layout{display:block}
+  .nd-layout>.nd-navtrigger,body:has(.nd-root) .nd-layout>.nd-tabs{display:none!important}
+  .nd-layout>.nd-main{width:100%;min-width:0}
+  .nd-title-block{gap:9px;align-items:flex-start}
+  .nd-title-ic{width:34px;height:34px}
+  .nd-title h1{font-size:16px;line-height:1.2}
+  .nd-title .nd-meta{gap:4px 7px;margin-top:3px;font-size:10px;line-height:1.3}
+  .nd-status-row{gap:4px;margin-top:5px}
+  .nd-chip{gap:4px;padding:2px 6px;font-size:9px}
+  .nd-menu-wrap{flex:none}
+  .nd-menu{right:0}
+  .nd-overview .ov-tags{gap:4px}
+  .nd-overview .ov-tag{padding:3px 6px;font-size:9px}
+  .nd-overview .ov-grid{grid-template-columns:minmax(0,1fr)!important;gap:8px}
+  .nd-overview .ov-wide{grid-column:auto}
+  .nd-overview .ov-card{width:100%;min-width:0;padding:12px}
+  .nd-overview .nd-def-row{flex-direction:row;align-items:flex-start;gap:8px;padding:5px 0}
+  .nd-overview .nd-def dt{flex:0 0 36%;font-size:9px;line-height:1.35}
+  .nd-overview .nd-def dd{flex:1;min-width:0;text-align:right;overflow-wrap:anywhere;word-break:break-word}
+  .nd-overview .ov-subsum{padding:10px 12px;gap:8px}
+  .nd-overview .ov-subsum-l{gap:6px}
+  .nd-overview .ov-subsum-t{font-size:10px}
+}
 `;

@@ -51,7 +51,7 @@ export function OverviewTab({ onOpenSession, onGoto }: {
   const memTotal = parseFloat(String(details?.totalMemory ?? "").replace(/\D+$/g, ""));
 
   return (
-    <div className="nd-root">
+    <div className="nd-root nd-overview">
       {/* ── Status tags — one clean row of small, subtle tags ── */}
       <div className="ov-tags">
         {(health as any[]).map((h) => (

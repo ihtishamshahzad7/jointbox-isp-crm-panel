@@ -102,6 +102,8 @@ interface OverviewStats extends Stats {
   todaySignups?: number;
 }
 
+const SUBSCRIBER_STATUS_FILTERS = ["ALL", "ACTIVE", "STALE", "EXPIRED", "SUSPENDED", "INACTIVE"];
+
 const API = API_BASE;
 
 import { Icons } from "../components/icons";
@@ -1668,6 +1670,9 @@ export default function SubscribersPage() {
                 gap: 4px;
                 overflow: visible;
               }
+              .subscribers-page-content .subs-mobile-filter-row .jb-status-filters {
+                display: none !important;
+              }
               .subscribers-page-content .subs-mobile-filter-row .jb-status-filters button,
               .subscribers-page-content .subs-mobile-filter-row .jb-exp-chips button {
                 flex: 0 0 auto;
@@ -1699,8 +1704,43 @@ export default function SubscribersPage() {
               .subscribers-page-content .subs-table-heading > span:last-child {
                 display: none;
               }
+              .subscribers-status-dock .jb-bn-scroll button.on {
+                background: color-mix(in srgb, var(--accent) 10%, #fff);
+                color: var(--accent);
+                box-shadow: inset 0 2px 0 var(--accent);
+              }
+              .subscribers-status-dock .jb-bn-scroll button.stale.on {
+                background: rgba(245, 158, 11, .12);
+                color: #b45309;
+                box-shadow: inset 0 2px 0 #f59e0b;
+              }
             }
           `}</style>
+          <nav className="jb-bottomnav section subscribers-status-dock" role="tablist" aria-label="Filter subscribers by status">
+            <div className="jb-bn-scroll">
+              {SUBSCRIBER_STATUS_FILTERS.map((status) => {
+                const active = statusFilter === status;
+                return (
+                  <button
+                    key={status}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    aria-label={status === "STALE" ? "Stale" : status}
+                    className={`${active ? "on" : ""}${status === "STALE" ? " stale" : ""}`}
+                    onClick={() => setStatusFilter(status)}
+                    title={status === "STALE" ? "Session active but no recent RADIUS activity (15+ min)" : undefined}
+                    style={active ? {
+                      background: status === "STALE" ? "#f59e0b" : t.accent,
+                      color: "#fff",
+                    } : undefined}
+                  >
+                    <span className="lbl">{status === "STALE" ? "⚠ Stale" : status}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
           <div style={{ marginBottom: 14 }}>
           </div>
 
@@ -1751,8 +1791,8 @@ export default function SubscribersPage() {
             {/* Search lives inside the table now (server-side, debounced by the
                 DataTable) — same backend q= search, one fewer duplicate input. */}
             <div className="subs-mobile-filter-row">
-            <div className="jb-status-filters" style={{ display: "flex", gap: 4 }}>
-              {["ALL", "ACTIVE", "STALE", "EXPIRED", "SUSPENDED", "INACTIVE"].map((s) => (
+            <div className="jb-status-filters mobile-hide-status-tabs" style={{ display: "flex", gap: 4 }}>
+              {SUBSCRIBER_STATUS_FILTERS.map((s) => (
                 <button
                   key={s}
                   onClick={() => setStatusFilter(s)}
