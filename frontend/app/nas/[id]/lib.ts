@@ -209,6 +209,11 @@ export interface Subscriber {
   connectionType?: string;
   authMethod?: string;
   package?: { name: string } | null;
+  serviceSettings?: {
+    ipAddress?: string | null;
+    macAddress?: string | null;
+    vlanId?: string | number | null;
+  } | null;
   [key: string]: any;
 }
 

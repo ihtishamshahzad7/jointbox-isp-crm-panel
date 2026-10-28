@@ -186,6 +186,7 @@ export function SubscribersTab({ onOpenSession }: { onOpenSession: (s: any) => v
   return (
     <div className="nd-root">
       <Panel
+        className="nd-subs-panel"
         title={`Subscribers on this device${nas?._count?.subscribers != null ? ` (${nas._count.subscribers})` : ""}`}
         sub="Accounts assigned to this NAS — click a row to open its live session"
         actions={
@@ -197,14 +198,16 @@ export function SubscribersTab({ onOpenSession }: { onOpenSession: (s: any) => v
           />
         }
       >
-        {subs.length === 0 ? (
+        {filtered.length === 0 ? (
           <EmptyState
-            title="No subscribers assigned"
-            hint="Assign accounts to this router from the NAS list or subscriber profile — active sessions appear here automatically."
+            title="No subscribers found"
+            hint={subs.length === 0
+              ? "Assign accounts to this router from the NAS list or subscriber profile."
+              : "Try a different name, username, or phone number."}
           />
         ) : (
           <>
-            <div className="nd-table-wrap">
+            <div className="nd-table-wrap nd-subs-desktop">
               <table className="nd-table">
                 <thead>
                   <tr><th>Username</th><th>Name</th><th>Phone</th><th>Package</th><th>Status</th><th>Online</th><th></th></tr>
@@ -231,6 +234,47 @@ export function SubscribersTab({ onOpenSession }: { onOpenSession: (s: any) => v
                 </tbody>
               </table>
             </div>
+            <div className="nd-subs-mobile">
+              {pageRows.map((s: Subscriber) => {
+                const act = activeMap.get(s.username);
+                const ipAddress = act?.framedipaddress || s.serviceSettings?.ipAddress;
+                const macAddress = act?.callingstationid || s.serviceSettings?.macAddress;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="nd-subs-card"
+                    disabled={!act}
+                    onClick={() => act && onOpenSession(act)}
+                  >
+                    <span className="nd-subs-card-head">
+                      <span className="nd-subs-name">{s.fullName || s.username}</span>
+                      <StatusChip
+                        level={act ? "ok" : "off"}
+                        text={act ? "Online" : "Offline"}
+                        dotPulse={false}
+                      />
+                    </span>
+                    <span className="nd-subs-details">
+                      <span className="nd-subs-field">
+                        <span className="nd-subs-label">IP address</span>
+                        <span className="nd-subs-value nd-mono">{show(ipAddress)}</span>
+                      </span>
+                      <span className="nd-subs-field">
+                        <span className="nd-subs-label">MAC address</span>
+                        <span className="nd-subs-value nd-mono">{show(macAddress)}</span>
+                      </span>
+                      {s.serviceSettings?.vlanId != null && s.serviceSettings.vlanId !== "" && (
+                        <span className="nd-subs-field">
+                          <span className="nd-subs-label">VLAN</span>
+                          <span className="nd-subs-value">{show(s.serviceSettings.vlanId)}</span>
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
             {pages > 1 && (
               <div className="nd-page">
                 <Btn size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>← Prev</Btn>
@@ -254,4 +298,22 @@ export const IfacesCss = `
 .nd-sub-q{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 10px;font-size:11.5px;width:220px;outline:none;font-family:inherit}
 .nd-sub-q:focus{border-color:var(--accent)}
 .nd-page{display:flex;align-items:center;gap:10px;justify-content:center;margin-top:10px;font-size:11px;color:var(--muted)}
+.nd-subs-mobile{display:none}
+@media (max-width:767px){
+  .nd-subs-panel .nd-panel-h{display:block}
+  .nd-subs-panel .nd-panel-a{width:100%;margin-top:8px}
+  .nd-subs-panel .nd-sub-q{width:100%;box-sizing:border-box}
+  .nd-subs-desktop{display:none}
+  .nd-subs-mobile{display:grid;gap:7px;overflow-x:visible}
+  .nd-subs-card{display:block;width:100%;min-width:0;box-sizing:border-box;padding:10px 11px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);font:inherit;text-align:left}
+  .nd-subs-card:not(:disabled){cursor:pointer}
+  .nd-subs-card:disabled{opacity:1}
+  .nd-subs-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;margin-bottom:9px}
+  .nd-subs-name{min-width:0;font-size:12px;font-weight:800;overflow-wrap:anywhere}
+  .nd-subs-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
+  .nd-subs-field{display:grid;gap:2px;min-width:0}
+  .nd-subs-label{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .nd-subs-value{min-width:0;font-size:11px;overflow-wrap:anywhere}
+  .nd-subs-value.nd-mono{word-break:break-all}
+}
 `;

@@ -330,6 +330,9 @@ export class NasService implements OnModuleInit {
           select: {
             id: true, username: true, fullName: true, phone: true, status: true,
             packageId: true, userId: true, areaId: true, createdAt: true,
+            serviceSettings: {
+              select: { ipAddress: true, macAddress: true, vlanId: true },
+            },
           },
         },
         _count: { select: { subscribers: { where: subWhere } } },
