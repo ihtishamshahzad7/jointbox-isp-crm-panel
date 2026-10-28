@@ -24,7 +24,7 @@ export default function Insights() {
           id: "logs",
           label: "Logs",
           hint: "Investigate connections, sessions, authentication, and system changes.",
-          render: () => <Logs embedded view="connections" />,
+          render: () => <Logs embedded />,
         },
       ]}
     />

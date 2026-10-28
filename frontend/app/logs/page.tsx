@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, type KeyboardEvent } from "react";
 import { BRAND } from "../../lib/brand";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
@@ -36,6 +36,18 @@ export const LOG_VIEWS = [
   { id: "authentication", label: "Authentication (AAA)", description: "Inspect subscriber RADIUS authentication and application sign-ins." },
   { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
 ];
+const LEGACY_LOG_TABS: Record<string, string> = {
+  console: "connections", network: "connections", failed: "connections",
+  timeline: "connections", radsess: "sessions", disconnects: "sessions",
+  authrec: "authentication", login: "authentication", radius: "authentication",
+  sessions: "sessions", actrec: "audit", activity: "audit", system: "audit",
+};
+
+const resolveLogTab = (value: string | null) => {
+  if (!value) return null;
+  const tab = LEGACY_LOG_TABS[value] || value;
+  return LOG_VIEWS.some((item) => item.id === tab) ? tab : null;
+};
 
 // ── Component ─────────────────────────────────────────────────────
 
@@ -49,11 +61,17 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const router = useRouter();
   const [darkMode] = useState(true);
   const [internalTab, setInternalTab] = useState("connections");
-  // When embedded, the active view is controlled by the parent hub.
-  const activeTab = embedded && view ? view : internalTab;
+  const activeTab = embedded && view && onViewChange ? view : internalTab;
   const setActiveTab = (id: string) => {
-    if (embedded && onViewChange) onViewChange(id);
-    else setInternalTab(id);
+    if (embedded && view && onViewChange) onViewChange(id);
+    else {
+      setInternalTab(id);
+      if (!embedded && typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.set("logTab", id);
+        window.history.pushState(null, "", url);
+      }
+    }
   };
   const [loading, setLoading] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
@@ -195,17 +213,19 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       const q = new URLSearchParams(window.location.search);
       const searchTerm = q.get("search") || q.get("username");
       if (searchTerm) setSearch(searchTerm);
-      if (embedded) return;
-      const want = q.get("logTab") || q.get("tab");
-      const legacyTab: Record<string, string> = {
-        console: "connections", network: "connections", failed: "connections",
-        timeline: "connections", radsess: "sessions", disconnects: "sessions",
-        authrec: "authentication", login: "authentication", radius: "authentication",
-        sessions: "sessions", actrec: "audit", activity: "audit", system: "audit",
-      };
-      const destination = want ? (legacyTab[want] || want) : undefined;
-      if (destination && tabs.some((x) => x.id === destination)) setActiveTab(destination);
+      if (!embedded) {
+        const destination = resolveLogTab(q.get("logTab") || q.get("tab"));
+        if (destination) setInternalTab(destination);
+      }
     } catch { /* no query */ }
+    const handlePopState = () => {
+      if (embedded) return;
+      const params = new URLSearchParams(window.location.search);
+      const destination = resolveLogTab(params.get("logTab") || params.get("tab"));
+      setInternalTab(destination || "connections");
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   // Initial load
@@ -319,6 +339,21 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   // ── Tabs ───────────────────────────────────────────────────────
 
   const tabs = LOG_VIEWS;
+  const activeTabIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTab));
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    if (event.key === "ArrowLeft") nextIndex = (index + tabs.length - 1) % tabs.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = tabs.length - 1;
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    setActiveTab(nextTab.id);
+    tabRefs.current[nextIndex]?.focus();
+  };
 
   // ── Render ─────────────────────────────────────────────────────
 
@@ -467,9 +502,14 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                   key={tab.id}
                   type="button"
                   role="tab"
+                  id={`logs-tab-${tab.id}`}
+                  aria-controls="logs-tabpanel"
                   aria-selected={activeTab === tab.id}
+                  tabIndex={activeTab === tab.id ? 0 : -1}
                   className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
                   onClick={() => setActiveTab(tab.id)}
+                  onKeyDown={(event) => handleTabKeyDown(event, tabs.indexOf(tab))}
+                  ref={(element) => { tabRefs.current[tabs.indexOf(tab)] = element; }}
                 >
                   {tab.label}
                 </button>
@@ -477,7 +517,13 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             </nav>
 
             {/* Right content area. */}
-            <div className="logs-main">
+            <div
+              className="logs-main"
+              id="logs-tabpanel"
+              role="tabpanel"
+              aria-labelledby={`logs-tab-${tabs[activeTabIndex].id}`}
+              tabIndex={0}
+            >
           <p className="logs-tab-description">{tabs.find((tab) => tab.id === activeTab)?.description}</p>
 
           {/* ═══════════════ LOADING ═══════════════ */}
