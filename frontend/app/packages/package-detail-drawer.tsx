@@ -18,6 +18,7 @@ import useSWR from "swr";
 import Portal from "../components/portal";
 import API from "../components/api";
 import { money } from "../components/currency";
+import "./package-detail-drawer.css";
 import {
   OverviewResponse, fupInfo, durationLabel, serviceTypeLabel,
   healthTone, fmtDate,
@@ -71,20 +72,21 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
 
   return (
     <Portal>
-      <div style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,.45)", backdropFilter: "blur(3px)" }}
+      <div className="package-detail-drawer-overlay" style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,.45)", backdropFilter: "blur(3px)" }}
         onClick={onClose}>
         <div
           onClick={(e) => e.stopPropagation()}
+          className="package-detail-drawer"
           style={{
             position: "absolute", top: 0, right: 0, height: "100%", width: "min(680px, 94vw)",
             background: "var(--bg-elev, var(--surface))", borderLeft: "1px solid var(--border)",
             display: "flex", flexDirection: "column", boxShadow: "-18px 0 50px rgba(0,0,0,.5)",
           }}>
           {/* Header */}
-          <div style={{ padding: "18px 22px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", gap: "14px" }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                <h2 style={{ fontSize: "18px", fontWeight: "800", color: "var(--text)", margin: 0 }}>{pkg?.name ?? "Package"}</h2>
+          <div className="package-detail-header" style={{ padding: "18px 22px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", gap: "14px" }}>
+            <div className="package-detail-header-info" style={{ flex: 1, minWidth: 0 }}>
+              <div className="package-detail-title-row" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <h2 className="package-detail-title" style={{ fontSize: "18px", fontWeight: "800", color: "var(--text)", margin: 0 }}>{pkg?.name ?? "Package"}</h2>
                 <span style={{
                   padding: "3px 10px", borderRadius: "999px", fontSize: "10px", fontWeight: "700", letterSpacing: ".06em", textTransform: "uppercase",
                   background: pkg?.isActive ? "rgba(16,185,129,.12)" : "rgba(255,112,112,.12)",
@@ -105,19 +107,20 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
                 )}
               </div>
               {pkg?.description && (
-                <div style={{ fontSize: "12.5px", color: "var(--muted)", marginTop: "6px", lineHeight: 1.6 }}>{pkg.description}</div>
+                <div className="package-detail-description" style={{ fontSize: "12.5px", color: "var(--muted)", marginTop: "6px", lineHeight: 1.6 }}>{pkg.description}</div>
               )}
-              <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "6px", fontFamily: "monospace" }}>
+              <div className="package-detail-meta" style={{ fontSize: "11px", color: "var(--muted)", marginTop: "6px", fontFamily: "monospace" }}>
                 {serviceTypeLabel(pkg?.serviceType)} · {durationLabel(pkg?.durationType)} · {money(pkg?.price)}{pkg?.duration ? ` / ${pkg.duration} day${pkg.duration === 1 ? "" : "s"}` : ""}
               </div>
             </div>
-            <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--muted)", fontSize: "20px", cursor: "pointer", lineHeight: 1 }} title="Close">✕</button>
+            <button className="package-detail-close" onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--muted)", fontSize: "20px", cursor: "pointer", lineHeight: 1 }} title="Close">✕</button>
           </div>
 
           {/* Tabs */}
-          <div style={{ display: "flex", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+          <div className="package-detail-tabs" style={{ display: "flex", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
             {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
               <button key={t} onClick={() => setTab(t)}
+                className="package-detail-tab"
                 style={{
                   padding: "7px 14px", borderRadius: "9px", fontSize: "12px", fontWeight: "600", cursor: "pointer",
                   border: "1px solid transparent", whiteSpace: "nowrap",
@@ -130,7 +133,7 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
           </div>
 
           {/* Body */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "18px 22px" }}>
+          <div className="package-detail-body" style={{ flex: 1, overflowY: "auto", padding: "18px 22px" }}>
             {isLoading && <div style={{ color: "var(--muted)", fontSize: "13px" }}>Loading…</div>}
             {!isLoading && error && (
               <div style={{ color: "#ff7070", fontSize: "13px", lineHeight: 1.7 }}>
@@ -157,9 +160,9 @@ export default function PackageDetailDrawer({ id, token, onClose, onChanged }: {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <div style={{ fontSize: "10px", fontWeight: "700", letterSpacing: ".08em", textTransform: "uppercase", color: "var(--muted)" }}>{label}</div>
-      <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text)", marginTop: "3px" }}>{children}</div>
+    <div className="package-detail-field">
+      <div className="package-detail-field-label" style={{ fontSize: "10px", fontWeight: "700", letterSpacing: ".08em", textTransform: "uppercase", color: "var(--muted)" }}>{label}</div>
+      <div className="package-detail-field-value" style={{ fontSize: "13px", fontWeight: "600", color: "var(--text)", marginTop: "3px" }}>{children}</div>
     </div>
   );
 }
@@ -181,17 +184,17 @@ function OverviewTab({ data, onRefresh }: { data: OverviewResponse; onRefresh: (
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "12px" }}>
+      <div className="package-spec-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "12px" }}>
         {specs.map((s) => <Field key={s.label} label={s.label}>{s.value}</Field>)}
       </div>
 
       {/* Health checks — derived from real data server-side.
           Ordered error → warn → ok → info so a blocking problem can never be
           buried under a list of neutral facts. */}
-      <section>
+      <section className="package-health">
         <h3 style={{ fontSize: "12px", fontWeight: "800", letterSpacing: ".06em", textTransform: "uppercase", color: "var(--muted)", margin: "0 0 10px" }}>Configuration health</h3>
         {data.healthStatus && (
-          <div style={{
+          <div className="package-health-banner" style={{
             padding: "10px 14px", borderRadius: 10, marginBottom: 10, fontSize: 12.5, lineHeight: 1.6,
             fontWeight: 600,
             border: `1px solid ${healthTone(
@@ -205,7 +208,7 @@ function OverviewTab({ data, onRefresh }: { data: OverviewResponse; onRefresh: (
           </div>
         )}
         {(data.health || []).length === 0 && <div style={{ fontSize: "13px", color: "var(--muted)" }}>No checks.</div>}
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        <div className="package-health-list" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
           {[...(data.health || [])]
             .sort((a, b) => {
               const rank: Record<string, number> = { error: 0, warn: 1, ok: 2, info: 3 };
@@ -214,13 +217,13 @@ function OverviewTab({ data, onRefresh }: { data: OverviewResponse; onRefresh: (
             .map((h, i) => {
               const t = healthTone(h.level);
               return (
-                <div key={i} style={{
+                <div key={i} className="package-health-item" style={{
                   padding: "10px 14px", borderRadius: "10px",
                   border: `1px solid ${h.level === "error" ? t.color : "var(--border)"}`,
                   background: t.bg, fontSize: "12.5px", color: t.color, lineHeight: 1.5,
                   display: "flex", gap: 8, alignItems: "flex-start",
                 }}>
-                  <span style={{ fontWeight: 800 }}>{t.icon}</span>
+                  <span className="package-health-icon" style={{ fontWeight: 800 }}>{h.level === "ok" ? "✓" : t.icon}</span>
                   <span>{h.message}</span>
                 </div>
               );
