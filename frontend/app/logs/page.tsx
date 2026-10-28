@@ -5,9 +5,8 @@ import { BRAND } from "../../lib/brand";
 import { useRouter } from "next/navigation";
 import { silent } from "../components/silent";
 import API from "../components/api";
-import { WinBoxLog } from "../components/winbox-log";
 import { LogRecordsTable } from "../components/log-records-table";
-import { CauseBadge, SeverityTag, causeOf, resolveCause } from "./terminate-cause";
+import { CauseBadge, SeverityTag, causeOf } from "./terminate-cause";
 import DisconnectsPanel from "./disconnects-panel";
 import { mustOk } from "../../lib/http";
 
@@ -25,72 +24,62 @@ const timeAgo = (ts: string | Date) => {
   return `${day}d ago`;
 };
 
-const money = (n: number) => n.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const dateTime = (value: string | Date) => new Date(value).toLocaleString(undefined, {
+  year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  second: "2-digit", timeZoneName: "short",
+});
 
-// ── Log views (exported so the Insights hub can build its accordion) ──
+// ── The four primary Logs categories ────────────────────────────
 export const LOG_VIEWS = [
-  { id: "console",    label: "🖥️ Console" },
-  { id: "actrec",     label: "🧾 Activity Logs" },
-  { id: "authrec",    label: "🔑 Subscriber Auth" },
-  { id: "timeline",   label: "📋 Timeline" },
-  { id: "login",      label: "🔐 Login" },
-  { id: "activity",   label: "📝 Activity" },
-  { id: "network",    label: "🖧 Network" },
-  { id: "system",     label: "⚙️ System" },
-  { id: "sessions",   label: "🟢 Sessions" },
-  { id: "radsess",    label: "📶 RADIUS Sessions" },
-  { id: "disconnects", label: "🔌 Disconnect Reasons" },
-  { id: "failed",     label: "⛔ Failed" },
-  { id: "radius",     label: "🩺 RADIUS" },
+  { id: "connections", label: "Connections", description: "Investigate connection events, network records, and failed activations." },
+  { id: "sessions", label: "Sessions", description: "Review RADIUS accounting sessions and recorded disconnect causes." },
+  { id: "authentication", label: "Authentication (AAA)", description: "Inspect subscriber RADIUS authentication and application sign-ins." },
+  { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
 ];
 
 // ── Component ─────────────────────────────────────────────────────
 
 /**
- * Props let the page be EMBEDDED inside the Insights hub: there, the hub's
- * accordion is the view switcher, so Logs hides its own sidebar and is driven
- * by the `view` prop instead. Standalone (no props) it keeps its own sidebar.
+ * The page can be embedded in Insights or opened directly; both modes use the
+ * same four-tab Logs navigation.
  */
 export default function LogsPage({ embedded = false, view, onViewChange }: {
   embedded?: boolean; view?: string; onViewChange?: (id: string) => void;
 } = {}) {
   const router = useRouter();
-  const [darkMode, setDarkMode] = useState(true);
-  const [user, setUser] = useState<any>(null);
-  const [internalTab, setInternalTab] = useState("timeline");
+  const [darkMode] = useState(true);
+  const [internalTab, setInternalTab] = useState("connections");
   // When embedded, the active view is controlled by the parent hub.
-  const activeTab = embedded ? (view || "timeline") : internalTab;
+  const activeTab = embedded && view ? view : internalTab;
   const setActiveTab = (id: string) => {
-    if (embedded) { onViewChange?.(id); } else { setInternalTab(id); }
+    if (embedded && onViewChange) onViewChange(id);
+    else setInternalTab(id);
   };
   const [loading, setLoading] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
-  const [navOpen, setNavOpen] = useState(false);
 
   // ── Data ───────────────────────────────────────────────────────
-  const [loginLogs, setLoginLogs] = useState<any[]>([]);
-  const [activityLogs, setActivityLogs] = useState<any[]>([]);
-  const [networkLogs, setNetworkLogs] = useState<any[]>([]);
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [radiusSessions, setRadiusSessions] = useState<any[]>([]);
-  const [radiusSummary, setRadiusSummary] = useState<any[]>([]);
-  const [radCause, setRadCause] = useState<string>("");   // "" = all, "online", or a cause label
   const [radWindow, setRadWindow] = useState<number>(0);  // 0 = all time, else hours
   const [failedActs, setFailedActs] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
+  const [statsError, setStatsError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [timelineError, setTimelineError] = useState("");
+  const [timelineLoading, setTimelineLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [diag, setDiag] = useState<any>(null);
+  const [diagError, setDiagError] = useState("");
   const [diagBusy, setDiagBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [timelineLimit, setTimelineLimit] = useState(100);
 
   // ── Filters ────────────────────────────────────────────────────
   const [search, setSearch] = useState("");
-  const [filterTypes, setFilterTypes] = useState<Record<string, boolean>>({
-    login: true, activity: true, network: true, system: true,
-  });
   const [filterSeverity, setFilterSeverity] = useState<string>("ALL");
   const [filterPeriod, setFilterPeriod] = useState("24h");
   const [focusUser, setFocusUser] = useState("");
@@ -139,14 +128,24 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
   const fetchTimeline = useCallback(async () => {
     if (!token) return;
+    setTimelineLoading(true);
     try {
       const params = new URLSearchParams();
       params.set("limit", String(timelineLimit));
+      params.set("type", "network");
       if (focusUser) params.set("forUser", focusUser);
       if (filterSeverity !== "ALL") params.set("severity", filterSeverity);
       const res = await fetch(`${API}/logs/timeline?${params}`, { headers });
-      if (res.ok) setTimeline(await res.json());
-    } catch { /* silent */ }
+      if (!res.ok) throw new Error(`Unable to load connection events (HTTP ${res.status}).`);
+      const events = await res.json();
+      if (!Array.isArray(events)) throw new Error("The connection event response was invalid.");
+      setTimeline(events);
+      setTimelineError("");
+    } catch (e) {
+      setTimelineError(e instanceof Error ? e.message : "Unable to load connection events.");
+    } finally {
+      setTimelineLoading(false);
+    }
   }, [token, timelineLimit, focusUser, filterSeverity]);
 
   const fetchStats = useCallback(async () => {
@@ -154,59 +153,58 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     try {
       const h = filterPeriod === "1h" ? 1 : filterPeriod === "6h" ? 6 : filterPeriod === "7d" ? 168 : 24;
       const res = await fetch(`${API}/logs/stats?hours=${h}`, { headers });
-      if (res.ok) setStats(await res.json());
-    } catch { /* silent */ }
+      if (!res.ok) throw new Error(`Unable to load summary metrics (HTTP ${res.status}).`);
+      setStats(await res.json());
+      setStatsError("");
+    } catch (e) {
+      setStatsError(e instanceof Error ? e.message : "Unable to load summary metrics.");
+    }
   }, [token, filterPeriod]);
 
   const fetchAllLogs = useCallback(async () => {
     if (!token) return;
     setLoading(true);
+    setLoadError("");
     try {
-      const fu = focusUser ? `&forUser=${focusUser}` : "";
       const fuq = focusUser ? `?forUser=${focusUser}` : "";
-      const [loginRes, activityRes, networkRes, systemRes, sessionsRes, radiusRes] = await Promise.all([
-        fetch(`${API}/logs/login?limit=100${fu}`, { headers }).catch((err) => { console.error('Login logs fetch failed', err); return null; }),
-        fetch(`${API}/logs/activity?limit=100${fu}`, { headers }).catch((err) => { console.error('Activity logs fetch failed', err); return null; }),
-        fetch(`${API}/logs/network?limit=100`, { headers }).catch((err) => { console.error('Network logs fetch failed', err); return null; }),
-        fetch(`${API}/logs/system?limit=100`, { headers }).catch((err) => { console.error('System logs fetch failed', err); return null; }),
-        fetch(`${API}/logs/sessions${fuq}`, { headers }).catch((err) => { console.error('Session logs fetch failed', err); return null; }),
-        fetch(`${API}/logs/radius-sessions?limit=500${radCause ? `&cause=${encodeURIComponent(radCause)}` : ""}${radWindow ? `&sinceHours=${radWindow}` : ""}`, { headers }).catch((err) => { console.error('RADIUS session logs fetch failed', err); return null; }),
+      const [systemRes, sessionsRes, radiusRes, failedRes] = await Promise.all([
+        fetch(`${API}/logs/system?limit=100`, { headers }),
+        fetch(`${API}/logs/sessions${fuq}`, { headers }),
+        fetch(`${API}/logs/radius-sessions?limit=500&cause=current${radWindow ? `&sinceHours=${radWindow}` : ""}`, { headers }),
+        fetch(`${API}/logs/failed-activations?limit=200`, { headers }),
       ]);
-      if (loginRes) {
-        if (loginRes.ok) { const d = await loginRes.json(); setLoginLogs(d.logs || []); }
-        else console.error('Login logs HTTP error', loginRes.status, await loginRes.text());
-      }
-      if (activityRes) {
-        if (activityRes.ok) { const d = await activityRes.json(); setActivityLogs(d.logs || []); }
-        else console.error('Activity logs HTTP error', activityRes.status, await activityRes.text());
-      }
-      if (networkRes) {
-        if (networkRes.ok) { const d = await networkRes.json(); setNetworkLogs(d.logs || []); }
-        else console.error('Network logs HTTP error', networkRes.status, await networkRes.text());
-      }
-      if (systemRes) {
-        if (systemRes.ok) { const d = await systemRes.json(); setSystemLogs(d.logs || []); }
-        else console.error('System logs HTTP error', systemRes.status, await systemRes.text());
-      }
-      if (sessionsRes) {
-        if (sessionsRes.ok) { const d = await sessionsRes.json(); setSessions(Array.isArray(d) ? d : []); }
-        else console.error('Session logs HTTP error', sessionsRes.status, await sessionsRes.text());
-      }
-      if (radiusRes) {
-        if (radiusRes.ok) { const d = await radiusRes.json(); setRadiusSessions(Array.isArray(d?.items) ? d.items : []); setRadiusSummary(Array.isArray(d?.summary) ? d.summary : []); }
-        else console.error('RADIUS session logs HTTP error', radiusRes.status, await radiusRes.text());
-      }
-    } finally { setLoading(false); }
-  }, [token, focusUser, radCause, radWindow]);
+      const failedResponse = [systemRes, sessionsRes, radiusRes, failedRes].find((response) => !response.ok);
+      if (failedResponse) throw new Error(`Unable to load log data (HTTP ${failedResponse.status}).`);
+      const [systemData, sessionsData, radiusData, failedData] = await Promise.all([
+        systemRes.json(), sessionsRes.json(), radiusRes.json(), failedRes.json(),
+      ]);
+      setSystemLogs(Array.isArray(systemData?.logs) ? systemData.logs : Array.isArray(systemData) ? systemData : []);
+      setSessions(Array.isArray(sessionsData) ? sessionsData : []);
+      setRadiusSessions(Array.isArray(radiusData?.items) ? radiusData.items : []);
+      setFailedActs(Array.isArray(failedData) ? failedData : []);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Unable to load log data.");
+    } finally {
+      setLoading(false);
+    }
+  }, [token, focusUser, radWindow]);
 
-  // Deep link: /logs?tab=disconnects (only this page's own tab ids — inside the
-  // Insights hub the same parameter names the hub tab, and is ignored here).
+  // Preserve old log-view bookmarks by redirecting their view id to a category.
   useEffect(() => {
-    if (embedded) return; // the hub controls the active view when embedded
     try {
       const q = new URLSearchParams(window.location.search);
+      const searchTerm = q.get("search") || q.get("username");
+      if (searchTerm) setSearch(searchTerm);
+      if (embedded) return;
       const want = q.get("logTab") || q.get("tab");
-      if (want && tabs.some((x) => x.id === want)) setActiveTab(want);
+      const legacyTab: Record<string, string> = {
+        console: "connections", network: "connections", failed: "connections",
+        timeline: "connections", radsess: "sessions", disconnects: "sessions",
+        authrec: "authentication", login: "authentication", radius: "authentication",
+        sessions: "sessions", actrec: "audit", activity: "audit", system: "audit",
+      };
+      const destination = want ? (legacyTab[want] || want) : undefined;
+      if (destination && tabs.some((x) => x.id === destination)) setActiveTab(destination);
     } catch { /* no query */ }
   }, []);
 
@@ -214,8 +212,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
     fetch(`${API}/profile`, { headers })
-      .then(res => { if (res.status === 401) { localStorage.removeItem("token"); router.push("/login"); return null; } return res.json(); })
-      .then(data => { if (data?.user) setUser(data.user); })
+      .then(res => { if (res.status === 401) { localStorage.removeItem("token"); router.push("/login"); } })
       .catch(silent("profileFetch"));
 
     fetchTimeline();
@@ -235,9 +232,15 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     if (token) { fetchTimeline(); fetchStats(); }
   }, [focusUser, filterSeverity, filterPeriod, timelineLimit]);
 
-  // Auto-refresh timeline every 15s
+  const didMountDataFilters = useRef(false);
   useEffect(() => {
-    if (activeTab !== "timeline" || !token) return;
+    if (!didMountDataFilters.current) { didMountDataFilters.current = true; return; }
+    if (token) fetchAllLogs();
+  }, [focusUser, radWindow]);
+
+  // Auto-refresh the connection event stream every 15s.
+  useEffect(() => {
+    if (activeTab !== "connections" || !token) return;
     const iv = setInterval(() => { fetchTimeline(); fetchStats(); }, 15_000);
     return () => clearInterval(iv);
   }, [activeTab, token, fetchTimeline, fetchStats]);
@@ -246,30 +249,45 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const loadDiag = useCallback(() => {
     if (!token) return;
     setDiagBusy(true);
+    setDiagError("");
     fetch(`${API}/logs/radius/diagnostics`, { headers })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => d && setDiag(d))
-      .catch(silent("radiusDiag"))
+      .then(r => {
+        if (!r.ok) throw new Error(`Unable to load RADIUS diagnostics (HTTP ${r.status}).`);
+        return r.json();
+      })
+      .then(setDiag)
+      .catch(e => setDiagError(e instanceof Error ? e.message : "Unable to load RADIUS diagnostics."))
       .finally(() => setDiagBusy(false));
   }, [token]);
 
   useEffect(() => {
-    if (activeTab !== "radius" || !token) return;
+    if (activeTab !== "authentication" || !token) return;
     loadDiag();
     const iv = setInterval(loadDiag, 30_000);
     return () => clearInterval(iv);
   }, [activeTab, token, loadDiag]);
+
+  const refreshAll = () => {
+    setRefreshKey((key) => key + 1);
+    fetchTimeline();
+    fetchStats();
+    fetchAllLogs();
+    if (activeTab === "authentication") loadDiag();
+  };
 
   // ── Filter helpers ─────────────────────────────────────────────
 
   const filterData = (data: any[], fields: string[]) => {
     if (!search) return data;
     const q = search.toLowerCase();
-    return data.filter(item => fields.some(f => String(item[f] || "").toLowerCase().includes(q)));
+    return data.filter(item => fields.some((field) => {
+      const value = field.split(".").reduce((current: any, key) => current?.[key], item);
+      return String(value ?? "").toLowerCase().includes(q);
+    }));
   };
 
   const filteredTimeline = timeline.filter(e => {
-    if (!filterTypes[e._type]) return false;
+    if (e._type !== "network") return false;
     if (filterSeverity !== "ALL" && e.severity?.toUpperCase() !== filterSeverity) return false;
     if (!search) return true;
     const q = search.toLowerCase();
@@ -311,40 +329,41 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
           {/* Layout styles: left vertical view sidebar + content. */}
           <style>{`
-            .logs-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:18px;align-items:start}
+            .logs-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
             .logs-layout.embedded{grid-template-columns:1fr}
             .logs-main{min-width:0}
-            .logs-side{position:sticky;top:12px;display:flex;flex-direction:column;gap:3px;
-              background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:9px;
-              box-shadow:0 1px 2px rgba(0,0,0,.05)}
-            .logs-side-tab{border:none;background:transparent;padding:9px 12px;border-radius:9px;
-              font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
-              text-align:left;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+            .logs-side{display:flex;gap:5px;overflow-x:auto;overscroll-behavior-x:contain;
+              background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:6px;
+              box-shadow:0 1px 2px rgba(0,0,0,.05);scrollbar-width:thin}
+            .logs-side-tab{flex:1 0 auto;border:none;background:transparent;padding:10px 14px;border-radius:9px;
+              font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
+              text-align:center;white-space:nowrap;
               transition:background .12s,color .12s}
             .logs-side-tab:hover{color:var(--text);background:var(--surface-2)}
             .logs-side-tab.on{background:var(--accent);color:#fff;
               box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 40%,transparent)}
-            .logs-navtrigger{display:none;align-items:center;justify-content:space-between;gap:10px;width:100%;
-              padding:11px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);
-              color:var(--text);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
-            .logs-navchev{transition:transform .18s;color:var(--muted)}
-            .logs-navchev.open{transform:rotate(180deg)}
-            @media (max-width:900px){
-              .logs-layout{grid-template-columns:1fr;gap:12px}
-              .logs-navtrigger{display:flex}
-              .logs-side{position:static;display:none;padding:7px}
-              .logs-side.open{display:flex}
+            .logs-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 16px}
+            .logs-heading h1{font-size:22px;line-height:1.2;margin:0;font-weight:750}
+            .logs-heading p{font-size:13px;color:var(--muted);margin:5px 0 0}
+            .logs-tab-description{font-size:12px;color:var(--muted);margin:-7px 0 14px}
+            @media (max-width:640px){
+              .logs-side{border-radius:11px}
+              .logs-side-tab{padding:10px 12px}
+              .logs-heading h1{font-size:20px}
+              .logs-tab-description{margin-top:-5px}
             }
           `}</style>
 
           {/* ═══════════════ TOP KPI CARDS ═══════════════ */}
       {showOverview && (
+        <>
+          {statsError && <p role="alert" style={{ color: t.red, fontSize: 12, margin: "0 0 10px" }}>{statsError}</p>}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 18 }}>
             {[
-              { label: "Events (24h)",  val: stats ? stats.totals.login + stats.totals.activity + stats.totals.network + stats.totals.system : "—", sub: "all types", color: t.accent },
-              { label: "Failed Logins", val: stats?.errors?.failedLogins ?? "—", sub: "last 24h", color: t.red },
-              { label: "Network Errors", val: stats?.errors?.networkErrors ?? "—", sub: "last 24h", color: t.amber },
-              { label: "Sessions",      val: stats?.activeSessions ?? "—", sub: "active now", color: t.green },
+              { label: `Events (${filterPeriod})`, val: stats ? stats.totals.login + stats.totals.activity + stats.totals.network + stats.totals.system : "—", sub: "all event types", color: t.accent },
+              { label: "Failed app sign-ins", val: stats?.errors?.failedLogins ?? "—", sub: filterPeriod, color: t.red },
+              { label: "Network errors", val: stats?.errors?.networkErrors ?? "—", sub: filterPeriod, color: t.amber },
+              { label: "Active app sessions", val: stats?.activeSessions ?? "—", sub: "current", color: t.green },
             ].map((c, i) => (
               <div key={i} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px" }}>
                 <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: t.textMuted }}>{c.label}</div>
@@ -353,9 +372,16 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
               </div>
             ))}
           </div>
+        </>
       )}
 
           {/* ═══════════════ FILTER BAR ═══════════════ */}
+          <header className="logs-heading">
+            <div>
+              <h1>Logs</h1>
+              <p>Investigate connections, sessions, authentication, and system changes.</p>
+            </div>
+          </header>
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               {/* Overview toggle — sits with the search for a clean single bar. */}
@@ -378,6 +404,11 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                   background: showFilters ? `${t.accent}15` : "transparent", color: showFilters ? t.accent : t.textSub, cursor: "pointer", fontSize: 12 }}>
                 ⚙️ Filters {showFilters ? "▲" : "▼"}
               </button>
+              <button type="button" onClick={refreshAll} disabled={loading}
+                style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${t.cardBorder}`,
+                  background: "transparent", color: t.textSub, cursor: loading ? "wait" : "pointer", fontSize: 12 }}>
+                {loading ? "Refreshing…" : "↻ Refresh"}
+              </button>
 
               {/* Account drill-down */}
               {accounts.length > 0 && (
@@ -389,21 +420,16 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                 </select>
               )}
             </div>
+            {loadError && (
+              <div role="alert" style={{ margin: "0 0 14px", padding: "10px 12px", border: "1px solid #ef4444",
+                borderRadius: 8, color: "#ef4444", fontSize: 12 }}>
+                {loadError}
+              </div>
+            )}
 
             {/* Collapsible advanced filters */}
             {showFilters && (
               <div style={{ marginTop: 10, padding: 12, background: t.card, borderRadius: 10, border: `1px solid ${t.cardBorder}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-                {/* Type filter */}
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: t.textSub }}>Types:</span>
-                  {Object.entries(typeConfig).map(([k, v]) => (
-                    <label key={k} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11 }}>
-                      <input type="checkbox" checked={filterTypes[k]} onChange={e => setFilterTypes(p => ({ ...p, [k]: e.target.checked }))} />
-                      <span style={{ opacity: filterTypes[k] ? 1 : .5 }}>{v.icon} {v.label}</span>
-                    </label>
-                  ))}
-                </div>
-
                 {/* Severity filter */}
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: t.textSub }}>Severity:</span>
@@ -433,41 +459,29 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             )}
           </div>
 
-          {/* ═══════════════ VIEW SIDEBAR + CONTENT ═══════════════ */}
-          {/* When embedded in the Insights hub, the hub's accordion is the view
-              switcher, so the own sidebar is dropped and content spans full width. */}
+          {/* ═══════════════ FOUR-TAB LOGS WORKSPACE ═══════════════ */}
           <div className={`logs-layout${embedded ? " embedded" : ""}`}>
-            {!embedded && (
-              <>
-                {/* Mobile: the view list collapses behind this trigger. */}
-                <button type="button" className="logs-navtrigger" aria-expanded={navOpen} onClick={() => setNavOpen(v => !v)}>
-                  <span>{tabs.find(x => x.id === activeTab)?.label || "View"}</span>
-                  <span className={`logs-navchev${navOpen ? " open" : ""}`}>▾</span>
+            <nav className="logs-side" role="tablist" aria-label="Log views">
+              {tabs.map(tab => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
+                  className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  {tab.label}
                 </button>
-
-                {/* Left vertical view navigation. */}
-                <nav className={`logs-side${navOpen ? " open" : ""}`} role="tablist" aria-label="Log views">
-                  {tabs.map(tab => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeTab === tab.id}
-                      className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
-                      onClick={() => { setActiveTab(tab.id); setNavOpen(false); }}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </nav>
-              </>
-            )}
+              ))}
+            </nav>
 
             {/* Right content area. */}
             <div className="logs-main">
+          <p className="logs-tab-description">{tabs.find((tab) => tab.id === activeTab)?.description}</p>
 
           {/* ═══════════════ LOADING ═══════════════ */}
-          {loading && activeTab !== "timeline" && activeTab !== "console" && activeTab !== "actrec" && activeTab !== "authrec" && (
+          {loading && activeTab !== "connections" && activeTab !== "audit" && activeTab !== "authentication" && (
             <div style={{ textAlign: "center", padding: 40, background: t.card, borderRadius: 12, border: `1px solid ${t.cardBorder}` }}>
               <div style={{ width: 30, height: 30, border: `3px solid ${t.cardBorder}`, borderTopColor: t.accent, borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 12px" }}></div>
               <p style={{ color: t.textMuted, fontSize: 12 }}>Loading...</p>
@@ -475,64 +489,64 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             </div>
           )}
 
-          {/* ═══════════════ TAB: CONSOLE (WinBox Log window) ═══════════════ */}
-          {activeTab === "console" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: t.green, animation: "pulse 2s infinite" }}></span>
-                <span style={{ fontSize: 11, color: t.textMuted }}>Live · auto-refresh 15s</span>
-                <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}`}</style>
-              </div>
-              <WinBoxLog entries={filteredTimeline} />
-            </div>
-          )}
-
           {/* ═══════════════ TAB: ACTIVITY LOGS (paginated) ═══════════════ */}
-          {activeTab === "actrec" && (
+          {activeTab === "audit" && (
+            <>
+            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Administrative activity</h2>
             <LogRecordsTable
               endpoint="/logs/activity"
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
               columns={[
                 { key: "id", label: "ID", nowrap: true, primary: true },
                 { key: "type", label: "Log Type", nowrap: true, primary: true, render: (r) => <b>{r.action}{r.entity ? ` · ${r.entity}` : ""}</b> },
                 { key: "subject", label: "Subject", nowrap: true, primary: true, render: (r) => r.entityId ? `${r.entity || ""} #${r.entityId}` : "—" },
-                { key: "createdAt", label: "Datetime", nowrap: true, primary: true, render: (r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : "—" },
+                { key: "createdAt", label: "Datetime", nowrap: true, primary: true, render: (r) => r.createdAt ? dateTime(r.createdAt) : "—" },
                 // Expanded detail — the long raw payload is here, not in the row.
                 { key: "details", label: "Description / Raw", mono: true, wide: true, render: (r) => r.details || r.action || "—" },
                 { key: "causer", label: "Causer", render: (r) => r.user ? `${r.user.name} (${r.user.role || "Staff"})` : "System" },
                 { key: "ipAddress", label: "IP Address", mono: true },
+                { key: "traceId", label: "Request / correlation ID", mono: true },
               ]}
             />
+            </>
           )}
 
           {/* ═══════════════ TAB: LOGIN LOGS — RADIUS auth (paginated) ═══════════════ */}
-          {activeTab === "authrec" && (
+          {activeTab === "authentication" && (
+            <>
+            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Subscriber RADIUS authentication</h2>
             <LogRecordsTable
               endpoint="/logs/radius-auth"
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
               days={7}
               daysOptions={[{ label: "Last 24 hours", value: 1 }, { label: "Last 7 days", value: 7 }, { label: "Last 30 days", value: 30 }, { label: "All time", value: 0 }]}
               columns={[
-                { key: "id", label: "ID", nowrap: true, mono: true, primary: true },
-                { key: "authdate", label: "Datetime", nowrap: true, primary: true, render: (r) => r.authdate ? new Date(r.authdate).toLocaleString() : "—" },
+                { key: "id", label: "Record ID", nowrap: true, mono: true, primary: true },
+                { key: "authdate", label: "Datetime", nowrap: true, primary: true, render: (r) => r.authdate ? dateTime(r.authdate) : "—" },
                 { key: "username", label: "Username", nowrap: true, primary: true, render: (r) => <b>{r.username}</b> },
-                { key: "reply", label: "Result", nowrap: true, primary: true, render: (r) => {
-                    const ok = r.accepted ?? String(r.reply || "").toLowerCase().includes("accept");
-                    return <span style={{ color: ok ? "#4caf50" : "#f44336", fontWeight: 700 }}>{ok ? "Accept" : "Reject"}</span>;
+                { key: "result", label: "Result", nowrap: true, primary: true, render: (r) => {
+                    const colors: Record<string, string> = { Accept: "#4caf50", Reject: "#f44336", Challenge: "#d97706", Unknown: "#64748b" };
+                    return <span style={{ color: colors[r.result] || colors.Unknown, fontWeight: 700 }}>{r.result || "Unknown"}</span>;
                   } },
-                // Expanded detail.
-                // Real account password (plaintext). radpostauth.pass is only the
-                // CHAP response hash, so we show the configured password instead.
-                { key: "password", label: "Password", mono: true, render: (r) => r.password || "—" },
-                { key: "reason", label: "Reason", render: (r) => <span style={{ color: (r.accepted ? "#4caf50" : "#e0a030") }}>{r.reason || "—"}</span> },
-                { key: "mac", label: "MAC Address", mono: true, render: (r) => r.mac || "—" },
+                { key: "reason", label: "Recorded RADIUS response", render: (r) => <span style={{ color: r.result === "Accept" ? "#16a34a" : r.result === "Reject" ? "#dc2626" : "#d97706" }}>{r.reason || "Not recorded"}</span> },
+                { key: "subscriberId", label: "Subscriber ID", render: (r) => r.subscriberId ?? "Not recorded" },
+                { key: "mac", label: "Calling-Station-Id", mono: true, render: (r) => r.mac || "Not recorded" },
                 { key: "port", label: "Port", render: (r) => r.port || "—" },
                 { key: "nas", label: "NAS", render: (r) => r.nas || "—" },
+                { key: "nasip", label: "NAS IP", mono: true, render: (r) => r.nasip || "Not recorded" },
               ]}
             />
+            </>
           )}
 
           {/* ═══════════════ TAB: TIMELINE ═══════════════ */}
-          {activeTab === "timeline" && (
+          {activeTab === "connections" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <h2 style={{ fontSize: 15, margin: "0 0 -3px" }}>Connection events</h2>
 
               {/* Heatmap */}
               {heatmapData.length > 0 && (
@@ -552,14 +566,17 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
               {/* Live status indicator */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: t.green, animation: "pulse 2s infinite" }}></span>
-                <span style={{ fontSize: 11, color: t.textMuted }}>Live · auto-refresh 15s</span>
+                <span style={{ fontSize: 11, color: t.textMuted }}>Auto-refresh every 15 seconds</span>
                 <span style={{ marginLeft: "auto", fontSize: 10, color: t.textMuted }}>{timeline.length} events</span>
-                <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}`}</style>
               </div>
+              {timelineError && <p role="alert" style={{ margin: 0, color: "#ef4444", fontSize: 12 }}>{timelineError}</p>}
 
               {/* Timeline entries */}
-              {filteredTimeline.length === 0 ? (
+              {timelineError ? null : timelineLoading && timeline.length === 0 ? (
+                <div role="status" style={{ textAlign: "center", padding: 30, color: t.textMuted, fontSize: 12, background: t.card, borderRadius: 10, border: `1px solid ${t.cardBorder}` }}>
+                  Loading connection events…
+                </div>
+              ) : filteredTimeline.length === 0 ? (
                 <div style={{ textAlign: "center", padding: 30, color: t.textMuted, fontSize: 12, background: t.card, borderRadius: 10, border: `1px solid ${t.cardBorder}` }}>
                   No events match your filters.
                 </div>
@@ -600,7 +617,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
                       {/* Time */}
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: t.text }} title={new Date(entry.ts).toLocaleString()}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: t.text }} title={dateTime(entry.ts)}>
                           {timeAgo(entry.ts)}
                         </div>
                       </div>
@@ -613,18 +630,21 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                     {isExpanded && (
                       <div style={{ padding: "12px 14px", borderTop: `1px solid ${t.cardBorder}`, background: d ? "var(--surface-2)" : "#f8fafc", fontSize: 12 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px" }}>
-                          <Detail label="Time" val={new Date(entry.ts).toLocaleString()} />
+                          <Detail label="Time" val={dateTime(entry.ts)} />
                           <Detail label="Type" val={`${tc.icon} ${tc.label}`} />
                           <Detail label="Severity" val={entry.severity} />
                           {entry.user && <Detail label="User" val={entry.user} />}
                           {entry.email && <Detail label="Email" val={entry.email} />}
-                          {entry.ipAddress && <Detail label="IP" val={entry.ipAddress} />}
+                          {entry.ipAddress && <Detail label="Source IP" val={entry.ipAddress} />}
                           {entry.action && <Detail label="Action" val={entry.action} />}
                           {entry.details && <Detail label="Details" val={entry.details} />}
                           {entry.message && <Detail label="Message" val={entry.message} />}
                           {entry.username && <Detail label="Username" val={entry.username} />}
-                          {entry.nasName && <Detail label="NAS" val={`${entry.nasName} (${entry.nasIp || ""})`} />}
-                          {entry.framedIp && <Detail label="Framed IP" val={entry.framedIp} />}
+                          {entry.subscriberId && <Detail label="Subscriber ID" val={entry.subscriberId} />}
+                          {(entry.nasName || entry.nasIp) && <Detail label="NAS" val={`${entry.nasName || "Not recorded"} (${entry.nasIp || "NAS IP not recorded"})`} />}
+                          {entry.framedIp && <Detail label="Subscriber IP" val={entry.framedIp} />}
+                          {entry.callerId && <Detail label="Calling-Station-Id" val={entry.callerId} />}
+                          {entry.sessionId && <Detail label="Acct-Session-Id" val={entry.sessionId} />}
                           {entry.source && <Detail label="Source" val={entry.source} />}
                           {entry.failReason && <Detail label="Fail Reason" val={entry.failReason} />}
                           {entry.userAgent && <Detail label="User Agent" val={entry.userAgent} />}
@@ -645,69 +665,37 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: LOGIN LOGS ═══════════════ */}
-          {activeTab === "login" && (
+          {activeTab === "authentication" && (
+            <>
+            <h2 style={{ fontSize: 15, margin: "16px 0 9px" }}>Application sign-ins</h2>
             <LogRecordsTable
               endpoint="/logs/login"
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
               columns={[
                 { key: "user", label: "User", nowrap: true, primary: true, render: (r) => r.user?.name || "—" },
                 { key: "email", label: "Email", nowrap: true, primary: true, render: (r) => r.email || "—" },
-                { key: "ipAddress", label: "IP", mono: true, nowrap: true, primary: true },
+                { key: "ipAddress", label: "Source IP", mono: true, nowrap: true },
                 { key: "status", label: "Status", nowrap: true, primary: true, render: (r) => (
                     <span style={{ color: r.status === "SUCCESS" ? "#16a34a" : "#dc2626", fontWeight: 700 }}>
                       {r.status === "SUCCESS" ? "Success" : "Failed"}
                     </span>
                   ) },
                 // Expanded detail.
-                { key: "createdAt", label: "Timestamp", render: (r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : "—" },
+                { key: "createdAt", label: "Timestamp", primary: true, render: (r) => r.createdAt ? dateTime(r.createdAt) : "—" },
                 { key: "failReason", label: "Reason", render: (r) => r.failReason || "—" },
                 { key: "userAgent", label: "Device / Browser", wide: true, render: (r) => r.userAgent || r.device || "—" },
               ]}
             />
-          )}
-
-          {/* ═══════════════ TAB: ACTIVITY LOGS ═══════════════ */}
-          {activeTab === "activity" && (
-            <LogTable data={filterData(activityLogs, ["user.name", "action", "entity", "details"])} d={d} t={t}
-              headers={["User", "Action", "Entity", "Details", "IP", "Time"]}
-              render={(log: any) => (
-                <tr key={log.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
-                  <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 500 }}>{log.user?.name || "System"}</td>
-                  <td style={{ padding: "8px 12px" }}><Badge color="#60a5fa" bg="var(--surface)">{log.action}</Badge></td>
-                  <td style={{ padding: "8px 12px", fontSize: 11 }}>{log.entity}{log.entityId ? ` #${log.entityId}` : ""}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textSub, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{log.details || "—"}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace" }}>{log.ipAddress || "—"}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{new Date(log.createdAt).toLocaleString()}</td>
-                </tr>
-              )} />
-          )}
-
-          {/* ═══════════════ TAB: NETWORK LOGS ═══════════════ */}
-          {activeTab === "network" && (
-            <LogTable data={filterData(networkLogs, ["nas?.nasname", "username", "message"])} d={d} t={t}
-              headers={["NAS Device", "Event", "User", "Message", "Time"]}
-              render={(log: any) => (
-                <tr key={log.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
-                  <td style={{ padding: "8px 12px" }}>
-                    <div style={{ fontWeight: 600, fontSize: 12 }}>{log.nas?.nasname || "Unknown"}</div>
-                    <div style={{ fontSize: 10, color: t.textMuted }}>{log.nas?.nasIp}</div>
-                  </td>
-                  <td style={{ padding: "8px 12px" }}><Badge color="#8b5cf6" bg="#3b0764">{log.eventType || "—"}</Badge></td>
-                  <td style={{ padding: "8px 12px" }}>
-                    <div style={{ fontWeight: 600, fontSize: 12 }}>{log.username || "—"}</div>
-                    <div style={{ fontSize: 10, color: t.textMuted }}>{log.framedIp}</div>
-                  </td>
-                  <td style={{ padding: "8px 12px", fontSize: 12, maxWidth: 300 }}>
-                    {log.message || "—"}
-                    {log.severity === "ERROR" && <span style={{ color: t.red, fontSize: 10, marginLeft: 6 }}>⚠️</span>}
-                  </td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{new Date(log.loggedAt || log.createdAt).toLocaleString()}</td>
-                </tr>
-              )} />
+            </>
           )}
 
           {/* ═══════════════ TAB: SYSTEM LOGS ═══════════════ */}
-          {activeTab === "system" && (
-            <LogTable data={filterData(systemLogs, ["message", "source"])} d={d} t={t}
+          {activeTab === "audit" && (
+            <>
+            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>System events</h2>
+            <LogTable data={filterData(systemLogs, ["message", "source", "level"])} d={d} t={t}
               headers={["Level", "Source", "Message", "Time"]}
               render={(log: any) => {
                 const lc = log.level === "ERROR" ? { color: "#f87171", bg: "#450a0a" } : log.level === "WARNING" ? { color: "#fbbf24", bg: "#422006" } : { color: "#60a5fa", bg: "var(--surface)" };
@@ -716,36 +704,37 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                     <td style={{ padding: "8px 12px" }}><Badge color={lc.color} bg={lc.bg}>{log.level}</Badge></td>
                     <td style={{ padding: "8px 12px", fontSize: 11 }}>{log.source}</td>
                     <td style={{ padding: "8px 12px", fontSize: 12 }}>{log.message}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{new Date(log.createdAt).toLocaleString()}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{dateTime(log.createdAt)}</td>
                   </tr>
                 );
               }} />
+            </>
           )}
 
           {/* ═══════════════ TAB: SESSIONS ═══════════════ */}
-          {activeTab === "sessions" && (
-            <LogTable data={sessions} d={d} t={t}
+          {activeTab === "authentication" && (
+            <>
+            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Application sessions</h2>
+            <LogTable data={filterData(sessions, ["user.name", "user.email", "ipAddress", "userAgent"])} d={d} t={t}
               headers={["User", "Role", "IP", "Login Time", "Expires"]}
               render={(s: any) => (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
                   <td style={{ padding: "8px 12px" }}><div style={{ fontWeight: 600, fontSize: 12 }}>{s.user?.name}</div><div style={{ fontSize: 10, color: t.textMuted }}>{s.user?.email}</div></td>
                   <td style={{ padding: "8px 12px" }}><Badge color="#4ade80" bg="#14532d">{s.user?.role}</Badge></td>
                   <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>{s.ipAddress}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{new Date(s.loginAt || s.createdAt).toLocaleString()}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.amber }}>{new Date(s.expiresAt).toLocaleString()}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{dateTime(s.loginAt || s.createdAt)}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.amber }}>{dateTime(s.expiresAt)}</td>
                 </tr>
               )} />
+            </>
           )}
 
           {/* ═══════════════ TAB: RADIUS SESSIONS (with termination cause) ═══════════════ */}
-          {activeTab === "radsess" && (
+          {activeTab === "sessions" && (
           <>
+            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>RADIUS accounting sessions</h2>
             {/* Time window */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-              <button type="button" onClick={() => setActiveTab("disconnects")}
-                style={{ order: 99, marginLeft: "auto", fontSize: 11.5, fontWeight: 700, color: t.accent, background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
-                Disconnect reasons — all 18 causes →
-              </button>
               <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Window:</span>
               {[[0,"All"],[24,"24h"],[72,"3d"],[168,"7d"]].map(([h,lbl]) => (
                 <button key={h as number} onClick={() => setRadWindow(h as number)}
@@ -756,31 +745,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                 </button>
               ))}
             </div>
-            {/* Per-cause summary chips — click to filter */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-              <button onClick={() => setRadCause("")}
-                style={{ fontSize: 11, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
-                  border: `1px solid ${radCause === "" ? t.accent : t.cardBorder}`,
-                  background: radCause === "" ? t.accent : "transparent", color: radCause === "" ? "#fff" : t.textSub }}>
-                All
-              </button>
-              {radiusSummary.map((c: any) => {
-                const val = c.online ? "online" : c.label;
-                const active = radCause.toLowerCase() === String(val).toLowerCase();
-                return (
-                  <button key={val} onClick={() => setRadCause(active ? "" : val)}
-                    title={c.online ? "Currently online" : `Terminate code #${c.code}`}
-                    style={{ fontSize: 11, padding: c.online ? "5px 11px" : 2, borderRadius: 999, cursor: "pointer",
-                      border: `${active ? 2 : 1}px solid ${active ? t.accent : (c.online ? t.cardBorder : "transparent")}`,
-                      background: c.online ? (active ? t.accent : "rgba(74,222,128,.1)") : "transparent",
-                      color: c.online ? (active ? "#fff" : "#16a34a") : t.text }}>
-                    {c.online ? `● Online · ${c.count}` : <CauseBadge compact cause={{ ...resolveCause(c.code || c.label), label: `${c.label} · ${c.count}` }} title="" />}
-                  </button>
-                );
-              })}
-            </div>
-            <LogTable data={radiusSessions} d={d} t={t}
-              headers={["User", "Status / Cause", "IP", "Started", "Duration", "Down / Up"]}
+            <LogTable data={filterData(radiusSessions, ["username", "nasIp", "framedIp", "callingStation", "sessionState", "terminateLabel"])} d={d} t={t}
+              headers={["Subscriber / Session", "Session state", "Subscriber / NAS IP", "Started", "Duration", "Last accounting update", "Down / Up"]}
               render={(s: any) => {
                 const dur = s.durationSec != null
                   ? (s.durationSec >= 3600 ? `${Math.floor(s.durationSec/3600)}h ${Math.floor((s.durationSec%3600)/60)}m` : s.durationSec >= 60 ? `${Math.floor(s.durationSec/60)}m ${s.durationSec%60}s` : `${s.durationSec}s`)
@@ -789,12 +755,18 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                   <tr key={s.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
                     <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600 }}>
                       {s.username}
-                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: "monospace" }}>{s.callingStation || ""}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted }}>Subscriber ID: {s.subscriberId ?? "Not recorded"}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: "monospace" }}>Acct-Session-Id: {s.sessionId || "Not recorded"}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: "monospace" }}>Calling-Station-Id: {s.callingStation || "Not recorded"}</div>
                     </td>
                     <td style={{ padding: "8px 12px" }}>
-                      {s.online
-                        ? <Badge color="#4ade80" bg="#14532d">● Online</Badge>
-                        : <span style={{ display: "grid", gap: 3, maxWidth: 360 }}>
+                      {s.sessionState === "active"
+                        ? <Badge color="#4ade80" bg="#14532d">Active · accounting fresh</Badge>
+                        : s.sessionState === "stale"
+                          ? <Badge color="#fbbf24" bg="#422006">Stale · no update for over 30 minutes</Badge>
+                          : s.sessionState === "unknown"
+                            ? <Badge color="#cbd5e1" bg="#334155">Unknown · no tracked PPPoE state</Badge>
+                            : <span style={{ display: "grid", gap: 3, maxWidth: 360 }}>
                             <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                               <CauseBadge compact cause={causeOf(s)} />
                               <SeverityTag severity={s.terminateSeverity} />
@@ -802,9 +774,14 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                             <span style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.45 }}>{s.terminateHow || s.terminateMeaning || s.terminateDescription}</span>
                           </span>}
                     </td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>{s.framedIp || "—"}<div style={{ fontSize: 10, color: t.textMuted }}>{s.nasIp}</div></td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.start ? new Date(s.start).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>
+                      Subscriber IP: {s.framedIp || "Not assigned"}
+                      <div style={{ fontSize: 10, color: t.textMuted }}>NAS: {s.nasName || "Not recorded"}{s.nasId ? ` · #${s.nasId}` : ""}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted }}>NAS IP: {s.nasIp || "Not recorded"}</div>
+                    </td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.start ? dateTime(s.start) : "—"}</td>
                     <td style={{ padding: "8px 12px", fontSize: 11 }}>{dur}</td>
+                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.lastSeen ? dateTime(s.lastSeen) : "Not recorded"}</td>
                     <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.downloadMB != null ? `${s.downloadMB} / ${s.uploadMB} MB` : "—"}</td>
                   </tr>
                 );
@@ -813,11 +790,20 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: DISCONNECT REASONS (all 18 RFC 2866 causes) ═══════════════ */}
-          {activeTab === "disconnects" && <DisconnectsPanel />}
+          {activeTab === "sessions" && (
+            <>
+              <h2 style={{ fontSize: 15, margin: "20px 0 9px" }}>Disconnect report</h2>
+              <DisconnectsPanel refreshKey={refreshKey} searchText={search} onSearchTextChange={setSearch} />
+            </>
+          )}
 
           {/* ═══════════════ TAB: FAILED ACTIVATIONS ═══════════════ */}
-          {activeTab === "failed" && (
-            <LogTable data={failedActs} d={d} t={t}
+          {activeTab === "connections" && (
+            <>
+            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Refused subscriber logins</h2>
+            <DisconnectsPanel mode="connections" refreshKey={refreshKey} searchText={search} onSearchTextChange={setSearch} />
+            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Failed activations</h2>
+            <LogTable data={filterData(failedActs, ["username", "reason", "by"])} d={d} t={t}
               headers={["ID", "Username", "Reason", "Attempted By", "When"]}
               render={(f: any, i: number) => (
                 <tr key={f.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: i % 2 === 0 ? (d ? "var(--surface-2)" : "#f8fafc") : t.card }}>
@@ -825,20 +811,22 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                   <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600 }}>{f.username || "—"}</td>
                   <td style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{f.reason}</td>
                   <td style={{ padding: "8px 12px", fontSize: 11, color: t.textSub }}>{f.by}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{new Date(f.createdAt).toLocaleString()}</td>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{dateTime(f.createdAt)}</td>
                 </tr>
               )}
               emptyMsg="No failed activations — good news." />
+            </>
           )}
 
           {/* ═══════════════ TAB: RADIUS HEALTH ═══════════════ */}
-          {activeTab === "radius" && (
+          {activeTab === "authentication" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <h2 style={{ fontSize: 15, margin: "18px 0 0" }}>RADIUS diagnostics</h2>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 700,
                   background: diag?.summary?.failures ? "rgba(239,68,68,.15)" : diag?.summary?.warnings ? "rgba(245,158,11,.15)" : "rgba(34,197,94,.15)",
                   color: diag?.summary?.failures ? "#ef4444" : diag?.summary?.warnings ? "#f59e0b" : "#16a34a" }}>
-                  {!diag ? "Checking…" : diag.summary.failures ? `${diag.summary.failures} problem(s)` : diag.summary.warnings ? `${diag.summary.warnings} warning(s)` : "✅ All systems healthy"}
+                  {diagError ? "Diagnostics unavailable" : !diag ? "Checking…" : diag.summary.failures ? `${diag.summary.failures} problem(s)` : diag.summary.warnings ? `${diag.summary.warnings} warning(s)` : "No alerts in returned checks"}
                 </div>
                 <button onClick={loadDiag} disabled={diagBusy}
                   style={{ background: t.accent, color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: diagBusy ? .6 : 1 }}>
@@ -852,6 +840,10 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                 )}
                 <span style={{ fontSize: 11, color: t.textMuted, marginLeft: "auto" }}>Auto-refresh 30s</span>
               </div>
+              {diagError && <p role="alert" style={{ margin: 0, color: "#ef4444", fontSize: 12 }}>{diagError}</p>}
+              <p style={{ margin: 0, color: t.textMuted, fontSize: 11 }}>
+                Checks summarize stored session and network-log data; they do not establish live NAS reachability or RADIUS server availability.
+              </p>
 
               {/* Summary cards */}
               {diag && (

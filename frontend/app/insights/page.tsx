@@ -4,15 +4,13 @@ import Hub from "../components/hub";
 import Segments from "../segments/page";
 import Analytics from "../analytics/page";
 import Reports from "../reports/page";
-import Logs, { LOG_VIEWS } from "../logs/page";
+import Logs from "../logs/page";
 
 /**
  * Looking backwards — trends, printable reports, and the raw record when a
  * number needs explaining.
  *
- * Logs is an accordion: clicking it expands the individual log views inline in
- * the sidebar, and the Logs page renders EMBEDDED (no second sidebar) so the
- * table gets the full width — no more three-column squeeze.
+ * Logs keeps its four investigation tabs in one embedded workspace.
  */
 export default function Insights() {
   return (
@@ -25,9 +23,8 @@ export default function Insights() {
         {
           id: "logs",
           label: "Logs",
-          hint: "RADIUS, system and audit records.",
-          children: LOG_VIEWS,
-          render: (sub) => <Logs embedded view={sub || "timeline"} />,
+          hint: "Investigate connections, sessions, authentication, and system changes.",
+          render: () => <Logs embedded view="connections" />,
         },
       ]}
     />

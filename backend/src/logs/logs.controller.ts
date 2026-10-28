@@ -23,6 +23,7 @@ export class LogsController {
     @Query('offset') offset: string,
     @Query('severity') severity: string,
     @Query('forUser') forUser: string,
+    @Query('type') type: string,
     @Req() req: any,
   ) {
     return this.logs.getTimeline(req.user, {
@@ -30,6 +31,7 @@ export class LogsController {
       offset: offset ? +offset : undefined,
       severity,
       forUser: forUser ? +forUser : undefined,
+      type: type || undefined,
     });
   }
 
@@ -48,12 +50,14 @@ export class LogsController {
     @Query('limit') limit: string,
     @Query('offset') offset: string,
     @Query('forUser') forUser: string,
+    @Query('q') q: string,
     @Req() req: any,
   ) {
     return this.logs.getLoginLogs(req.user, {
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
       forUser: forUser ? +forUser : undefined,
+      q: q || undefined,
     });
   }
 
@@ -65,6 +69,7 @@ export class LogsController {
     @Query('forUser') forUser: string,
     @Query('action') action: string,
     @Query('financial') financial: string,
+    @Query('q') q: string,
     @Req() req: any,
   ) {
     return this.logs.getActivityLogs(req.user, {
@@ -73,6 +78,7 @@ export class LogsController {
       forUser: forUser ? +forUser : undefined,
       action: action || undefined,
       financial: financial === '1' || financial === 'true',
+      q: q || undefined,
     });
   }
 
@@ -130,11 +136,13 @@ export class LogsController {
   systemLogs(
     @Query('limit') limit: string,
     @Query('offset') offset: string,
+    @Query('q') q: string,
     @Req() req: any,
   ) {
     return this.logs.getSystemLogs(req.user, {
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
+      q: q || undefined,
     });
   }
 

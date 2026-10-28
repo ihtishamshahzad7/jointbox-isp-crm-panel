@@ -119,9 +119,9 @@ function bytes(b: number | null | undefined) {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
 }
 const clock = (d: string | null | undefined) =>
-  d ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+  d ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }) : "—";
 const full = (d: string | null | undefined) =>
-  d ? new Date(d).toLocaleString([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+  d ? new Date(d).toLocaleString([], { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }) : "—";
 function ago(d: string | null | undefined) {
   if (!d) return "—";
   const sec = Math.max(0, (Date.now() - new Date(d).getTime()) / 1000);
@@ -146,7 +146,14 @@ function dayLabel(d: string | null) {
 const initials = (name: string) =>
   name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
 
-export default function DisconnectsPanel() {
+export default function DisconnectsPanel({
+  mode = "sessions", refreshKey = 0, searchText, onSearchTextChange,
+}: {
+  mode?: "connections" | "sessions";
+  refreshKey?: number;
+  searchText?: string;
+  onSearchTextChange?: (value: string) => void;
+}) {
   const [hours, setHours] = useState(168);
   const [cause, setCause] = useState<string>("");
   const [category, setCategory] = useState<string>("");
@@ -160,13 +167,13 @@ export default function DisconnectsPanel() {
   const [err, setErr] = useState("");
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [allReasons, setAllReasons] = useState(false);
-  const [view, setView] = useState<"disconnects" | "failed">("disconnects");
   const [failed, setFailed] = useState<Failed | null>(null);
   const [failedOffset, setFailedOffset] = useState(0);
   const [failedErr, setFailedErr] = useState("");
   const [routerOptions, setRouterOptions] = useState<Record<string, string | null>>({});
   const reqId = useRef(0);
   const logRef = useRef<HTMLElement | null>(null);
+  const visibleFindInput = searchText ?? findInput;
 
   // Deep links: /logs?tab=disconnects&username=…&cause=…&hours=…
   useEffect(() => {
@@ -181,15 +188,16 @@ export default function DisconnectsPanel() {
   // The search box applies after typing stops.
   useEffect(() => {
     const t = setTimeout(() => {
-      const v = findInput.trim();
+      const v = visibleFindInput.trim();
       setFind((prev) => (prev === v ? prev : v));
       if (username && v !== username) setUsername("");
       setOffset(0);
     }, 450);
     return () => clearTimeout(t);
-  }, [findInput]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleFindInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(async () => {
+    if (mode === "connections") return;
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
     if (!token) { setErr("Sign in to see disconnects."); return; }
     const id = ++reqId.current;
@@ -224,12 +232,13 @@ export default function DisconnectsPanel() {
     } finally {
       if (id === reqId.current) setBusy(false);
     }
-  }, [hours, cause, category, nasIp, username, find, offset]);
+  }, [mode, hours, cause, category, nasIp, username, find, offset]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, refreshKey]);
 
   // Failed logins — same window, router and search box as the log.
   const loadFailed = useCallback(async () => {
+    if (mode !== "connections") return;
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
     if (!token) return;
     const q = new URLSearchParams({ sinceHours: String(hours), limit: String(PAGE), offset: String(failedOffset) });
@@ -242,9 +251,9 @@ export default function DisconnectsPanel() {
       setFailed(await r.json());
       setFailedErr("");
     } catch { setFailedErr("Could not reach the server. Check your connection and try again."); }
-  }, [hours, nasIp, username, find, failedOffset]);
+  }, [mode, hours, nasIp, username, find, failedOffset]);
 
-  useEffect(() => { void loadFailed(); }, [loadFailed]);
+  useEffect(() => { void loadFailed(); }, [loadFailed, refreshKey]);
 
   const byKey = useMemo(() => new Map((data?.causes || []).map((c) => [c.key, c])), [data]);
   const badgeFor = (key: string, label?: string) => {
@@ -281,6 +290,48 @@ export default function DisconnectsPanel() {
     }
     return out;
   }, [data]);
+
+  if (mode === "connections") {
+    return (
+      <div id={s.root} className={s.page}>
+        <header className={s.head}>
+          <div>
+            <div className={s.eyebrow}>RADIUS · Access-Reject</div>
+            <h2>Failed connection attempts</h2>
+            <p>Recorded refused subscriber logins, grouped into bursts. The reason is shown as a likely explanation when the available records support one.</p>
+          </div>
+          <div className={s.controls}>
+            <div className={s.seg} role="group" aria-label="Time window">
+              {WINDOWS.slice(0, 3).map(([h, label]) => (
+                <button key={h} type="button" aria-pressed={hours === h} onClick={() => { setHours(h); setFailedOffset(0); }}>{label}</button>
+              ))}
+            </div>
+            <label className={s.findWrap}>
+              <span className={s.findIcon} aria-hidden>⌕</span>
+              <input className={s.findBox} value={visibleFindInput} placeholder="Username, MAC, or NAS IP"
+                onChange={(e) => {
+                  setFindInput(e.target.value);
+                  onSearchTextChange?.(e.target.value);
+                  setNasIp("");
+                }} autoComplete="off" spellCheck={false} />
+            </label>
+            <label className={s.findWrap}>
+              <span className={s.findIcon} aria-hidden>NAS</span>
+              <input className={s.findBox} value={nasIp} placeholder="NAS IP"
+                onChange={(e) => { setNasIp(e.target.value); setFailedOffset(0); }} autoComplete="off" spellCheck={false} />
+            </label>
+          </div>
+        </header>
+        <section className={s.panel} aria-label="Failed connection attempts">
+          <div className={s.panelHead}>
+            <h3>Refused subscriber logins</h3>
+            <span>{failed ? `${nf(failed.totals.attempts)} attempts · ${nf(failed.totals.customers)} subscribers` : "Loading…"}</span>
+          </div>
+          <FailedLogins data={failed} err={failedErr} offset={failedOffset} setOffset={setFailedOffset} />
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div id={s.root} className={`${s.page}${busy && data ? " " + s.loading : ""}`}>
@@ -325,8 +376,11 @@ export default function DisconnectsPanel() {
         <div className={s.filterRow}>
           <label className={s.findWrap} htmlFor="disc-find">
             <span className={s.findIcon} aria-hidden>⌕</span>
-            <input id="disc-find" className={s.findBox} value={findInput} placeholder="Find a username, MAC address or IP"
-              onChange={(e) => setFindInput(e.target.value)} autoComplete="off" spellCheck={false} />
+            <input id="disc-find" className={s.findBox} value={visibleFindInput} placeholder="Find a username, MAC address or IP"
+              onChange={(e) => {
+                setFindInput(e.target.value);
+                onSearchTextChange?.(e.target.value);
+              }} autoComplete="off" spellCheck={false} />
             {findInput && <button type="button" className={s.findClear} aria-label="Clear search" onClick={() => setFindInput("")}>×</button>}
           </label>
           <div className={s.typeRow} role="group" aria-label="How it ended">
@@ -396,7 +450,7 @@ export default function DisconnectsPanel() {
           <ul className={s.massList}>
             {data.massDrops.map((m) => (
               <li key={`${m.nasIp}-${m.from}`}>
-                <button type="button" className={s.massItem} onClick={() => { setNasIp(m.nasIp); setOffset(0); setView("disconnects"); toLog(); }}
+                <button type="button" className={s.massItem} onClick={() => { setNasIp(m.nasIp); setOffset(0); toLog(); }}
                   title="Show only this NAS in the log">
                   <b>{m.nasName || m.nasIp}</b>
                   <span className={s.faint}>{m.nasName ? m.nasIp : ""}</span>
@@ -413,23 +467,10 @@ export default function DisconnectsPanel() {
       {/* ── THE LOG ── */}
       <section className={s.panel} ref={logRef} aria-label="Disconnect log">
         <div className={s.panelHead}>
-          <div className={s.viewSwitch} role="tablist" aria-label="Log view">
-            <button type="button" role="tab" aria-selected={view === "disconnects"} onClick={() => setView("disconnects")}>
-              Disconnects <b>{nf(data?.recordsTotal)}</b>
-            </button>
-            <button type="button" role="tab" aria-selected={view === "failed"} onClick={() => setView("failed")}>
-              Failed logins <b>{nf(failed?.totals.attempts)}</b>
-            </button>
-          </div>
-          <span>
-            {view === "failed"
-              ? (failed ? `${nf(failed.totals.attempts)} refused attempt${failed.totals.attempts === 1 ? "" : "s"} by ${nf(failed.totals.customers)} customer${failed.totals.customers === 1 ? "" : "s"}` : "…")
-              : (sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}
-          </span>
+          <h3>Disconnect log</h3>
+          <span>{(sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}</span>
         </div>
-        {view === "failed" ? (
-          <FailedLogins data={failed} err={failedErr} offset={failedOffset} setOffset={(n) => { setFailedOffset(n); toLog(); }} />
-        ) : !data ? (
+        {!data ? (
           <div className={s.empty}>Loading the disconnect log…</div>
         ) : !data.records.length ? (
           <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
@@ -768,7 +809,7 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
             {r.flapping && r.flapping.last24h > 1 && <div><strong>Drops:</strong> {r.flapping.lastHour} in the hour and {r.flapping.last24h} in the 24 hours up to this one.</div>}
             {r.macChanged && <div><strong>MAC changed:</strong> the session before came from {r.macChanged.previous}{r.macChanged.previousMaker ? ` (${r.macChanged.previousMaker})` : ""}{r.mac ? `, this one from ${r.mac}` : ""} — a new router, or the login is being shared.</div>}
             {r.retries && <div><strong>Tried to reconnect:</strong> {r.retries.failed} login{r.retries.failed === 1 ? "" : "s"} refused between {clock(r.retries.firstAt)} and {clock(r.retries.lastAt)}. Likely: {r.retries.likely.label} — {r.retries.likely.detail}</div>}
-            {r.account?.expiredAtDrop && <div><strong>Account:</strong> the package had expired{r.account.expiryDate ? ` on ${new Date(r.account.expiryDate).toLocaleString()}` : ""} when this happened.</div>}
+            {r.account?.expiredAtDrop && <div><strong>Account:</strong> the package had expired{r.account.expiryDate ? ` on ${full(r.account.expiryDate)}` : ""} when this happened.</div>}
             {r.account?.fupAtDrop && <div><strong>Data limit:</strong> the fair-usage limit was active.</div>}
             {!!r.before?.length && (
               <div><strong>In the panel just before:</strong>{" "}
@@ -861,7 +902,7 @@ function Trend({ data }: { data: Report | null }) {
           const x = L + i * bw + bw * 0.14;
           const w = Math.max(1, bw * 0.72);
           const parts = CATEGORY_ORDER.map((c) => ({ c, n: Number(b.counts?.[c] || 0) })).filter((p) => p.n > 0);
-          const tip = `${hourly ? new Date(b.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : fmt(b.at)} — ${totals[i]} ended` +
+          const tip = `${hourly ? new Date(b.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : fmt(b.at)} — ${totals[i]} ended` +
             (parts.length ? "\n" + parts.map((p) => `${CATEGORY_META[p.c].label}: ${p.n}`).join("\n") : "");
           return (
             <g key={b.at}>

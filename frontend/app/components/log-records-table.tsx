@@ -23,7 +23,8 @@ export type Col = {
 };
 
 export function LogRecordsTable({
-  endpoint, columns, days, daysOptions, searchable = true, pageSize = 50,
+  endpoint, columns, days, daysOptions, searchable = true, pageSize = 50, refreshKey = 0,
+  searchText, onSearchTextChange,
 }: {
   endpoint: string;
   columns: Col[];
@@ -32,6 +33,9 @@ export function LogRecordsTable({
   daysOptions?: { label: string; value: number }[];
   searchable?: boolean;
   pageSize?: number;
+  refreshKey?: number;
+  searchText?: string;
+  onSearchTextChange?: (value: string) => void;
 }) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -40,8 +44,10 @@ export function LogRecordsTable({
   const [q, setQ] = React.useState("");
   const [dayR, setDayR] = React.useState(days ?? 0);
   const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
   const [expanded, setExpanded] = React.useState(false);
   const [openRow, setOpenRow] = React.useState<number | null>(null);
+  const query = searchText ?? q;
 
   // Inline expandable rows: if any column is marked primary, the collapsed row
   // shows only those and the rest appear in a detail grid under a chevron.
@@ -60,26 +66,48 @@ export function LogRecordsTable({
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (signal: AbortSignal) => {
     setLoading(true);
+    setError("");
     try {
       const p = new URLSearchParams();
       p.set("limit", String(size));
       p.set("offset", String(page * size));
-      if (q) p.set("q", q);
+      if (query) p.set("q", query);
       if (dayR) p.set("days", String(dayR));
-      const r = await fetch(`${API}${endpoint}?${p}`, { headers: { Authorization: `Bearer ${token}` } });
+      const r = await fetch(`${API}${endpoint}?${p}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal,
+      });
+      if (!r.ok) throw new Error(`Unable to load records (HTTP ${r.status}).`);
       const d = await r.json();
-      const list = Array.isArray(d) ? d : (d.logs || d.data || []);
+      const list = Array.isArray(d) ? d : (d?.logs || d?.data || []);
+      if (signal.aborted) return;
       setRows(list);
-      setTotal(Number(d.total ?? list.length));
-    } catch { setRows([]); setTotal(0); }
-    setLoading(false);
-  }, [endpoint, size, page, q, dayR, token]);
+      setTotal(Number(d?.total ?? list.length));
+    } catch (e) {
+      if (!signal.aborted) {
+        setError(e instanceof Error ? e.message : "Unable to load records.");
+      }
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
+  }, [endpoint, size, page, query, dayR, token]);
 
-  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void load(controller.signal); }, query ? 300 : 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [load, query, refreshKey]);
   // reset to first page when the query/range changes
-  const onSearch = (v: string) => { setQ(v); setPage(0); };
+  const onSearch = (v: string) => {
+    if (onSearchTextChange) onSearchTextChange(v);
+    else setQ(v);
+    setPage(0);
+  };
   const onDays = (v: number) => { setDayR(v); setPage(0); };
 
   const from = total === 0 ? 0 : page * size + 1;
@@ -113,7 +141,7 @@ export function LogRecordsTable({
         {searchable && (
           <span className="lrt-find">
             <span>⌕</span>
-            <input value={q} onChange={(e) => onSearch(e.target.value)} placeholder="Type & search…" />
+            <input value={query} onChange={(e) => onSearch(e.target.value)} placeholder="Type & search…" />
           </span>
         )}
         <span className="lrt-spacer" />
@@ -135,7 +163,10 @@ export function LogRecordsTable({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && !loading && (
+            {error && !loading && (
+              <tr className="empty"><td colSpan={totalCols} role="alert">{error}</td></tr>
+            )}
+            {rows.length === 0 && !loading && !error && (
               <tr className="empty"><td colSpan={totalCols}>No records.</td></tr>
             )}
             {rows.map((row, i) => {
@@ -147,7 +178,7 @@ export function LogRecordsTable({
                     onClick={detailCols.length ? () => setOpenRow(isOpen ? null : i) : undefined}
                   >
                     {collapsedCols.map((c) => (
-                      <td key={c.key} className={`${c.mono ? "mono" : ""} ${c.nowrap ? "nw" : ""}`}>
+                      <td key={c.key} data-label={c.label} className={`${c.mono ? "mono" : ""} ${c.nowrap ? "nw" : ""}`}>
                         {c.render ? c.render(row) : (row[c.key] ?? "—")}
                       </td>
                     ))}
@@ -259,4 +290,30 @@ html[data-theme="dark"] .lrt tr.lrt-detail td{background:#0d1420}
 .lrt-foot button.on{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
 .lrt-foot button:disabled{opacity:.4;cursor:not-allowed}
 .lrt-foot .ell{color:var(--muted);padding:0 4px}
+
+@media(max-width:640px){
+  .lrt-bar{gap:6px}
+  .lrt-bar select{min-height:36px}
+  .lrt-find{flex:1 1 100%;min-width:0}
+  .lrt-find input{width:100%;min-width:0}
+  .lrt-count{flex:1 1 100%}
+  .lrt-expand{margin-left:auto;min-height:36px}
+  .lrt-scroll{overflow:visible;max-height:none}
+  .lrt table{display:block;min-width:0}
+  .lrt thead{display:none}
+  .lrt tbody{display:grid;gap:8px;padding:8px}
+  .lrt tbody tr:not(.lrt-detail):not(.empty){position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    border:1px solid var(--border);border-radius:9px;padding:7px}
+  .lrt tbody tr:not(.lrt-detail):not(.empty) td{display:flex;flex-direction:column;gap:2px;min-width:0;
+    padding:5px 7px;border:0;white-space:normal!important;overflow-wrap:anywhere}
+  .lrt tbody tr:not(.lrt-detail):not(.empty) td::before{content:attr(data-label);font-size:9px;font-weight:800;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .lrt tbody tr:not(.lrt-detail):not(.empty) .lrt-chevcell{position:absolute;top:3px;right:3px;width:auto;padding:2px!important}
+  .lrt tbody tr:not(.lrt-detail):not(.empty) .lrt-chevcell::before{content:none}
+  .lrt tbody tr.lrt-detail{display:block}
+  .lrt tbody tr.lrt-detail td{display:block;padding:0}
+  .lrt-dgrid{grid-template-columns:minmax(0,1fr);gap:10px;padding:12px}
+  .lrt tbody tr.empty td{display:block}
+  .lrt-foot button{min-height:40px}
+}
 `;

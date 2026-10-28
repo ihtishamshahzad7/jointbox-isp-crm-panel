@@ -4,6 +4,7 @@ import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { terminateInfo, endedInfo, fieldsOf } from '../common/radius-terminate';
 import { radiusTenancyAllows, TENANCY_REFUSED } from '../nas/radius-tenancy';
+import { redactForAudit } from '../common/audit.interceptor';
 
 @Injectable()
 export class LogsService {
@@ -51,7 +52,7 @@ export class LogsService {
           action,
           entity: details?.entity || 'SYSTEM',
           entityId: details?.entityId || null,
-          details: details ? JSON.stringify(details) : null,
+          details: details ? JSON.stringify(redactForAudit(details)) : null,
           ipAddress: details?.ip || details?.ipAddress || null,
           userAgent: details?.userAgent || null,
         },
@@ -65,6 +66,28 @@ export class LogsService {
     if (this.scope.isAdmin(actor?.role)) return null;
     const rootId = await this.scope.rootId(actor);
     return this.scope.descendantIds(rootId);
+  }
+
+  private redactAuditDetails(details: string | null): string | null {
+    if (!details) return details;
+    const splitAt = details.lastIndexOf(' · ');
+    const prefix = splitAt < 0 ? '' : details.slice(0, splitAt + 3);
+    const body = splitAt < 0 ? details : details.slice(splitAt + 3);
+    try {
+      const parsed: unknown = JSON.parse(body) as unknown;
+      if (typeof parsed === 'string') {
+        return prefix + this.redactAuditDetails(parsed);
+      }
+      return prefix + JSON.stringify(redactForAudit(parsed));
+    } catch {
+      return (
+        prefix +
+        body.replace(
+          /\b(password|passwd|pass|secret|token|authorization|credential|api[_-]?key|shared[_-]?secret|community|otp|pin)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+          '$1$2"[redacted]"',
+        )
+      );
+    }
   }
 
   /**
@@ -82,11 +105,17 @@ export class LogsService {
 
   async getLoginLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; forUser?: number } = {},
+    opts: { limit?: number; offset?: number; forUser?: number; q?: string } = {},
   ) {
     const ids = await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
+    const q = opts.q?.trim();
+    if (q) {
+      where.OR = ['email', 'ipAddress', 'failReason'].map((field) => ({
+        [field]: { contains: q, mode: 'insensitive' },
+      }));
+    }
 
     const [logs, total] = await Promise.all([
       this.prisma.loginLog.findMany({
@@ -111,11 +140,17 @@ export class LogsService {
 
   async getActivityLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean } = {},
+    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean; q?: string } = {},
   ) {
     const ids = await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
+    const q = opts.q?.trim();
+    if (q) {
+      where.OR = ['action', 'entity', 'details', 'ipAddress', 'traceId'].map((field) => ({
+        [field]: { contains: q, mode: 'insensitive' },
+      }));
+    }
     // Optional action filter: an explicit comma list, or the financial preset.
     const actions = opts.action
       ? opts.action.split(',').map((a) => a.trim()).filter(Boolean)
@@ -132,15 +167,17 @@ export class LogsService {
       }),
       this.prisma.activityLog.count({ where }),
     ]);
-    return { logs, total };
+    return {
+      logs: logs.map((log) => ({ ...log, details: this.redactAuditDetails(log.details) })),
+      total,
+    };
   }
 
   // ── RADIUS auth logs (radpostauth) ────────────────────────────
   /**
-   * Paginated FreeRADIUS post-auth log — every Access-Accept / Access-Reject.
-   * radpostauth only stores id/username/pass/reply/authdate natively, so MAC,
-   * VLAN/port and NAS are enriched per page from the user's most recent radacct
-   * session (cheap: only the rows on the current page are joined).
+   * Paginated FreeRADIUS post-auth log. Credential material is never returned;
+   * MAC, port and NAS are enriched per page from the latest radacct session
+   * when they were not captured on the authentication attempt itself.
    */
   async getRadiusAuthLogs(actor: Actor, opts: { limit?: number; offset?: number; q?: string; days?: number } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -177,8 +214,7 @@ export class LogsService {
     // (present on every attempt, including rejects). For rows written before
     // that capture existed, fall back to the user's most recent session.
     const rowsSql = `
-      SELECT p.id::text AS id, p.authdate, p.username, p.pass, p.reply,
-             s.password AS subpass, s.status AS substatus,
+      SELECT p.id::text AS id, p.authdate, p.username, p.reply, s.id AS subscriberid,
              COALESCE(p.callingstationid, a.callingstationid) AS mac,
              COALESCE(p.nasportid, a.nasportid) AS port,
              COALESCE(p.nasipaddress, host(a.nasipaddress)) AS nasip,
@@ -203,38 +239,26 @@ export class LogsService {
         this.prisma.$queryRawUnsafe<any[]>(countSql, ...params),
       ]);
       const total = Number(cnt?.[0]?.n ?? 0);
-      // Derive a human reason and surface the subscriber's configured password
-      // (plaintext) so the operator can see WHY an attempt was accepted/rejected.
-      // `pass` from radpostauth is the CHAP response (a hash, not the password),
-      // so it is never useful on its own — we expose the real account password.
+      // Report only what the RADIUS reply confirms. A reject alone does not
+      // establish whether the password, policy, or another factor caused it.
       const mapped = (logs as any[]).map((r) => {
         const accepted = typeof r.reply === 'string' && /accept/i.test(r.reply);
-        let reason: string;
-        if (accepted) {
-          reason = 'Authenticated';
-        } else if (r.subpass == null) {
-          reason = 'Unknown username (no such subscriber)';
-        } else {
-          switch (String(r.substatus || '')) {
-            case 'SUSPENDED': reason = 'Account suspended'; break;
-            case 'EXPIRED': reason = 'Subscription expired'; break;
-            case 'INACTIVE': reason = 'Account inactive'; break;
-            default: reason = 'Wrong password or policy (CHAP mismatch)';
-          }
-        }
+        const reply = typeof r.reply === 'string' ? r.reply : null;
+        const result = /accept/i.test(reply || '') ? 'Accept'
+          : /reject/i.test(reply || '') ? 'Reject'
+          : /challenge/i.test(reply || '') ? 'Challenge'
+          : 'Unknown';
         return {
           id: r.id, authdate: r.authdate, username: r.username,
-          password: r.subpass ?? null,          // real account password (plaintext)
-          chap: r.pass ?? null,                  // CHAP response hash (for reference)
-          reply: r.reply, accepted, reason,
-          status: r.substatus ?? null,
+          subscriberId: r.subscriberid == null ? null : Number(r.subscriberid),
+          reply, accepted, result, reason: reply || 'No RADIUS reply recorded',
           mac: r.mac, port: r.port, nasip: r.nasip, nas: r.nas,
         };
       });
       return { logs: mapped, total };
     } catch (e: any) {
       this.logger?.warn?.(`RADIUS auth log query failed: ${e?.message || e}`);
-      return { logs: [], total: 0 };
+      throw e;
     }
   }
 
@@ -460,19 +484,27 @@ export class LogsService {
 
   async getSystemLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number } = {},
+    opts: { limit?: number; offset?: number; q?: string } = {},
   ) {
     if (!this.scope.isAdmin(actor?.role)) {
       return { logs: [], total: 0 };
     }
 
+    const where: any = {};
+    const q = opts.q?.trim();
+    if (q) {
+      where.OR = ['level', 'message', 'source', 'metadata'].map((field) => ({
+        [field]: { contains: q, mode: 'insensitive' },
+      }));
+    }
     const [logs, total] = await Promise.all([
       this.prisma.systemLog.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         take: opts.limit ?? 100,
         skip: opts.offset ?? 0,
       }),
-      this.prisma.systemLog.count(),
+      this.prisma.systemLog.count({ where }),
     ]);
     return { logs, total };
   }
@@ -487,7 +519,12 @@ export class LogsService {
     const sessions = await this.prisma.sessionLog.findMany({
       where,
       orderBy: { loginAt: 'desc' },
-      include: {
+      select: {
+        id: true,
+        ipAddress: true,
+        userAgent: true,
+        loginAt: true,
+        expiresAt: true,
         user: { select: { id: true, name: true, email: true, role: true } },
       },
     });
@@ -534,6 +571,7 @@ export class LogsService {
     if (opts.sinceHours && opts.sinceHours > 0) {
       where.acctstarttime = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
     }
+    if (opts.cause?.toLowerCase() === 'current') where.acctstoptime = null;
 
     const rows = await this.prisma.radAcct.findMany({
       where,
@@ -541,20 +579,57 @@ export class LogsService {
       take,
     });
 
+    const [pppoeSessions, nasDevices] = rows.length
+      ? await Promise.all([
+          this.prisma.pppoeSession.findMany({
+            where: { sessionId: { in: rows.map((r) => r.acctsessionid) } },
+            select: { sessionId: true, subscriberId: true, isActive: true, lastSeenAt: true, endTime: true, disconnectReason: true },
+          }),
+          this.prisma.nas.findMany({
+            where: { nasIp: { in: [...new Set(rows.map((r) => r.nasipaddress).filter(Boolean))] } },
+            select: { id: true, nasname: true, shortname: true, nasIp: true },
+          }),
+        ])
+      : [[], []];
+    const pppoeBySession = new Map(pppoeSessions.map((session) => [session.sessionId, session]));
+    const nasByIp = new Map(nasDevices.map((nas) => [String(nas.nasIp).replace(/^::ffff:/i, ''), nas]));
+    const staleBefore = Date.now() - 30 * 60 * 1000;
     const MB = 1024 * 1024;
     let items = rows.map((r) => {
-      const online = r.acctstoptime == null;
-      const info = online ? terminateInfo(null) : endedInfo(r.acctterminatecause);
+      const tracked = pppoeBySession.get(r.acctsessionid);
+      const nas = nasByIp.get(String(r.nasipaddress).replace(/^::ffff:/i, ''));
+      const stoppedAt = r.acctstoptime ?? tracked?.endTime ?? null;
+      const sessionState = stoppedAt || tracked?.isActive === false
+        ? 'stopped'
+        : !tracked
+          ? 'unknown'
+          : new Date(tracked.lastSeenAt).getTime() < staleBefore
+            ? 'stale'
+            : 'active';
+      const online = sessionState === 'active';
+      const info = sessionState === 'stopped'
+        ? endedInfo(r.acctterminatecause || tracked?.disconnectReason)
+        : terminateInfo(null);
+      const durationEnd = sessionState === 'active'
+        ? new Date()
+        : stoppedAt ?? (sessionState !== 'unknown' ? tracked?.lastSeenAt ?? null : null);
       return {
         id: r.radacctid,
+        sessionId: r.acctsessionid,
+        subscriberId: tracked?.subscriberId ?? null,
+        nasId: nas?.id ?? null,
+        nasName: nas?.shortname || nas?.nasname || null,
+        sessionState,
         username: r.username,
         nasIp: r.nasipaddress,
         framedIp: r.framedipaddress,
         callingStation: r.callingstationid,
         start: r.acctstarttime,
-        stop: r.acctstoptime,
+        stop: stoppedAt,
         lastSeen: r.acctupdatetime,
-        durationSec: r.acctsessiontime ?? null,
+        durationSec: r.acctsessiontime ?? (r.acctstarttime && durationEnd
+          ? Math.max(0, Math.floor((durationEnd.getTime() - r.acctstarttime.getTime()) / 1000))
+          : null),
         downloadMB: r.acctoutputoctets != null ? Math.round(Number(r.acctoutputoctets) / MB) : null,
         uploadMB: r.acctinputoctets != null ? Math.round(Number(r.acctinputoctets) / MB) : null,
         online,
@@ -568,10 +643,21 @@ export class LogsService {
     // Per-cause count summary (built BEFORE the cause filter, so the chips always
     // show the full breakdown to pick from). Repeated NAS reboots or carrier
     // losses jump out here.
-    const counts = new Map<string, { code: number; label: string; count: number; online: boolean }>();
+    const counts = new Map<string, { code: number; label: string; count: number; online: boolean; state: string }>();
     for (const it of items) {
-      const key = it.online ? 'online' : `${it.terminateCode}:${it.terminateLabel}`;
-      const cur = counts.get(key) || { code: it.terminateCode, label: it.online ? 'Online' : it.terminateLabel, count: 0, online: it.online };
+      const key = it.sessionState === 'active' ? 'online'
+        : it.sessionState === 'stale' || it.sessionState === 'unknown' ? it.sessionState
+        : `${it.terminateCode}:${it.terminateLabel}`;
+      const cur = counts.get(key) || {
+        code: it.terminateCode,
+        label: it.sessionState === 'active' ? 'Online'
+          : it.sessionState === 'stale' ? 'Stale'
+          : it.sessionState === 'unknown' ? 'Unknown state'
+          : it.terminateLabel,
+        count: 0,
+        online: it.online,
+        state: it.sessionState,
+      };
       cur.count++;
       counts.set(key, cur);
     }
@@ -581,7 +667,10 @@ export class LogsService {
     if (opts.cause) {
       const c = opts.cause.toLowerCase();
       items = items.filter((it) =>
-        c === 'online' ? it.online : (!it.online && it.terminateLabel.toLowerCase() === c),
+        c === 'current' ? it.sessionState !== 'stopped'
+          : c === 'online' ? it.sessionState === 'active'
+          : c === 'stale' || c === 'unknown' ? it.sessionState === c
+          : (it.sessionState === 'stopped' && it.terminateLabel.toLowerCase() === c),
       );
     }
 
@@ -602,10 +691,9 @@ export class LogsService {
         take: opts.limit ?? 200,
       });
       return logs;
-    } catch (e) {
-      // Table may not exist yet
-      console.warn('failedActivation table not available:', e);
-      return [];
+    } catch (e: any) {
+      this.logger.warn(`Failed activation log query failed: ${e?.message || e}`);
+      throw e;
     }
   }
 
@@ -723,7 +811,7 @@ export class LogsService {
     let activePppoe = 0;
     try {
       activePppoe = await this.prisma.pppoeSession.count({
-        where: { isActive: true, ...nasScope },
+        where: { isActive: true, lastSeenAt: { gte: thirtyMinAgo }, ...nasScope },
       });
     } catch (e) {}
     addCheck('active-sessions', 'Active PPPoE sessions', 'OK',
@@ -823,6 +911,7 @@ export class LogsService {
       offset?: number;
       severity?: string;
       forUser?: number;
+      type?: string;
     } = {},
   ) {
     const limit = opts.limit ?? 100;
@@ -838,22 +927,23 @@ export class LogsService {
     if (ids) networkWhere.nas = { ownerId: { in: ids } };
 
     const severity = opts.severity?.toUpperCase();
+    const type = opts.type?.toLowerCase();
 
     const [loginLogs, activityLogs, networkLogs, systemLogs] =
       await Promise.all([
-        this.prisma.loginLog.findMany({
+        !type || type === 'login' ? this.prisma.loginLog.findMany({
           where: loginWhere,
           orderBy: { createdAt: 'desc' },
           take: limit,
           include: { user: { select: { id: true, name: true } } },
-        }),
-        this.prisma.activityLog.findMany({
+        }) : Promise.resolve([]),
+        !type || type === 'activity' ? this.prisma.activityLog.findMany({
           where: activityWhere,
           orderBy: { createdAt: 'desc' },
           take: limit,
           include: { user: { select: { id: true, name: true } } },
-        }),
-        this.prisma.networkLog.findMany({
+        }) : Promise.resolve([]),
+        !type || type === 'network' ? this.prisma.networkLog.findMany({
           where: { ...networkWhere, ...(severity ? { severity } : {}) },
           orderBy: { loggedAt: 'desc' },
           take: limit,
@@ -861,8 +951,8 @@ export class LogsService {
             nas: { select: { nasname: true, nasIp: true } },
             subscriber: { select: { id: true, fullName: true } },
           },
-        }),
-        this.scope.isAdmin(actor?.role)
+        }) : Promise.resolve([]),
+        (!type || type === 'system') && this.scope.isAdmin(actor?.role)
           ? this.prisma.systemLog.findMany({
               orderBy: { createdAt: 'desc' },
               take: limit,
@@ -896,7 +986,7 @@ export class LogsService {
         action: a.action,
         entity: a.entity,
         entityId: a.entityId,
-        details: a.details,
+        details: this.redactAuditDetails(a.details),
         ipAddress: a.ipAddress,
         severity: 'INFO',
       });
@@ -910,8 +1000,10 @@ export class LogsService {
         nasName: n.nas?.nasname,
         nasIp: n.nas?.nasIp,
         username: n.username,
+        subscriberId: n.subscriber?.id,
         eventType: n.eventType,
         message: n.message,
+        sessionId: n.sessionId,
         callerId: n.callerId,
         framedIp: n.framedIp,
         subscriberName: n.subscriber?.fullName,
