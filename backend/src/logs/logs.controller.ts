@@ -24,6 +24,7 @@ export class LogsController {
     @Query('severity') severity: string,
     @Query('forUser') forUser: string,
     @Query('type') type: string,
+    @Query('sinceHours') sinceHours: string,
     @Req() req: any,
   ) {
     return this.logs.getTimeline(req.user, {
@@ -32,6 +33,7 @@ export class LogsController {
       severity,
       forUser: forUser ? +forUser : undefined,
       type: type || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
     });
   }
 
@@ -51,6 +53,7 @@ export class LogsController {
     @Query('offset') offset: string,
     @Query('forUser') forUser: string,
     @Query('q') q: string,
+    @Query('sinceHours') sinceHours: string,
     @Req() req: any,
   ) {
     return this.logs.getLoginLogs(req.user, {
@@ -58,6 +61,7 @@ export class LogsController {
       offset: offset ? +offset : undefined,
       forUser: forUser ? +forUser : undefined,
       q: q || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
     });
   }
 
@@ -70,6 +74,8 @@ export class LogsController {
     @Query('action') action: string,
     @Query('financial') financial: string,
     @Query('q') q: string,
+    @Query('sinceHours') sinceHours: string,
+    @Query('auditType') auditType: string,
     @Req() req: any,
   ) {
     return this.logs.getActivityLogs(req.user, {
@@ -79,6 +85,8 @@ export class LogsController {
       action: action || undefined,
       financial: financial === '1' || financial === 'true',
       q: q || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
+      auditType: auditType || undefined,
     });
   }
 
@@ -89,6 +97,9 @@ export class LogsController {
     @Query('offset') offset: string,
     @Query('q') q: string,
     @Query('days') days: string,
+    @Query('sinceHours') sinceHours: string,
+    @Query('forUser') forUser: string,
+    @Query('outcome') outcome: string,
     @Req() req: any,
   ) {
     return this.logs.getRadiusAuthLogs(req.user, {
@@ -96,6 +107,9 @@ export class LogsController {
       offset: offset ? +offset : undefined,
       q: q || undefined,
       days: days ? +days : undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
+      forUser: forUser ? +forUser : undefined,
+      outcome: outcome || undefined,
     });
   }
 
@@ -104,11 +118,19 @@ export class LogsController {
   networkLogs(
     @Query('limit') limit: string,
     @Query('offset') offset: string,
+    @Query('q') q: string,
+    @Query('severity') severity: string,
+    @Query('sinceHours') sinceHours: string,
+    @Query('forUser') forUser: string,
     @Req() req: any,
   ) {
     return this.logs.getNetworkLogs(req.user, {
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
+      q: q || undefined,
+      severity: severity || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
+      forUser: forUser ? +forUser : undefined,
     });
   }
 
@@ -137,12 +159,14 @@ export class LogsController {
     @Query('limit') limit: string,
     @Query('offset') offset: string,
     @Query('q') q: string,
+    @Query('sinceHours') sinceHours: string,
     @Req() req: any,
   ) {
     return this.logs.getSystemLogs(req.user, {
       limit: limit ? +limit : undefined,
       offset: offset ? +offset : undefined,
       q: q || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
     });
   }
 
@@ -164,6 +188,9 @@ export class LogsController {
     @Query('username') username: string,
     @Query('cause') cause: string,
     @Query('sinceHours') sinceHours: string,
+    @Query('offset') offset: string,
+    @Query('q') q: string,
+    @Query('forUser') forUser: string,
     @Req() req: any,
   ) {
     return this.logs.getRadiusSessions(req.user, {
@@ -171,6 +198,9 @@ export class LogsController {
       username: username || undefined,
       cause: cause || undefined,
       sinceHours: sinceHours ? +sinceHours : undefined,
+      offset: offset ? +offset : undefined,
+      q: q || undefined,
+      forUser: forUser ? +forUser : undefined,
     });
   }
 
@@ -224,10 +254,18 @@ export class LogsController {
   @Get('failed-activations')
   failedActivations(
     @Query('limit') limit: string,
+    @Query('offset') offset: string,
+    @Query('q') q: string,
+    @Query('sinceHours') sinceHours: string,
+    @Query('forUser') forUser: string,
     @Req() req: any,
   ) {
     return this.logs.getFailedActivations(req.user, {
       limit: limit ? +limit : undefined,
+      offset: offset ? +offset : undefined,
+      q: q || undefined,
+      sinceHours: sinceHours ? +sinceHours : undefined,
+      forUser: forUser ? +forUser : undefined,
     });
   }
 

@@ -105,11 +105,14 @@ export class LogsService {
 
   async getLoginLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; forUser?: number; q?: string } = {},
+    opts: { limit?: number; offset?: number; forUser?: number; q?: string; sinceHours?: number } = {},
   ) {
     const ids = await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
+    if (opts.sinceHours && opts.sinceHours > 0) {
+      where.createdAt = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
+    }
     const q = opts.q?.trim();
     if (q) {
       where.OR = ['email', 'ipAddress', 'failReason'].map((field) => ({
@@ -140,11 +143,18 @@ export class LogsService {
 
   async getActivityLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean; q?: string } = {},
+    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean; q?: string; sinceHours?: number; auditType?: string } = {},
   ) {
     const ids = await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
+    if (opts.sinceHours && opts.sinceHours > 0) {
+      where.createdAt = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
+    }
+    if (opts.auditType === 'changes') where.entity = { not: 'SYSTEM' };
+    if (opts.auditType === 'activity') {
+      where.AND = [...(where.AND ?? []), { userId: { not: null } }];
+    }
     const q = opts.q?.trim();
     if (q) {
       where.OR = ['action', 'entity', 'details', 'ipAddress', 'traceId'].map((field) => ({
@@ -179,7 +189,7 @@ export class LogsService {
    * MAC, port and NAS are enriched per page from the latest radacct session
    * when they were not captured on the authentication attempt itself.
    */
-  async getRadiusAuthLogs(actor: Actor, opts: { limit?: number; offset?: number; q?: string; days?: number } = {}) {
+  async getRadiusAuthLogs(actor: Actor, opts: { limit?: number; offset?: number; q?: string; days?: number; sinceHours?: number; forUser?: number; outcome?: string } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     const offset = Math.max(opts.offset ?? 0, 0);
     const days = opts.days && opts.days > 0 ? opts.days : null;
@@ -188,12 +198,31 @@ export class LogsService {
     // SECURITY: non-admin actors (reseller/retailer/staff) may ONLY see auth logs
     // for subscribers inside their own subtree — never the whole system. Admins
     // (SUPER_ADMIN/ADMIN) see everything. subtreeIds() returns null for admins.
-    const ids = await this.subtreeIds(actor);
+    const ids = opts.forUser
+      ? await this.idsFor(actor, opts.forUser)
+      : await this.subtreeIds(actor);
 
-    const since = days ? `NOW() - INTERVAL '${days} days'` : null;
     const whereParts: string[] = [];
     const params: any[] = [];
-    if (since) whereParts.push(`p.authdate > ${since}`);
+    if (opts.sinceHours && opts.sinceHours > 0) {
+      params.push(Math.min(opts.sinceHours, 24 * 90));
+      whereParts.push(`p.authdate > NOW() - ($${params.length} * INTERVAL '1 hour')`);
+    } else if (days) {
+      params.push(Math.min(days, 90));
+      whereParts.push(`p.authdate > NOW() - ($${params.length} * INTERVAL '1 day')`);
+    }
+    const outcome = opts.outcome?.toUpperCase();
+    const replyPatterns: Record<string, string> = {
+      ACCEPT: '%Access-Accept%',
+      REJECT: '%Access-Reject%',
+      CHALLENGE: '%Access-Challenge%',
+    };
+    if (outcome && replyPatterns[outcome]) {
+      params.push(replyPatterns[outcome]);
+      whereParts.push(`p.reply ILIKE $${params.length}`);
+    } else if (outcome === 'UNKNOWN') {
+      whereParts.push(`(p.reply IS NULL OR (p.reply NOT ILIKE '%Access-Accept%' AND p.reply NOT ILIKE '%Access-Reject%' AND p.reply NOT ILIKE '%Access-Challenge%'))`);
+    }
     if (q) { params.push(`%${q}%`); whereParts.push(`(p.username ILIKE $${params.length} OR p.reply ILIKE $${params.length})`); }
     if (ids !== null) {
       // Restrict to usernames owned within the actor's subtree. An empty subtree
@@ -266,10 +295,11 @@ export class LogsService {
 
   async getNetworkLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number } = {},
+    opts: { limit?: number; offset?: number; q?: string; severity?: string; sinceHours?: number; forUser?: number } = {},
   ) {
     const userIds = await this.subtreeIds(actor);
     const where: any = {};
+    const and: any[] = [];
     if (userIds) {
       where.nas = { ownerId: { in: userIds } };
       // A row about ANOTHER company's subscriber on one of our routers — a
@@ -277,11 +307,31 @@ export class LogsService {
       // enforced, or while it only monitors — is that company's data: its
       // subscriber's name, address and usage. Router events with no
       // subscriber stay visible.
-      where.OR = [
+      and.push({ OR: [
         { subscriberId: null },
         { subscriber: { userId: { in: userIds } } },
-      ];
+      ] });
     }
+    if (opts.forUser) {
+      await this.scope.assertUser(actor, opts.forUser);
+      and.push({ OR: [
+        { nas: { ownerId: opts.forUser } },
+        { subscriber: { userId: opts.forUser } },
+      ] });
+    }
+    if (opts.sinceHours && opts.sinceHours > 0) {
+      where.loggedAt = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
+    }
+    if (opts.severity && opts.severity.toUpperCase() !== 'ALL') {
+      where.severity = opts.severity.toUpperCase();
+    }
+    const term = opts.q?.trim().slice(0, 100);
+    if (term) {
+      and.push({ OR: ['eventType', 'eventReason', 'username', 'callerId', 'framedIp', 'sessionId', 'message'].map((field) => ({
+        [field]: { contains: term, mode: 'insensitive' },
+      })) });
+    }
+    if (and.length) where.AND = and;
 
     const [logs, total] = await Promise.all([
       this.prisma.networkLog.findMany({
@@ -484,13 +534,16 @@ export class LogsService {
 
   async getSystemLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; q?: string } = {},
+    opts: { limit?: number; offset?: number; q?: string; sinceHours?: number } = {},
   ) {
     if (!this.scope.isAdmin(actor?.role)) {
       return { logs: [], total: 0 };
     }
 
     const where: any = {};
+    if (opts.sinceHours && opts.sinceHours > 0) {
+      where.createdAt = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
+    }
     const q = opts.q?.trim();
     if (q) {
       where.OR = ['level', 'message', 'source', 'metadata'].map((field) => ({
@@ -540,14 +593,19 @@ export class LogsService {
    */
   async getRadiusSessions(
     actor: Actor,
-    opts: { limit?: number; username?: string; cause?: string; sinceHours?: number } = {},
+    opts: { limit?: number; offset?: number; username?: string; cause?: string; sinceHours?: number; q?: string; forUser?: number } = {},
   ) {
     const take = Math.min(Math.max(opts.limit ?? 200, 1), 2000);
+    const skip = Math.max(opts.offset ?? 0, 0);
     const where: any = {};
 
-    // Scope: non-admins only see their own subtree's subscriber usernames.
-    if (!this.scope.isAdmin(actor?.role)) {
-      const subWhere = await this.scope.subscriberWhere(actor);
+    // Narrow to the actor's own subtree, and optionally to one authorized account.
+    if (!this.scope.isAdmin(actor?.role) || opts.forUser) {
+      let subWhere = await this.scope.subscriberWhere(actor);
+      if (opts.forUser) {
+        await this.scope.assertUser(actor, opts.forUser);
+        subWhere = { AND: [subWhere, { userId: opts.forUser }] };
+      }
       const subs = await this.prisma.subscriber.findMany({ where: subWhere, select: { username: true } });
       const names = subs.map((s) => s.username).filter(Boolean) as string[];
       if (!names.length) return { items: [], summary: [], total: 0 };
@@ -572,12 +630,24 @@ export class LogsService {
       where.acctstarttime = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
     }
     if (opts.cause?.toLowerCase() === 'current') where.acctstoptime = null;
+    const term = opts.q?.trim().slice(0, 100);
+    if (term) {
+      where.AND = [...(where.AND ?? []), {
+        OR: ['username', 'acctsessionid', 'nasipaddress', 'framedipaddress', 'callingstationid'].map((field) => ({
+          [field]: { contains: term, mode: 'insensitive' },
+        })),
+      }];
+    }
 
-    const rows = await this.prisma.radAcct.findMany({
-      where,
-      orderBy: { radacctid: 'desc' },
-      take,
-    });
+    const [rows, total] = await Promise.all([
+      this.prisma.radAcct.findMany({
+        where,
+        orderBy: { radacctid: 'desc' },
+        take,
+        skip,
+      }),
+      this.prisma.radAcct.count({ where }),
+    ]);
 
     const [pppoeSessions, nasDevices] = rows.length
       ? await Promise.all([
@@ -674,23 +744,41 @@ export class LogsService {
       );
     }
 
-    return { items, summary, total: items.length };
+    return { items, summary, total };
   }
 
   // ── Failed Activations ────────────────────────────────────────
 
-  async getFailedActivations(actor: Actor, opts: { limit?: number } = {}) {
+  async getFailedActivations(
+    actor: Actor,
+    opts: { limit?: number; offset?: number; q?: string; sinceHours?: number; forUser?: number } = {},
+  ) {
     try {
-      const ids = await this.subtreeIds(actor);
+      const ids = opts.forUser
+        ? await this.idsFor(actor, opts.forUser)
+        : await this.subtreeIds(actor);
       const where: any = {};
       if (ids) where.createdById = { in: ids };
+      if (opts.sinceHours && opts.sinceHours > 0) {
+        where.createdAt = { gte: new Date(Date.now() - opts.sinceHours * 3600_000) };
+      }
+      const q = opts.q?.trim().slice(0, 100);
+      if (q) {
+        where.OR = ['username', 'fullName', 'reason'].map((field) => ({
+          [field]: { contains: q, mode: 'insensitive' },
+        }));
+      }
 
-      const logs = await this.prisma.failedActivation.findMany({
+      const [logs, total] = await Promise.all([
+        this.prisma.failedActivation.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        take: opts.limit ?? 200,
-      });
-      return logs;
+          take: Math.min(Math.max(opts.limit ?? 50, 1), 200),
+          skip: Math.max(opts.offset ?? 0, 0),
+        }),
+        this.prisma.failedActivation.count({ where }),
+      ]);
+      return { logs, total };
     } catch (e: any) {
       this.logger.warn(`Failed activation log query failed: ${e?.message || e}`);
       throw e;
@@ -912,22 +1000,39 @@ export class LogsService {
       severity?: string;
       forUser?: number;
       type?: string;
+      sinceHours?: number;
     } = {},
   ) {
     const limit = opts.limit ?? 100;
     const ids = await this.idsFor(actor, opts.forUser);
+    const since = opts.sinceHours && opts.sinceHours > 0
+      ? new Date(Date.now() - opts.sinceHours * 3600_000)
+      : undefined;
 
     const loginWhere: any = {};
     if (ids) loginWhere.userId = { in: ids };
+    if (since) loginWhere.createdAt = { gte: since };
 
     const activityWhere: any = {};
     if (ids) activityWhere.userId = { in: ids };
+    if (since) activityWhere.createdAt = { gte: since };
 
     const networkWhere: any = {};
-    if (ids) networkWhere.nas = { ownerId: { in: ids } };
+    const networkAnd: any[] = [];
+    if (ids) {
+      networkWhere.nas = { ownerId: { in: ids } };
+      networkAnd.push({
+        OR: [
+          { subscriberId: null },
+          { subscriber: { userId: { in: ids } } },
+        ],
+      });
+    }
+    if (since) networkWhere.loggedAt = { gte: since };
 
     const severity = opts.severity?.toUpperCase();
     const type = opts.type?.toLowerCase();
+    if (severity) networkWhere.severity = severity;
 
     const [loginLogs, activityLogs, networkLogs, systemLogs] =
       await Promise.all([
@@ -944,7 +1049,7 @@ export class LogsService {
           include: { user: { select: { id: true, name: true } } },
         }) : Promise.resolve([]),
         !type || type === 'network' ? this.prisma.networkLog.findMany({
-          where: { ...networkWhere, ...(severity ? { severity } : {}) },
+          where: { ...networkWhere, ...(networkAnd.length ? { AND: networkAnd } : {}) },
           orderBy: { loggedAt: 'desc' },
           take: limit,
           include: {
@@ -954,6 +1059,7 @@ export class LogsService {
         }) : Promise.resolve([]),
         (!type || type === 'system') && this.scope.isAdmin(actor?.role)
           ? this.prisma.systemLog.findMany({
+              where: since ? { createdAt: { gte: since } } : {},
               orderBy: { createdAt: 'desc' },
               take: limit,
             })

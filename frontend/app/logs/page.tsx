@@ -36,6 +36,36 @@ export const LOG_VIEWS = [
   { id: "authentication", label: "Authentication (AAA)", description: "Inspect subscriber RADIUS authentication and application sign-ins." },
   { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
 ];
+const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
+  connections: [
+    { id: "console", label: "Connection Console" },
+    { id: "network", label: "Network Diagnostics" },
+    { id: "failed", label: "Failed Connections" },
+    { id: "nas", label: "NAS Connectivity" },
+  ],
+  sessions: [
+    { id: "live", label: "Live PPPoE Sessions" },
+    { id: "accounting", label: "RADIUS Accounting" },
+    { id: "timeline", label: "Session Timeline" },
+    { id: "disconnects", label: "Disconnect Analysis" },
+  ],
+  authentication: [
+    { id: "subscriber", label: "Subscriber Authentication" },
+    { id: "login", label: "Login History" },
+    { id: "health", label: "RADIUS / AAA Results" },
+  ],
+  audit: [
+    { id: "activity", label: "User Activity" },
+    { id: "changes", label: "Administrative Changes" },
+    { id: "system", label: "System Events" },
+  ],
+};
+const DEFAULT_LOG_FEATURES: Record<string, string> = {
+  connections: "console",
+  sessions: "live",
+  authentication: "subscriber",
+  audit: "activity",
+};
 const LEGACY_LOG_TABS: Record<string, string> = {
   console: "connections", network: "connections", failed: "connections",
   timeline: "connections", radsess: "sessions", disconnects: "sessions",
@@ -62,6 +92,10 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const [darkMode] = useState(true);
   const [internalTab, setInternalTab] = useState("connections");
   const activeTab = embedded && view && onViewChange ? view : internalTab;
+  const [featureByTab, setFeatureByTab] = useState(DEFAULT_LOG_FEATURES);
+  const activeFeature = featureByTab[activeTab] || DEFAULT_LOG_FEATURES[activeTab] || "console";
+  const activeFeatures = LOG_FEATURES[activeTab] || LOG_FEATURES.connections;
+  const [authOutcome, setAuthOutcome] = useState("ALL");
   const setActiveTab = (id: string) => {
     if (embedded && view && onViewChange) onViewChange(id);
     else {
@@ -78,33 +112,66 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const [showOverview, setShowOverview] = useState(false);
 
   // ── Data ───────────────────────────────────────────────────────
-  const [systemLogs, setSystemLogs] = useState<any[]>([]);
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [radiusSessions, setRadiusSessions] = useState<any[]>([]);
-  const [radWindow, setRadWindow] = useState<number>(0);  // 0 = all time, else hours
-  const [failedActs, setFailedActs] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
+  const [timelineLimit, setTimelineLimit] = useState(100);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
+  const timelineRequest = useRef(0);
   const [stats, setStats] = useState<any>(null);
   const [statsError, setStatsError] = useState("");
+  const statsRequest = useRef(0);
+  const [sessions, setSessions] = useState<any[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [timelineError, setTimelineError] = useState("");
-  const [timelineLoading, setTimelineLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [diag, setDiag] = useState<any>(null);
   const [diagError, setDiagError] = useState("");
   const [diagBusy, setDiagBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [timelineLimit, setTimelineLimit] = useState(100);
+  const [nasList, setNasList] = useState<any[]>([]);
+  const [nasId, setNasId] = useState("");
+  const [nasLogs, setNasLogs] = useState<any[]>([]);
+  const [nasLogError, setNasLogError] = useState("");
+  const [nasLogNote, setNasLogNote] = useState("");
+  const [recordsSummary, setRecordsSummary] = useState<{ rows: any[]; total: number } | null>(null);
 
   // ── Filters ────────────────────────────────────────────────────
   const [search, setSearch] = useState("");
   const [filterSeverity, setFilterSeverity] = useState<string>("ALL");
   const [filterPeriod, setFilterPeriod] = useState("24h");
+  const [filterOutcome, setFilterOutcome] = useState("ALL");
   const [focusUser, setFocusUser] = useState("");
   const [accounts, setAccounts] = useState<any[]>([]);
-  const timelineRequest = useRef(0);
-  const statsRequest = useRef(0);
   const diagRequest = useRef(0);
+
+  const setFeature = (id: string) => {
+    setFeatureByTab((current) => ({ ...current, [activeTab]: id }));
+    setRecordsSummary(null);
+    if (activeTab === "connections") setFilterSeverity(id === "network" ? "ERROR" : "ALL");
+    if (
+      (activeTab === "connections" && (id === "failed" || id === "nas")) ||
+      (activeTab === "sessions" && id === "disconnects") ||
+      (activeTab === "audit" && id === "system")
+    ) setFocusUser("");
+  };
+  const sinceHours = filterPeriod === "1h" ? 1
+    : filterPeriod === "6h" ? 6
+      : filterPeriod === "24h" ? 24
+        : filterPeriod === "7d" ? 168
+          : filterPeriod === "30d" ? 720
+            : filterPeriod === "90d" ? 2160
+              : undefined;
+  const accountFilterAvailable =
+    activeFeature !== "nas" &&
+    !(activeTab === "connections" && activeFeature === "failed") &&
+    !(activeTab === "sessions" && activeFeature === "disconnects") &&
+    !(activeTab === "audit" && activeFeature === "system");
+  const canShowAccountFilter = accounts.length > 0 && accountFilterAvailable;
+  const onRecordsChange = useCallback((rows: any[], total: number) => {
+    setRecordsSummary({ rows, total });
+  }, []);
+  useEffect(() => {
+    setRecordsSummary(null);
+  }, [activeTab, activeFeature, search, focusUser, filterPeriod, filterSeverity, filterOutcome]);
 
   // ── Auth ────────────────────────────────────────────────────────
   const token = typeof window !== 'undefined' ? localStorage.getItem("token") : "";
@@ -157,6 +224,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       params.set("type", "network");
       if (focusUser) params.set("forUser", focusUser);
       if (filterSeverity !== "ALL") params.set("severity", filterSeverity);
+      if (sinceHours) params.set("sinceHours", String(sinceHours));
       const res = await fetch(`${API}/logs/timeline?${params}`, { headers, signal });
       if (!res.ok) throw new Error(`Unable to load connection events (HTTP ${res.status}).`);
       const events = await res.json();
@@ -170,13 +238,14 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     } finally {
       if (!signal?.aborted && requestId === timelineRequest.current) setTimelineLoading(false);
     }
-  }, [token, timelineLimit, focusUser, filterSeverity]);
+  }, [token, timelineLimit, focusUser, filterSeverity, sinceHours]);
 
   const fetchStats = useCallback(async (signal?: AbortSignal) => {
     if (!token) return;
     const requestId = ++statsRequest.current;
     try {
-      const h = filterPeriod === "1h" ? 1 : filterPeriod === "6h" ? 6 : filterPeriod === "7d" ? 168 : 24;
+      if (!sinceHours) return;
+      const h = sinceHours;
       const res = await fetch(`${API}/logs/stats?hours=${h}`, { headers, signal });
       if (!res.ok) throw new Error(`Unable to load summary metrics (HTTP ${res.status}).`);
       const result = await res.json();
@@ -187,65 +256,33 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       if (signal?.aborted || requestId !== statsRequest.current) return;
       setStatsError(e instanceof Error ? e.message : "Unable to load summary metrics.");
     }
-  }, [token, filterPeriod]);
+  }, [token, sinceHours]);
 
   const fetchTabData = useCallback(async (signal: AbortSignal) => {
     if (!token) return;
-    if (activeTab === "authentication") {
+    if (activeTab !== "sessions" || activeFeature !== "timeline") {
       setLoading(false);
       setLoadError("");
       return;
     }
     setLoading(true);
     setLoadError("");
-    if (activeTab === "connections") setFailedActs([]);
-    if (activeTab === "sessions") {
-      setSessions([]);
-      setRadiusSessions([]);
-    }
-    if (activeTab === "audit") setSystemLogs([]);
+    setSessions([]);
     try {
-      if (activeTab === "connections") {
-        const response = await fetch(`${API}/logs/failed-activations?limit=200`, { headers, signal });
-        if (!response.ok) throw new Error(`Unable to load failed activations (HTTP ${response.status}).`);
-        const records = await response.json();
-        if (!Array.isArray(records)) throw new Error("The failed activation response was invalid.");
-        if (!signal.aborted) setFailedActs(records);
-      } else if (activeTab === "sessions") {
-        const userQuery = focusUser ? `?forUser=${encodeURIComponent(focusUser)}` : "";
-        const radiusQuery = new URLSearchParams({ limit: "500", cause: "current" });
-        if (radWindow) radiusQuery.set("sinceHours", String(radWindow));
-        const [sessionsResponse, radiusResponse] = await Promise.all([
-          fetch(`${API}/logs/sessions${userQuery}`, { headers, signal }),
-          fetch(`${API}/logs/radius-sessions?${radiusQuery}`, { headers, signal }),
-        ]);
-        const failedResponse = [sessionsResponse, radiusResponse].find((response) => !response.ok);
-        if (failedResponse) throw new Error(`Unable to load session data (HTTP ${failedResponse.status}).`);
-        const [sessionsData, radiusData] = await Promise.all([
-          sessionsResponse.json(), radiusResponse.json(),
-        ]);
-        if (signal.aborted) return;
-        if (!Array.isArray(sessionsData) || !Array.isArray(radiusData?.items)) {
-          throw new Error("The session response was invalid.");
-        }
-        setSessions(sessionsData);
-        setRadiusSessions(radiusData.items);
-      } else if (activeTab === "audit") {
-        const response = await fetch(`${API}/logs/system?limit=100`, { headers, signal });
-        if (!response.ok) throw new Error(`Unable to load system events (HTTP ${response.status}).`);
-        const result = await response.json();
-        if (signal.aborted) return;
-        const records = Array.isArray(result?.logs) ? result.logs : Array.isArray(result) ? result : null;
-        if (!records) throw new Error("The system event response was invalid.");
-        setSystemLogs(records);
-      }
+      const params = new URLSearchParams();
+      if (focusUser) params.set("forUser", focusUser);
+      const response = await fetch(`${API}/logs/sessions?${params}`, { headers, signal });
+      if (!response.ok) throw new Error(`Unable to load panel sessions (HTTP ${response.status}).`);
+      const records = await response.json();
+      if (!Array.isArray(records)) throw new Error("The panel session response was invalid.");
+      if (!signal.aborted) setSessions(records);
     } catch (e) {
       if (signal.aborted) return;
-      setLoadError(e instanceof Error ? e.message : "Unable to load log data.");
+      setLoadError(e instanceof Error ? e.message : "Unable to load panel sessions.");
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [activeTab, token, focusUser, radWindow]);
+  }, [activeTab, activeFeature, token, focusUser]);
 
   // Preserve old log-view bookmarks by redirecting their view id to a category.
   useEffect(() => {
@@ -282,35 +319,88 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       .catch(silent("usersFetch"));
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== "connections" || activeFeature !== "nas" || !token) return;
+    const controller = new AbortController();
+    setNasList([]);
+    setNasLogError("");
+    fetch(`${API}/nas`, { headers, signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Unable to load authorized NAS devices (HTTP ${response.status}).`);
+        return response.json();
+      })
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        const rows = Array.isArray(response) ? response : response?.data ?? [];
+        if (!Array.isArray(rows)) throw new Error("The NAS list response was invalid.");
+        const safeNas = rows.map((row: any) => ({
+          id: String(row.id),
+          name: row.shortname || row.nasname || `NAS ${row.id}`,
+          ip: row.nasIp || row.nasname || "",
+        }));
+        setNasList(safeNas);
+        setNasId((current) => safeNas.some((nas: any) => nas.id === current) ? current : safeNas[0]?.id || "");
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setNasLogError(error instanceof Error ? error.message : "Unable to load authorized NAS devices.");
+        }
+      });
+    return () => controller.abort();
+  }, [activeTab, activeFeature, token, refreshKey]);
+
+  useEffect(() => {
+    if (activeTab !== "connections" || activeFeature !== "nas" || !token || !nasId) {
+      setNasLogs([]);
+      return;
+    }
+    const controller = new AbortController();
+    const params = new URLSearchParams({ nasId, limit: "120" });
+    setNasLogs([]);
+    setNasLogError("");
+    setNasLogNote("");
+    fetch(`${API}/logs/router?${params}`, { headers, signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Unable to load NAS console records (HTTP ${response.status}).`);
+        return response.json();
+      })
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        const rows = Array.isArray(result) ? result : result?.lines ?? result?.logs ?? [];
+        if (!Array.isArray(rows)) throw new Error("The NAS log response was invalid.");
+        setNasLogs(rows);
+        setNasLogNote(result?.note || "");
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setNasLogError(error instanceof Error ? error.message : "Unable to load NAS console records.");
+        }
+      });
+    return () => controller.abort();
+  }, [activeTab, activeFeature, token, nasId, refreshKey]);
+
   // Each selection owns its request lifecycle. Abort on tab/filter changes so
   // late responses from the previous view cannot overwrite the current view.
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
     void fetchTabData(controller.signal);
-    if (activeTab === "connections") {
-      void fetchTimeline(controller.signal);
-      void fetchStats(controller.signal);
-    } else {
-      setTimelineError("");
-      setTimelineLoading(false);
-      setStatsError("");
-    }
+    if (activeTab === "connections" && activeFeature === "console") {
+      if (!focusUser && sinceHours) void fetchStats(controller.signal);
+      else {
+        setStats(null);
+        setStatsError("");
+      }
+    } else setStatsError("");
     return () => controller.abort();
-  }, [activeTab, token, fetchTabData, fetchTimeline, fetchStats, refreshKey]);
+  }, [activeTab, activeFeature, token, fetchTabData, fetchStats, focusUser, sinceHours, refreshKey]);
 
-  // Auto-refresh the connection event stream every 15s.
+  // Keep the live connection console fresh without mounting other log views.
   useEffect(() => {
-    if (activeTab !== "connections" || !token) return;
-    let controller: AbortController | null = null;
-    const iv = setInterval(() => {
-      controller?.abort();
-      controller = new AbortController();
-      void fetchTimeline(controller.signal);
-      void fetchStats(controller.signal);
-    }, 15_000);
-    return () => { clearInterval(iv); controller?.abort(); };
-  }, [activeTab, token, fetchTimeline, fetchStats]);
+    if (activeTab !== "connections" || activeFeature !== "console" || !token || focusUser || !sinceHours) return;
+    const iv = setInterval(() => setRefreshKey((key) => key + 1), 15_000);
+    return () => clearInterval(iv);
+  }, [activeTab, activeFeature, token, focusUser, sinceHours]);
 
   // RADIUS diag
   const loadDiag = useCallback((signal?: AbortSignal) => {
@@ -337,16 +427,16 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   }, [token]);
 
   useEffect(() => {
-    if (activeTab !== "authentication" || !token) return;
+    if (activeTab !== "authentication" || activeFeature !== "health" || !token || focusUser) return;
     const controller = new AbortController();
     loadDiag(controller.signal);
     const iv = setInterval(() => loadDiag(controller.signal), 30_000);
     return () => { clearInterval(iv); controller.abort(); };
-  }, [activeTab, token, loadDiag]);
+  }, [activeTab, activeFeature, token, focusUser, loadDiag]);
 
   const refreshAll = () => {
     setRefreshKey((key) => key + 1);
-    if (activeTab === "authentication") loadDiag();
+    if (activeTab === "authentication" && activeFeature === "health" && !focusUser) loadDiag();
   };
 
   // ── Filter helpers ─────────────────────────────────────────────
@@ -359,6 +449,19 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       return String(value ?? "").toLowerCase().includes(q);
     }));
   };
+
+  const filteredSessions = filterData(sessions, ["user.name", "user.email", "ipAddress", "userAgent"]).filter((session) => {
+    const timestamp = new Date(session.loginAt || session.createdAt || 0).getTime();
+    return !sinceHours || timestamp === 0 || timestamp >= Date.now() - sinceHours * 3600_000;
+  });
+  const filteredNasLogs = nasLogs.filter((entry: any) => {
+    const timestamp = new Date(entry.loggedAt || entry.time || entry.date || 0).getTime();
+    if (sinceHours && timestamp > 0 && timestamp < Date.now() - sinceHours * 3600_000) return false;
+    if (!search) return true;
+    const query = search.toLowerCase();
+    return [entry.message, entry.msg, entry.topics, entry.severity, entry.time, entry.loggedAt]
+      .some((value) => String(value ?? "").toLowerCase().includes(query));
+  });
 
   const filteredTimeline = timeline.filter(e => {
     if (e._type !== "network") return false;
@@ -409,109 +512,160 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     tabRefs.current[nextIndex]?.focus();
   };
 
+  const pageRows = recordsSummary?.rows ?? [];
+  const pageMetric = activeTab === "connections"
+    ? { label: "Errors on this page", value: pageRows.filter((row) => row.severity?.toUpperCase() === "ERROR").length }
+    : activeTab === "sessions"
+      ? { label: "Active on this page", value: pageRows.filter((row) => row.sessionState === "active").length }
+      : activeTab === "authentication"
+        ? { label: "Rejects on this page", value: pageRows.filter((row) => row.result === "Reject" || /reject/i.test(row.status || "")).length }
+        : activeFeature === "system"
+          ? { label: "Errors on this page", value: pageRows.filter((row) => row.level?.toUpperCase() === "ERROR").length }
+          : { label: "Actor-attributed on this page", value: pageRows.filter((row) => row.user != null).length };
+
   // ── Render ─────────────────────────────────────────────────────
 
   return (
     <div style={{ display: "flex", minHeight: embedded ? "auto" : "100vh", background: embedded ? "transparent" : t.bg, color: t.text, fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", fontSize: 13 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-        <div style={{ flex: 1, padding: embedded ? 0 : "16px 20px", overflowY: embedded ? "visible" : "auto" }}>
+        <div className="logs-content" style={{ flex: 1, padding: embedded ? 0 : "16px 20px", overflowY: embedded ? "visible" : "auto" }}>
 
           {/* Layout styles: left vertical view sidebar + content. */}
           <style>{`
+            .logs-content{display:flex;flex-direction:column;gap:12px;min-width:0}
             .logs-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
             .logs-layout.embedded{grid-template-columns:1fr}
             .logs-main{min-width:0}
-            .logs-side{display:flex;gap:5px;overflow-x:auto;overscroll-behavior-x:contain;
+            .logs-side{display:flex;gap:5px;overflow-x:auto;overscroll-behavior-x:contain;width:100%;
               background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:6px;
               box-shadow:0 1px 2px rgba(0,0,0,.05);scrollbar-width:thin}
-            .logs-side-tab{flex:1 0 auto;border:none;background:transparent;padding:10px 14px;border-radius:9px;
+            .logs-side-tab{flex:1 1 0;min-width:max-content;border:none;background:transparent;padding:10px 14px;border-radius:9px;
               font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;
               text-align:center;white-space:nowrap;
               transition:background .12s,color .12s}
             .logs-side-tab:hover{color:var(--text);background:var(--surface-2)}
             .logs-side-tab.on{background:var(--accent);color:#fff;
               box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 40%,transparent)}
-            .logs-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0 0 16px}
-            .logs-heading h1{font-size:22px;line-height:1.2;margin:0;font-weight:750}
+            .logs-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+            .logs-heading h1{display:flex;align-items:center;gap:9px;font-size:22px;line-height:1.2;margin:0;font-weight:750}
             .logs-heading p{font-size:13px;color:var(--muted);margin:5px 0 0}
-            .logs-tab-description{font-size:12px;color:var(--muted);margin:-7px 0 14px}
+            .logs-tab-description{font-size:12px;color:var(--muted);margin:0 0 10px}
+            .logs-toolbar{padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:12px}
+            .logs-toolbar-main{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+            .logs-toolbar-main select{height:36px;max-width:220px;padding:0 10px;border:1px solid var(--border);
+              border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-size:12px}
+            .logs-search{display:flex;align-items:center;gap:8px;flex:1 1 250px;min-width:160px;height:36px;
+              padding:0 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--muted)}
+            .logs-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%,transparent)}
+            .logs-search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:12px}
+            .logs-toolbar-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;
+              padding:0 11px;border:1px solid var(--border);border-radius:8px;background:var(--surface);
+              color:var(--text);font:inherit;font-size:12px;font-weight:650;cursor:pointer;white-space:nowrap}
+            .logs-toolbar-button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+            .logs-toolbar-button:disabled{opacity:.55;cursor:wait}
+            .logs-overview{margin-top:-2px}
+            .logs-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin:0 0 12px}
+            .logs-summary-card{display:flex;flex-direction:column;gap:5px;min-width:0;padding:10px 12px;
+              border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+            .logs-summary-card span{overflow:hidden;color:var(--muted);font-size:10px;font-weight:700;
+              letter-spacing:.045em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
+            .logs-summary-card strong{font-size:20px;line-height:1.1;font-weight:800}
             @media (max-width:640px){
               .logs-side{border-radius:11px}
-              .logs-side-tab{padding:10px 12px}
+              .logs-side-tab{flex:0 0 auto;padding:9px 10px;font-size:12px}
               .logs-heading h1{font-size:20px}
-              .logs-tab-description{margin-top:-5px}
+              .logs-heading p{font-size:12px}
+              .logs-toolbar{padding:8px}
+              .logs-toolbar-main select{flex:1 1 135px;max-width:none;min-width:0}
+              .logs-search{flex:1 1 100%;min-width:0}
+              .logs-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
             }
           `}</style>
-
-          {/* ═══════════════ TOP KPI CARDS ═══════════════ */}
-      {activeTab === "connections" && showOverview && (
-        <>
-          {statsError && <p role="alert" style={{ color: t.red, fontSize: 12, margin: "0 0 10px" }}>{statsError}</p>}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 18 }}>
-            {[
-              { label: `Events (${filterPeriod})`, val: stats ? stats.totals.login + stats.totals.activity + stats.totals.network + stats.totals.system : "—", sub: "all event types", color: t.accent },
-              { label: "Failed app sign-ins", val: stats?.errors?.failedLogins ?? "—", sub: filterPeriod, color: t.red },
-              { label: "Network errors", val: stats?.errors?.networkErrors ?? "—", sub: filterPeriod, color: t.amber },
-              { label: "Active app sessions", val: stats?.activeSessions ?? "—", sub: "current", color: t.green },
-            ].map((c, i) => (
-              <div key={i} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: t.textMuted }}>{c.label}</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: c.color, marginTop: 2 }}>{loading ? "—" : c.val}</div>
-                <div style={{ fontSize: 10, color: t.textMuted, marginTop: 2 }}>{c.sub}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
 
           {/* ═══════════════ FILTER BAR ═══════════════ */}
           <header className="logs-heading">
             <div>
-              <h1>Logs</h1>
+              <h1><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" /></svg> Logs</h1>
               <p>Investigate connections, sessions, authentication, and system changes.</p>
             </div>
           </header>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {/* Overview toggle — sits with the search for a clean single bar. */}
-              {activeTab === "connections" && (
-                <button onClick={() => setShowOverview(v => !v)} style={{ background: showOverview ? `${t.accent}15` : "transparent", border: `1px solid ${showOverview ? t.accent : t.cardBorder}`, color: showOverview ? t.accent : t.textSub, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  {showOverview ? "▲ Hide overview" : "▼ Show overview"}
-                </button>
-              )}
-              {/* Search */}
-              <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-                <input value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder="Search logs by user, IP, message, action..."
-                  style={{ width: "100%", padding: "9px 12px 9px 34px", borderRadius: 8,
-                    border: `1px solid ${t.cardBorder}`, fontSize: 12, background: t.input, color: t.text, outline: "none" }}
-                  onFocus={e => e.target.style.borderColor = t.accent}
-                  onBlur={e => e.target.style.borderColor = t.cardBorder} />
-                <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 14 }}>🔍</span>
-              </div>
-
-              {activeTab === "connections" && (
-                <button onClick={() => setShowFilters(!showFilters)}
-                  style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${showFilters ? t.accent : t.cardBorder}`,
-                    background: showFilters ? `${t.accent}15` : "transparent", color: showFilters ? t.accent : t.textSub, cursor: "pointer", fontSize: 12 }}>
-                  ⚙️ Filters {showFilters ? "▲" : "▼"}
-                </button>
-              )}
-              <button type="button" onClick={refreshAll} disabled={loading}
-                style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${t.cardBorder}`,
-                  background: "transparent", color: t.textSub, cursor: loading ? "wait" : "pointer", fontSize: 12 }}>
-                {loading ? "Refreshing…" : "↻ Refresh"}
+          <nav className="logs-side" role="tablist" aria-label="Log views">
+            {tabs.map((tab, index) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={`logs-tab-${tab.id}`}
+                aria-controls="logs-tabpanel"
+                aria-selected={activeTab === tab.id}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
+                onClick={() => setActiveTab(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+                ref={(element) => { tabRefs.current[index] = element; }}
+              >
+                {tab.label}
               </button>
-
-              {/* Account drill-down */}
-              {accounts.length > 0 && (
-                <select value={focusUser} onChange={e => setFocusUser(e.target.value)}
-                  style={{ padding: "9px 12px", borderRadius: 8, border: `1px solid ${focusUser ? t.accent : t.cardBorder}`,
-                    fontSize: 12, background: t.input, color: t.text, cursor: "pointer", minWidth: 160 }}>
-                  <option value="">📋 All accounts</option>
-                  {accounts.map((u: any) => <option key={u.id} value={u.id}>{u.name} · {u.role}</option>)}
+            ))}
+          </nav>
+          <div className="logs-toolbar">
+            <div className="logs-toolbar-main">
+              <label className="logs-search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+                <input
+                  aria-label="Search logs"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search subscriber, IP, NAS, event, or actor"
+                />
+              </label>
+              <select aria-label="Event group" value={activeFeature} onChange={(event) => setFeature(event.target.value)}>
+                {activeFeatures.map((feature) => <option key={feature.id} value={feature.id}>{feature.label}</option>)}
+              </select>
+              <select aria-label="Time range" value={filterPeriod} onChange={(event) => setFilterPeriod(event.target.value)}>
+                <option value="1h">Last hour</option>
+                <option value="6h">Last 6 hours</option>
+                <option value="24h">Last 24 hours</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+                <option value="90d">Last 90 days</option>
+              </select>
+              {canShowAccountFilter && (
+                <select aria-label="Account" value={focusUser} onChange={(event) => setFocusUser(event.target.value)}>
+                  <option value="">All authorized accounts</option>
+                  {accounts.map((account: any) => <option key={account.id} value={account.id}>{account.name} · {account.role}</option>)}
                 </select>
               )}
+              {activeTab === "connections" && activeFeature === "nas" && (
+                <select aria-label="NAS device" value={nasId} onChange={(event) => setNasId(event.target.value)}>
+                  <option value="">Select a NAS</option>
+                  {nasList.map((nas) => <option key={nas.id} value={nas.id}>{nas.name}{nas.ip ? ` · ${nas.ip}` : ""}</option>)}
+                </select>
+              )}
+              {activeTab === "connections" && (activeFeature === "console" || activeFeature === "network") && (
+                <button type="button" className="logs-toolbar-button" onClick={() => setShowFilters((value) => !value)}
+                  aria-expanded={showFilters}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /><path d="M8 6v0M15 12v0M11 18v0" /></svg> Filters
+                </button>
+              )}
+              {activeTab === "authentication" && activeFeature === "health" && !focusUser && (
+                <select aria-label="RADIUS outcome" value={authOutcome} onChange={(event) => setAuthOutcome(event.target.value)}>
+                  <option value="ALL">All outcomes</option>
+                  <option value="ACCEPT">Accept</option>
+                  <option value="REJECT">Reject</option>
+                  <option value="CHALLENGE">Challenge</option>
+                  <option value="UNKNOWN">Other / unknown</option>
+                </select>
+              )}
+              {activeTab === "connections" && activeFeature === "console" && !focusUser && !search && filterSeverity === "ALL" && sinceHours && (
+                <button type="button" className="logs-toolbar-button" onClick={() => setShowOverview((value) => !value)}
+                  aria-expanded={showOverview}>
+                  {showOverview ? "Hide overview" : "Overview"}
+                </button>
+              )}
+              <button type="button" className="logs-toolbar-button" onClick={refreshAll} disabled={loading}>
+                {loading ? "Refreshing…" : "Refresh"}
+              </button>
             </div>
             {loadError && (
               <div role="alert" style={{ margin: "0 0 14px", padding: "10px 12px", border: "1px solid #ef4444",
@@ -521,7 +675,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             )}
 
             {/* Collapsible advanced filters */}
-            {activeTab === "connections" && showFilters && (
+            {activeTab === "connections" && showFilters && (activeFeature === "console" || activeFeature === "network") && (
               <div style={{ marginTop: 10, padding: 12, background: t.card, borderRadius: 10, border: `1px solid ${t.cardBorder}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
                 {/* Severity filter */}
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -535,46 +689,11 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                     </button>
                   ))}
                 </div>
-
-                {/* Period */}
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: t.textSub }}>Period:</span>
-                  {["1h", "6h", "24h", "7d"].map(p => (
-                    <button key={p} onClick={() => setFilterPeriod(p)}
-                      style={{ padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontWeight: 600,
-                        background: filterPeriod === p ? t.accent : "transparent",
-                        color: filterPeriod === p ? "#fff" : t.textSub, border: filterPeriod === p ? "none" : `1px solid ${t.cardBorder}` }}>
-                      {p}
-                    </button>
-                  ))}
-                </div>
               </div>
             )}
           </div>
 
-          {/* ═══════════════ FOUR-TAB LOGS WORKSPACE ═══════════════ */}
           <div className={`logs-layout${embedded ? " embedded" : ""}`}>
-            <nav className="logs-side" role="tablist" aria-label="Log views">
-              {tabs.map(tab => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  id={`logs-tab-${tab.id}`}
-                  aria-controls="logs-tabpanel"
-                  aria-selected={activeTab === tab.id}
-                  tabIndex={activeTab === tab.id ? 0 : -1}
-                  className={`logs-side-tab${activeTab === tab.id ? " on" : ""}`}
-                  onClick={() => setActiveTab(tab.id)}
-                  onKeyDown={(event) => handleTabKeyDown(event, tabs.indexOf(tab))}
-                  ref={(element) => { tabRefs.current[tabs.indexOf(tab)] = element; }}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
-
-            {/* Right content area. */}
             <div
               className="logs-main"
               id="logs-tabpanel"
@@ -583,6 +702,83 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
               tabIndex={0}
             >
           <p className="logs-tab-description">{tabs.find((tab) => tab.id === activeTab)?.description}</p>
+          {recordsSummary && (
+            <div className="logs-summary-grid" aria-label="Selected view summary">
+              <div className="logs-summary-card">
+                <span>Matching records</span>
+                <strong>{recordsSummary.total.toLocaleString()}</strong>
+              </div>
+              <div className="logs-summary-card">
+                <span>{pageMetric.label}</span>
+                <strong>{pageMetric.value.toLocaleString()}</strong>
+              </div>
+              <div className="logs-summary-card">
+                <span>Rows on this page</span>
+                <strong>{recordsSummary.rows.length.toLocaleString()}</strong>
+              </div>
+            </div>
+          )}
+          {activeTab === "sessions" && activeFeature === "timeline" && (
+            <div className="logs-summary-grid" aria-label="Panel session summary">
+              <div className="logs-summary-card"><span>Active panel sessions</span><strong>{filteredSessions.length}</strong></div>
+              <div className="logs-summary-card"><span>Accounts in view</span><strong>{new Set(filteredSessions.map((session: any) => session.user?.id).filter(Boolean)).size}</strong></div>
+            </div>
+          )}
+          {activeTab === "connections" && activeFeature === "nas" && nasId && (
+            <div className="logs-summary-grid" aria-label="NAS log summary">
+              <div className="logs-summary-card"><span>Matching router entries</span><strong>{filteredNasLogs.length}</strong></div>
+              <div className="logs-summary-card"><span>Entries returned</span><strong>{nasLogs.length}</strong></div>
+            </div>
+          )}
+          {activeTab === "connections" && activeFeature === "console" && showOverview && !focusUser && !search && filterSeverity === "ALL" && sinceHours && (
+            <section className="logs-overview" aria-label="Overall logs overview">
+              <div className="logs-summary-grid">
+                {[
+                  { label: `All log events · ${filterPeriod}`, value: stats ? stats.totals.login + stats.totals.activity + stats.totals.network + stats.totals.system : "—", color: t.accent },
+                  { label: "Failed sign-ins", value: stats?.errors?.failedLogins ?? "—", color: t.red },
+                  { label: "Network errors", value: stats?.errors?.networkErrors ?? "—", color: t.amber },
+                  { label: "Active panel sessions", value: stats?.activeSessions ?? "—", color: t.green },
+                ].map((card) => (
+                  <div key={card.label} className="logs-summary-card">
+                    <span>{card.label}</span>
+                    <strong style={{ color: card.color }}>{card.value}</strong>
+                  </div>
+                ))}
+              </div>
+              {statsError && <p role="alert" style={{ color: t.red, fontSize: 12, margin: "8px 0 0" }}>{statsError}</p>}
+            </section>
+          )}
+            {activeTab === "connections" && activeFeature === "console" && (
+              <>
+                <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Connection events</h2>
+                <LogRecordsTable
+                  endpoint="/logs/network"
+                  detailPanel
+                  searchable={false}
+                  hideToolbar
+                  refreshKey={refreshKey}
+                  searchText={search}
+                  onSearchTextChange={setSearch}
+                  queryParams={{ sinceHours: sinceHours ? String(sinceHours) : "", forUser: focusUser, severity: filterSeverity }}
+                  onRecordsChange={onRecordsChange}
+                  columns={[
+                    { key: "loggedAt", label: "Timestamp", nowrap: true, primary: true, render: (r) => r.loggedAt ? dateTime(r.loggedAt) : "—" },
+                    { key: "username", label: "Subscriber", nowrap: true, primary: true, render: (r) => r.subscriber?.fullName || r.username || "—" },
+                    { key: "eventType", label: "Event", nowrap: true, primary: true },
+                    { key: "severity", label: "Result", nowrap: true, primary: true },
+                    { key: "eventReason", label: "Recorded failure reason", wide: true },
+                    { key: "nasName", label: "NAS", render: (r) => r.nas?.nasname || "—" },
+                    { key: "nasIp", label: "NAS IP", mono: true, render: (r) => r.nas?.nasIp || r.nasIp || "—" },
+                    { key: "framedIp", label: "Subscriber IP", mono: true },
+                    { key: "callerId", label: "Calling-Station-Id", mono: true },
+                    { key: "sessionId", label: "Session ID", mono: true },
+                    { key: "message", label: "Message", wide: true },
+                  ]}
+                />
+              </>
+            )}
+
+          {/* ═══════════════ SELECTED TAB WORKSPACE ═══════════════ */}
 
           {/* ═══════════════ LOADING ═══════════════ */}
           {loading && activeTab !== "connections" && activeTab !== "audit" && activeTab !== "authentication" && (
@@ -594,16 +790,23 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: ACTIVITY LOGS (paginated) ═══════════════ */}
-          {activeTab === "audit" && (
+          {activeTab === "audit" && (activeFeature === "activity" || activeFeature === "changes") && (
             <>
-            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Administrative activity</h2>
+            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>{activeFeature === "changes" ? "Administrative changes" : "User activity"}</h2>
             <LogRecordsTable
               endpoint="/logs/activity"
               detailPanel
               searchable={false}
+              hideToolbar
               refreshKey={refreshKey}
               searchText={search}
               onSearchTextChange={setSearch}
+              queryParams={{
+                sinceHours: sinceHours ? String(sinceHours) : "",
+                forUser: focusUser,
+                auditType: activeFeature,
+              }}
+              onRecordsChange={onRecordsChange}
               columns={[
                 { key: "id", label: "ID", nowrap: true, primary: true },
                 { key: "type", label: "Log Type", nowrap: true, primary: true, render: (r) => <b>{r.action}{r.entity ? ` · ${r.entity}` : ""}</b> },
@@ -620,18 +823,23 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: LOGIN LOGS — RADIUS auth (paginated) ═══════════════ */}
-          {activeTab === "authentication" && (
+          {activeTab === "authentication" && (activeFeature === "subscriber" || activeFeature === "health") && (
             <>
             <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Subscriber RADIUS authentication</h2>
             <LogRecordsTable
               endpoint="/logs/radius-auth"
               detailPanel
               searchable={false}
+              hideToolbar
               refreshKey={refreshKey}
               searchText={search}
               onSearchTextChange={setSearch}
-              days={7}
-              daysOptions={[{ label: "Last 24 hours", value: 1 }, { label: "Last 7 days", value: 7 }, { label: "Last 30 days", value: 30 }, { label: "All time", value: 0 }]}
+              queryParams={{
+                sinceHours: sinceHours ? String(sinceHours) : "",
+                forUser: focusUser,
+                outcome: activeFeature === "health" && authOutcome !== "ALL" ? authOutcome : "",
+              }}
+              onRecordsChange={onRecordsChange}
               columns={[
                 { key: "id", label: "Record ID", nowrap: true, mono: true, primary: true },
                 { key: "authdate", label: "Datetime", nowrap: true, primary: true, render: (r) => r.authdate ? dateTime(r.authdate) : "—" },
@@ -651,8 +859,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             </>
           )}
 
-          {/* ═══════════════ TAB: TIMELINE ═══════════════ */}
-          {activeTab === "connections" && (
+          {/* Retained only for legacy state recovery; it is not a primary view. */}
+          {activeTab === "connections" && activeFeature === "legacy-timeline" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <h2 style={{ fontSize: 15, margin: "0 0 -3px" }}>Connection events</h2>
 
@@ -772,17 +980,78 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             </div>
           )}
 
+          {activeTab === "connections" && activeFeature === "network" && (
+            <>
+              <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Network diagnostics</h2>
+              <LogRecordsTable
+                endpoint="/logs/network"
+                detailPanel
+                searchable={false}
+                hideToolbar
+                refreshKey={refreshKey}
+                searchText={search}
+                onSearchTextChange={setSearch}
+                queryParams={{
+                  sinceHours: sinceHours ? String(sinceHours) : "",
+                  forUser: focusUser,
+                  severity: filterSeverity,
+                }}
+                onRecordsChange={onRecordsChange}
+                columns={[
+                  { key: "loggedAt", label: "Timestamp", nowrap: true, primary: true, render: (r) => r.loggedAt ? dateTime(r.loggedAt) : "—" },
+                  { key: "username", label: "Subscriber", nowrap: true, primary: true, render: (r) => r.subscriber?.fullName || r.username || "—" },
+                  { key: "eventType", label: "Event", nowrap: true, primary: true },
+                  { key: "severity", label: "Result", nowrap: true, primary: true },
+                  { key: "eventReason", label: "Recorded failure reason", wide: true },
+                  { key: "nasName", label: "NAS", render: (r) => r.nas?.nasname || "—" },
+                  { key: "nasIp", label: "NAS IP", mono: true, render: (r) => r.nas?.nasIp || r.nasIp || "—" },
+                  { key: "framedIp", label: "Subscriber IP", mono: true },
+                  { key: "callerId", label: "Calling-Station-Id", mono: true },
+                  { key: "sessionId", label: "Session ID", mono: true },
+                  { key: "message", label: "Message", wide: true },
+                ]}
+              />
+            </>
+          )}
+
+          {activeTab === "connections" && activeFeature === "nas" && (
+            <section aria-label="NAS connectivity" style={{ display: "grid", gap: 10 }}>
+              <h2 style={{ fontSize: 15, margin: 0 }}>NAS connectivity</h2>
+              {nasLogNote && <p style={{ margin: 0, color: t.textMuted, fontSize: 12 }}>{nasLogNote}</p>}
+              {nasLogError && <p role="alert" style={{ margin: 0, color: t.red, fontSize: 12 }}>{nasLogError}</p>}
+              {!nasLogError && !nasList.length && <p style={{ margin: 0, color: t.textMuted, fontSize: 12 }}>No authorized NAS devices are available.</p>}
+              <div style={{ display: "grid", gap: 8 }}>
+                {filteredNasLogs.map((entry: any, index: number) => (
+                    <article key={`${entry.id ?? entry.loggedAt ?? entry.time ?? "nas-log"}-${index}`}
+                      style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 9, padding: "10px 12px", display: "grid", gap: 5, minWidth: 0 }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <strong style={{ fontSize: 12 }}>{entry.severity || entry.topics || "NAS event"}</strong>
+                        <time style={{ color: t.textMuted, fontSize: 11 }}>{entry.loggedAt || entry.time || entry.date ? dateTime(entry.loggedAt || entry.time || entry.date) : "Timestamp not recorded"}</time>
+                      </div>
+                      <div style={{ fontSize: 12, overflowWrap: "anywhere" }}>{entry.message || entry.msg || "Message not recorded"}</div>
+                    </article>
+                  ))}
+                {!nasLogError && nasId && nasLogs.length === 0 && (
+                  <p style={{ margin: 0, color: t.textMuted, fontSize: 12 }}>No router log entries were returned.</p>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* ═══════════════ TAB: LOGIN LOGS ═══════════════ */}
-          {activeTab === "authentication" && (
+          {activeTab === "authentication" && activeFeature === "login" && (
             <>
             <h2 style={{ fontSize: 15, margin: "16px 0 9px" }}>Application sign-ins</h2>
             <LogRecordsTable
               endpoint="/logs/login"
               detailPanel
               searchable={false}
+              hideToolbar
               refreshKey={refreshKey}
               searchText={search}
               onSearchTextChange={setSearch}
+              queryParams={{ sinceHours: sinceHours ? String(sinceHours) : "", forUser: focusUser }}
+              onRecordsChange={onRecordsChange}
               columns={[
                 { key: "user", label: "User", nowrap: true, primary: true, render: (r) => r.user?.name || "—" },
                 { key: "email", label: "Email", nowrap: true, primary: true, render: (r) => r.email || "—" },
@@ -802,30 +1071,35 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: SYSTEM LOGS ═══════════════ */}
-          {activeTab === "audit" && (
+          {activeTab === "audit" && activeFeature === "system" && (
             <>
             <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>System events</h2>
-            <LogTable data={filterData(systemLogs, ["message", "source", "level"])} d={d} t={t}
-              headers={["Level", "Source", "Message", "Time"]}
-              render={(log: any) => {
-                const lc = log.level === "ERROR" ? { color: "#f87171", bg: "#450a0a" } : log.level === "WARNING" ? { color: "#fbbf24", bg: "#422006" } : { color: "#60a5fa", bg: "var(--surface)" };
-                return (
-                  <tr key={log.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
-                    <td style={{ padding: "8px 12px" }}><Badge color={lc.color} bg={lc.bg}>{log.level}</Badge></td>
-                    <td style={{ padding: "8px 12px", fontSize: 11 }}>{log.source}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 12 }}>{log.message}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{dateTime(log.createdAt)}</td>
-                  </tr>
-                );
-              }} />
+            <LogRecordsTable
+              endpoint="/logs/system"
+              detailPanel
+              searchable={false}
+              hideToolbar
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
+              queryParams={{ sinceHours: sinceHours ? String(sinceHours) : "" }}
+              onRecordsChange={onRecordsChange}
+              columns={[
+                { key: "level", label: "Level", nowrap: true, primary: true },
+                { key: "source", label: "Source", nowrap: true, primary: true },
+                { key: "message", label: "System event", primary: true },
+                { key: "createdAt", label: "Timestamp", nowrap: true, primary: true, render: (r) => r.createdAt ? dateTime(r.createdAt) : "—" },
+                { key: "metadata", label: "Recorded metadata", wide: true },
+              ]}
+            />
             </>
           )}
 
           {/* ═══════════════ TAB: SESSIONS ═══════════════ */}
-          {activeTab === "sessions" && (
+          {activeTab === "sessions" && activeFeature === "timeline" && (
             <>
             <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Active panel sessions</h2>
-            <LogTable data={filterData(sessions, ["user.name", "user.email", "ipAddress", "userAgent"])} d={d} t={t}
+            <LogTable data={filteredSessions} d={d} t={t}
               headers={["User", "Role", "IP", "Login Time", "Expires"]}
               render={(s: any) => (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
@@ -840,96 +1114,95 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: RADIUS SESSIONS (with termination cause) ═══════════════ */}
-          {activeTab === "sessions" && (
+          {activeTab === "sessions" && (activeFeature === "live" || activeFeature === "accounting") && (
           <>
-            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>RADIUS accounting sessions</h2>
-            {/* Time window */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4 }}>Window:</span>
-              {[[0,"All"],[24,"24h"],[72,"3d"],[168,"7d"]].map(([h,lbl]) => (
-                <button key={h as number} onClick={() => setRadWindow(h as number)}
-                  style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-                    border: `1px solid ${radWindow === h ? t.accent : t.cardBorder}`,
-                    background: radWindow === h ? t.accent : "transparent", color: radWindow === h ? "#fff" : t.textSub }}>
-                  {lbl as string}
-                </button>
-              ))}
-            </div>
-            <LogTable data={filterData(radiusSessions, ["username", "nasIp", "framedIp", "callingStation", "sessionState", "terminateLabel"])} d={d} t={t}
-              headers={["Subscriber / Session", "Session state", "Subscriber / NAS IP", "Started", "Duration", "Last accounting update", "Down / Up"]}
-              render={(s: any) => {
-                const dur = s.durationSec != null
-                  ? (s.durationSec >= 3600 ? `${Math.floor(s.durationSec/3600)}h ${Math.floor((s.durationSec%3600)/60)}m` : s.durationSec >= 60 ? `${Math.floor(s.durationSec/60)}m ${s.durationSec%60}s` : `${s.durationSec}s`)
-                  : "—";
-                return (
-                  <tr key={s.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: `var(--surface-2)` }}>
-                    <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600 }}>
-                      {s.username}
-                      <div style={{ fontSize: 10, color: t.textMuted }}>Subscriber ID: {s.subscriberId ?? "Not recorded"}</div>
-                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: "monospace" }}>Acct-Session-Id: {s.sessionId || "Not recorded"}</div>
-                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: "monospace" }}>Calling-Station-Id: {s.callingStation || "Not recorded"}</div>
-                    </td>
-                    <td style={{ padding: "8px 12px" }}>
-                      {s.sessionState === "active"
-                        ? <Badge color="#4ade80" bg="#14532d">Active · accounting fresh</Badge>
-                        : s.sessionState === "stale"
-                          ? <Badge color="#fbbf24" bg="#422006">Stale · no update for over 30 minutes</Badge>
-                          : s.sessionState === "unknown"
-                            ? <Badge color="#cbd5e1" bg="#334155">Unknown · no tracked PPPoE state</Badge>
-                            : <span style={{ display: "grid", gap: 3, maxWidth: 360 }}>
-                            <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                              <CauseBadge compact cause={causeOf(s)} />
-                              <SeverityTag severity={s.terminateSeverity} />
-                            </span>
-                            <span style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.45 }}>{s.terminateHow || s.terminateMeaning || s.terminateDescription}</span>
-                          </span>}
-                    </td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, fontFamily: "monospace", color: t.accent }}>
-                      Subscriber IP: {s.framedIp || "Not assigned"}
-                      <div style={{ fontSize: 10, color: t.textMuted }}>NAS: {s.nasName || "Not recorded"}{s.nasId ? ` · #${s.nasId}` : ""}</div>
-                      <div style={{ fontSize: 10, color: t.textMuted }}>NAS IP: {s.nasIp || "Not recorded"}</div>
-                    </td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.start ? dateTime(s.start) : "—"}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 11 }}>{dur}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.lastSeen ? dateTime(s.lastSeen) : "Not recorded"}</td>
-                    <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{s.downloadMB != null ? `${s.downloadMB} / ${s.uploadMB} MB` : "—"}</td>
-                  </tr>
-                );
-              }} />
+            <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>{activeFeature === "live" ? "Live PPPoE sessions" : "RADIUS accounting history"}</h2>
+            <LogRecordsTable
+              endpoint="/logs/radius-sessions"
+              detailPanel
+              searchable={false}
+              hideToolbar
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
+              queryParams={{
+                limit: "50",
+                sinceHours: sinceHours ? String(sinceHours) : "",
+                forUser: focusUser,
+                cause: activeFeature === "live" ? "current" : "",
+              }}
+              onRecordsChange={onRecordsChange}
+              columns={[
+                { key: "username", label: "Subscriber", nowrap: true, primary: true },
+                { key: "sessionId", label: "Session ID", mono: true, nowrap: true, primary: true },
+                { key: "sessionState", label: "State", nowrap: true, primary: true },
+                { key: "start", label: "Started", nowrap: true, primary: true, render: (r) => r.start ? dateTime(r.start) : "—" },
+                { key: "stop", label: "Stopped", nowrap: true, render: (r) => r.stop ? dateTime(r.stop) : "—" },
+                { key: "durationSec", label: "Duration", render: (r) => r.durationSec == null ? "—" : `${Math.floor(r.durationSec / 60)}m ${r.durationSec % 60}s` },
+                { key: "nasName", label: "NAS", render: (r) => r.nasName || "Not recorded" },
+                { key: "nasIp", label: "NAS IP", mono: true },
+                { key: "framedIp", label: "Assigned IP", mono: true },
+                { key: "callingStation", label: "Calling-Station-Id", mono: true },
+                { key: "lastSeen", label: "Last accounting update", render: (r) => r.lastSeen ? dateTime(r.lastSeen) : "Not recorded" },
+                { key: "downloadMB", label: "Download / upload", render: (r) => r.downloadMB == null ? "—" : `${r.downloadMB} / ${r.uploadMB ?? "—"} MB` },
+                { key: "terminateLabel", label: "Disconnect reason", wide: true, render: (r) => r.terminateLabel || "Not recorded" },
+              ]}
+            />
           </>
           )}
 
           {/* ═══════════════ TAB: DISCONNECT REASONS (all 18 RFC 2866 causes) ═══════════════ */}
-          {activeTab === "sessions" && (
+          {activeTab === "sessions" && activeFeature === "disconnects" && (
             <>
               <h2 style={{ fontSize: 15, margin: "20px 0 9px" }}>Disconnect report</h2>
-              <DisconnectsPanel refreshKey={refreshKey} searchText={search} onSearchTextChange={setSearch} />
+              <DisconnectsPanel
+                refreshKey={refreshKey}
+                searchText={search}
+                onSearchTextChange={setSearch}
+                controlledHours={sinceHours ?? 2160}
+                onHoursChange={(value) => setFilterPeriod(value === 24 ? "24h" : value === 168 ? "7d" : value === 720 ? "30d" : "90d")}
+                hideTimeRange
+                hideSearch
+              />
             </>
           )}
 
           {/* ═══════════════ TAB: FAILED ACTIVATIONS ═══════════════ */}
-          {activeTab === "connections" && (
+          {activeTab === "connections" && activeFeature === "failed" && (
             <>
-            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Refused subscriber logins</h2>
-            <DisconnectsPanel mode="connections" refreshKey={refreshKey} searchText={search} onSearchTextChange={setSearch} />
+            <DisconnectsPanel
+              mode="connections"
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
+              controlledHours={sinceHours ?? 2160}
+              hideTimeRange
+              hideSearch
+            />
             <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Failed activations</h2>
-            <LogTable data={filterData(failedActs, ["username", "reason", "by"])} d={d} t={t}
-              headers={["ID", "Username", "Reason", "Attempted By", "When"]}
-              render={(f: any, i: number) => (
-                <tr key={f.id} style={{ borderBottom: `1px solid ${t.cardBorder}`, background: i % 2 === 0 ? (d ? "var(--surface-2)" : "#f8fafc") : t.card }}>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{f.id}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600 }}>{f.username || "—"}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{f.reason}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textSub }}>{f.by}</td>
-                  <td style={{ padding: "8px 12px", fontSize: 11, color: t.textMuted }}>{dateTime(f.createdAt)}</td>
-                </tr>
-              )}
-              emptyMsg="No failed activations — good news." />
+            <LogRecordsTable
+              endpoint="/logs/failed-activations"
+              detailPanel
+              searchable={false}
+              hideToolbar
+              refreshKey={refreshKey}
+              searchText={search}
+              onSearchTextChange={setSearch}
+              queryParams={{ sinceHours: sinceHours ? String(sinceHours) : "", forUser: focusUser }}
+              onRecordsChange={onRecordsChange}
+              columns={[
+                { key: "username", label: "Subscriber", nowrap: true, primary: true },
+                { key: "reason", label: "Recorded failure reason", primary: true },
+                { key: "createdAt", label: "Timestamp", nowrap: true, primary: true, render: (r) => r.createdAt ? dateTime(r.createdAt) : "—" },
+                { key: "fullName", label: "Customer name" },
+                { key: "createdById", label: "Attempted by (user ID)" },
+              ]}
+            />
             </>
           )}
 
           {/* ═══════════════ TAB: RADIUS HEALTH ═══════════════ */}
-          {activeTab === "authentication" && (
+          {activeTab === "authentication" && activeFeature === "health" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <h2 style={{ fontSize: 15, margin: "18px 0 0" }}>RADIUS diagnostics</h2>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

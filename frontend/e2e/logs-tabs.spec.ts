@@ -15,7 +15,7 @@ test.describe("Logs workspace tabs", () => {
     const pageErrors: Error[] = [];
     const now = new Date().toISOString();
     const dataPaths = [
-      "/logs/timeline",
+      "/logs/network",
       "/logs/radius-sessions",
       "/logs/radius-auth",
       "/logs/activity",
@@ -31,7 +31,7 @@ test.describe("Logs workspace tabs", () => {
     const fixtures: Record<string, unknown> = {
       "/profile": {},
       "/users": [],
-      "/logs/timeline": [],
+      "/logs/network": { logs: [], total: 0 },
       "/logs/stats": { hourly: [] },
       "/logs/system": { logs: [] },
       "/logs/sessions": [],
@@ -81,16 +81,17 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/insights?tab=logs");
     const panel = page.getByRole("tabpanel");
-    await expect(panel.getByRole("status")).toContainText("Loading connection events…");
+    await expect(page.getByRole("tablist", { name: "Log views" }).getByRole("tab")).toHaveCount(4);
+    await expect.poll(() => requestedPaths.includes("/logs/network")).toBe(true);
 
     const views = [
-      { label: "Connections", heading: "Connection events", endpoint: "/logs/timeline", empty: "No events match your filters." },
-      { label: "Sessions", heading: "RADIUS accounting sessions", endpoint: "/logs/radius-sessions", empty: "No data found." },
+      { label: "Connections", heading: "Connection events", endpoint: "/logs/network", empty: "No records." },
+      { label: "Sessions", heading: "Live PPPoE sessions", endpoint: "/logs/radius-sessions", empty: "No records." },
       { label: "Authentication (AAA)", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
-      { label: "Audit Trail", heading: "Administrative activity", endpoint: "/logs/activity", empty: "No records." },
+      { label: "Audit Trail", heading: "User activity", endpoint: "/logs/activity", empty: "No records." },
     ];
 
-    for (const [index, view] of views.entries()) {
+    for (const view of views) {
       const tab = page.getByRole("tab", { name: view.label });
       await expect(tab).toBeVisible();
       const box = await tab.boundingBox();
@@ -98,11 +99,6 @@ test.describe("Logs workspace tabs", () => {
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
       await expect(tab).toHaveAttribute("aria-selected", "true");
       await expect(panel.getByRole("heading", { name: view.heading })).toBeVisible();
-      if (index === 1) {
-        await expect(panel).toContainText("Loading...");
-      } else if (index > 1) {
-        await expect(panel).toContainText("Loading…");
-      }
       heldPaths.delete(view.endpoint);
       releaseGates.get(view.endpoint)?.();
       await expect(panel).toContainText(view.empty);
@@ -118,15 +114,14 @@ test.describe("Logs workspace tabs", () => {
     const fixtures: Record<string, unknown> = {
       "/profile": {},
       "/users": [],
-      "/logs/timeline": [{
-        _type: "network",
+      "/logs/network": { logs: [{
         id: "network-connection",
-        ts: now,
+        loggedAt: now,
         username: "connection-only-subscriber",
         eventType: "PPP_SESSION_START",
         severity: "INFO",
         message: "Connection-only event",
-      }],
+      }], total: 1 },
       "/logs/stats": { hourly: [], totals: { login: 0, activity: 0, network: 1, system: 0 } },
       "/logs/failed-activations": [],
       "/logs/sessions": [],
@@ -200,6 +195,7 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/insights?tab=logs");
     const panel = page.getByRole("tabpanel");
+    await expect.poll(() => requestedPaths.includes("/logs/network")).toBe(true);
     await expect(panel).toContainText("connection-only-subscriber");
     await expect(panel).not.toContainText("session-only-subscriber");
     await expect(panel).not.toContainText("aaa-only-subscriber");
@@ -263,19 +259,18 @@ test.describe("Logs workspace tabs", () => {
     const fixtures: Record<string, unknown> = {
       "/profile": {},
       "/users": [],
-      "/logs/timeline": [{
-        _type: "network",
+      "/logs/network": { logs: [{
         id: "network-detail",
-        ts: now,
+        loggedAt: now,
         username: "details-subscriber",
         eventType: "PPP_SESSION_START",
         severity: "INFO",
         message: "Selected connection detail",
-        nasName: "test-router",
+        nas: { nasname: "test-router", nasIp: "192.0.2.1" },
         nasIp: "192.0.2.1",
         callerId: "00:11:22:33:44:55",
         sessionId: "session-detail",
-      }],
+      }], total: 1 },
       "/logs/stats": { hourly: [], totals: { login: 0, activity: 0, network: 1, system: 0 } },
       "/logs/failed-activations": [],
       "/logs/sessions": [],
@@ -329,28 +324,30 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/insights?tab=logs");
     const panel = page.getByRole("tabpanel");
+    await expect(panel).toContainText("details-subscriber");
+    await panel.getByText("details-subscriber").click();
     await expect(panel).toContainText("Selected connection detail");
-    await panel.getByText("Selected connection detail").click();
     await expect(panel).toContainText("test-router");
     await expect(panel).toContainText("00:11:22:33:44:55");
+    await page.getByRole("button", { name: "Close event details" }).click();
 
     await page.getByRole("button", { name: /filters/i }).click();
     await page.getByRole("button", { name: "ERROR", exact: true }).click();
     await expect.poll(() => requestedUrls.some((url) => {
       const parsed = new URL(url);
-      return parsed.pathname.endsWith("/logs/timeline") && parsed.searchParams.get("severity") === "ERROR";
+      return parsed.pathname.endsWith("/logs/network") && parsed.searchParams.get("severity") === "ERROR";
     })).toBe(true);
 
     await page.getByRole("tab", { name: "Sessions" }).click();
-    await page.getByRole("button", { name: "24h", exact: true }).first().click();
+    await page.getByLabel("Time range").selectOption("6h");
     await expect.poll(() => requestedUrls.some((url) => {
       const parsed = new URL(url);
-      return parsed.pathname.endsWith("/logs/radius-sessions") && parsed.searchParams.get("sinceHours") === "24";
+      return parsed.pathname.endsWith("/logs/radius-sessions") && parsed.searchParams.get("sinceHours") === "6";
     })).toBe(true);
 
     await page.getByRole("tab", { name: "Audit Trail" }).click();
     await expect(panel).toContainText("AUDIT_FIRST_ACTION");
-    const search = page.getByPlaceholder("Search logs by user, IP, message, action...");
+    const search = page.getByRole("textbox", { name: "Search logs" });
     await search.fill("AUDIT_QUERY");
     await expect.poll(() => requestedUrls.some((url) => {
       const parsed = new URL(url);
@@ -370,14 +367,18 @@ test.describe("Logs workspace tabs", () => {
       return parsed.pathname.endsWith("/logs/activity") && parsed.searchParams.get("offset") === "50";
     })).toBe(true);
     await panel.getByText("AUDIT_LAST_PAGE_ACTION").click();
-    await expect(page.getByRole("dialog", { name: "Record details" })).toBeVisible();
+    if (await panel.getByLabel("Selected event details").isVisible()) {
+      await expect(panel.getByLabel("Selected event details")).toBeVisible();
+    } else {
+      await expect(page.getByRole("dialog", { name: "Record details" })).toBeVisible();
+    }
     await expect(panel).toContainText("recorded audit detail 51");
   });
 
   test("shows API failures in each Logs category", async ({ page }) => {
     const pageErrors: Error[] = [];
     const failingPaths = new Set([
-      "/logs/timeline",
+      "/logs/network",
       "/logs/radius-sessions",
       "/logs/radius-auth",
       "/logs/activity",
@@ -412,10 +413,10 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/insights?tab=logs");
     const views = [
-      { label: "Connections", heading: "Connection events", error: "Unable to load connection events (HTTP 503)." },
-      { label: "Sessions", heading: "RADIUS accounting sessions", error: "Unable to load session data (HTTP 503)." },
+      { label: "Connections", heading: "Connection events", error: "Unable to load records (HTTP 503)." },
+      { label: "Sessions", heading: "Live PPPoE sessions", error: "Unable to load records (HTTP 503)." },
       { label: "Authentication (AAA)", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
-      { label: "Audit Trail", heading: "Administrative activity", error: "Unable to load records (HTTP 503)." },
+      { label: "Audit Trail", heading: "User activity", error: "Unable to load records (HTTP 503)." },
     ];
 
     for (const view of views) {
@@ -443,8 +444,8 @@ test.describe("Logs workspace tabs", () => {
     await page.getByRole("button", { name: /sign in/i }).click();
     await expect(page).not.toHaveURL(/\/login/, { timeout: 20_000 });
 
-    const timelineResponse = page.waitForResponse((response) =>
-      isLogResponse(response.url(), "timeline"),
+    const networkResponse = page.waitForResponse((response) =>
+      isLogResponse(response.url(), "network"),
     );
     const sessionsResponse = page.waitForResponse((response) =>
       isLogResponse(response.url(), "radius-sessions"),
@@ -454,15 +455,15 @@ test.describe("Logs workspace tabs", () => {
     const connectionsTab = page.getByRole("tab", { name: "Connections" });
     await expect(connectionsTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "Connection events" })).toBeVisible();
-    const timelineApiResponse = await timelineResponse;
-    expect(timelineApiResponse.status()).toBe(200);
-    const timeline = await timelineApiResponse.json();
-    expect(Array.isArray(timeline)).toBe(true);
+    const networkApiResponse = await networkResponse;
+    expect(networkApiResponse.status()).toBe(200);
+    const network = await networkApiResponse.json();
+    expect(Array.isArray(network.logs)).toBe(true);
 
     const sessionsTab = page.getByRole("tab", { name: "Sessions" });
     await sessionsTab.click();
     await expect(sessionsTab).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("heading", { name: "RADIUS accounting sessions" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Live PPPoE sessions" })).toBeVisible();
     const sessionsApiResponse = await sessionsResponse;
     expect(sessionsApiResponse.status()).toBe(200);
     const sessions = await sessionsApiResponse.json();
@@ -487,7 +488,7 @@ test.describe("Logs workspace tabs", () => {
     );
     await auditTab.click();
     await expect(auditTab).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("heading", { name: "Administrative activity" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "User activity" })).toBeVisible();
     const activityApiResponse = await activityResponse;
     expect(activityApiResponse.status()).toBe(200);
     const activity = await activityApiResponse.json();

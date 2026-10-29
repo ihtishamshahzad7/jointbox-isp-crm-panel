@@ -81,6 +81,7 @@ describe('LogsService RADIUS records', () => {
             acctstoptime: null,
           },
         ]),
+        count: jest.fn().mockResolvedValue(4),
       },
       pppoeSession: {
         findMany: jest.fn().mockResolvedValue([
@@ -148,6 +149,7 @@ describe('LogsService RADIUS records', () => {
           queryWhere = where;
           return Promise.resolve([]);
         }),
+        count: jest.fn().mockResolvedValue(0),
       },
       pppoeSession: { findMany: jest.fn().mockResolvedValue([]) },
       nas: { findMany: jest.fn().mockResolvedValue([]) },
@@ -174,6 +176,79 @@ describe('LogsService RADIUS records', () => {
 describe('LogsService audit and application-session responses', () => {
   const actor = { sub: 1, role: 'SUPER_ADMIN' };
   const scope = { isAdmin: () => true };
+
+  it('keeps automated audit records out of the human activity view', async () => {
+    let queryWhere: Record<string, unknown> | undefined;
+    const prisma = {
+      activityLog: {
+        findMany: jest.fn(({ where }: { where: Record<string, unknown> }) => {
+          queryWhere = where;
+          return Promise.resolve([]);
+        }),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const service = new LogsService(
+      prisma as unknown as PrismaService,
+      scope as unknown as ScopeService,
+      {} as MikrotikSyncService,
+    );
+
+    await service.getActivityLogs(actor, { auditType: 'activity' });
+
+    expect(queryWhere?.AND).toContainEqual({ userId: { not: null } });
+  });
+
+  it('filters administrative changes separately from system events', async () => {
+    let queryWhere: Record<string, unknown> | undefined;
+    const prisma = {
+      activityLog: {
+        findMany: jest.fn(({ where }: { where: Record<string, unknown> }) => {
+          queryWhere = where;
+          return Promise.resolve([]);
+        }),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const service = new LogsService(
+      prisma as unknown as PrismaService,
+      scope as unknown as ScopeService,
+      {} as MikrotikSyncService,
+    );
+
+    await service.getActivityLogs(actor, { auditType: 'changes' });
+
+    expect(queryWhere?.entity).toEqual({ not: 'SYSTEM' });
+  });
+
+  it('returns failed activations using the selected account and query filters', async () => {
+    const record = { id: 8, username: 'subscriber-8', reason: 'timeout' };
+    const prisma = {
+      failedActivation: {
+        findMany: jest.fn().mockResolvedValue([record]),
+        count: jest.fn().mockResolvedValue(1),
+      },
+    };
+    const service = new LogsService(
+      prisma as unknown as PrismaService,
+      scope as unknown as ScopeService,
+      {} as MikrotikSyncService,
+    );
+
+    const result = await service.getFailedActivations(actor, {
+      forUser: 7,
+      q: ' timeout ',
+      sinceHours: 24,
+    });
+    const where = prisma.failedActivation.findMany.mock.calls[0][0].where;
+
+    expect(result).toEqual({ logs: [record], total: 1 });
+    expect(where.createdById).toEqual({ in: [7] });
+    expect(where.createdAt.gte).toBeInstanceOf(Date);
+    expect(where.OR).toContainEqual({
+      reason: { contains: 'timeout', mode: 'insensitive' },
+    });
+  });
 
   it('redacts sensitive values from activity-log details', async () => {
     const prisma = {

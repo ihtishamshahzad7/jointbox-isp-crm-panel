@@ -24,7 +24,8 @@ export type Col = {
 
 export function LogRecordsTable({
   endpoint, columns, days, daysOptions, searchable = true, pageSize = 50, refreshKey = 0,
-  searchText, onSearchTextChange, detailPanel = false,
+  searchText, onSearchTextChange, detailPanel = false, queryParams, hideToolbar = false,
+  onRecordsChange,
 }: {
   endpoint: string;
   columns: Col[];
@@ -38,6 +39,11 @@ export function LogRecordsTable({
   onSearchTextChange?: (value: string) => void;
   /** Open selected records in a responsive detail panel instead of inline rows. */
   detailPanel?: boolean;
+  /** Additional server-side filters owned by the selected Logs view. */
+  queryParams?: Record<string, string>;
+  /** Use the shared Logs toolbar instead of the table's search/range controls. */
+  hideToolbar?: boolean;
+  onRecordsChange?: (rows: any[], total: number) => void;
 }) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -50,6 +56,7 @@ export function LogRecordsTable({
   const [expanded, setExpanded] = React.useState(false);
   const [openRow, setOpenRow] = React.useState<number | null>(null);
   const query = searchText ?? q;
+  const queryParamsString = new URLSearchParams(queryParams).toString();
 
   // Inline expandable rows: if any column is marked primary, the collapsed row
   // shows only those and the rest appear in a detail grid under a chevron.
@@ -77,6 +84,11 @@ export function LogRecordsTable({
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
 
+  React.useEffect(() => {
+    setPage(0);
+    setOpenRow(null);
+  }, [endpoint, query, queryParamsString]);
+
   const load = React.useCallback(async (signal: AbortSignal) => {
     setOpenRow(null);
     setLoading(true);
@@ -87,16 +99,19 @@ export function LogRecordsTable({
       p.set("offset", String(page * size));
       if (query) p.set("q", query);
       if (dayR) p.set("days", String(dayR));
+      new URLSearchParams(queryParamsString).forEach((value, key) => p.set(key, value));
       const r = await fetch(`${API}${endpoint}?${p}`, {
         headers: { Authorization: `Bearer ${token}` },
         signal,
       });
       if (!r.ok) throw new Error(`Unable to load records (HTTP ${r.status}).`);
       const d = await r.json();
-      const list = Array.isArray(d) ? d : (d?.logs || d?.data || []);
+      const list = Array.isArray(d) ? d : (d?.logs || d?.items || d?.data || []);
+      const recordTotal = Number(d?.total ?? list.length);
       if (signal.aborted) return;
       setRows(list);
-      setTotal(Number(d?.total ?? list.length));
+      setTotal(recordTotal);
+      onRecordsChange?.(list, recordTotal);
     } catch (e) {
       if (!signal.aborted) {
         setError(e instanceof Error ? e.message : "Unable to load records.");
@@ -104,7 +119,7 @@ export function LogRecordsTable({
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [endpoint, size, page, query, dayR, token]);
+  }, [endpoint, size, page, query, dayR, token, queryParamsString, onRecordsChange]);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -138,10 +153,10 @@ export function LogRecordsTable({
   }, [lastPage, page]);
 
   return (
-    <div className={`lrt ${expanded ? "lrt-full" : ""}`}>
+    <div className={`lrt${expanded ? " lrt-full" : ""}${detailPanel && selectedRow ? " lrt-has-detail" : ""}`}>
       <style>{CSS}</style>
 
-      <div className="lrt-bar">
+      {!hideToolbar && <div className="lrt-bar">
         {daysOptions && (
           <select value={dayR} onChange={(e) => onDays(Number(e.target.value))} title="Time range">
             {daysOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -164,7 +179,7 @@ export function LogRecordsTable({
           title={expanded ? "Exit full screen (Esc)" : "Expand to full screen"}>
           {expanded ? "✕ Close" : "⛶ Expand"}
         </button>
-      </div>
+      </div>}
 
       <div className="lrt-scroll">
         <table>
@@ -186,7 +201,7 @@ export function LogRecordsTable({
               return (
                 <React.Fragment key={i}>
                   <tr
-                    className={`${detailCols.length ? "lrt-clickable" : ""}${isOpen ? " lrt-open" : ""}`}
+                    className={`${canOpenDetails ? "lrt-clickable" : ""}${isOpen ? " lrt-open" : ""}`}
                     tabIndex={canOpenDetails ? 0 : undefined}
                     onClick={canOpenDetails ? () => setOpenRow(isOpen ? null : i) : undefined}
                     onKeyDown={canOpenDetails ? (e) => {
@@ -229,6 +244,28 @@ export function LogRecordsTable({
           </tbody>
         </table>
       </div>
+
+      {detailPanel && selectedRow && (
+        <aside className="lrt-desktop-detail" aria-label="Selected event details">
+          <div className="lrt-desktop-head">
+            <div>
+              <span>LOG RECORD</span>
+              <h2>Event details</h2>
+            </div>
+            <button type="button" onClick={() => setOpenRow(null)} aria-label="Close event details">×</button>
+          </div>
+          <div className="lrt-drawer-fields">
+            {columns.map((column) => (
+              <div key={column.key} className={column.wide ? "wide" : ""}>
+                <span>{column.label}</span>
+                <div className={column.mono ? "mono" : ""}>
+                  {column.render ? column.render(selectedRow) : selectedRow[column.key] ?? "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </aside>
+      )}
 
       {detailPanel && selectedRow && (
         <div className="lrt-drawer-backdrop" onClick={() => setOpenRow(null)}>
@@ -278,6 +315,21 @@ const CSS = `
 .lrt{background:#ffffff;color:#1A1714;border:1px solid var(--border);border-radius:10px;overflow:hidden}
 html[data-theme="dark"] .lrt{background:#111827;color:#e5e7eb}
 @media(prefers-color-scheme:dark){html:not([data-theme]) .lrt{background:#111827;color:#e5e7eb}}
+.lrt-has-detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(270px,340px)}
+.lrt-has-detail .lrt-bar,.lrt-has-detail .lrt-foot{grid-column:1/-1}
+.lrt-has-detail .lrt-scroll{grid-column:1;grid-row:2}
+.lrt-desktop-detail{grid-column:2;grid-row:2;min-width:0;max-height:64vh;overflow:auto;
+  border-left:1px solid var(--border);background:var(--surface-2)}
+.lrt-desktop-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;
+  padding:12px;background:var(--surface);border-bottom:1px solid var(--border)}
+.lrt-desktop-head span{font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--muted)}
+.lrt-desktop-head h2{margin:4px 0 0;font-size:16px}
+.lrt-desktop-head button{width:30px;height:30px;border:1px solid var(--border);border-radius:7px;
+  background:var(--surface-2);color:var(--text);font-size:20px;cursor:pointer}
+.lrt-desktop-detail .lrt-drawer-fields{grid-template-columns:minmax(0,1fr);padding:14px}
+.lrt-desktop-detail .lrt-drawer-fields>div.wide{grid-column:auto}
+.lrt-desktop-detail .lrt-drawer-fields>div{padding-bottom:10px;border-bottom:1px solid var(--border)}
+.lrt-drawer-backdrop{display:none}
 
 /* Full-screen "expanded" view — fills the viewport so long log rows are easy to read. */
 .lrt-full{position:fixed;inset:12px;z-index:350;border-radius:12px;display:flex;flex-direction:column;
@@ -332,7 +384,7 @@ html[data-theme="dark"] .lrt tr.lrt-detail td{background:#0d1420}
 .lrt-dval{font-size:12.5px;color:inherit;white-space:pre-wrap;word-break:break-word;line-height:1.5}
 .lrt-dval.mono{font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11.5px}
 
-.lrt-drawer-backdrop{position:fixed;inset:0;z-index:360;display:flex;justify-content:flex-end;
+.lrt-drawer-backdrop{position:fixed;inset:0;z-index:360;justify-content:flex-end;
   background:rgba(2,6,23,.52)}
 .lrt-drawer{width:min(480px,100vw);height:100%;overflow:auto;background:var(--surface);
   color:var(--text);border-left:1px solid var(--border);box-shadow:-18px 0 50px rgba(0,0,0,.2)}
@@ -358,7 +410,15 @@ html[data-theme="dark"] .lrt tr.lrt-detail td{background:#0d1420}
 .lrt-foot button:disabled{opacity:.4;cursor:not-allowed}
 .lrt-foot .ell{color:var(--muted);padding:0 4px}
 
+@media(max-width:900px){
+  .lrt-has-detail{display:block}
+  .lrt-desktop-detail{display:none}
+  .lrt-drawer-backdrop{display:flex}
+}
+
 @media(max-width:640px){
+  .lrt-has-detail{display:block}
+  .lrt-desktop-detail{display:none}
   .lrt-bar{gap:6px}
   .lrt-bar select{min-height:36px}
   .lrt-find{flex:1 1 100%;min-width:0}

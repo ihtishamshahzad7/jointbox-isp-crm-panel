@@ -148,13 +148,18 @@ const initials = (name: string) =>
 
 export default function DisconnectsPanel({
   mode = "sessions", refreshKey = 0, searchText, onSearchTextChange,
+  controlledHours, onHoursChange, hideTimeRange = false, hideSearch = false,
 }: {
   mode?: "connections" | "sessions";
   refreshKey?: number;
   searchText?: string;
   onSearchTextChange?: (value: string) => void;
+  controlledHours?: number;
+  onHoursChange?: (value: number) => void;
+  hideTimeRange?: boolean;
+  hideSearch?: boolean;
 }) {
-  const [hours, setHours] = useState(168);
+  const [hours, setHours] = useState(controlledHours ?? 168);
   const [cause, setCause] = useState<string>("");
   const [category, setCategory] = useState<string>("");
   const [nasIp, setNasIp] = useState("");
@@ -174,6 +179,15 @@ export default function DisconnectsPanel({
   const reqId = useRef(0);
   const logRef = useRef<HTMLElement | null>(null);
   const visibleFindInput = searchText ?? findInput;
+
+  useEffect(() => {
+    if (controlledHours != null) setHours(controlledHours);
+  }, [controlledHours]);
+
+  const changeHours = (value: number) => {
+    if (onHoursChange) onHoursChange(value);
+    else setHours(value);
+  };
 
   // Deep links: /logs?tab=disconnects&username=…&cause=…&hours=…
   useEffect(() => {
@@ -301,20 +315,20 @@ export default function DisconnectsPanel({
             <p>Recorded refused subscriber logins, grouped into bursts. The reason is shown as a likely explanation when the available records support one.</p>
           </div>
           <div className={s.controls}>
-            <div className={s.seg} role="group" aria-label="Time window">
+            {!hideTimeRange && <div className={s.seg} role="group" aria-label="Time window">
               {WINDOWS.slice(0, 3).map(([h, label]) => (
-                <button key={h} type="button" aria-pressed={hours === h} onClick={() => { setHours(h); setFailedOffset(0); }}>{label}</button>
+                <button key={h} type="button" aria-pressed={hours === h} onClick={() => { changeHours(h); setFailedOffset(0); }}>{label}</button>
               ))}
-            </div>
-            <label className={s.findWrap}>
-              <span className={s.findIcon} aria-hidden>⌕</span>
-              <input className={s.findBox} value={visibleFindInput} placeholder="Username, MAC, or NAS IP"
-                onChange={(e) => {
-                  setFindInput(e.target.value);
-                  onSearchTextChange?.(e.target.value);
-                  setNasIp("");
-                }} autoComplete="off" spellCheck={false} />
-            </label>
+            </div>}
+            {!hideSearch && <label className={s.findWrap}>
+                <span className={s.findIcon} aria-hidden>⌕</span>
+                <input className={s.findBox} value={visibleFindInput} placeholder="Username, MAC, or NAS IP"
+                  onChange={(e) => {
+                    setFindInput(e.target.value);
+                    onSearchTextChange?.(e.target.value);
+                    setNasIp("");
+                  }} autoComplete="off" spellCheck={false} />
+              </label>}
             <label className={s.findWrap}>
               <span className={s.findIcon} aria-hidden>NAS</span>
               <input className={s.findBox} value={nasIp} placeholder="NAS IP"
@@ -342,11 +356,11 @@ export default function DisconnectsPanel({
           <p>Every session that ended — who it was, when, how it was disconnected, the NAS and port it was on, and the client’s MAC and IP. Click an entry for every detail.</p>
         </div>
         <div className={s.controls}>
-          <div className={s.seg} role="group" aria-label="Time window">
+          {!hideTimeRange && <div className={s.seg} role="group" aria-label="Time window">
             {WINDOWS.map(([h, label]) => (
-              <button key={h} type="button" aria-pressed={hours === h} onClick={() => { setHours(h); setOffset(0); }}>{label}</button>
+              <button key={h} type="button" aria-pressed={hours === h} onClick={() => { changeHours(h); setOffset(0); }}>{label}</button>
             ))}
-          </div>
+          </div>}
           <select id="disc-router" className={s.select} value={nasIp} aria-label="NAS"
             onChange={(e) => { setNasIp(e.target.value); setOffset(0); }}>
             <option value="">All NAS / routers</option>
@@ -374,7 +388,7 @@ export default function DisconnectsPanel({
       {/* ── Filters ── */}
       <section className={s.filters} aria-label="Filter the log">
         <div className={s.filterRow}>
-          <label className={s.findWrap} htmlFor="disc-find">
+          {!hideSearch && <label className={s.findWrap} htmlFor="disc-find">
             <span className={s.findIcon} aria-hidden>⌕</span>
             <input id="disc-find" className={s.findBox} value={visibleFindInput} placeholder="Find a username, MAC address or IP"
               onChange={(e) => {
@@ -382,7 +396,7 @@ export default function DisconnectsPanel({
                 onSearchTextChange?.(e.target.value);
               }} autoComplete="off" spellCheck={false} />
             {findInput && <button type="button" className={s.findClear} aria-label="Clear search" onClick={() => setFindInput("")}>×</button>}
-          </label>
+          </label>}
           <div className={s.typeRow} role="group" aria-label="How it ended">
             {(data?.categories || []).filter((c) => c.count > 0 || category === c.id).map((c) => (
               <button key={c.id} type="button" className={s.catPick} style={catVar(c.id)} aria-pressed={category === c.id}
