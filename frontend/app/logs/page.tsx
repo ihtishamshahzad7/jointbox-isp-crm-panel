@@ -33,7 +33,7 @@ const dateTime = (value: string | Date) => new Date(value).toLocaleString(undefi
 export const LOG_VIEWS = [
   { id: "connections", label: "Connections", description: "Investigate connection events, network records, and failed activations." },
   { id: "sessions", label: "Sessions", description: "Review RADIUS accounting sessions and recorded disconnect causes." },
-  { id: "authentication", label: "Authentication & AAA", description: "Inspect subscriber authentication and RADIUS diagnostics." },
+  { id: "authentication", label: "Login", description: "Review disconnect analysis, subscriber logins, and RADIUS diagnostics." },
   { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
 ];
 const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
@@ -50,6 +50,7 @@ const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
     { id: "disconnects", label: "Disconnect Analysis" },
   ],
   authentication: [
+    { id: "disconnects", label: "Disconnect Analysis" },
     { id: "subscriber", label: "Authentication" },
     { id: "health", label: "AAA / RADIUS Server" },
   ],
@@ -63,7 +64,7 @@ const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
 const DEFAULT_LOG_FEATURES: Record<string, string> = {
   connections: "console",
   sessions: "live",
-  authentication: "subscriber",
+  authentication: "disconnects",
   audit: "activity",
 };
 const LEGACY_LOG_TABS: Record<string, string> = {
@@ -105,6 +106,10 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const activeFeatures = LOG_FEATURES[activeTab] || LOG_FEATURES.connections;
   const [authOutcome, setAuthOutcome] = useState("ALL");
   const setActiveTab = (id: string) => {
+    if (id === "authentication") {
+      setFeatureByTab((current) => ({ ...current, authentication: "disconnects" }));
+      setRecordsSummary(null);
+    }
     if (embedded && view && onViewChange) onViewChange(id);
     else {
       setInternalTab(id);
@@ -158,6 +163,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     if (
       (activeTab === "connections" && (id === "failed" || id === "nas")) ||
       (activeTab === "sessions" && id === "disconnects") ||
+      (activeTab === "authentication" && id === "disconnects") ||
       (activeTab === "audit" && id === "system")
     ) setFocusUser("");
   };
@@ -1185,6 +1191,21 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
           {/* ═══════════════ TAB: DISCONNECT REASONS (all 18 RFC 2866 causes) ═══════════════ */}
           {activeTab === "sessions" && activeFeature === "disconnects" && (
+            <>
+              <h2 style={{ fontSize: 15, margin: "20px 0 9px" }}>Disconnect report</h2>
+              <DisconnectsPanel
+                refreshKey={refreshKey}
+                searchText={search}
+                onSearchTextChange={setSearch}
+                controlledHours={sinceHours ?? 2160}
+                onHoursChange={(value) => setFilterPeriod(value === 24 ? "24h" : value === 168 ? "7d" : value === 720 ? "30d" : "90d")}
+                hideTimeRange
+                hideSearch
+              />
+            </>
+          )}
+
+          {activeTab === "authentication" && activeFeature === "disconnects" && (
             <>
               <h2 style={{ fontSize: 15, margin: "20px 0 9px" }}>Disconnect report</h2>
               <DisconnectsPanel

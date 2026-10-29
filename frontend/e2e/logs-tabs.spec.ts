@@ -9,6 +9,105 @@ const isLogResponse = (url: string, endpoint: string) => {
 };
 
 test.describe("Logs workspace tabs", () => {
+  test("opens Disconnect Analysis first in Login and keeps all cause cards usable on mobile", async ({ page }) => {
+    const now = new Date().toISOString();
+    const causeNames = [
+      "User Request", "Lost Carrier", "Lost Service", "Idle Timeout", "Session Timeout",
+      "Admin Reset", "Admin Reboot", "Port Error", "NAS Error", "NAS Request", "NAS Reboot",
+      "Port Unneeded", "Port Preempted", "Port Suspended", "Service Unavailable", "Callback",
+      "User Error", "Host Request",
+    ];
+    const causes = causeNames.map((label, index) => ({
+      code: index + 1,
+      key: label.replaceAll(" ", "-"),
+      label,
+      description: `Definition for ${label}.`,
+      meaning: `Meaning for ${label}.`,
+      action: `Check ${label}.`,
+      category: "customer",
+      severity: "normal",
+      standard: true,
+      count: index + 1,
+      share: (index + 1) / 171,
+      customers: index + 1,
+      avgSessionSec: 60,
+      lastAt: now,
+    }));
+    const requestedUrls: string[] = [];
+
+    await page.addInitScript(() => localStorage.setItem("token", "logs-disconnects-test-token"));
+    await page.route("**/api/**", async (route) => {
+      const url = new URL(route.request().url());
+      requestedUrls.push(url.toString());
+      const path = url.pathname.replace(/^\/api/, "");
+      const report = {
+        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+        totals: { ended: 171, openNow: 0, customers: 171, avgSessionSec: 60, abnormal: 0, abnormalShare: 0, topCause: null },
+        causes,
+        categories: [],
+        trend: { unit: "day", partial: false, buckets: [] },
+        routers: [],
+        customers: [],
+        records: [],
+        recordsTotal: 0,
+        massDrops: [],
+      };
+      const fixtures: Record<string, unknown> = {
+        "/profile": {},
+        "/users": [],
+        "/logs/network": { logs: [], total: 0 },
+        "/logs/stats": { hourly: [] },
+        "/logs/disconnects": report,
+      };
+      const fixture = fixtures[path];
+      await route.fulfill({
+        status: fixture === undefined ? 404 : 200,
+        contentType: "application/json",
+        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+      });
+    });
+
+    await page.goto("/insights?tab=logs");
+    const panel = page.getByRole("tabpanel");
+    const loginTab = page.getByRole("tab", { name: "Login" });
+    await loginTab.click();
+    await expect(loginTab).toHaveAttribute("aria-selected", "true");
+    await expect(panel.getByRole("heading", { name: "Disconnect report" })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
+
+    const causeSection = panel.getByRole("heading", { name: "All 18 termination causes" }).locator("xpath=../..");
+    const cards = causeSection.getByRole("button");
+    await expect(cards).toHaveCount(18);
+    const cardText = await cards.allTextContents();
+    for (const [index, label] of causeNames.entries()) {
+      expect(cardText[index]).toContain(label);
+      expect(cardText[index]).toContain(String(index + 1));
+    }
+
+    const filteredRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith("/logs/disconnects") && url.searchParams.get("cause") === "User-Request";
+    });
+    await cards.first().click();
+    await filteredRequest;
+    await expect(cards.first()).toHaveAttribute("aria-pressed", "true");
+
+    for (const viewport of [
+      { width: 1024, height: 768 },
+      { width: 390, height: 844 },
+      { width: 320, height: 700 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(() => page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      )).toBe(true);
+      const box = await cards.first().boundingBox();
+      expect(box?.width).toBeLessThanOrEqual(viewport.width);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+    }
+    expect(requestedUrls.some((url) => new URL(url).pathname.endsWith("/logs/disconnects"))).toBe(true);
+  });
+
   test("switches embedded Logs tabs and loads each category's data source", async ({ page }) => {
     test.setTimeout(90_000);
     const requestedPaths: string[] = [];
@@ -19,6 +118,7 @@ test.describe("Logs workspace tabs", () => {
       "/logs/radius-sessions",
       "/logs/radius-auth",
       "/logs/activity",
+      "/logs/disconnects",
     ];
     const heldPaths = new Set(dataPaths);
     const gates = new Map<string, Promise<void>>();
@@ -87,7 +187,7 @@ test.describe("Logs workspace tabs", () => {
     const views = [
       { label: "Connections", heading: "Connection events", endpoint: "/logs/network", empty: "No records." },
       { label: "Sessions", heading: "Live PPPoE sessions", endpoint: "/logs/radius-sessions", empty: "No records." },
-      { label: "Authentication & AAA", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
+      { label: "Login", heading: "Disconnect report", endpoint: "/logs/disconnects", empty: "All 18 termination causes" },
       { label: "Audit Trail", heading: "User activity", endpoint: "/logs/activity", empty: "No records." },
     ];
 
@@ -210,7 +310,9 @@ test.describe("Logs workspace tabs", () => {
     await expect(panel).not.toContainText("aaa-only-subscriber");
     await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
 
-    await page.getByRole("tab", { name: "Authentication & AAA" }).click();
+    await page.getByRole("tab", { name: "Login" }).click();
+    await expect(panel.getByRole("heading", { name: "Disconnect report" })).toBeVisible();
+    await page.getByLabel("Event group").selectOption("subscriber");
     await expect(panel).toContainText("aaa-only-subscriber");
     await expect(panel).not.toContainText("session-only-subscriber");
     await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
@@ -233,7 +335,7 @@ test.describe("Logs workspace tabs", () => {
       for (const tab of [
         "Connections",
         "Sessions",
-        "Authentication & AAA",
+        "Login",
         "Audit Trail",
       ]) {
         await page.getByRole("tab", { name: tab }).click();
@@ -382,6 +484,7 @@ test.describe("Logs workspace tabs", () => {
       "/logs/radius-sessions",
       "/logs/radius-auth",
       "/logs/activity",
+      "/logs/disconnects",
     ]);
     const fixtures: Record<string, unknown> = {
       "/profile": {},
@@ -404,10 +507,13 @@ test.describe("Logs workspace tabs", () => {
       const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
       const failed = failingPaths.has(path);
       const fixture = fixtures[path];
+      const body = failed && path === "/logs/disconnects"
+        ? {}
+        : fixture ?? { message: "Unavailable in this test." };
       await route.fulfill({
         status: failed ? 503 : fixture === undefined ? 404 : 200,
         contentType: "application/json",
-        body: JSON.stringify(fixture ?? { message: "Unavailable in this test." }),
+        body: JSON.stringify(body),
       });
     });
 
@@ -415,7 +521,7 @@ test.describe("Logs workspace tabs", () => {
     const views = [
       { label: "Connections", heading: "Connection events", error: "Unable to load records (HTTP 503)." },
       { label: "Sessions", heading: "Live PPPoE sessions", error: "Unable to load records (HTTP 503)." },
-      { label: "Authentication & AAA", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
+      { label: "Login", heading: "Disconnect report", error: "Could not load disconnects (HTTP 503)." },
       { label: "Audit Trail", heading: "User activity", error: "Unable to load records (HTTP 503)." },
     ];
 
@@ -469,11 +575,13 @@ test.describe("Logs workspace tabs", () => {
     const sessions = await sessionsApiResponse.json();
     expect(Array.isArray(sessions.items)).toBe(true);
 
-    const authenticationTab = page.getByRole("tab", { name: "Authentication & AAA" });
+    const authenticationTab = page.getByRole("tab", { name: "Login" });
     const radiusAuthResponse = page.waitForResponse((response) =>
       isLogResponse(response.url(), "radius-auth"),
     );
     await authenticationTab.click();
+    await expect(page.getByRole("heading", { name: "Disconnect report" })).toBeVisible();
+    await page.getByLabel("Event group").selectOption("subscriber");
     await expect(authenticationTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "Subscriber RADIUS authentication" })).toBeVisible();
     const radiusAuthApiResponse = await radiusAuthResponse;

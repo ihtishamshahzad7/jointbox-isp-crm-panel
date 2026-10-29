@@ -64,7 +64,7 @@
 
 /* ── All 18 causes ──────────────────────────────────────────── */
 .causeGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); gap: 10px; }
-.cause { position: relative; display: grid; gap: 8px; text-align: left; padding: 12px 12px 11px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+.cause { position: relative; display: grid; gap: 8px; min-height: 44px; min-width: 0; text-align: left; padding: 12px 12px 11px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
 .cause:hover { border-color: color-mix(in srgb, var(--cat) 55%, var(--border)); }
 .cause:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
 .cause[aria-pressed="true"] { border-color: var(--cat); box-shadow: 0 0 0 1px var(--cat) inset; background: color-mix(in srgb, var(--cat) 6%, var(--surface)); }
@@ -72,11 +72,11 @@
 .causeTop { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; }
 .num { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--cat); color: #fff; font-family: var(--jb-mono, ui-monospace, monospace); font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .num.dot { font-size: 12px; }
-.causeName { font-size: 13px; font-weight: 800; line-height: 1.25; }
-.causeKey { font-family: var(--jb-mono, ui-monospace, monospace); font-size: 10px; color: var(--muted); margin-top: 2px; }
+.causeName { min-width: 0; font-size: 13px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.causeKey { min-width: 0; font-family: var(--jb-mono, ui-monospace, monospace); font-size: 10px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 .causeCount { text-align: right; font-size: 18px; font-weight: 850; font-variant-numeric: tabular-nums; line-height: 1; }
 .causeCount small { display: block; font-size: 10px; font-weight: 700; color: var(--muted); margin-top: 3px; }
-.causeDesc { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.causeDesc { font-size: 11.5px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
 .share { height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
 .share i { display: block; height: 100%; background: var(--cat); border-radius: 999px; }
 .causeMeta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
