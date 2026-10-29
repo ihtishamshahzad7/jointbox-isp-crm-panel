@@ -1939,7 +1939,7 @@ export default function SubscribersPage() {
             <div className="subs-table-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 16px", borderBottom: `1px solid ${t.cardBorder}` }}>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 Subscriber List
-                <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 400, marginLeft: 8 }}>{serverTotal.toLocaleString()} shown</span>
+                <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 400, marginLeft: 8 }}>{serverTotal.toLocaleString()} total</span>
               </span>
               <span style={{ fontSize: 11, color: t.textMuted }}>Username + Password → auto-synced to FreeRADIUS on save</span>
             </div>

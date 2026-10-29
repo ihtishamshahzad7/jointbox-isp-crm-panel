@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import API_BASE from "../components/api";
 import { money } from "../components/currency";
 import { DataTable, type DtColumn } from "../components/data-table";
+import { EntityActivityHistory } from "../components/entity-activity-history";
 
 interface Payment {
   id: number;
@@ -33,6 +34,7 @@ const [loading, setLoading] = useState(true);
 const [showOverview, setShowOverview] = useState(false);
 const [error, setError] = useState("");
 const [showRefundModal, setShowRefundModal] = useState(false);
+const [showHistoryModal, setShowHistoryModal] = useState(false);
 const [refundReason, setRefundReason] = useState("");
 const [refundToBalance, setRefundToBalance] = useState(true);
 const [refundAmount, setRefundAmount] = useState("");
@@ -185,9 +187,19 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
     { key: "amount", header: "Amount", align: "right", sortable: true, sortValue: (payment) => payment.amount, render: (payment) => <strong style={{ color: t.green }}>{formatCurrency(payment.amount)}</strong> },
     { key: "method", header: "Method", sortable: true, sortValue: (payment) => payment.method, render: (payment) => { const style = getMethodStyle(payment.method); return <span style={{ padding: "3px 9px", borderRadius: 6, fontSize: 10, fontWeight: 600, background: style.bg, color: style.color }}>{style.label}</span>; } },
     { key: "paymentDate", header: "Date", sortable: true, sortValue: (payment) => new Date(payment.paymentDate).getTime(), render: (payment) => new Date(payment.paymentDate).toLocaleDateString() },
-    { key: "actions", header: "Actions", sortable: false, exportable: false, render: (payment) => payment.refundedAt
-      ? <span style={{ color: t.textMuted, fontSize: 10 }}>Refunded</span>
-      : <button onClick={() => { setSelectedPayment(payment); setRefundReason(""); setRefundToBalance(true); setShowRefundModal(true); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 10, fontWeight: 600, background: "transparent", color: t.red, cursor: "pointer" }}>Refund</button> },
+    { key: "actions", header: "Actions", sortable: false, exportable: false, render: (payment) => (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        <button
+          onClick={() => { setSelectedPayment(payment); setShowHistoryModal(true); }}
+          style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 10, fontWeight: 600, background: "transparent", color: t.teal, cursor: "pointer" }}
+        >
+          History
+        </button>
+        {payment.refundedAt
+          ? <span style={{ alignSelf: "center", color: t.textMuted, fontSize: 10 }}>Refunded</span>
+          : <button onClick={() => { setSelectedPayment(payment); setRefundReason(""); setRefundToBalance(true); setShowRefundModal(true); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 10, fontWeight: 600, background: "transparent", color: t.red, cursor: "pointer" }}>Refund</button>}
+      </div>
+    ) },
   ];
 
   return (
@@ -253,6 +265,26 @@ const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
       </div>
 
       {/* Refund Modal */}
+      {showHistoryModal && selectedPayment && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Payment ${selectedPayment.paymentNo} activity history`}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 12 }}
+          onClick={() => setShowHistoryModal(false)}
+        >
+          <div
+            style={{ width: "min(760px, 100%)", maxHeight: "92vh", overflowY: "auto", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: 12 }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <strong>Payment {selectedPayment.paymentNo || `#${selectedPayment.id}`} history</strong>
+              <button type="button" onClick={() => setShowHistoryModal(false)} style={{ minWidth: 36, minHeight: 36 }}>Close</button>
+            </div>
+            <EntityActivityHistory entity="payment" entityId={selectedPayment.id} label="Payment" />
+          </div>
+        </div>
+      )}
       {showRefundModal && selectedPayment && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowRefundModal(false)}>
           <div style={{ background: t.card, borderRadius: 16, padding: 24, width: "90%", maxWidth: 450 }} onClick={(e) => e.stopPropagation()}>

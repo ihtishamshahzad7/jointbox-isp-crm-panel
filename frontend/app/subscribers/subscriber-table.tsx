@@ -75,7 +75,7 @@ const IC_TRASH = (
 
 export function SubscriberTable({
   rows, selectedIds, onToggle, onToggleAll, onOpen, onEdit, onMove, onDeactivate, onDelete, onActivate, money,
-  onRefresh, fetchPage, filters, refreshToken, totalCount, selectable = true, canWrite = true, defaultPageSize = 50, pageSizes = [25, 50, 100, 200],
+  onRefresh, fetchPage, filters, refreshToken, totalCount, selectable = true, canWrite = true, defaultPageSize = 10, pageSizes = [10, 50, 100],
 }: {
   rows: Row[];
   selectedIds: number[];

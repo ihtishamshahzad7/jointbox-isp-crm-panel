@@ -163,7 +163,7 @@ export function LogRecordsTable({
           </select>
         )}
         <select value={size} onChange={(e) => { setSize(Number(e.target.value)); setPage(0); }} title="Rows per page">
-          {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
+          {[25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         {searchable && (
           <span className="lrt-find">

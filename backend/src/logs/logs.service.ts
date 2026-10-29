@@ -1,10 +1,28 @@
-import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { MikrotikSyncService } from '../nas/mikrotik-sync.service';
 import { terminateInfo, endedInfo, fieldsOf } from '../common/radius-terminate';
 import { radiusTenancyAllows, TENANCY_REFUSED } from '../nas/radius-tenancy';
 import { redactForAudit } from '../common/audit.interceptor';
+
+const ACTIVITY_ENTITY_ALIASES: Record<string, string[]> = {
+  subscriber: ['Subscriber', 'subscriber', 'subscribers'],
+  nas: ['Nas', 'nas'],
+  'ip-pool': ['IpPool', 'ip-pool', 'ip-pools', 'ip_pool'],
+  user: ['User', 'user', 'users'],
+  payment: ['Payment', 'payment', 'payments'],
+};
+
+function activityEntityKey(value: string): string {
+  const normalized = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  if (['subscriber', 'subscribers'].includes(normalized)) return 'subscriber';
+  if (['nas', 'network-device', 'network-devices'].includes(normalized)) return 'nas';
+  if (['ip-pool', 'ip-pools'].includes(normalized)) return 'ip-pool';
+  if (['user', 'users', 'account', 'accounts'].includes(normalized)) return 'user';
+  if (['payment', 'payments', 'transaction', 'transactions'].includes(normalized)) return 'payment';
+  return '';
+}
 
 @Injectable()
 export class LogsService {
@@ -101,6 +119,36 @@ export class LogsService {
     return [Number(forUser)];
   }
 
+  private async assertActivityEntityReadPermission(actor: Actor, resource: string): Promise<void> {
+    if (this.scope.isAdmin(actor?.role)) return;
+    const actorId = this.scope.actorId(actor);
+    if (!Number.isSafeInteger(actorId) || actorId < 1) {
+      throw new ForbiddenException('You are not allowed to view this record activity.');
+    }
+    const accountIds = await this.scope.ancestorIds(actorId);
+    const [grants, denied] = await Promise.all([
+      this.prisma.rolePermission.findMany({
+        where: { role: actor?.role },
+        select: { permission: true },
+      }),
+      this.prisma.userPermission.findMany({
+        where: {
+          userId: { in: accountIds },
+          allowed: false,
+          permission: { in: ['*', `${resource}.*`, `${resource}.read`] },
+        },
+        select: { permission: true },
+      }),
+    ]);
+    const granted = new Set(grants.map((row) => row.permission));
+    if (
+      denied.length ||
+      !['*', `${resource}.*`, `${resource}.read`, `${resource}.write`].some((permission) => granted.has(permission))
+    ) {
+      throw new ForbiddenException(`You are not allowed to view ${resource} activity.`);
+    }
+  }
+
   // ── Login Logs ────────────────────────────────────────────────
 
   async getLoginLogs(
@@ -143,9 +191,33 @@ export class LogsService {
 
   async getActivityLogs(
     actor: Actor,
-    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean; q?: string; sinceHours?: number; auditType?: string } = {},
+    opts: { limit?: number; offset?: number; forUser?: number; action?: string; financial?: boolean; q?: string; sinceHours?: number; auditType?: string; entity?: string; entityId?: number } = {},
   ) {
-    const ids = await this.idsFor(actor, opts.forUser);
+    const limit = opts.limit ?? 25;
+    const offset = opts.offset ?? 0;
+    if (![25, 50, 100].includes(limit)) {
+      throw new BadRequestException('Limit must be 25, 50, or 100');
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000) {
+      throw new BadRequestException('Offset must be between 0 and 10000');
+    }
+    if (opts.q && opts.q.length > 120) {
+      throw new BadRequestException('Search text must be 120 characters or fewer');
+    }
+    let entityFilter: { aliases: string[]; id: number } | null = null;
+    if (opts.entity || opts.entityId !== undefined) {
+      const entityKey = activityEntityKey(opts.entity || '');
+      if (!entityKey || !Number.isSafeInteger(opts.entityId) || Number(opts.entityId) < 1) {
+        throw new BadRequestException('A supported entity and positive entity ID are required');
+      }
+      entityFilter = { aliases: ACTIVITY_ENTITY_ALIASES[entityKey], id: Number(opts.entityId) };
+      await this.getEntityActivity(actor, entityKey, entityFilter.id, {
+        limit: 25,
+        offset: 0,
+        authorizeOnly: true,
+      });
+    }
+    const ids = entityFilter && !opts.forUser ? null : await this.idsFor(actor, opts.forUser);
     const where: any = {};
     if (ids) where.userId = { in: ids };
     if (opts.sinceHours && opts.sinceHours > 0) {
@@ -154,6 +226,10 @@ export class LogsService {
     if (opts.auditType === 'changes') where.entity = { not: 'SYSTEM' };
     if (opts.auditType === 'activity') {
       where.AND = [...(where.AND ?? []), { userId: { not: null } }];
+    }
+    if (entityFilter) {
+      where.entity = { in: entityFilter.aliases };
+      where.entityId = entityFilter.id;
     }
     const q = opts.q?.trim();
     if (q) {
@@ -171,8 +247,8 @@ export class LogsService {
       this.prisma.activityLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        take: opts.limit ?? 100,
-        skip: opts.offset ?? 0,
+        take: limit,
+        skip: offset,
         include: { user: { select: { id: true, name: true, email: true, role: true } } },
       }),
       this.prisma.activityLog.count({ where }),
@@ -180,6 +256,152 @@ export class LogsService {
     return {
       logs: logs.map((log) => ({ ...log, details: this.redactAuditDetails(log.details) })),
       total,
+    };
+  }
+
+  /**
+   * Return audit rows for exactly one record, after verifying the caller can
+   * still access that record. For deleted records, only the caller's own
+   * authorized tenant-scope audit rows can establish a retained reference.
+   */
+  async getEntityActivity(
+    actor: Actor,
+    entity: string,
+    entityId: number,
+    opts: { limit: number; offset: number; q?: string; authorizeOnly?: boolean },
+  ) {
+    const key = activityEntityKey(entity);
+    const aliases = ACTIVITY_ENTITY_ALIASES[key];
+    if (!key || !aliases) throw new BadRequestException('Unsupported activity entity');
+    const permissionResource = key === 'subscriber' ? 'subscribers'
+      : key === 'ip-pool' ? 'ip-pools'
+        : key === 'user' ? 'users'
+          : key === 'payment' ? 'payments' : key;
+    await this.assertActivityEntityReadPermission(actor, permissionResource);
+
+    const whereForEntity = { entity: { in: aliases }, entityId };
+    let visible = false;
+    let exists = false;
+
+    if (key === 'subscriber') {
+      const scopeWhere = await this.scope.subscriberWhere(actor);
+      visible = !!await this.prisma.subscriber.findFirst({
+        where: { AND: [{ id: entityId }, scopeWhere] },
+        select: { id: true },
+      });
+      exists = visible || !!await this.prisma.subscriber.findUnique({
+        where: { id: entityId }, select: { id: true },
+      });
+    } else if (key === 'nas') {
+      const scopeWhere = await this.scope.nasWhere(actor);
+      visible = !!await this.prisma.nas.findFirst({
+        where: { AND: [{ id: entityId }, scopeWhere] },
+        select: { id: true },
+      });
+      exists = visible || !!await this.prisma.nas.findUnique({
+        where: { id: entityId }, select: { id: true },
+      });
+    } else if (key === 'ip-pool') {
+      const scopeWhere = await this.scope.poolWhere(actor);
+      visible = !!await this.prisma.ipPool.findFirst({
+        where: { AND: [{ id: entityId }, scopeWhere] },
+        select: { id: true },
+      });
+      exists = visible || !!await this.prisma.ipPool.findUnique({
+        where: { id: entityId }, select: { id: true },
+      });
+    } else if (key === 'user') {
+      const scopeWhere = await this.scope.userWhere(actor);
+      visible = !!await this.prisma.user.findFirst({
+        where: { AND: [{ id: entityId }, scopeWhere] },
+        select: { id: true },
+      });
+      exists = visible || !!await this.prisma.user.findUnique({
+        where: { id: entityId }, select: { id: true },
+      });
+    } else if (key === 'payment') {
+      if (this.scope.isAdmin(actor?.role)) {
+        visible = !!await this.prisma.payment.findUnique({
+          where: { id: entityId }, select: { id: true },
+        });
+      } else {
+        const [subscriberWhere, tree] = await Promise.all([
+          this.scope.subscriberWhere(actor),
+          this.scope.descendantIds(await this.scope.rootId(actor)),
+        ]);
+        visible = !!await this.prisma.payment.findFirst({
+          where: {
+            id: entityId,
+            OR: [
+              { subscriber: { is: subscriberWhere } },
+              { receivedBy: { in: tree } },
+            ],
+          },
+          select: { id: true },
+        });
+      }
+      exists = visible || !!await this.prisma.payment.findUnique({
+        where: { id: entityId }, select: { id: true },
+      });
+    }
+
+    if (!visible) {
+      if (exists) throw new NotFoundException('Record not found');
+      const actorIds = await this.subtreeIds(actor);
+      const retained = await this.prisma.activityLog.findFirst({
+        where: {
+          ...whereForEntity,
+          ...(actorIds ? { userId: { in: actorIds } } : {}),
+        },
+        select: { id: true },
+      });
+      if (!retained) throw new NotFoundException('Record not found');
+    }
+
+    if (opts.authorizeOnly) {
+      return { latestActivity: null, logs: [], hasMore: false, limit: opts.limit, offset: opts.offset };
+    }
+
+    const q = opts.q?.trim();
+    const where: any = {
+      ...whereForEntity,
+      ...(q ? {
+        AND: [{
+          OR: ['action', 'details', 'ipAddress', 'traceId'].map((field) => ({
+            [field]: { contains: q, mode: 'insensitive' },
+          })),
+        }],
+      } : {}),
+    };
+    const latestWhere = whereForEntity;
+    const [latest, pageRows] = await Promise.all([
+      this.prisma.activityLog.findFirst({
+        where: latestWhere,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: { user: { select: { id: true, name: true, email: true, role: true } } },
+      }),
+      this.prisma.activityLog.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: opts.limit + 1,
+        skip: opts.offset,
+        include: { user: { select: { id: true, name: true, email: true, role: true } } },
+      }),
+    ]);
+    const hasMore = pageRows.length > opts.limit;
+    const logs = (hasMore ? pageRows.slice(0, opts.limit) : pageRows).map((row) => ({
+      ...row,
+      details: this.redactAuditDetails(row.details),
+    }));
+    return {
+      latestActivity: latest ? {
+        ...latest,
+        details: this.redactAuditDetails(latest.details),
+      } : null,
+      logs,
+      hasMore,
+      limit: opts.limit,
+      offset: opts.offset,
     };
   }
 

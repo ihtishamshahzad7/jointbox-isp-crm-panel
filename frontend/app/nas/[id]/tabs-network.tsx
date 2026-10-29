@@ -11,6 +11,7 @@ import React, { useMemo, useState } from "react";
 import { useNasDetail } from "./context";
 import { apiGet, fmtDateTime, show } from "./lib";
 import { Btn, EmptyState, Panel, severityOf } from "./ui";
+import { EntityActivityHistory } from "../../components/entity-activity-history";
 
 // ── IP Addresses ──────────────────────────────────────────────────
 export function IpAddrTab() {
@@ -184,51 +185,10 @@ export function LogsTab() {
 
 // ── Audit timeline ─────────────────────────────────────────────────
 export function AuditTab() {
-  const { timeline, loadTimeline, nasId } = useNasDetail();
-  const [page, setPage] = useState(0);
-  const PER = 40;
-  const pages = Math.max(1, Math.ceil(timeline.length / PER));
-  const rows = timeline.slice(page * PER, (page + 1) * PER);
-
+  const { nasId } = useNasDetail();
   return (
     <div className="nd-root">
-      <Panel
-        title={`Audit — device #${nasId}`}
-        sub="Login, activity and system log rows referencing this device"
-        actions={<Btn size="xs" variant="ghost" onClick={loadTimeline}>Reload</Btn>}
-      >
-        {rows.length === 0 ? (
-          <EmptyState title="No audit rows referencing this device yet" hint="Administrative actions (edit, disconnect, assign) that touch this NAS appear here." />
-        ) : (
-          <>
-            <div className="nd-table-wrap">
-              <table className="nd-table">
-                <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead>
-                <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={`${r.id ?? i}`}>
-                      <td className="num nd-mono">{fmtDateTime(r.ts ?? r.loggedAt ?? r.at)}</td>
-                      <td>{r.actor?.name ?? r.user?.name ?? r.actorName ?? r.actor ?? "system"}</td>
-                      <td className="nd-mono">{r.action ?? r.eventType ?? "—"}</td>
-                      <td>{r.entity ?? "—"}</td>
-                      <td style={{ maxWidth: 380 }} title={r.details ?? r.message}>
-                        {r.details ?? r.message ?? ""}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {pages > 1 && (
-              <div className="nd-page">
-                <Btn size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>← Prev</Btn>
-                <span>{page + 1} / {pages}</span>
-                <Btn size="xs" variant="ghost" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)}>Next →</Btn>
-              </div>
-            )}
-          </>
-        )}
-      </Panel>
+      <EntityActivityHistory entity="nas" entityId={nasId} label="NAS" />
     </div>
   );
 }

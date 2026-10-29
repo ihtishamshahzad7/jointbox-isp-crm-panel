@@ -9,9 +9,10 @@ import React, { useMemo } from "react";
 import { useSubscriberDetail } from "./context";
 import { Panel, StatusChip, EmptyState } from "./ui";
 import { fmtBytes, fmtDuration } from "./lib";
+import { EntityActivityHistory } from "../../components/entity-activity-history";
 
 export function ActivitiesTab() {
-  const { sub, liveSession, sessionLogs, authLogs, radiusChecks, openSessions, duplicate } = useSubscriberDetail();
+  const { subscriberId, sub, liveSession, sessionLogs, authLogs, radiusChecks, openSessions, duplicate } = useSubscriberDetail();
 
   const stats = useMemo(() => {
     const accepted = authLogs.filter((a) => a.reply === "Access-Accept").length;
@@ -26,6 +27,7 @@ export function ActivitiesTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <EntityActivityHistory entity="subscriber" entityId={subscriberId} label="Subscriber" />
       <Panel title="Activity summary">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 7 }}>
           <div className="sd-mini-cell">

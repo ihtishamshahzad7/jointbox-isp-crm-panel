@@ -278,7 +278,10 @@ export function DataTable<T>(props: DataTableProps<T>) {
   // ── Paging ──────────────────────────────────────────────────────────────
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(
-    () => loadJson(storageKey ? `${storageKey}:ps` : "", defaultPageSize),
+    () => {
+      const saved = loadJson(storageKey ? `${storageKey}:ps` : "", defaultPageSize);
+      return pageSizes.includes(saved) ? saved : defaultPageSize;
+    },
   );
   const changePageSize = (n: number) => {
     setPageSize(n);

@@ -87,7 +87,7 @@ test.describe("Logs workspace tabs", () => {
     const views = [
       { label: "Connections", heading: "Connection events", endpoint: "/logs/network", empty: "No records." },
       { label: "Sessions", heading: "Live PPPoE sessions", endpoint: "/logs/radius-sessions", empty: "No records." },
-      { label: "Authentication (AAA)", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
+      { label: "Authentication & AAA", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
       { label: "Audit Trail", heading: "User activity", endpoint: "/logs/activity", empty: "No records." },
     ];
 
@@ -210,7 +210,7 @@ test.describe("Logs workspace tabs", () => {
     await expect(panel).not.toContainText("aaa-only-subscriber");
     await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
 
-    await page.getByRole("tab", { name: "Authentication (AAA)" }).click();
+    await page.getByRole("tab", { name: "Authentication & AAA" }).click();
     await expect(panel).toContainText("aaa-only-subscriber");
     await expect(panel).not.toContainText("session-only-subscriber");
     await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
@@ -233,7 +233,7 @@ test.describe("Logs workspace tabs", () => {
       for (const tab of [
         "Connections",
         "Sessions",
-        "Authentication (AAA)",
+        "Authentication & AAA",
         "Audit Trail",
       ]) {
         await page.getByRole("tab", { name: tab }).click();
@@ -415,7 +415,7 @@ test.describe("Logs workspace tabs", () => {
     const views = [
       { label: "Connections", heading: "Connection events", error: "Unable to load records (HTTP 503)." },
       { label: "Sessions", heading: "Live PPPoE sessions", error: "Unable to load records (HTTP 503)." },
-      { label: "Authentication (AAA)", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
+      { label: "Authentication & AAA", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
       { label: "Audit Trail", heading: "User activity", error: "Unable to load records (HTTP 503)." },
     ];
 
@@ -469,7 +469,7 @@ test.describe("Logs workspace tabs", () => {
     const sessions = await sessionsApiResponse.json();
     expect(Array.isArray(sessions.items)).toBe(true);
 
-    const authenticationTab = page.getByRole("tab", { name: "Authentication (AAA)" });
+    const authenticationTab = page.getByRole("tab", { name: "Authentication & AAA" });
     const radiusAuthResponse = page.waitForResponse((response) =>
       isLogResponse(response.url(), "radius-auth"),
     );

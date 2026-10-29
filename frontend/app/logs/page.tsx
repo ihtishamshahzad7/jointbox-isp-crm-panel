@@ -33,31 +33,31 @@ const dateTime = (value: string | Date) => new Date(value).toLocaleString(undefi
 export const LOG_VIEWS = [
   { id: "connections", label: "Connections", description: "Investigate connection events, network records, and failed activations." },
   { id: "sessions", label: "Sessions", description: "Review RADIUS accounting sessions and recorded disconnect causes." },
-  { id: "authentication", label: "Authentication (AAA)", description: "Inspect subscriber RADIUS authentication and application sign-ins." },
+  { id: "authentication", label: "Authentication & AAA", description: "Inspect subscriber authentication and RADIUS diagnostics." },
   { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
 ];
 const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
   connections: [
-    { id: "console", label: "Connection Console" },
-    { id: "network", label: "Network Diagnostics" },
+    { id: "console", label: "Connection Events" },
+    { id: "network", label: "NAS & Network" },
     { id: "failed", label: "Failed Connections" },
-    { id: "nas", label: "NAS Connectivity" },
+    { id: "nas", label: "Connection Diagnostics" },
   ],
   sessions: [
-    { id: "live", label: "Live PPPoE Sessions" },
-    { id: "accounting", label: "RADIUS Accounting" },
-    { id: "timeline", label: "Session Timeline" },
+    { id: "live", label: "Active Sessions" },
+    { id: "accounting", label: "Accounting Logs" },
+    { id: "timeline", label: "Session History" },
     { id: "disconnects", label: "Disconnect Analysis" },
   ],
   authentication: [
-    { id: "subscriber", label: "Subscriber Authentication" },
-    { id: "login", label: "Login History" },
-    { id: "health", label: "RADIUS / AAA Results" },
+    { id: "subscriber", label: "Authentication" },
+    { id: "health", label: "AAA / RADIUS Server" },
   ],
   audit: [
     { id: "activity", label: "User Activity" },
-    { id: "changes", label: "Administrative Changes" },
-    { id: "system", label: "System Events" },
+    { id: "changes", label: "CRUD & Record Changes" },
+    { id: "security", label: "Security & Access" },
+    { id: "system", label: "System & Configuration" },
   ],
 };
 const DEFAULT_LOG_FEATURES: Record<string, string> = {
@@ -69,8 +69,14 @@ const DEFAULT_LOG_FEATURES: Record<string, string> = {
 const LEGACY_LOG_TABS: Record<string, string> = {
   console: "connections", network: "connections", failed: "connections",
   timeline: "connections", radsess: "sessions", disconnects: "sessions",
-  authrec: "authentication", login: "authentication", radius: "authentication",
+  authrec: "authentication", login: "audit", radius: "authentication",
   sessions: "sessions", actrec: "audit", activity: "audit", system: "audit",
+};
+const LEGACY_LOG_FEATURES: Record<string, string> = {
+  console: "console", network: "network", failed: "failed",
+  timeline: "timeline", radsess: "accounting", disconnects: "disconnects",
+  authrec: "subscriber", login: "security", radius: "health",
+  sessions: "live", actrec: "activity", activity: "activity", system: "system",
 };
 
 const resolveLogTab = (value: string | null) => {
@@ -93,6 +99,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const [internalTab, setInternalTab] = useState("connections");
   const activeTab = embedded && view && onViewChange ? view : internalTab;
   const [featureByTab, setFeatureByTab] = useState(DEFAULT_LOG_FEATURES);
+  const [auditEntity, setAuditEntity] = useState("");
+  const [auditEntityId, setAuditEntityId] = useState("");
   const activeFeature = featureByTab[activeTab] || DEFAULT_LOG_FEATURES[activeTab] || "console";
   const activeFeatures = LOG_FEATURES[activeTab] || LOG_FEATURES.connections;
   const [authOutcome, setAuthOutcome] = useState("ALL");
@@ -286,21 +294,42 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
   // Preserve old log-view bookmarks by redirecting their view id to a category.
   useEffect(() => {
-    try {
-      const q = new URLSearchParams(window.location.search);
-      const searchTerm = q.get("search") || q.get("username");
-      if (searchTerm) setSearch(searchTerm);
-      if (!embedded) {
-        const destination = resolveLogTab(q.get("logTab") || q.get("tab"));
-        if (destination) setInternalTab(destination);
-      }
-    } catch { /* no query */ }
+    const applyLocation = () => {
+      try {
+        const q = new URLSearchParams(window.location.search);
+        const searchTerm = q.get("search") || q.get("username");
+        if (searchTerm) setSearch(searchTerm);
+        setAuditEntity(q.get("entity") || "");
+        setAuditEntityId(q.get("entityId") || "");
+        if (!embedded) {
+          const legacyKey = q.get("logTab") || q.get("tab") || "";
+          const destination = resolveLogTab(legacyKey);
+          if (destination) {
+            setInternalTab(destination);
+            const requestedFeature = q.get("logFeature") || LEGACY_LOG_FEATURES[legacyKey];
+            const supported = LOG_FEATURES[destination]?.some((feature) => feature.id === requestedFeature);
+            if (requestedFeature && supported) {
+              setFeatureByTab((current) => ({ ...current, [destination]: requestedFeature }));
+            }
+          }
+        }
+      } catch { /* no query */ }
+    };
+
     const handlePopState = () => {
       if (embedded) return;
       const params = new URLSearchParams(window.location.search);
-      const destination = resolveLogTab(params.get("logTab") || params.get("tab"));
+      const legacyKey = params.get("logTab") || params.get("tab") || "";
+      const destination = resolveLogTab(legacyKey);
       setInternalTab(destination || "connections");
+      setAuditEntity(params.get("entity") || "");
+      setAuditEntityId(params.get("entityId") || "");
+      const requestedFeature = params.get("logFeature") || LEGACY_LOG_FEATURES[legacyKey];
+      if (destination && requestedFeature && LOG_FEATURES[destination]?.some((feature) => feature.id === requestedFeature)) {
+        setFeatureByTab((current) => ({ ...current, [destination]: requestedFeature }));
+      }
     };
+    applyLocation();
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
@@ -756,6 +785,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                   detailPanel
                   searchable={false}
                   hideToolbar
+                  pageSize={25}
                   refreshKey={refreshKey}
                   searchText={search}
                   onSearchTextChange={setSearch}
@@ -805,6 +835,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                 sinceHours: sinceHours ? String(sinceHours) : "",
                 forUser: focusUser,
                 auditType: activeFeature,
+                entity: activeTab === "audit" ? auditEntity : "",
+                entityId: activeTab === "audit" ? auditEntityId : "",
               }}
               onRecordsChange={onRecordsChange}
               columns={[
@@ -1039,9 +1071,9 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: LOGIN LOGS ═══════════════ */}
-          {activeTab === "authentication" && activeFeature === "login" && (
+          {activeTab === "audit" && activeFeature === "security" && (
             <>
-            <h2 style={{ fontSize: 15, margin: "16px 0 9px" }}>Application sign-ins</h2>
+            <h2 style={{ fontSize: 15, margin: "16px 0 9px" }}>Security & access · Application sign-ins</h2>
             <LogRecordsTable
               endpoint="/logs/login"
               detailPanel

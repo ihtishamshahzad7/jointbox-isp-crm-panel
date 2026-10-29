@@ -9,6 +9,7 @@ import { silent } from "../../components/silent";
 import API_BASE from "../../components/api";
 import { money as moneyWithCurrency } from "../../components/currency";
 import Portal from "../../components/portal";
+import { EntityActivityHistory } from "../../components/entity-activity-history";
 
 const API = API_BASE;
 
@@ -607,9 +608,11 @@ export default function UserProfilePage() {
 
       {/* ── ACTIVITY ── what this account has been doing ── */}
       {tab === "activity" && (
-        <div style={card}>
+        <div style={{ display: "grid", gap: 12 }}>
+          <EntityActivityHistory entity="user" entityId={Number(id)} label="Account" />
+          <div style={card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>Activity by this account</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Actions performed by this account</div>
             <button
               onClick={loadActivity}
               disabled={loadingActivity}
@@ -682,6 +685,7 @@ export default function UserProfilePage() {
               )}
             </div>
           )}
+          </div>
         </div>
       )}
 

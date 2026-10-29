@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Param, Query, Req, UseGuards,
+  BadRequestException, Controller, Get, Post, Param, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
@@ -76,6 +76,8 @@ export class LogsController {
     @Query('q') q: string,
     @Query('sinceHours') sinceHours: string,
     @Query('auditType') auditType: string,
+    @Query('entity') entity: string,
+    @Query('entityId') entityId: string,
     @Req() req: any,
   ) {
     return this.logs.getActivityLogs(req.user, {
@@ -87,6 +89,43 @@ export class LogsController {
       q: q || undefined,
       sinceHours: sinceHours ? +sinceHours : undefined,
       auditType: auditType || undefined,
+      entity: entity || undefined,
+      entityId: entityId ? +entityId : undefined,
+    });
+  }
+
+  /**
+   * Canonical audit history for one authorized record. The entity history
+   * screen and the global Audit Trail read the same ActivityLog rows.
+   */
+  @Get('entity/:entity/:id')
+  entityActivity(
+    @Param('entity') entity: string,
+    @Param('id') rawId: string,
+    @Query('limit') rawLimit: string,
+    @Query('offset') rawOffset: string,
+    @Query('q') q: string,
+    @Req() req: any,
+  ) {
+    const id = Number(rawId);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new BadRequestException('Record ID must be a positive integer');
+    }
+    const limit = rawLimit === undefined ? 25 : Number(rawLimit);
+    const offset = rawOffset === undefined ? 0 : Number(rawOffset);
+    if (![25, 50, 100].includes(limit)) {
+      throw new BadRequestException('Limit must be 25, 50, or 100');
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000) {
+      throw new BadRequestException('Offset must be between 0 and 10000');
+    }
+    if (q && q.length > 120) {
+      throw new BadRequestException('Search text must be 120 characters or fewer');
+    }
+    return this.logs.getEntityActivity(req.user, entity, id, {
+      limit,
+      offset,
+      q: q || undefined,
     });
   }
 

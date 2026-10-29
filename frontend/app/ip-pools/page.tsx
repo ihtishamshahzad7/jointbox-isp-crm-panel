@@ -7,6 +7,7 @@ import { WinBoxToolbar } from "../components/winbox-toolbar";
 import { SkeletonTable } from "../components/skeleton";
 import { PoolTable } from "../components/network-tables";
 import { RecordNotes } from "../components/record-notes";
+import { EntityActivityHistory } from "../components/entity-activity-history";
 import { silent } from "../components/silent";
 import { useRouter } from "next/navigation";
 
@@ -862,6 +863,10 @@ export default function IpPoolsPage() {
             {/* Notes */}
             <div style={{ border:`1px solid ${t.cardBorder}`, borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
               <RecordNotes entityType="IP_POOL" entityId={detailPool.id} title="Notes" />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <EntityActivityHistory entity="ip-pool" entityId={detailPool.id} label="IP Pool" />
             </div>
 
             <div style={{ background:d?"#0a1525":"#eff6ff", border:`1px solid ${d?"#1e3a5f":"#bfdbfe"}`, borderRadius:10, padding:"12px 14px", marginBottom:16 }}>

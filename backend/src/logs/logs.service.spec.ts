@@ -250,6 +250,92 @@ describe('LogsService audit and application-session responses', () => {
     });
   });
 
+  describe('LogsService record-specific activity history', () => {
+    const actor = { sub: 11, role: 'RESELLER' };
+
+    it('scopes the query to the exact visible entity and returns a bounded page', async () => {
+      const auditRow = {
+        id: 8n,
+        action: 'UPDATE',
+        entity: 'Subscriber',
+        entityId: 42,
+        details: '{"password":"unsafe","status":"ACTIVE"}',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        user: { id: 11, name: 'Operator', role: 'RESELLER' },
+      };
+      const prisma = {
+        rolePermission: { findMany: jest.fn().mockResolvedValue([{ permission: 'subscribers.read' }]) },
+        userPermission: { findMany: jest.fn().mockResolvedValue([]) },
+        subscriber: { findFirst: jest.fn().mockResolvedValue({ id: 42 }) },
+        activityLog: {
+          findFirst: jest.fn().mockResolvedValue(auditRow),
+          findMany: jest.fn().mockResolvedValue([auditRow]),
+        },
+      };
+      const scope = {
+        isAdmin: () => false,
+        actorId: () => 11,
+        ancestorIds: jest.fn().mockResolvedValue([11]),
+        subscriberWhere: jest.fn().mockResolvedValue({ userId: { in: [11] } }),
+      };
+      const service = new LogsService(
+        prisma as unknown as PrismaService,
+        scope as unknown as ScopeService,
+        {} as MikrotikSyncService,
+      );
+
+      const result = await service.getEntityActivity(actor, 'subscribers', 42, {
+        limit: 25,
+        offset: 0,
+      });
+
+      expect(prisma.subscriber.findFirst).toHaveBeenCalledWith({
+        where: { AND: [{ id: 42 }, { userId: { in: [11] } }] },
+        select: { id: true },
+      });
+      expect(prisma.activityLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { entity: { in: ['Subscriber', 'subscriber', 'subscribers'] }, entityId: 42 },
+        take: 26,
+        skip: 0,
+      }));
+      expect(result.latestActivity?.details).toContain('[redacted]');
+      expect(result.logs).toHaveLength(1);
+      expect(result.hasMore).toBe(false);
+    });
+
+    it('does not expose history when a live record exists outside the caller scope', async () => {
+      const prisma = {
+        rolePermission: { findMany: jest.fn().mockResolvedValue([{ permission: 'subscribers.read' }]) },
+        userPermission: { findMany: jest.fn().mockResolvedValue([]) },
+        subscriber: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findUnique: jest.fn().mockResolvedValue({ id: 42 }),
+        },
+        activityLog: {
+          findFirst: jest.fn(),
+          findMany: jest.fn(),
+        },
+      };
+      const scope = {
+        isAdmin: () => false,
+        actorId: () => 11,
+        ancestorIds: jest.fn().mockResolvedValue([11]),
+        subscriberWhere: jest.fn().mockResolvedValue({ userId: { in: [11] } }),
+      };
+      const service = new LogsService(
+        prisma as unknown as PrismaService,
+        scope as unknown as ScopeService,
+        {} as MikrotikSyncService,
+      );
+
+      await expect(service.getEntityActivity(actor, 'subscriber', 42, {
+        limit: 25,
+        offset: 0,
+      })).rejects.toThrow('Record not found');
+      expect(prisma.activityLog.findMany).not.toHaveBeenCalled();
+    });
+  });
+
   it('redacts sensitive values from activity-log details', async () => {
     const prisma = {
       activityLog: {
