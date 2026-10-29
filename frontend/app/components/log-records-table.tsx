@@ -24,7 +24,7 @@ export type Col = {
 
 export function LogRecordsTable({
   endpoint, columns, days, daysOptions, searchable = true, pageSize = 50, refreshKey = 0,
-  searchText, onSearchTextChange,
+  searchText, onSearchTextChange, detailPanel = false,
 }: {
   endpoint: string;
   columns: Col[];
@@ -36,6 +36,8 @@ export function LogRecordsTable({
   refreshKey?: number;
   searchText?: string;
   onSearchTextChange?: (value: string) => void;
+  /** Open selected records in a responsive detail panel instead of inline rows. */
+  detailPanel?: boolean;
 }) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -55,6 +57,8 @@ export function LogRecordsTable({
   const collapsedCols = hasPrimary ? columns.filter((c) => c.primary) : columns;
   const detailCols = hasPrimary ? columns.filter((c) => !c.primary) : [];
   const totalCols = collapsedCols.length + (detailCols.length ? 1 : 0);
+  const canOpenDetails = detailPanel || detailCols.length > 0;
+  const selectedRow = openRow == null ? null : rows[openRow] ?? null;
 
   // Esc closes the expanded (fullscreen) view.
   React.useEffect(() => {
@@ -64,9 +68,17 @@ export function LogRecordsTable({
     return () => window.removeEventListener("keydown", h);
   }, [expanded]);
 
+  React.useEffect(() => {
+    if (!detailPanel || openRow == null) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpenRow(null); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [detailPanel, openRow]);
+
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
 
   const load = React.useCallback(async (signal: AbortSignal) => {
+    setOpenRow(null);
     setLoading(true);
     setError("");
     try {
@@ -175,20 +187,27 @@ export function LogRecordsTable({
                 <React.Fragment key={i}>
                   <tr
                     className={`${detailCols.length ? "lrt-clickable" : ""}${isOpen ? " lrt-open" : ""}`}
-                    onClick={detailCols.length ? () => setOpenRow(isOpen ? null : i) : undefined}
+                    tabIndex={canOpenDetails ? 0 : undefined}
+                    onClick={canOpenDetails ? () => setOpenRow(isOpen ? null : i) : undefined}
+                    onKeyDown={canOpenDetails ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setOpenRow(isOpen ? null : i);
+                      }
+                    } : undefined}
                   >
                     {collapsedCols.map((c) => (
                       <td key={c.key} data-label={c.label} className={`${c.mono ? "mono" : ""} ${c.nowrap ? "nw" : ""}`}>
                         {c.render ? c.render(row) : (row[c.key] ?? "—")}
                       </td>
                     ))}
-                    {detailCols.length > 0 && (
+                    {detailCols.length > 0 && !detailPanel && (
                       <td className="nw lrt-chevcell">
                         <span className={`lrt-chev${isOpen ? " up" : ""}`} aria-hidden>▾</span>
                       </td>
                     )}
                   </tr>
-                  {isOpen && detailCols.length > 0 && (
+                  {isOpen && detailCols.length > 0 && !detailPanel && (
                     <tr className="lrt-detail">
                       <td colSpan={totalCols}>
                         <div className="lrt-dgrid">
@@ -210,6 +229,36 @@ export function LogRecordsTable({
           </tbody>
         </table>
       </div>
+
+      {detailPanel && selectedRow && (
+        <div className="lrt-drawer-backdrop" onClick={() => setOpenRow(null)}>
+          <aside
+            className="lrt-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Record details"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="lrt-drawer-head">
+              <div>
+                <span>LOG RECORD</span>
+                <h2>Event details</h2>
+              </div>
+              <button type="button" onClick={() => setOpenRow(null)} aria-label="Close event details">×</button>
+            </header>
+            <div className="lrt-drawer-fields">
+              {columns.map((column) => (
+                <div key={column.key} className={column.wide ? "wide" : ""}>
+                  <span>{column.label}</span>
+                  <div className={column.mono ? "mono" : ""}>
+                    {column.render ? column.render(selectedRow) : selectedRow[column.key] ?? "—"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </aside>
+        </div>
+      )}
 
       <div className="lrt-foot">
         <button disabled={page <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Prev</button>
@@ -283,6 +332,24 @@ html[data-theme="dark"] .lrt tr.lrt-detail td{background:#0d1420}
 .lrt-dval{font-size:12.5px;color:inherit;white-space:pre-wrap;word-break:break-word;line-height:1.5}
 .lrt-dval.mono{font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11.5px}
 
+.lrt-drawer-backdrop{position:fixed;inset:0;z-index:360;display:flex;justify-content:flex-end;
+  background:rgba(2,6,23,.52)}
+.lrt-drawer{width:min(480px,100vw);height:100%;overflow:auto;background:var(--surface);
+  color:var(--text);border-left:1px solid var(--border);box-shadow:-18px 0 50px rgba(0,0,0,.2)}
+.lrt-drawer-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;
+  padding:18px 20px;background:var(--surface);border-bottom:1px solid var(--border)}
+.lrt-drawer-head span{font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--muted)}
+.lrt-drawer-head h2{margin:4px 0 0;font-size:18px}
+.lrt-drawer-head button{width:36px;height:36px;border:1px solid var(--border);border-radius:8px;
+  background:var(--surface-2);color:var(--text);font-size:22px;cursor:pointer}
+.lrt-drawer-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding:18px 20px}
+.lrt-drawer-fields>div{min-width:0}
+.lrt-drawer-fields>div.wide{grid-column:1/-1}
+.lrt-drawer-fields>div>span{display:block;margin-bottom:4px;font-size:9px;font-weight:800;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.lrt-drawer-fields>div>div{font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.lrt-drawer-fields .mono{font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11px}
+
 .lrt-foot{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:8px 10px;border-top:1px solid var(--border)}
 .lrt-foot button{min-width:30px;padding:4px 9px;font-size:12px;font-family:inherit;cursor:pointer;
   background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px}
@@ -298,6 +365,10 @@ html[data-theme="dark"] .lrt tr.lrt-detail td{background:#0d1420}
   .lrt-find input{width:100%;min-width:0}
   .lrt-count{flex:1 1 100%}
   .lrt-expand{margin-left:auto;min-height:36px}
+  .lrt-drawer{width:100%;height:min(82dvh,760px);margin-top:auto;border-left:0;border-top:1px solid var(--border);
+    border-radius:16px 16px 0 0}
+  .lrt-drawer-fields{grid-template-columns:minmax(0,1fr)}
+  .lrt-drawer-fields>div.wide{grid-column:auto}
   .lrt-scroll{overflow:visible;max-height:none}
   .lrt table{display:block;min-width:0}
   .lrt thead{display:none}

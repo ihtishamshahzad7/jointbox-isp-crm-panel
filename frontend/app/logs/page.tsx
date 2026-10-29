@@ -102,6 +102,9 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const [filterPeriod, setFilterPeriod] = useState("24h");
   const [focusUser, setFocusUser] = useState("");
   const [accounts, setAccounts] = useState<any[]>([]);
+  const timelineRequest = useRef(0);
+  const statsRequest = useRef(0);
+  const diagRequest = useRef(0);
 
   // ── Auth ────────────────────────────────────────────────────────
   const token = typeof window !== 'undefined' ? localStorage.getItem("token") : "";
@@ -144,8 +147,9 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
   // ── Data fetching ──────────────────────────────────────────────
 
-  const fetchTimeline = useCallback(async () => {
+  const fetchTimeline = useCallback(async (signal?: AbortSignal) => {
     if (!token) return;
+    const requestId = ++timelineRequest.current;
     setTimelineLoading(true);
     try {
       const params = new URLSearchParams();
@@ -153,59 +157,95 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       params.set("type", "network");
       if (focusUser) params.set("forUser", focusUser);
       if (filterSeverity !== "ALL") params.set("severity", filterSeverity);
-      const res = await fetch(`${API}/logs/timeline?${params}`, { headers });
+      const res = await fetch(`${API}/logs/timeline?${params}`, { headers, signal });
       if (!res.ok) throw new Error(`Unable to load connection events (HTTP ${res.status}).`);
       const events = await res.json();
       if (!Array.isArray(events)) throw new Error("The connection event response was invalid.");
+      if (signal?.aborted || requestId !== timelineRequest.current) return;
       setTimeline(events);
       setTimelineError("");
     } catch (e) {
+      if (signal?.aborted || requestId !== timelineRequest.current) return;
       setTimelineError(e instanceof Error ? e.message : "Unable to load connection events.");
     } finally {
-      setTimelineLoading(false);
+      if (!signal?.aborted && requestId === timelineRequest.current) setTimelineLoading(false);
     }
   }, [token, timelineLimit, focusUser, filterSeverity]);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (signal?: AbortSignal) => {
     if (!token) return;
+    const requestId = ++statsRequest.current;
     try {
       const h = filterPeriod === "1h" ? 1 : filterPeriod === "6h" ? 6 : filterPeriod === "7d" ? 168 : 24;
-      const res = await fetch(`${API}/logs/stats?hours=${h}`, { headers });
+      const res = await fetch(`${API}/logs/stats?hours=${h}`, { headers, signal });
       if (!res.ok) throw new Error(`Unable to load summary metrics (HTTP ${res.status}).`);
-      setStats(await res.json());
+      const result = await res.json();
+      if (signal?.aborted || requestId !== statsRequest.current) return;
+      setStats(result);
       setStatsError("");
     } catch (e) {
+      if (signal?.aborted || requestId !== statsRequest.current) return;
       setStatsError(e instanceof Error ? e.message : "Unable to load summary metrics.");
     }
   }, [token, filterPeriod]);
 
-  const fetchAllLogs = useCallback(async () => {
+  const fetchTabData = useCallback(async (signal: AbortSignal) => {
     if (!token) return;
+    if (activeTab === "authentication") {
+      setLoading(false);
+      setLoadError("");
+      return;
+    }
     setLoading(true);
     setLoadError("");
+    if (activeTab === "connections") setFailedActs([]);
+    if (activeTab === "sessions") {
+      setSessions([]);
+      setRadiusSessions([]);
+    }
+    if (activeTab === "audit") setSystemLogs([]);
     try {
-      const fuq = focusUser ? `?forUser=${focusUser}` : "";
-      const [systemRes, sessionsRes, radiusRes, failedRes] = await Promise.all([
-        fetch(`${API}/logs/system?limit=100`, { headers }),
-        fetch(`${API}/logs/sessions${fuq}`, { headers }),
-        fetch(`${API}/logs/radius-sessions?limit=500&cause=current${radWindow ? `&sinceHours=${radWindow}` : ""}`, { headers }),
-        fetch(`${API}/logs/failed-activations?limit=200`, { headers }),
-      ]);
-      const failedResponse = [systemRes, sessionsRes, radiusRes, failedRes].find((response) => !response.ok);
-      if (failedResponse) throw new Error(`Unable to load log data (HTTP ${failedResponse.status}).`);
-      const [systemData, sessionsData, radiusData, failedData] = await Promise.all([
-        systemRes.json(), sessionsRes.json(), radiusRes.json(), failedRes.json(),
-      ]);
-      setSystemLogs(Array.isArray(systemData?.logs) ? systemData.logs : Array.isArray(systemData) ? systemData : []);
-      setSessions(Array.isArray(sessionsData) ? sessionsData : []);
-      setRadiusSessions(Array.isArray(radiusData?.items) ? radiusData.items : []);
-      setFailedActs(Array.isArray(failedData) ? failedData : []);
+      if (activeTab === "connections") {
+        const response = await fetch(`${API}/logs/failed-activations?limit=200`, { headers, signal });
+        if (!response.ok) throw new Error(`Unable to load failed activations (HTTP ${response.status}).`);
+        const records = await response.json();
+        if (!Array.isArray(records)) throw new Error("The failed activation response was invalid.");
+        if (!signal.aborted) setFailedActs(records);
+      } else if (activeTab === "sessions") {
+        const userQuery = focusUser ? `?forUser=${encodeURIComponent(focusUser)}` : "";
+        const radiusQuery = new URLSearchParams({ limit: "500", cause: "current" });
+        if (radWindow) radiusQuery.set("sinceHours", String(radWindow));
+        const [sessionsResponse, radiusResponse] = await Promise.all([
+          fetch(`${API}/logs/sessions${userQuery}`, { headers, signal }),
+          fetch(`${API}/logs/radius-sessions?${radiusQuery}`, { headers, signal }),
+        ]);
+        const failedResponse = [sessionsResponse, radiusResponse].find((response) => !response.ok);
+        if (failedResponse) throw new Error(`Unable to load session data (HTTP ${failedResponse.status}).`);
+        const [sessionsData, radiusData] = await Promise.all([
+          sessionsResponse.json(), radiusResponse.json(),
+        ]);
+        if (signal.aborted) return;
+        if (!Array.isArray(sessionsData) || !Array.isArray(radiusData?.items)) {
+          throw new Error("The session response was invalid.");
+        }
+        setSessions(sessionsData);
+        setRadiusSessions(radiusData.items);
+      } else if (activeTab === "audit") {
+        const response = await fetch(`${API}/logs/system?limit=100`, { headers, signal });
+        if (!response.ok) throw new Error(`Unable to load system events (HTTP ${response.status}).`);
+        const result = await response.json();
+        if (signal.aborted) return;
+        const records = Array.isArray(result?.logs) ? result.logs : Array.isArray(result) ? result : null;
+        if (!records) throw new Error("The system event response was invalid.");
+        setSystemLogs(records);
+      }
     } catch (e) {
+      if (signal.aborted) return;
       setLoadError(e instanceof Error ? e.message : "Unable to load log data.");
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, [token, focusUser, radWindow]);
+  }, [activeTab, token, focusUser, radWindow]);
 
   // Preserve old log-view bookmarks by redirecting their view id to a category.
   useEffect(() => {
@@ -228,16 +268,13 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  // Initial load
+  // Load shared account options once; records themselves are loaded by the
+  // selected tab so another category cannot replace its results.
   useEffect(() => {
     if (!token) { router.push("/login"); return; }
     fetch(`${API}/profile`, { headers })
       .then(res => { if (res.status === 401) { localStorage.removeItem("token"); router.push("/login"); } })
       .catch(silent("profileFetch"));
-
-    fetchTimeline();
-    fetchStats();
-    fetchAllLogs();
 
     fetch(`${API}/users`, { headers })
       .then(r => r.ok ? r.json() : [])
@@ -245,53 +282,70 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       .catch(silent("usersFetch"));
   }, []);
 
-  // Re-fetch when filters change for timeline / stats tabs
-  const didMount = useRef(false);
+  // Each selection owns its request lifecycle. Abort on tab/filter changes so
+  // late responses from the previous view cannot overwrite the current view.
   useEffect(() => {
-    if (!didMount.current) { didMount.current = true; return; }
-    if (token) { fetchTimeline(); fetchStats(); }
-  }, [focusUser, filterSeverity, filterPeriod, timelineLimit]);
-
-  const didMountDataFilters = useRef(false);
-  useEffect(() => {
-    if (!didMountDataFilters.current) { didMountDataFilters.current = true; return; }
-    if (token) fetchAllLogs();
-  }, [focusUser, radWindow]);
+    if (!token) return;
+    const controller = new AbortController();
+    void fetchTabData(controller.signal);
+    if (activeTab === "connections") {
+      void fetchTimeline(controller.signal);
+      void fetchStats(controller.signal);
+    } else {
+      setTimelineError("");
+      setTimelineLoading(false);
+      setStatsError("");
+    }
+    return () => controller.abort();
+  }, [activeTab, token, fetchTabData, fetchTimeline, fetchStats, refreshKey]);
 
   // Auto-refresh the connection event stream every 15s.
   useEffect(() => {
     if (activeTab !== "connections" || !token) return;
-    const iv = setInterval(() => { fetchTimeline(); fetchStats(); }, 15_000);
-    return () => clearInterval(iv);
+    let controller: AbortController | null = null;
+    const iv = setInterval(() => {
+      controller?.abort();
+      controller = new AbortController();
+      void fetchTimeline(controller.signal);
+      void fetchStats(controller.signal);
+    }, 15_000);
+    return () => { clearInterval(iv); controller?.abort(); };
   }, [activeTab, token, fetchTimeline, fetchStats]);
 
   // RADIUS diag
-  const loadDiag = useCallback(() => {
+  const loadDiag = useCallback((signal?: AbortSignal) => {
     if (!token) return;
+    const requestId = ++diagRequest.current;
     setDiagBusy(true);
     setDiagError("");
-    fetch(`${API}/logs/radius/diagnostics`, { headers })
+    fetch(`${API}/logs/radius/diagnostics`, { headers, signal })
       .then(r => {
         if (!r.ok) throw new Error(`Unable to load RADIUS diagnostics (HTTP ${r.status}).`);
         return r.json();
       })
-      .then(setDiag)
-      .catch(e => setDiagError(e instanceof Error ? e.message : "Unable to load RADIUS diagnostics."))
-      .finally(() => setDiagBusy(false));
+      .then((result) => {
+        if (!signal?.aborted && requestId === diagRequest.current) setDiag(result);
+      })
+      .catch(e => {
+        if (!signal?.aborted && requestId === diagRequest.current) {
+          setDiagError(e instanceof Error ? e.message : "Unable to load RADIUS diagnostics.");
+        }
+      })
+      .finally(() => {
+        if (!signal?.aborted && requestId === diagRequest.current) setDiagBusy(false);
+      });
   }, [token]);
 
   useEffect(() => {
     if (activeTab !== "authentication" || !token) return;
-    loadDiag();
-    const iv = setInterval(loadDiag, 30_000);
-    return () => clearInterval(iv);
+    const controller = new AbortController();
+    loadDiag(controller.signal);
+    const iv = setInterval(() => loadDiag(controller.signal), 30_000);
+    return () => { clearInterval(iv); controller.abort(); };
   }, [activeTab, token, loadDiag]);
 
   const refreshAll = () => {
     setRefreshKey((key) => key + 1);
-    fetchTimeline();
-    fetchStats();
-    fetchAllLogs();
     if (activeTab === "authentication") loadDiag();
   };
 
@@ -390,7 +444,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           `}</style>
 
           {/* ═══════════════ TOP KPI CARDS ═══════════════ */}
-      {showOverview && (
+      {activeTab === "connections" && showOverview && (
         <>
           {statsError && <p role="alert" style={{ color: t.red, fontSize: 12, margin: "0 0 10px" }}>{statsError}</p>}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 18 }}>
@@ -420,9 +474,11 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               {/* Overview toggle — sits with the search for a clean single bar. */}
-              <button onClick={() => setShowOverview(v => !v)} style={{ background: showOverview ? `${t.accent}15` : "transparent", border: `1px solid ${showOverview ? t.accent : t.cardBorder}`, color: showOverview ? t.accent : t.textSub, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-                {showOverview ? "▲ Hide overview" : "▼ Show overview"}
-              </button>
+              {activeTab === "connections" && (
+                <button onClick={() => setShowOverview(v => !v)} style={{ background: showOverview ? `${t.accent}15` : "transparent", border: `1px solid ${showOverview ? t.accent : t.cardBorder}`, color: showOverview ? t.accent : t.textSub, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {showOverview ? "▲ Hide overview" : "▼ Show overview"}
+                </button>
+              )}
               {/* Search */}
               <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
                 <input value={search} onChange={e => setSearch(e.target.value)}
@@ -434,11 +490,13 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                 <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 14 }}>🔍</span>
               </div>
 
-              <button onClick={() => setShowFilters(!showFilters)}
-                style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${showFilters ? t.accent : t.cardBorder}`,
-                  background: showFilters ? `${t.accent}15` : "transparent", color: showFilters ? t.accent : t.textSub, cursor: "pointer", fontSize: 12 }}>
-                ⚙️ Filters {showFilters ? "▲" : "▼"}
-              </button>
+              {activeTab === "connections" && (
+                <button onClick={() => setShowFilters(!showFilters)}
+                  style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${showFilters ? t.accent : t.cardBorder}`,
+                    background: showFilters ? `${t.accent}15` : "transparent", color: showFilters ? t.accent : t.textSub, cursor: "pointer", fontSize: 12 }}>
+                  ⚙️ Filters {showFilters ? "▲" : "▼"}
+                </button>
+              )}
               <button type="button" onClick={refreshAll} disabled={loading}
                 style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${t.cardBorder}`,
                   background: "transparent", color: t.textSub, cursor: loading ? "wait" : "pointer", fontSize: 12 }}>
@@ -463,7 +521,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             )}
 
             {/* Collapsible advanced filters */}
-            {showFilters && (
+            {activeTab === "connections" && showFilters && (
               <div style={{ marginTop: 10, padding: 12, background: t.card, borderRadius: 10, border: `1px solid ${t.cardBorder}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
                 {/* Severity filter */}
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -541,6 +599,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Administrative activity</h2>
             <LogRecordsTable
               endpoint="/logs/activity"
+              detailPanel
+              searchable={false}
               refreshKey={refreshKey}
               searchText={search}
               onSearchTextChange={setSearch}
@@ -565,6 +625,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             <h2 style={{ fontSize: 15, margin: "0 0 9px" }}>Subscriber RADIUS authentication</h2>
             <LogRecordsTable
               endpoint="/logs/radius-auth"
+              detailPanel
+              searchable={false}
               refreshKey={refreshKey}
               searchText={search}
               onSearchTextChange={setSearch}
@@ -716,6 +778,8 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
             <h2 style={{ fontSize: 15, margin: "16px 0 9px" }}>Application sign-ins</h2>
             <LogRecordsTable
               endpoint="/logs/login"
+              detailPanel
+              searchable={false}
               refreshKey={refreshKey}
               searchText={search}
               onSearchTextChange={setSearch}
@@ -758,9 +822,9 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: SESSIONS ═══════════════ */}
-          {activeTab === "authentication" && (
+          {activeTab === "sessions" && (
             <>
-            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Application sessions</h2>
+            <h2 style={{ fontSize: 15, margin: "18px 0 9px" }}>Active panel sessions</h2>
             <LogTable data={filterData(sessions, ["user.name", "user.email", "ipAddress", "userAgent"])} d={d} t={t}
               headers={["User", "Role", "IP", "Login Time", "Expires"]}
               render={(s: any) => (
@@ -874,7 +938,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                   color: diag?.summary?.failures ? "#ef4444" : diag?.summary?.warnings ? "#f59e0b" : "#16a34a" }}>
                   {diagError ? "Diagnostics unavailable" : !diag ? "Checking…" : diag.summary.failures ? `${diag.summary.failures} problem(s)` : diag.summary.warnings ? `${diag.summary.warnings} warning(s)` : "No alerts in returned checks"}
                 </div>
-                <button onClick={loadDiag} disabled={diagBusy}
+                <button onClick={() => loadDiag()} disabled={diagBusy}
                   style={{ background: t.accent, color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: diagBusy ? .6 : 1 }}>
                   {diagBusy ? "⟳ Refreshing…" : "↻ Refresh"}
                 </button>

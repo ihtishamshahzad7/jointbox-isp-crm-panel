@@ -112,6 +112,268 @@ test.describe("Logs workspace tabs", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("renders only the selected category's records", async ({ page }) => {
+    const now = new Date().toISOString();
+    const requestedPaths: string[] = [];
+    const fixtures: Record<string, unknown> = {
+      "/profile": {},
+      "/users": [],
+      "/logs/timeline": [{
+        _type: "network",
+        id: "network-connection",
+        ts: now,
+        username: "connection-only-subscriber",
+        eventType: "PPP_SESSION_START",
+        severity: "INFO",
+        message: "Connection-only event",
+      }],
+      "/logs/stats": { hourly: [], totals: { login: 0, activity: 0, network: 1, system: 0 } },
+      "/logs/failed-activations": [],
+      "/logs/sessions": [],
+      "/logs/radius-sessions": {
+        items: [{
+          id: "session-record",
+          username: "session-only-subscriber",
+          sessionId: "session-only-id",
+          sessionState: "unknown",
+          start: now,
+        }],
+      },
+      "/logs/radius-auth": {
+        logs: [{
+          id: "aaa-record",
+          username: "aaa-only-subscriber",
+          authdate: now,
+          result: "Reject",
+          reason: "Access-Reject",
+        }],
+        total: 1,
+      },
+      "/logs/login": { logs: [], total: 0 },
+      "/logs/radius/diagnostics": {
+        summary: { ok: 0, warnings: 0, failures: 0 },
+        checks: [],
+        staleSessions: [],
+      },
+      "/logs/activity": {
+        logs: [{
+          id: "audit-record",
+          action: "AUDIT_ONLY_ACTION",
+          entity: "Subscriber",
+          entityId: 7,
+          createdAt: now,
+        }],
+        total: 1,
+      },
+      "/logs/system": { logs: [], total: 0 },
+      "/logs/disconnects": {
+        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+        totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+        causes: [],
+        categories: [],
+        trend: { unit: "day", partial: false, buckets: [] },
+        routers: [],
+        customers: [],
+        records: [],
+        recordsTotal: 0,
+        massDrops: [],
+      },
+      "/logs/failed-logins": {
+        totals: { attempts: 0, bursts: 0, customers: 0, capped: false },
+        reasons: [],
+        items: [],
+        total: 0,
+      },
+    };
+
+    await page.addInitScript(() => localStorage.setItem("token", "logs-tab-isolation-test-token"));
+    await page.route("**/api/**", async (route) => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+      requestedPaths.push(path);
+      const fixture = fixtures[path];
+      await route.fulfill({
+        status: fixture === undefined ? 404 : 200,
+        contentType: "application/json",
+        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+      });
+    });
+
+    await page.goto("/insights?tab=logs");
+    const panel = page.getByRole("tabpanel");
+    await expect(panel).toContainText("connection-only-subscriber");
+    await expect(panel).not.toContainText("session-only-subscriber");
+    await expect(panel).not.toContainText("aaa-only-subscriber");
+    await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
+    expect(requestedPaths).not.toContain("/logs/radius-sessions");
+    expect(requestedPaths).not.toContain("/logs/radius-auth");
+    expect(requestedPaths).not.toContain("/logs/activity");
+
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await expect(panel).toContainText("session-only-subscriber");
+    await expect(panel).not.toContainText("connection-only-subscriber");
+    await expect(panel).not.toContainText("aaa-only-subscriber");
+    await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
+
+    await page.getByRole("tab", { name: "Authentication (AAA)" }).click();
+    await expect(panel).toContainText("aaa-only-subscriber");
+    await expect(panel).not.toContainText("session-only-subscriber");
+    await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
+
+    await page.getByRole("tab", { name: "Audit Trail" }).click();
+    await expect(panel).toContainText("AUDIT_ONLY_ACTION");
+    await expect(panel).not.toContainText("aaa-only-subscriber");
+    await expect(panel).not.toContainText("session-only-subscriber");
+
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 1024, height: 768 },
+      { width: 390, height: 844 },
+      { width: 320, height: 700 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(() => page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      )).toBe(true);
+      for (const tab of [
+        "Connections",
+        "Sessions",
+        "Authentication (AAA)",
+        "Audit Trail",
+      ]) {
+        await page.getByRole("tab", { name: tab }).click();
+        await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+      }
+    }
+  });
+
+  test("applies category filters, shared search, refresh, pagination, and event details", async ({ page }) => {
+    const now = new Date().toISOString();
+    const requestedUrls: string[] = [];
+    const auditRows = Array.from({ length: 51 }, (_, index) => ({
+      id: `audit-${index + 1}`,
+      action: index === 50 ? "AUDIT_LAST_PAGE_ACTION" : index === 0 ? "AUDIT_FIRST_ACTION" : `AUDIT_ACTION_${index + 1}`,
+      entity: "Subscriber",
+      entityId: index + 1,
+      details: `recorded audit detail ${index + 1}`,
+      createdAt: now,
+      user: { id: 8, name: "Test Actor", role: "ADMIN" },
+      ipAddress: "192.0.2.10",
+      traceId: `trace-${index + 1}`,
+    }));
+    const fixtures: Record<string, unknown> = {
+      "/profile": {},
+      "/users": [],
+      "/logs/timeline": [{
+        _type: "network",
+        id: "network-detail",
+        ts: now,
+        username: "details-subscriber",
+        eventType: "PPP_SESSION_START",
+        severity: "INFO",
+        message: "Selected connection detail",
+        nasName: "test-router",
+        nasIp: "192.0.2.1",
+        callerId: "00:11:22:33:44:55",
+        sessionId: "session-detail",
+      }],
+      "/logs/stats": { hourly: [], totals: { login: 0, activity: 0, network: 1, system: 0 } },
+      "/logs/failed-activations": [],
+      "/logs/sessions": [],
+      "/logs/radius-sessions": { items: [] },
+      "/logs/radius-auth": { logs: [], total: 0 },
+      "/logs/login": { logs: [], total: 0 },
+      "/logs/radius/diagnostics": {
+        summary: { ok: 0, warnings: 0, failures: 0 },
+        checks: [],
+        staleSessions: [],
+      },
+      "/logs/activity": { logs: auditRows, total: auditRows.length },
+      "/logs/system": { logs: [], total: 0 },
+      "/logs/disconnects": {
+        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+        totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+        causes: [],
+        categories: [],
+        trend: { unit: "day", partial: false, buckets: [] },
+        routers: [],
+        customers: [],
+        records: [],
+        recordsTotal: 0,
+        massDrops: [],
+      },
+      "/logs/failed-logins": {
+        totals: { attempts: 0, bursts: 0, customers: 0, capped: false },
+        reasons: [],
+        items: [],
+        total: 0,
+      },
+    };
+
+    await page.addInitScript(() => localStorage.setItem("token", "logs-controls-test-token"));
+    await page.route("**/api/**", async (route) => {
+      const requestUrl = new URL(route.request().url());
+      const path = requestUrl.pathname.replace(/^\/api/, "");
+      requestedUrls.push(requestUrl.toString());
+      let fixture = fixtures[path];
+      if (path === "/logs/activity") {
+        const offset = Number(requestUrl.searchParams.get("offset") || 0);
+        const limit = Number(requestUrl.searchParams.get("limit") || 50);
+        fixture = { logs: auditRows.slice(offset, offset + limit), total: auditRows.length };
+      }
+      await route.fulfill({
+        status: fixture === undefined ? 404 : 200,
+        contentType: "application/json",
+        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+      });
+    });
+
+    await page.goto("/insights?tab=logs");
+    const panel = page.getByRole("tabpanel");
+    await expect(panel).toContainText("Selected connection detail");
+    await panel.getByText("Selected connection detail").click();
+    await expect(panel).toContainText("test-router");
+    await expect(panel).toContainText("00:11:22:33:44:55");
+
+    await page.getByRole("button", { name: /filters/i }).click();
+    await page.getByRole("button", { name: "ERROR", exact: true }).click();
+    await expect.poll(() => requestedUrls.some((url) => {
+      const parsed = new URL(url);
+      return parsed.pathname.endsWith("/logs/timeline") && parsed.searchParams.get("severity") === "ERROR";
+    })).toBe(true);
+
+    await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: "24h", exact: true }).first().click();
+    await expect.poll(() => requestedUrls.some((url) => {
+      const parsed = new URL(url);
+      return parsed.pathname.endsWith("/logs/radius-sessions") && parsed.searchParams.get("sinceHours") === "24";
+    })).toBe(true);
+
+    await page.getByRole("tab", { name: "Audit Trail" }).click();
+    await expect(panel).toContainText("AUDIT_FIRST_ACTION");
+    const search = page.getByPlaceholder("Search logs by user, IP, message, action...");
+    await search.fill("AUDIT_QUERY");
+    await expect.poll(() => requestedUrls.some((url) => {
+      const parsed = new URL(url);
+      return parsed.pathname.endsWith("/logs/activity") && parsed.searchParams.get("q") === "AUDIT_QUERY";
+    })).toBe(true);
+
+    const priorAuditRequests = requestedUrls.filter((url) => new URL(url).pathname.endsWith("/logs/activity")).length;
+    await page.getByRole("button", { name: /refresh/i }).click();
+    await expect.poll(() => requestedUrls.filter((url) =>
+      new URL(url).pathname.endsWith("/logs/activity"),
+    ).length).toBeGreaterThan(priorAuditRequests);
+
+    await page.getByRole("button", { name: "2", exact: true }).click();
+    await expect(panel).toContainText("AUDIT_LAST_PAGE_ACTION");
+    await expect.poll(() => requestedUrls.some((url) => {
+      const parsed = new URL(url);
+      return parsed.pathname.endsWith("/logs/activity") && parsed.searchParams.get("offset") === "50";
+    })).toBe(true);
+    await panel.getByText("AUDIT_LAST_PAGE_ACTION").click();
+    await expect(page.getByRole("dialog", { name: "Record details" })).toBeVisible();
+    await expect(panel).toContainText("recorded audit detail 51");
+  });
+
   test("shows API failures in each Logs category", async ({ page }) => {
     const pageErrors: Error[] = [];
     const failingPaths = new Set([
@@ -151,7 +413,7 @@ test.describe("Logs workspace tabs", () => {
     await page.goto("/insights?tab=logs");
     const views = [
       { label: "Connections", heading: "Connection events", error: "Unable to load connection events (HTTP 503)." },
-      { label: "Sessions", heading: "RADIUS accounting sessions", error: "Unable to load log data (HTTP 503)." },
+      { label: "Sessions", heading: "RADIUS accounting sessions", error: "Unable to load session data (HTTP 503)." },
       { label: "Authentication (AAA)", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
       { label: "Audit Trail", heading: "Administrative activity", error: "Unable to load records (HTTP 503)." },
     ];
