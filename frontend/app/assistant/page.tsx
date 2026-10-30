@@ -21,9 +21,7 @@ export default function AssistantPage() {
       <div className="asp-head">
         <div>
           <h1>✦ Assistant</h1>
-          <p>Ask anything about the panel — where a feature lives, how to use it,
-            and what happens before you commit. Answers come from the same guide as
-            the Documentation page.</p>
+          <p>Ask how to use features or review the guide.</p>
         </div>
         <button onClick={() => router.push("/docs")}>📖 Browse documentation</button>
       </div>
@@ -40,8 +38,8 @@ const CSS = `
   display:flex;flex-direction:column;height:calc(100vh - 120px);min-height:520px}
 .asp-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
   flex-wrap:wrap;margin-bottom:14px;flex:none}
-.asp-head h1{font-size:24px;font-weight:800;margin:0 0 5px}
-.asp-head p{font-size:13px;color:var(--muted);margin:0;line-height:1.7;max-width:66ch}
+.asp-head h1{font-size:18px;font-weight:800;margin:0 0 3px}
+.asp-head p{font-size:11px;color:var(--muted);margin:0;line-height:1.4;max-width:66ch}
 .asp-head button{background:var(--surface);border:1px solid var(--border);color:var(--text);
   border-radius:10px;padding:9px 14px;font-size:12.5px;font-weight:700;cursor:pointer;
   font-family:inherit;white-space:nowrap}

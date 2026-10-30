@@ -4,7 +4,6 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import API from "../components/api";
 import { SkeletonCards } from "../components/skeleton";
-import { BRAND } from "../../lib/brand";
 
 /**
  * Documentation — every feature, what it does, where it lives and when to use it.
@@ -69,9 +68,7 @@ export default function DocsPage() {
 
       <div className="doc-hero">
         <h1>Documentation</h1>
-        <p>Every feature in {BRAND.name} — what it does, where to find it, and when to use it.
-          The built-in assistant (✦, bottom-right) answers from this same guide, so you can
-          either browse here or just ask it.</p>
+        <p>Search feature instructions or ask the built-in assistant.</p>
         <div className="doc-search">
           <span>⌕</span>
           <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
@@ -124,9 +121,9 @@ export default function DocsPage() {
 
 const CSS = `
 .doc{padding:20px;max-width:920px;margin:0 auto;color:var(--text)}
-.doc-hero{margin-bottom:18px}
-.doc-hero h1{font-size:26px;font-weight:800;margin:0 0 6px}
-.doc-hero p{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.7;max-width:70ch}
+.doc-hero{margin-bottom:12px}
+.doc-hero h1{font-size:20px;font-weight:800;margin:0 0 3px}
+.doc-hero p{font-size:11px;color:var(--muted);margin:0 0 8px;line-height:1.4;max-width:70ch}
 .doc-search{display:flex;align-items:center;gap:9px;background:var(--surface);
   border:1px solid var(--border);border-radius:12px;padding:0 13px;height:46px}
 .doc-search:focus-within{border-color:var(--accent)}

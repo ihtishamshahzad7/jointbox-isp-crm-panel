@@ -716,7 +716,7 @@ const TAB_TO_GUIDE: Record<string, Record<string, string>> = {
     users: 'users', security: 'security', settings: 'settings', licence: 'licence',
   },
   'my-work': { business: 'my-business', connect: 'quick-connect', renewals: 'renewals' },
-  insights: { segments: 'segments', analytics: 'analytics', reports: 'reports', logs: 'logs' },
+  insights: { segments: 'segments', analytics: 'analytics', reports: 'reports' },
 };
 
 // Pages whose tabs live in internal state (not the URL): matched by the tab

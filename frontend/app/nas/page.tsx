@@ -877,24 +877,23 @@ export default function NasPage() {
         <div className="nas-page-content" style={{ flex:1, padding:'16px 20px', overflowY:'auto' }}>
 
           {/* Section header — a clean subject line for the page. */}
-          <div className="nas-page-heading" style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', borderBottom:`1px solid ${t.cardBorder}`, paddingBottom:12, marginBottom:16 }}>
-            <div style={{ width:38, height:38, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', background:`${t.accent}1a`, color:t.accent, fontSize:18 }}>🛰️</div>
+          <div className="nas-page-heading" style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', borderBottom:`1px solid ${t.cardBorder}`, paddingBottom:8, marginBottom:10 }}>
             <div style={{ minWidth:0 }}>
-              <h1 style={{ margin:0, fontSize:19, fontWeight:800, color:t.text, letterSpacing:'-0.01em' }}>Routers &amp; RADIUS</h1>
-              <div style={{ fontSize:12, color:t.textMuted, marginTop:2 }}>Your MikroTiks, their reachability and RADIUS settings.</div>
+              <h1 style={{ margin:0, fontSize:17, fontWeight:800, color:t.text, letterSpacing:'-0.01em' }}>Routers &amp; RADIUS</h1>
+              <div style={{ fontSize:11, color:t.textMuted, marginTop:1 }}>Router status and RADIUS settings.</div>
             </div>
             <span style={{ marginLeft:'auto', fontSize:12, fontWeight:700, color:t.textMuted, background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:999, padding:'4px 12px' }}>
               {nasList.length} router{nasList.length !== 1 ? 's' : ''}
             </span>
           </div>
 
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:16, flexWrap:'wrap', marginBottom:16 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap', marginBottom:10 }}>
             <div>
               {/* Say up front where this account's routers come from. Without
                   it, an account that can only use routers handed down to it
                   saw an "Add NAS" button that always failed at save time. */}
               {me && !isAdminRole(me.role) && (
-                <div style={{ fontSize:12, color:t.textMuted, lineHeight:1.7, maxWidth:520 }}>
+                <div style={{ fontSize:11, color:t.textMuted, lineHeight:1.45, maxWidth:520 }}>
                   {me.canAddNas
                     ? <>You may <b style={{color:t.text}}>register your own routers</b>, and you can also use any assigned to you by your parent.</>
                     : <>You use routers <b style={{color:t.text}}>assigned to you by your parent</b>. Registering your own is switched off for this account — ask them to enable “can add router”, or to assign you a NAS.</>}

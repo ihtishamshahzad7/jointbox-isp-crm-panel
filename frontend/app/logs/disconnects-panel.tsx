@@ -172,6 +172,7 @@ export default function DisconnectsPanel({
   const [err, setErr] = useState("");
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [allReasons, setAllReasons] = useState(false);
+  const [breakdownExpanded, setBreakdownExpanded] = useState(false);
   const [failed, setFailed] = useState<Failed | null>(null);
   const [failedOffset, setFailedOffset] = useState(0);
   const [failedErr, setFailedErr] = useState("");
@@ -310,9 +311,8 @@ export default function DisconnectsPanel({
       <div id={s.root} className={s.page}>
         <header className={s.head}>
           <div>
-            <div className={s.eyebrow}>RADIUS · Access-Reject</div>
             <h2>Failed connection attempts</h2>
-            <p>Recorded refused subscriber logins, grouped into bursts. The reason is shown as a likely explanation when the available records support one.</p>
+            <p>Access-Reject events, grouped by subscriber.</p>
           </div>
           <div className={s.controls}>
             {!hideTimeRange && <div className={s.seg} role="group" aria-label="Time window">
@@ -351,9 +351,8 @@ export default function DisconnectsPanel({
     <div id={s.root} className={`${s.page}${busy && data ? " " + s.loading : ""}`}>
       <header className={s.head}>
         <div>
-          <div className={s.eyebrow}>RADIUS · Acct-Terminate-Cause</div>
           <h2>Disconnect log</h2>
-          <p>Every session that ended — who it was, when, how it was disconnected, the NAS and port it was on, and the client’s MAC and IP. Click an entry for every detail.</p>
+          <p>Ended sessions with router and client details.</p>
         </div>
         <div className={s.controls}>
           {!hideTimeRange && <div className={s.seg} role="group" aria-label="Time window">
@@ -514,8 +513,28 @@ export default function DisconnectsPanel({
       </section>
 
       {/* ── Breakdown ── */}
-      <div className={s.subHead}>Breakdown for this window</div>
-      <div className={s.twoCol}>
+      <div className={s.breakdown}>
+        <button
+          type="button"
+          className={s.breakdownToggle}
+          aria-expanded={breakdownExpanded}
+          aria-controls="disconnect-breakdown"
+          onClick={() => setBreakdownExpanded((expanded) => !expanded)}
+        >
+          <span>{breakdownExpanded ? "Hide breakdown" : "Show breakdown"}</span>
+          <svg className={s.breakdownChevron} viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m6 3 5 5-5 5" />
+          </svg>
+        </button>
+        <div
+          id="disconnect-breakdown"
+          className={`${s.breakdownContent} ${breakdownExpanded ? s.breakdownExpanded : ""}`}
+          aria-hidden={!breakdownExpanded}
+          inert={!breakdownExpanded}
+        >
+          <div className={s.breakdownInner}>
+            <div className={s.subHead} role="heading" aria-level={3}>Breakdown for this window</div>
+            <div className={s.twoCol}>
         <section className={s.panel}>
           <div className={s.panelHead}>
             <h3>Who or what ended them</h3>
@@ -537,7 +556,7 @@ export default function DisconnectsPanel({
           <Trend data={data} />
         </section>
 
-        <section className={s.panel}>
+              <section className={s.panel}>
           <div className={s.panelHead}>
             <h3>By NAS / router</h3>
             <span>{sel ? sel.label : selCat ? selCat.label : "All reasons"}</span>
@@ -568,8 +587,8 @@ export default function DisconnectsPanel({
               })}
             </div>
           )}
-        </section>
-      </div>
+              </section>
+            </div>
 
       <section className={s.panel}>
         <div className={s.panelHead}>
@@ -637,6 +656,9 @@ export default function DisconnectsPanel({
           ))}
         </div>
       </section>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

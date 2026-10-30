@@ -49,7 +49,6 @@ const Ic = {
   Eye:    (p?:any) => <Icons.Eye {...p} />,
   X:      (p?:any) => <Icons.X {...p} />,
   /** Not in shared Icons — keep inline. */
-  Info:   () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>,
   Network: () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="16" y="2" width="6" height="6" rx="1"/><rect x="9" y="16" width="6" height="6" rx="1"/><path d="M5 8v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><line x1="12" y1="12" x2="12" y2="16"/></svg>,
 };
 
@@ -127,6 +126,7 @@ export default function IpPoolsPage() {
   const [toast, setToast] = useState<{ msg: string; type: "ok"|"err"|"warn" } | null>(null);
   const [networkError, setNetworkError] = useState("");
   const [showVerifyDetails, setShowVerifyDetails] = useState(false);
+  const [showPoolHelp, setShowPoolHelp] = useState(false);
   const alertAnchorRef = useRef<HTMLDivElement>(null);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
@@ -397,12 +397,8 @@ export default function IpPoolsPage() {
 
   const poolGuidance = (
     <>
-      <b>How IP Pools work in this system:</b> Create a pool here with the <b>exact same name</b> as the pool on your MikroTik router →
-      Assign the pool to a <b>Package</b> → Assign that Package to a <b>Subscriber</b> →
-      FreeRADIUS sends <code style={{background:d?"#1e3a5f":"#dbeafe", padding:"1px 4px", borderRadius:3}}>Framed-Pool</code> to MikroTik →
-      MikroTik assigns an IP from that pool to the subscriber automatically.
-      <br/>
-      <b style={{color: d?"#fbbf24":"#d97706"}}>⚠️ One pool can only be assigned to ONE package.</b>
+      Create the pool with the exact same name as on the MikroTik router, assign it to a package, then assign that package to subscribers.
+      FreeRADIUS sends <code style={{background:d?"#1e3a5f":"#dbeafe", padding:"1px 4px", borderRadius:3}}>Framed-Pool</code> so MikroTik assigns addresses automatically.
     </>
   );
 
@@ -426,7 +422,13 @@ export default function IpPoolsPage() {
         .ip-pool-alert-unreachable{margin-top:10px;padding-top:9px;border-top:1px solid var(--border);
           color:#fcd34d;font-size:11.5px;line-height:1.55}
         .ip-pool-alert-anchor.no-issues{display:none}
-        .ip-pool-how-it-works-mobile{display:none}
+        .ip-pool-help{margin:0 0 12px}
+        .ip-pool-help-toggle{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:6px 10px;border:1px solid var(--border);
+          border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+        .ip-pool-help-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+        .ip-pool-help-rule{color:#d97706}
+        .ip-pool-help-body{max-width:760px;margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;
+          background:var(--surface-2);color:var(--muted);font-size:11px;line-height:1.55}
         .ip-pool-primary-toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
         .ip-pool-cards{display:none}
         .ip-pool-card{padding:12px;border-bottom:1px solid var(--border)}
@@ -456,9 +458,6 @@ export default function IpPoolsPage() {
           .ip-pool-alert-anchor{margin-bottom:8px}
           .ip-pool-alert-popover{width:min(360px,calc(100vw - 32px));max-height:58dvh}
           .ip-pool-alert-anchor.no-issues{display:flex}
-          .ip-pool-how-it-works{display:none!important}
-          .ip-pool-how-it-works-mobile{display:block;margin-top:10px;padding:10px;border:1px solid #1e3a5f;border-radius:8px;background:#0a1525;color:#93c5fd;font-size:11px;line-height:1.6}
-          .ip-pool-how-it-works-mobile b:last-child{color:#fbbf24}
           .ip-pools-content{padding:10px!important}
         }
       `}</style>
@@ -487,7 +486,7 @@ export default function IpPoolsPage() {
               <button
                 type="button"
                 className="ip-pool-alert-button"
-                aria-label="Show IP pool guidance and verification issues"
+                aria-label="Show IP pool verification issues"
                 aria-expanded={showVerifyDetails}
                 onClick={() => setShowVerifyDetails((open) => !open)}
               >
@@ -526,15 +525,22 @@ export default function IpPoolsPage() {
                       Could not check {unreachableRouters.join(", ")} — no API access. Add the API username and password under Network → NAS / Routers so pools can be verified there too.
                     </div>
                   )}
-                  <div className="ip-pool-how-it-works-mobile">{poolGuidance}</div>
                 </div>
               )}
           </div>
 
-          {/* How It Works Banner */}
-          <div className="ip-pool-how-it-works" style={{ background: d?"#0a1525":"#eff6ff", border:`1px solid ${d?"#1e3a5f":"#bfdbfe"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, display:"flex", alignItems:"flex-start", gap:10 }}>
-            <div style={{ color:"#60a5fa", flexShrink:0, marginTop:1 }}><Ic.Info /></div>
-            <div style={{ fontSize:11, color: d?"#93c5fd":"#1e40af", lineHeight:1.7 }}>
+          <div className="ip-pool-help">
+            <button
+              type="button"
+              className="ip-pool-help-toggle"
+              aria-expanded={showPoolHelp}
+              aria-controls="ip-pool-help-body"
+              onClick={() => setShowPoolHelp((show) => !show)}
+            >
+              <span className="ip-pool-help-rule">One pool can be assigned to only one package.</span>
+              <span>{showPoolHelp ? "Hide help" : "How pools work"}</span>
+            </button>
+            <div id="ip-pool-help-body" className="ip-pool-help-body" hidden={!showPoolHelp}>
               {poolGuidance}
             </div>
           </div>

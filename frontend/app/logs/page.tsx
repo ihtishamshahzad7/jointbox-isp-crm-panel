@@ -97,8 +97,8 @@ const resolveLogTab = (value: string | null) => {
 // ── Component ─────────────────────────────────────────────────────
 
 /**
- * The page can be embedded in Insights or opened directly; both modes use the
- * same five-section Logs navigation.
+ * The page is opened from its dedicated application navigation entry; legacy
+ * links continue to resolve to the same five-section Logs workspace.
  */
 export default function LogsPage({ embedded = false, view, onViewChange }: {
   embedded?: boolean; view?: string; onViewChange?: (id: string) => void;

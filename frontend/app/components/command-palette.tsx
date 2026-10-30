@@ -53,7 +53,7 @@ const DESTS: Dest[] = [
   { label: "Vouchers", href: "/vouchers", group: "Business", keys: "voucher prepaid card pin redeem" },
   { label: "Reseller pricing", href: "/pricing", group: "Business", keys: "reseller price margin dealer franchise" },
   { label: "Disputes & Reversals", href: "/reversals", group: "Business", keys: "reversal reverse commission audit trail dispute" },
-  { label: "Insights", href: "/insights", group: "Business", keys: "analytics reports revenue growth segments logs" },
+  { label: "Insights", href: "/insights", group: "Business", keys: "analytics reports revenue growth segments" },
   { label: "Reports", href: "/insights?tab=reports", group: "Business", keys: "report revenue aged debt reseller performance export" },
   { label: "KYC & Data Usage", href: "/compliance", group: "Business", keys: "kyc cnic identity verify fup quota data usage" },
   // System

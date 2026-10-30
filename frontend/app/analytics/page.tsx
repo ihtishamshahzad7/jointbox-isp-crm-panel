@@ -248,22 +248,22 @@ const CSS = `
 @keyframes nvRing{from{stroke-dasharray:0 9999}}
 
 /* ── 1 · verdict ── */
-.nv-verdict{display:flex;align-items:center;gap:20px;padding:22px 26px;border-radius:20px;
-  margin-bottom:16px;position:relative;overflow:hidden;
+.nv-verdict{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:12px;
+  margin-bottom:12px;position:relative;overflow:hidden;
   background:var(--surface);border:1px solid var(--border)}
 .nv-verdict::before{content:"";position:absolute;inset:0;opacity:.10;pointer-events:none}
 .nv-verdict.ok::before{background:radial-gradient(circle at 12% 50%,#10B981,transparent 62%)}
 .nv-verdict.warn::before{background:radial-gradient(circle at 12% 50%,#F59E0B,transparent 62%)}
 .nv-verdict.bad::before{background:radial-gradient(circle at 12% 50%,#EF4444,transparent 62%)}
-.nv-verdict .orb{width:46px;height:46px;border-radius:50%;flex-shrink:0;position:relative}
+.nv-verdict .orb{width:14px;height:14px;border-radius:50%;flex-shrink:0;position:relative}
 .nv-verdict.ok .orb{background:linear-gradient(135deg,#00C9FF,#92FE9D);box-shadow:0 0 26px rgba(16,185,129,.5)}
 .nv-verdict.warn .orb{background:linear-gradient(135deg,#F7971E,#FFD200);box-shadow:0 0 26px rgba(245,158,11,.5)}
 .nv-verdict.bad .orb{background:linear-gradient(135deg,#F43F5E,#E9408B);box-shadow:0 0 26px rgba(239,68,68,.55);
   animation:nvBeat 1.9s ease-in-out infinite}
 @keyframes nvBeat{50%{transform:scale(1.08)}}
 .nv-verdict .txt{flex:1;min-width:0;position:relative}
-.nv-verdict h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.025em}
-.nv-verdict p{margin:5px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
+.nv-verdict h1{margin:0;font-size:18px;font-weight:750;letter-spacing:-.02em}
+.nv-verdict p{margin:2px 0 0;font-size:11.5px;color:var(--muted);line-height:1.4}
 .nv-verdict .live{display:inline-flex;align-items:center;gap:7px;padding:6px 13px;border-radius:99px;
   background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);color:#10B981;
   font-size:11px;font-weight:700;flex-shrink:0;position:relative}

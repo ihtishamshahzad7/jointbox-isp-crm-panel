@@ -328,7 +328,7 @@ export default function MonitoringPage() {
         <div>
           <h1>Network Monitoring</h1>
           <p>
-            Ping and traceroute for every device, with live latency graphs.
+            Ping status and latency for monitored devices.
             {summary && summary.merged > 0 && (
               <> <b>{summary.merged}</b> device{summary.merged === 1 ? "" : "s"} shown once instead of twice.</>
             )}

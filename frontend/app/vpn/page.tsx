@@ -140,9 +140,8 @@ export default function VpnPage() {
         <span style={{ background: `linear-gradient(135deg, ${G}, ${G2})`, color: "#fff", fontWeight: 800, fontSize: 12, padding: "4px 11px", borderRadius: 999 }}>VPN</span>
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: "var(--text,#111)" }}>Panel VPN Servers</h1>
       </div>
-      <p style={{ color: "var(--muted,#64748B)", fontSize: 13.5, marginBottom: 18 }}>
-        Let a remote MikroTik behind CGNAT reach this panel so its PPPoE users authenticate here and
-        the panel can run RADIUS/CoA toward the router. Run several at once; many routers can connect to each.
+      <p style={{ color: "var(--muted,#64748B)", fontSize: 11.5, margin: "0 0 12px" }}>
+        Connect remote MikroTik routers for RADIUS authentication and CoA; multiple routers can use each tunnel.
       </p>
 
       {err && (
@@ -152,8 +151,8 @@ export default function VpnPage() {
       {/* Endpoint host — the address every router dials. */}
       <div style={card}>
         <h2 style={{ fontSize: 15, fontWeight: 800, margin: "0 0 4px", color: "var(--text,#111)" }}>Panel public address</h2>
-        <p style={{ color: "var(--muted,#64748B)", fontSize: 13, margin: "0 0 10px" }}>
-          The public hostname or IP of this panel that routers will connect to. Required for every VPN type.
+        <p style={{ color: "var(--muted,#64748B)", fontSize: 11.5, margin: "0 0 8px" }}>
+          Public hostname or IP that routers use to connect; required for each VPN type.
         </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input style={{ ...input, flex: 1, minWidth: 220 }} value={host} placeholder="vpn.yourdomain.com or 203.0.113.10"
