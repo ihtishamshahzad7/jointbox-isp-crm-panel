@@ -10,10 +10,11 @@ import { CommonModule } from '../common/common.module';
 import { RadiusClientVaultService } from './radius-client-vault.service';
 import { NasL2tpConfigController } from './nas-l2tp-config.controller';
 import { NasL2tpConfigService } from './nas-l2tp-config.service';
+import { VpnModule } from '../vpn/vpn.module';
 
 @Module({
   // CommonModule provides ScopeService for NAS ownership / assignment scoping.
-  imports: [PrismaModule, CommonModule],
+  imports: [PrismaModule, CommonModule, VpnModule],
   // ORDER MATTERS. Both controllers are mounted on 'nas', and NasController
   // ends with a catch-all `@Get(':id')`. Nest matches in registration order,
   // so with NasController first a request for /nas/tunnels would be handled as
