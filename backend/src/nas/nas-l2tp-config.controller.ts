@@ -8,6 +8,16 @@ import { NasL2tpConfigService } from './nas-l2tp-config.service';
 export class NasL2tpConfigController {
   constructor(private readonly service: NasL2tpConfigService) {}
 
+  @Get(':id/vpn/activity')
+  async activity(@Param('id') id: string, @Req() req: any) {
+    return this.service.getActivity(Number(id), req.user);
+  }
+
+  @Get(':id/vpn/radius')
+  async radius(@Param('id') id: string, @Req() req: any) {
+    return this.service.getRadiusForNas(Number(id), req.user);
+  }
+
   @Get(':id/l2tp-config')
   async get(@Param('id') id: string, @Req() req: any) {
     return this.service.getForNas(Number(id), req.user);

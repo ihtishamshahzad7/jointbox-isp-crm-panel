@@ -91,6 +91,17 @@ export interface IpAddress {
   disabled: string;
 }
 
+export interface NasDiscoveredNeighbor {
+  address: string | null;
+  macAddress: string | null;
+  interface: string | null;
+  identity: string | null;
+  platform: string | null;
+  version: string | null;
+  source: string[];
+  kind: 'olt' | 'onu' | 'switch' | 'unknown';
+}
+
 @Injectable()
 export class MikrotikSyncService {
   private readonly logger = new Logger(MikrotikSyncService.name);
@@ -373,6 +384,75 @@ export class MikrotikSyncService {
             ranges: String(r.ranges ?? ''),
             comment: r.comment ?? null,
           }));
+      },
+    );
+  }
+
+  /**
+   * Read only the selected router's existing neighbor and ARP tables. This is
+   * deliberately not an active subnet scan and does not probe discovered IPs.
+   */
+  async discoverNeighbors(
+    nasIp: string,
+    apiPort: number,
+    apiUsername: string,
+    apiPassword: string,
+  ): Promise<NasDiscoveredNeighbor[]> {
+    return withMikrotik(
+      { host: nasIp, port: apiPort, username: apiUsername, password: apiPassword, timeout: 10000 },
+      async (client) => {
+        const [neighbors, arpEntries] = await Promise.all([
+          client.send(['/ip/neighbor/print']),
+          client.send(['/ip/arp/print']),
+        ]);
+        const discovered = new Map<string, NasDiscoveredNeighbor>();
+
+        const classify = (value: string): NasDiscoveredNeighbor['kind'] => {
+          if (/\b(onu|ont)\b/i.test(value)) return 'onu';
+          if (/\b(olt|gpon|epon|pon)\b/i.test(value)) return 'olt';
+          if (/\b(switch|switching)\b/i.test(value)) return 'switch';
+          return 'unknown';
+        };
+        const add = (
+          row: Record<string, string>,
+          source: 'router-neighbor' | 'arp',
+        ) => {
+          const address = row.address || row['address4'] || null;
+          const macAddress = row['mac-address'] || row.macAddress || null;
+          const iface = row.interface || row['interface-name'] || null;
+          const identity = row.identity || row.name || null;
+          const platform = row.platform || row.board || null;
+          const version = row.version || null;
+          const key = (macAddress || `${address ?? ''}|${iface ?? ''}`).toLowerCase();
+          if (!key || key === '|') return;
+
+          const current = discovered.get(key);
+          const evidence = [identity, platform, version].filter(Boolean).join(' ');
+          if (current) {
+            if (!current.address && address) current.address = address;
+            if (!current.identity && identity) current.identity = identity;
+            if (!current.platform && platform) current.platform = platform;
+            if (!current.version && version) current.version = version;
+            if (iface && !current.interface) current.interface = iface;
+            if (!current.source.includes(source)) current.source.push(source);
+            if (current.kind === 'unknown') current.kind = classify(evidence);
+            return;
+          }
+          discovered.set(key, {
+            address,
+            macAddress,
+            interface: iface,
+            identity,
+            platform,
+            version,
+            source: [source],
+            kind: classify(evidence),
+          });
+        };
+
+        for (const row of neighbors) add(row, 'router-neighbor');
+        for (const row of arpEntries) add(row, 'arp');
+        return [...discovered.values()];
       },
     );
   }

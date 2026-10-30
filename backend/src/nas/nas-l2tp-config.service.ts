@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -25,6 +26,14 @@ export interface NasL2tpConfigRecord extends L2tpConfigInput {
   lastError?: string | null;
 }
 
+interface NasRadiusSettings {
+  server: string;
+  authPort: number;
+  acctPort: number;
+  nasIdentifier: string | null;
+  sharedSecret: string | null;
+}
+
 interface RouterOsCapabilityCheck {
   osVersion: string;
   supported: { l2tp: boolean; ipsec: boolean; radius: boolean };
@@ -46,15 +55,79 @@ export class NasL2tpConfigService {
     return raw == null ? null : Number(raw);
   }
 
-  private async ensureAccess(nasId: number, actor: any): Promise<void> {
+  private async ensureAccess(nasId: number, actor: any): Promise<any> {
     await this.scope.assertNas(actor, nasId);
-    const exists = await this.prisma.nas.findUnique({
+    const nas = await this.prisma.nas.findUnique({
       where: { id: nasId },
-      select: { id: true },
+      select: {
+        id: true,
+        ownerId: true,
+        nasname: true,
+        nasIp: true,
+        nasIdentifier: true,
+        secret: true,
+        radiusSecretEnc: true,
+      },
     });
-    if (!exists) {
+    if (!nas) {
       throw new NotFoundException(`NAS ${nasId} not found`);
     }
+    if (
+      !this.scope.isPlatformOwner(actor) &&
+      Number(nas.ownerId) !== this.scope.actorId(actor)
+    ) {
+      throw new ForbiddenException(
+        'Only the NAS owner can manage its VPN configuration.',
+      );
+    }
+    return nas;
+  }
+
+  private radiusSettings(nas: any, configRow?: any): NasRadiusSettings {
+    const envPort = (name: string, fallback: number) => {
+      const value = Number(process.env[name]);
+      return Number.isInteger(value) && value > 0 && value <= 65535
+        ? value
+        : fallback;
+    };
+    const sharedSecret =
+      this.decryptSecret(nas.radiusSecretEnc) ??
+      this.decryptSecret(nas.secret) ??
+      this.decryptSecret(configRow?.radiusSharedSecretEnc);
+
+    return {
+      server: process.env.RADIUS_SERVER_IP || '127.0.0.1',
+      authPort: envPort('RADIUS_AUTH_PORT', 1812),
+      acctPort: envPort('RADIUS_ACCT_PORT', 1813),
+      nasIdentifier: nas.nasIdentifier || nas.nasname || null,
+      sharedSecret,
+    };
+  }
+
+  private useCentralRadius(
+    input: L2tpConfigInput,
+    settings: NasRadiusSettings,
+  ): L2tpConfigInput {
+    return {
+      ...input,
+      radiusServer: settings.server,
+      radiusAuthPort: settings.authPort,
+      radiusAcctPort: settings.acctPort,
+      nasIdentifier: settings.nasIdentifier ?? undefined,
+      radiusSharedSecret: settings.sharedSecret ?? undefined,
+    };
+  }
+
+  private publicRadius(settings: NasRadiusSettings) {
+    return {
+      provider: 'FreeRADIUS',
+      server: settings.server,
+      authPort: settings.authPort,
+      acctPort: settings.acctPort,
+      nasIdentifier: settings.nasIdentifier,
+      sharedSecretConfigured: Boolean(settings.sharedSecret),
+      subscriberStore: 'central',
+    };
   }
 
   private encryptSecret(value?: string): string | null {
@@ -173,11 +246,6 @@ export class NasL2tpConfigService {
     if (input.ipsecPsk !== undefined) {
       data.ipsecPskEnc = this.encryptSecret(input.ipsecPsk) ?? null;
     }
-    if (input.radiusSharedSecret !== undefined) {
-      data.radiusSharedSecretEnc =
-        this.encryptSecret(input.radiusSharedSecret) ?? null;
-    }
-
     if (input.configurationName !== undefined) {
       data.configurationName = input.configurationName;
     }
@@ -196,18 +264,27 @@ export class NasL2tpConfigService {
     return this.sanitizeRecord(row);
   }
 
+  async getRadiusForNas(nasId: number, actor: any) {
+    const nas = await this.ensureAccess(nasId, actor);
+    const config = await this.prisma.nasL2tpConfig.findUnique({
+      where: { nasId },
+    });
+    return this.publicRadius(this.radiusSettings(nas, config));
+  }
+
   async saveDraft(
     nasId: number,
     input: Partial<L2tpConfigInput>,
     actor: any,
   ): Promise<NasL2tpConfigRecord> {
-    await this.ensureAccess(nasId, actor);
+    const nas = await this.ensureAccess(nasId, actor);
     const actorUserId = this.getActorUserId(actor);
-    const data = this.normalizePayload(input, actorUserId, 'draft');
-
     const current = await this.prisma.nasL2tpConfig.findUnique({
       where: { nasId },
     });
+    const radius = this.radiusSettings(nas, current);
+    const source = this.useCentralRadius(input, radius);
+    const data = this.normalizePayload(source, actorUserId, 'draft');
     const row = await this.prisma.nasL2tpConfig.upsert({
       where: { nasId },
       create: {
@@ -230,13 +307,15 @@ export class NasL2tpConfigService {
     input?: Partial<L2tpConfigInput>,
     actor?: any,
   ): Promise<any> {
-    await this.ensureAccess(nasId, actor);
+    const nas = await this.ensureAccess(nasId, actor);
     const current = await this.prisma.nasL2tpConfig.findUnique({
       where: { nasId },
     });
-    const source = input
+    const proposed = input
       ? { ...this.buildInputFromDb(current ?? {}), ...input }
       : this.buildInputFromDb(current ?? {});
+    const radius = this.radiusSettings(nas, current);
+    const source = this.useCentralRadius(proposed, radius);
     const preview = this.vpn.validateL2tpConfig(source);
     const nextState = preview.valid ? 'validated' : 'failed';
 
@@ -269,6 +348,7 @@ export class NasL2tpConfigService {
       errors: preview.errors,
       preview: preview.preview,
       masked: preview.masked,
+      authentication: this.publicRadius(radius),
       simulated: true,
     };
   }
@@ -278,13 +358,14 @@ export class NasL2tpConfigService {
     input: Partial<L2tpConfigInput>,
     actor: any,
   ): Promise<any> {
-    await this.ensureAccess(nasId, actor);
+    const nas = await this.ensureAccess(nasId, actor);
 
     const current = await this.prisma.nasL2tpConfig.findUnique({
       where: { nasId },
     });
     const base = current ? this.buildInputFromDb(current) : {};
-    const proposed = { ...base, ...input };
+    const radius = this.radiusSettings(nas, current);
+    const proposed = this.useCentralRadius({ ...base, ...input }, radius);
     const preview = this.vpn.validateL2tpConfig(proposed);
 
     return {
@@ -294,12 +375,13 @@ export class NasL2tpConfigService {
       warnings: preview.warnings,
       errors: preview.errors,
       preview: preview.preview,
+      authentication: this.publicRadius(radius),
       simulated: true,
     };
   }
 
   async approveForNas(nasId: number, actor: any): Promise<any> {
-    await this.ensureAccess(nasId, actor);
+    const nas = await this.ensureAccess(nasId, actor);
     const row = await this.prisma.nasL2tpConfig.findUnique({
       where: { nasId },
     });
@@ -313,7 +395,10 @@ export class NasL2tpConfigService {
         'Configuration must be validated before it can be approved.',
       );
     }
-    const preview = this.vpn.validateL2tpConfig(this.buildInputFromDb(row));
+    const radius = this.radiusSettings(nas, row);
+    const preview = this.vpn.validateL2tpConfig(
+      this.useCentralRadius(this.buildInputFromDb(row), radius),
+    );
     if (!preview.valid) {
       throw new BadRequestException(
         'Configuration is not valid and cannot be approved.',
@@ -336,7 +421,7 @@ export class NasL2tpConfigService {
   }
 
   async applyApproved(nasId: number, actor: any): Promise<any> {
-    await this.ensureAccess(nasId, actor);
+    const nas = await this.ensureAccess(nasId, actor);
     const row = await this.prisma.nasL2tpConfig.findUnique({
       where: { nasId },
     });
@@ -350,7 +435,10 @@ export class NasL2tpConfigService {
         'Configuration must be approved before an apply attempt.',
       );
     }
-    const validation = this.vpn.validateL2tpConfig(this.buildInputFromDb(row));
+    const radius = this.radiusSettings(nas, row);
+    const validation = this.vpn.validateL2tpConfig(
+      this.useCentralRadius(this.buildInputFromDb(row), radius),
+    );
     if (!validation.valid) {
       throw new BadRequestException(
         'Cannot apply invalid L2TP/IPsec configuration.',
@@ -388,6 +476,7 @@ export class NasL2tpConfigService {
         'No saved L2TP/IPsec configuration exists to roll back.',
       );
     }
+
     return {
       nasId,
       rolledBack: false,
@@ -397,6 +486,37 @@ export class NasL2tpConfigService {
       message:
         'No live RouterOS rollback was executed; the saved configuration state is unchanged.',
     };
+  }
+
+  async getActivity(nasId: number, actor: any) {
+    await this.ensureAccess(nasId, actor);
+    const rows = await this.prisma.activityLog.findMany({
+      where: { entity: 'nas', entityId: nasId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        action: true,
+        details: true,
+        createdAt: true,
+        user: { select: { name: true } },
+      },
+    });
+    const route = `/nas/${nasId}/`;
+    return rows
+      .filter(
+        (row: any) =>
+          typeof row.details === 'string' &&
+          row.details.includes(route) &&
+          /l2tp-config|\/tunnel|vpn\/discover-neighbors/.test(row.details),
+      )
+      .slice(0, 25)
+      .map((row: any) => ({
+        id: String(row.id),
+        action: row.action,
+        actor: row.user?.name ?? 'Operator',
+        createdAt: row.createdAt,
+      }));
   }
 
   private async capabilityCheck(

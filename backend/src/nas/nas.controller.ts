@@ -163,6 +163,12 @@ export class NasController {
     return this.nasService.setMonitoredPorts(+id, body?.ports || [], req.user);
   }
 
+  /** Read the selected router's neighbor and ARP tables; never scans a subnet. */
+  @Post(':id/vpn/discover-neighbors')
+  discoverVpnNeighbors(@Param('id') id: string, @Req() req: any) {
+    return this.nasService.discoverNeighbors(+id, req.user);
+  }
+
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req: any) { return this.nasService.remove(+id, req.user); }
 

@@ -126,6 +126,7 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   // ── NAS / ROUTERS ─────────────────────────────────────────────────────────
   { method: 'DELETE', test: /^\/nas\/\d+(\/)?$/,                        key: 'nas.delete' },
   { method: 'GET',    test: /^\/nas\/\d+\/(sync|reachability|ping|quick-check)\b/, key: 'nas.sync' },
+  { method: 'POST',   test: /^\/nas\/\d+\/vpn\/discover-neighbors\b/,   key: 'telemetry.write' },
   { method: 'POST',   test: /^\/nas\/assign-bulk\b/,                    key: 'nas.share' },
   { method: 'POST',   test: /^\/nas\/\d+\/assign\/\d+$/,                key: 'nas.share' },
   { method: 'DELETE', test: /^\/nas\/\d+\/assign\/\d+$/,                key: 'nas.share' },

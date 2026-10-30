@@ -359,6 +359,61 @@ export class NasService implements OnModuleInit {
     return { id, monitoredPorts: clean, monitorsAll: clean.length === 0 };
   }
 
+  /**
+   * Read a NAS's own neighbor and ARP tables for explicitly authorized
+   * discovery. No discovered address is probed and no subnet is scanned.
+   */
+  async discoverNeighbors(id: number, actor: any) {
+    await this.assertNasOwner(id, actor);
+    const nas = await this.prisma.nas.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        shortname: true,
+        nasIp: true,
+        apiEnabled: true,
+        apiPort: true,
+        apiUsername: true,
+        apiPassword: true,
+        isActive: true,
+      },
+    });
+    if (!nas) throw new NotFoundException(`NAS with ID ${id} not found`);
+    if (!nas.isActive || nas.apiEnabled === false) {
+      throw new BadRequestException(
+        'Enable this NAS and its RouterOS API before discovering neighbors.',
+      );
+    }
+    if (!nas.nasIp || !nas.apiUsername || !nas.apiPassword) {
+      throw new BadRequestException(
+        'Set this NAS IP address and RouterOS API credentials before discovering neighbors.',
+      );
+    }
+
+    let neighbors;
+    try {
+      neighbors = await this.mikrotikSync.discoverNeighbors(
+        nas.nasIp,
+        nas.apiPort ?? 8728,
+        nas.apiUsername,
+        nas.apiPassword,
+      );
+    } catch (error: any) {
+      throw new BadGatewayException(
+        `Neighbor discovery failed for ${nas.shortname || nas.nasIp}: ${String(error?.message || error).slice(0, 160)}`,
+      );
+    }
+
+    return {
+      nasId: id,
+      source: ['RouterOS neighbor table', 'RouterOS ARP table'],
+      activeScan: false,
+      discoveredAt: new Date(),
+      count: neighbors.length,
+      neighbors,
+    };
+  }
+
   /** Group NAS by owner, type or site — clear classification with counts. */
   async groupedBy(by: string, actor?: any) {
     const where = await this.scope.nasWhere(actor);

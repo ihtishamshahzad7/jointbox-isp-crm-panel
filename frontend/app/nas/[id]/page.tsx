@@ -48,7 +48,7 @@ const PermissionPanel = lazy(() => import("./permissions").then((m) => ({ defaul
 const AlertRules = lazy(() => import("./alert-rules").then((m) => ({ default: m.AlertRules })));
 // Lazy like the rest: a tunnel is provisioned once and then rarely looked at,
 // so its panel should not be in the bundle every other tab pays for.
-const TunnelPanel = lazy(() => import("../tunnel-panel").then((m) => ({ default: m.TunnelPanel })));
+const NasVpnPanel = lazy(() => import("../nas-vpn-panel").then((m) => ({ default: m.NasVpnPanel })));
 
 const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "overview", label: "Overview", group: "Device" },
@@ -65,9 +65,7 @@ const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "audit", label: "Audit", group: "History" },
   { id: "diagnostics", label: "Diagnostics", group: "Device" },
   { id: "configuration", label: "Configuration", group: "Device" },
-  // Grouped under Services, not Device: a tunnel is how the panel REACHES this
-  // router, alongside RADIUS and SNMP — not a property of the hardware.
-  { id: "tunnel", label: "Tunnel", group: "Services" },
+  { id: "vpn", label: "VPN", group: "Services" },
 ];
 
 const TAB_ICONS: Record<string, (props: React.SVGProps<SVGSVGElement>) => React.ReactNode> = {
@@ -85,7 +83,7 @@ const TAB_ICONS: Record<string, (props: React.SVGProps<SVGSVGElement>) => React.
   audit: Icons.Logs,
   diagnostics: Icons.Support,
   configuration: Icons.Settings,
-  tunnel: Icons.Network,
+  vpn: Icons.Network,
 };
 
 export default function NasDetailPage() {
@@ -158,7 +156,7 @@ function DevicePage() {
 
   // Remember the last tab per device (session storage, never persisted to disk).
   // A `?tab=` in the URL wins — it lets other screens deep-link to a tab
-  // (e.g. the NAS list's "VPN" button jumps straight to the Tunnel tab).
+  // (e.g. the NAS list's "VPN" button jumps straight to this tab).
   React.useEffect(() => {
     let fromUrl: string | null = null;
     try {
@@ -166,12 +164,13 @@ function DevicePage() {
     } catch {
       /* SSR / no window */
     }
-    if (fromUrl && TABS.some((t) => t.id === fromUrl)) {
-      setTab(fromUrl);
+    if (fromUrl && (TABS.some((t) => t.id === fromUrl) || fromUrl === "tunnel")) {
+      setTab(fromUrl === "tunnel" ? "vpn" : fromUrl);
       return;
     }
     const saved = sessionStorage.getItem(`nb-nas-tab-${nasId}`);
-    if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
+    if (saved === "tunnel") setTab("vpn");
+    else if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nasId]);
 
@@ -233,7 +232,7 @@ function DevicePage() {
               <StatusChip
                 level={!tunnel.exists ? "warn" : tunnel.online ? "ok" : "warn"}
                 text={`VPN: ${!tunnel.exists ? "no tunnel" : tunnel.online ? "connected" : tunnel.lastHandshake ? "not responding" : "waiting"}`}
-                detail={!tunnel.exists ? "Configure it on the Tunnel tab" : undefined}
+                detail={!tunnel.exists ? "Configure it on the VPN tab" : undefined}
                 dotPulse={tunnel.exists && tunnel.online}
               />
             )}
@@ -251,7 +250,7 @@ function DevicePage() {
               <button onClick={() => { setMenuOpen(false); void runAllTests(); goTab("diagnostics"); }}>⚡ Run all tests</button>
               <button onClick={() => { setMenuOpen(false); clearTests(); }}>✕ Clear test results</button>
               <div className="nd-menu-sep" />
-              <button onClick={() => { setMenuOpen(false); goTab("tunnel"); }}>🛰️ VPN / tunnel</button>
+              <button onClick={() => { setMenuOpen(false); goTab("vpn"); }}>🛰️ VPN</button>
               <button onClick={() => { setMenuOpen(false); goTab("configuration"); }}>⚙ Edit configuration</button>
               <button className="danger" onClick={() => { setMenuOpen(false); goTab("logs"); }}>📄 Device logs</button>
             </div>
@@ -310,7 +309,7 @@ function DevicePage() {
               </div>
             )}
             {tab === "configuration" && <ConfigTab />}
-            {tab === "tunnel" && <TunnelPanel nasId={nasId} nasName={nas?.shortname || nas?.nasname} />}
+            {tab === "vpn" && <NasVpnPanel nasId={nasId} nasName={nas?.shortname || nas?.nasname} />}
           </Suspense>
         </div>
       </div>

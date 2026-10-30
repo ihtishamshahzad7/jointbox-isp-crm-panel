@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { NasL2tpConfigService } from './nas-l2tp-config.service';
 
 describe('NasL2tpConfigService tenancy', () => {
@@ -37,9 +37,22 @@ describe('NasL2tpConfigService tenancy', () => {
       lastError: null,
     };
     const prisma: any = {
+      activityLog: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       nas: {
         findUnique: jest.fn(async ({ where }: any) =>
-          where.id === 100 ? { id: 100 } : null,
+          where.id === 100
+            ? {
+                id: 100,
+                ownerId: 10,
+                nasname: '10.0.0.42',
+                nasIp: '10.0.0.42',
+                nasIdentifier: 'nas-100',
+                secret: null,
+                radiusSecretEnc: 'enc:central-radius-secret',
+              }
+            : null,
         ),
       },
       nasL2tpConfig: {
@@ -56,10 +69,12 @@ describe('NasL2tpConfigService tenancy', () => {
 
     const scope: any = {
       assertNas: jest.fn(async (actor: any, nasId: number) => {
-        if (actor?.sub !== 10 || nasId !== 100) {
+        if (![10, 30].includes(actor?.sub) || nasId !== 100) {
           throw new NotFoundException(`NAS ${nasId} not found`);
         }
       }),
+      isPlatformOwner: jest.fn((actor: any) => actor?.role === 'SUPER_ADMIN'),
+      actorId: jest.fn((actor: any) => Number(actor?.sub)),
     };
 
     const secrets: any = {
@@ -133,6 +148,66 @@ describe('NasL2tpConfigService tenancy', () => {
     ).resolves.toMatchObject({ nasId: 100 });
     expect(scope.assertNas).toHaveBeenCalledWith(ownerA, 100);
     expect(prisma.nasL2tpConfig.upsert).toHaveBeenCalled();
+  });
+
+  it('returns only public central FreeRADIUS settings for the NAS owner', async () => {
+    const { service, scope } = makeService();
+    await expect(service.getRadiusForNas(100, ownerA)).resolves.toEqual({
+      provider: 'FreeRADIUS',
+      server: process.env.RADIUS_SERVER_IP || '127.0.0.1',
+      authPort: Number(process.env.RADIUS_AUTH_PORT) || 1812,
+      acctPort: Number(process.env.RADIUS_ACCT_PORT) || 1813,
+      nasIdentifier: 'nas-100',
+      sharedSecretConfigured: true,
+      subscriberStore: 'central',
+    });
+    expect(scope.assertNas).toHaveBeenCalledWith(ownerA, 100);
+  });
+
+  it('refuses VPN configuration access to a dealer who can only use a shared NAS', async () => {
+    const { service, prisma, vpn } = makeService();
+    const sharedDealer = { sub: 30, role: 'RESELLER' };
+
+    await expect(service.getForNas(100, sharedDealer)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(
+      service.saveDraft(100, { publicHost: 'vpn.example.com' }, sharedDealer),
+    ).rejects.toThrow(ForbiddenException);
+    expect(prisma.nasL2tpConfig.findUnique).not.toHaveBeenCalled();
+    expect(vpn.validateL2tpConfig).not.toHaveBeenCalled();
+  });
+
+  it('uses the central FreeRADIUS endpoint and existing NAS secret without storing a VPN-specific copy', async () => {
+    const { service, prisma, vpn } = makeService();
+    await service.validateForNas(
+      100,
+      {
+        radiusServer: 'attacker.example',
+        radiusAuthPort: 9,
+        radiusSharedSecret: 'client-supplied-secret',
+      },
+      ownerA,
+    );
+    expect(vpn.validateL2tpConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        radiusServer: process.env.RADIUS_SERVER_IP || '127.0.0.1',
+        radiusAuthPort: Number(process.env.RADIUS_AUTH_PORT) || 1812,
+        radiusAcctPort: Number(process.env.RADIUS_ACCT_PORT) || 1813,
+        nasIdentifier: 'nas-100',
+        radiusSharedSecret: 'central-radius-secret',
+      }),
+    );
+
+    await service.saveDraft(
+      100,
+      { publicHost: 'vpn.example.com', ipsecPsk: 'per-nas-psk' },
+      ownerA,
+    );
+    const create = prisma.nasL2tpConfig.upsert.mock.calls[0][0].create;
+    expect(create.radiusServer).toBe(process.env.RADIUS_SERVER_IP || '127.0.0.1');
+    expect(create).not.toHaveProperty('radiusSharedSecretEnc');
+    expect(create).not.toHaveProperty('radiusSharedSecret');
   });
 
   it('forces draft state regardless of a client-supplied state and only persists schema fields', async () => {

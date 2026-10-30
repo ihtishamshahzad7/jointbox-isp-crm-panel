@@ -1084,7 +1084,7 @@ export default function NasPage() {
                 onEdit={openEdit}
                 onShare={openShare}
                 onCheck={checkNas}
-                onVpn={(nas) => { router.push(`/nas/${nas.id}?tab=tunnel`); }}
+                onVpn={(nas) => { router.push(`/nas/${nas.id}?tab=vpn`); }}
                 onGroup={moveToGroup}
                 onDelete={(nas) => setDeleteConfirm(nas.id)}
                 checkingIds={checkingIds}
