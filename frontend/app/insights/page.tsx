@@ -10,7 +10,8 @@ import Logs from "../logs/page";
  * Looking backwards — trends, printable reports, and the raw record when a
  * number needs explaining.
  *
- * Logs keeps its four investigation tabs in one embedded workspace.
+ * Logs remains available here for existing links; its full five-section
+ * workspace also has a dedicated route in the application navigation.
  */
 export default function Insights() {
   return (
@@ -23,7 +24,7 @@ export default function Insights() {
         {
           id: "logs",
           label: "Logs",
-          hint: "Investigate connections, sessions, authentication, and system changes.",
+          hint: "Review disconnect statistics, Connections, Sessions, AAA, and the Audit Trail.",
           render: () => <Logs embedded />,
         },
       ]}

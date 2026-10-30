@@ -8,6 +8,8 @@ import { TunnelController } from './tunnel.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CommonModule } from '../common/common.module';
 import { RadiusClientVaultService } from './radius-client-vault.service';
+import { NasL2tpConfigController } from './nas-l2tp-config.controller';
+import { NasL2tpConfigService } from './nas-l2tp-config.service';
 
 @Module({
   // CommonModule provides ScopeService for NAS ownership / assignment scoping.
@@ -18,9 +20,10 @@ import { RadiusClientVaultService } from './radius-client-vault.service';
   // findOne(NaN) — a 404 that reads like a missing feature rather than a
   // routing mistake. TunnelController's literal paths go ahead of it, for the
   // same reason NasController's own comment puts 'stats' before ':id'.
-  controllers: [TunnelController, NasController],
+  controllers: [TunnelController, NasController, NasL2tpConfigController],
   providers: [
-    NasService, 
+    NasService,
+    NasL2tpConfigService,
     RadiusSyncService,
     RadiusClientVaultService,
     MikrotikSyncService,

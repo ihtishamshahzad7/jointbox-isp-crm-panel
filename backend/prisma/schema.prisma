@@ -497,6 +497,9 @@ model Nas {
   /// Optional: a router on a public IP does not need one.
   tunnel NasTunnel? @relation("NasTunnel")
 
+  /// L2TP/IPsec configuration and lifecycle for this NAS.
+  l2tpConfig NasL2tpConfig? @relation("NasL2tpConfig")
+
   @@index([nasname])
   @@map("nas")
 }
@@ -560,6 +563,51 @@ model NasTunnel {
   rotatedAt DateTime?
 
   @@index([enabled])
+}
+
+/// Independent L2TP/IPsec configuration per NAS. Secrets are encrypted at rest
+/// before being written to the database; plaintext values are never returned to
+/// the browser or audit logs.
+model NasL2tpConfig {
+  id Int @id @default(autoincrement())
+
+  nasId Int @unique
+  nas   Nas @relation("NasL2tpConfig", fields: [nasId], references: [id], onDelete: Cascade)
+
+  configurationName    String? @db.VarChar(128)
+  publicHost           String? @db.VarChar(255)
+  routerManagementIp   String? @db.VarChar(45)
+  l2tpEnabled          Boolean @default(true)
+  ipsecEnabled         Boolean @default(true)
+  ipsecPskEnc          String? @db.VarChar(512)
+  pppProfile           String? @db.VarChar(64)
+  clientPool           String? @db.VarChar(64)
+  dnsServers           String[] @default([])
+  mtu                  Int?
+  mru                  Int?
+  maxSessions          Int?
+  idleTimeout          Int?
+  sessionTimeout       Int?
+  radiusServer         String? @db.VarChar(255)
+  radiusAuthPort       Int @default(1812)
+  radiusAcctPort       Int @default(1813)
+  nasIdentifier        String? @db.VarChar(128)
+  radiusSourceIp       String? @db.VarChar(45)
+  radiusSharedSecretEnc String? @db.VarChar(512)
+  state                String  @default("draft") @db.VarChar(24)
+  revision             Int     @default(1)
+  lastAppliedAt        DateTime?
+  lastVerifiedAt       DateTime?
+  lastError            String? @db.VarChar(512)
+
+  createdById Int?
+  updatedById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([state])
+  @@index([updatedAt])
+  @@map("nas_l2tp_config")
 }
 
 /// A temporary speed change for a subscriber. Two modes:

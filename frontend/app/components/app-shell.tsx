@@ -77,6 +77,7 @@ const menuGroups = [
     { id: 'network', label: 'Network', href: '/network-center', Icon: navIcons.Network },
     { id: 'monitoring', label: 'Monitoring', href: '/monitoring', Icon: navIcons.Network },
     { id: 'catalog', label: 'Plans & Stock', href: '/service-catalog', Icon: navIcons.Packages },
+    { id: 'logs', label: 'Logs', href: '/logs', Icon: navIcons.Logs },
   ]},
   { label: 'Business', items: [
     // Accounting + Collections + Invoices + Payments + Gateways + Vouchers +
@@ -164,6 +165,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/support-center', 'support'],
   ['/admin-center', 'admin'],
   ['/insights', 'insights'],
+  ['/logs', 'logs'],
 
   ['/trace', 'trace'],
   ['/subscribers', 'subscribers'],
@@ -212,7 +214,6 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/segments', 'insights'],
   ['/analytics', 'insights'],
   ['/reports', 'insights'],
-  ['/logs', 'insights'],
 
   // Administration
   ['/organization', 'admin'],

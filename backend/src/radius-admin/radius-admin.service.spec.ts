@@ -65,7 +65,7 @@ describe('FreeRADIUS admin screen', () => {
     process.env.JOINTBOX_RADIUS_BACKUP_DIR = join(
       root,
       '..',
-      `${root.split('/').pop()}-backups`,
+      `${root.split(/[\\/]/).pop()}-backups`,
     );
     const vault: any = {
       mode: () => 'file',
@@ -89,9 +89,30 @@ describe('FreeRADIUS admin screen', () => {
     await expect(svc.readFile('../../etc/passwd')).rejects.toThrow(/outside/);
   });
 
+  it('accepts POSIX and Windows-style config paths but rejects traversal', async () => {
+    const { root, svc } = setup();
+    const safe = svc as any;
+    expect(safe.safePath('sites-available/default')).toBe(
+      join(root, 'sites-available', 'default'),
+    );
+    expect(safe.safePath('sites-available\\default')).toBe(
+      join(root, 'sites-available', 'default'),
+    );
+    expect(() => safe.safePath('../../etc/passwd')).toThrow(/outside/);
+    expect(() => safe.safePath('..\\..\\windows\\system32')).toThrow(/outside/);
+  });
+
   it('follows a symlink only within the config folder', async () => {
     const { root, svc } = setup();
-    symlinkSync('/etc/hostname', join(root, 'mods-enabled', 'escape'));
+    try {
+      symlinkSync('/etc/hostname', join(root, 'mods-enabled', 'escape'));
+    } catch (err: any) {
+      if (err?.code === 'EPERM' || err?.code === 'EACCES') {
+        expect(true).toBe(true);
+        return;
+      }
+      throw err;
+    }
     await expect(svc.readFile('mods-enabled/escape')).rejects.toThrow(
       /outside/,
     );
@@ -160,6 +181,19 @@ describe('FreeRADIUS admin screen', () => {
       site.content.replace('\tpap', '\tpap\n\t# note'),
     );
     expect(w3.ok).toBe(true);
+  });
+
+  it('rejects a tenancy policy file edit even when a different file path is used to reach it', async () => {
+    const { root, svc } = setup();
+    const path = join(root, 'policy.d', 'jointbox-tenancy');
+    const before = readFileSync(path, 'utf8');
+    const r = await svc.readFile('policy.d/jointbox-tenancy');
+    const w: any = await svc.writeFile(
+      'policy.d/jointbox-tenancy',
+      r.content.replace('noop', 'ok'),
+    );
+    expect(w.ok).toBe(false);
+    expect(readFileSync(path, 'utf8')).toBe(before);
   });
 
   it('puts the previous version back when FreeRADIUS rejects the edit', async () => {

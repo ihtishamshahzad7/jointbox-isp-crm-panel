@@ -5561,6 +5561,21 @@ html .main .recharts-responsive-container { width: 100% !important; }
   .jb-bottomnav.section .jb-bn-scroll button.on { color: #3C50E0; }
   .jb-bottomnav.section .jb-bn-scroll button.on .ico svg { color: #3C50E0; }
 
+  .jb-bottomnav.section.logs .jb-bn-scroll { overflow-x: hidden; }
+  .jb-bottomnav.section.logs .jb-bn-scroll button {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    padding-right: 2px;
+    padding-left: 2px;
+  }
+  .jb-bottomnav.section.logs .jb-bn-scroll button .lbl { font-size: 9px; }
+  .jb-bottomnav.section.logs .jb-bn-scroll button.on {
+    background: rgba(60, 80, 224, .08);
+    border-radius: 9px;
+    font-weight: 800;
+  }
+
   .db-root:has(.jb-bottomnav) .app-shell-page-content {
     padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
   }

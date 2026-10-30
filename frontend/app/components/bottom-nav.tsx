@@ -14,6 +14,8 @@ import { subscribeSection, getSection, type Section } from "./section-nav";
 function tabIcon(id: string, label: string) {
   const key = `${id} ${label}`.toLowerCase();
   if (/dashboard|overview|home/.test(key)) return Icons.Dashboard;
+  if (/session/.test(key)) return Icons.Logs;
+  if (/aaa|authentication|radius/.test(key)) return Icons.Settings;
   if (/subscriber|customer/.test(key)) return Icons.Subscribers;
   if (/invoice/.test(key)) return Icons.Invoices;
   if (/billing|account|payment|wallet|reversal|pricing|earning/.test(key)) return Icons.Payments;
@@ -47,7 +49,7 @@ function BottomNavInner() {
   if (!section || !pathname.startsWith(section.basePath)) return null;
 
   return (
-    <nav className="jb-bottomnav section" aria-label="Section">
+    <nav className={`jb-bottomnav section${section.basePath === "/logs" ? " logs" : ""}`} aria-label="Section">
       <div className="jb-bn-scroll">
         {section.tabs.map((tab) => {
           const Icon = tabIcon(tab.id, tab.label);

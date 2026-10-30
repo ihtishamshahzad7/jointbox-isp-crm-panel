@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { execFile } from 'child_process';
+import * as dns from 'dns';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -38,6 +39,49 @@ export interface VpnConfig {
   sstp: { port: number; subnet: string };
 }
 
+export interface L2tpConfigInput {
+  configurationName?: string;
+  nasName?: string;
+  publicHost?: string;
+  routerManagementIp?: string;
+  l2tpEnabled?: boolean;
+  ipsecEnabled?: boolean;
+  ipsecPsk?: string;
+  pppProfile?: string;
+  clientPool?: string;
+  dnsServers?: string[];
+  mtu?: number;
+  mru?: number;
+  maxSessions?: number;
+  idleTimeout?: number;
+  sessionTimeout?: number;
+  radiusServer?: string;
+  radiusAuthPort?: number;
+  radiusAcctPort?: number;
+  nasIdentifier?: string;
+  radiusSourceIp?: string;
+  radiusSharedSecret?: string;
+}
+
+export interface L2tpConfigPreview {
+  valid: boolean;
+  warnings: string[];
+  errors: string[];
+  masked: {
+    configurationName?: string;
+    nasName?: string;
+    publicHost?: string;
+    routerManagementIp?: string;
+    ipsecPsk?: string;
+    radiusSharedSecret?: string;
+    radiusServer?: string;
+    radiusSourceIp?: string;
+    pppProfile?: string;
+    clientPool?: string;
+  };
+  preview: string;
+}
+
 const DEFAULTS: VpnConfig = {
   endpointHost: '',
   wireguard: { port: 51820, subnet: '10.66.0.0/24' },
@@ -52,7 +96,9 @@ export class VpnService {
   private readonly logger = new Logger(VpnService.name);
 
   private get configPath(): string {
-    return process.env.JBX_VPN_CONFIG || path.join(process.cwd(), 'vpn-servers.json');
+    return (
+      process.env.JBX_VPN_CONFIG || path.join(process.cwd(), 'vpn-servers.json')
+    );
   }
 
   // ── stored, editable config (no DB migration needed) ──────────────────
@@ -60,7 +106,8 @@ export class VpnService {
     try {
       const raw = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
       return {
-        endpointHost: typeof raw.endpointHost === 'string' ? raw.endpointHost : '',
+        endpointHost:
+          typeof raw.endpointHost === 'string' ? raw.endpointHost : '',
         wireguard: { ...DEFAULTS.wireguard, ...(raw.wireguard || {}) },
         openvpn: { ...DEFAULTS.openvpn, ...(raw.openvpn || {}) },
         l2tp: { ...DEFAULTS.l2tp, ...(raw.l2tp || {}) },
@@ -81,13 +128,17 @@ export class VpnService {
   }
 
   private save(cfg: VpnConfig): void {
-    fs.writeFileSync(this.configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    fs.writeFileSync(this.configPath, JSON.stringify(cfg, null, 2), {
+      mode: 0o600,
+    });
   }
 
   private port(n: unknown, what: string): number {
     const p = Number(n);
     if (!Number.isInteger(p) || p < 1 || p > 65535) {
-      throw new BadRequestException(`${what} must be a port between 1 and 65535.`);
+      throw new BadRequestException(
+        `${what} must be a port between 1 and 65535.`,
+      );
     }
     return p;
   }
@@ -95,8 +146,15 @@ export class VpnService {
   private cidr(v: unknown, what: string): string {
     const s = String(v || '');
     const m = CIDR.exec(s);
-    if (!m || m.slice(1, 5).some((o) => Number(o) > 255) || Number(m[5]) < 16 || Number(m[5]) > 30) {
-      throw new BadRequestException(`${what} must be a CIDR between /16 and /30, e.g. 10.66.0.0/24.`);
+    if (
+      !m ||
+      m.slice(1, 5).some((o) => Number(o) > 255) ||
+      Number(m[5]) < 16 ||
+      Number(m[5]) > 30
+    ) {
+      throw new BadRequestException(
+        `${what} must be a CIDR between /16 and /30, e.g. 10.66.0.0/24.`,
+      );
     }
     return s;
   }
@@ -107,27 +165,37 @@ export class VpnService {
     if (body.endpointHost !== undefined) {
       const h = String(body.endpointHost || '').trim();
       if (h && !HOST.test(h)) {
-        throw new BadRequestException('Endpoint host must be a hostname or IP, e.g. vpn.yourdomain.com.');
+        throw new BadRequestException(
+          'Endpoint host must be a hostname or IP, e.g. vpn.yourdomain.com.',
+        );
       }
       cfg.endpointHost = h;
     }
     const wg = body.wireguard as Record<string, unknown> | undefined;
     if (wg) {
-      if (wg.port !== undefined) cfg.wireguard.port = this.port(wg.port, 'WireGuard port');
-      if (wg.subnet !== undefined) cfg.wireguard.subnet = this.cidr(wg.subnet, 'WireGuard subnet');
+      if (wg.port !== undefined)
+        cfg.wireguard.port = this.port(wg.port, 'WireGuard port');
+      if (wg.subnet !== undefined)
+        cfg.wireguard.subnet = this.cidr(wg.subnet, 'WireGuard subnet');
     }
     const ov = body.openvpn as Record<string, unknown> | undefined;
     if (ov) {
-      if (ov.port !== undefined) cfg.openvpn.port = this.port(ov.port, 'OpenVPN port');
-      if (ov.proto !== undefined) cfg.openvpn.proto = ov.proto === 'tcp' ? 'tcp' : 'udp';
-      if (ov.subnet !== undefined) cfg.openvpn.subnet = this.cidr(ov.subnet, 'OpenVPN subnet');
+      if (ov.port !== undefined)
+        cfg.openvpn.port = this.port(ov.port, 'OpenVPN port');
+      if (ov.proto !== undefined)
+        cfg.openvpn.proto = ov.proto === 'tcp' ? 'tcp' : 'udp';
+      if (ov.subnet !== undefined)
+        cfg.openvpn.subnet = this.cidr(ov.subnet, 'OpenVPN subnet');
     }
     const l2 = body.l2tp as Record<string, unknown> | undefined;
-    if (l2 && l2.subnet !== undefined) cfg.l2tp.subnet = this.cidr(l2.subnet, 'L2TP subnet');
+    if (l2 && l2.subnet !== undefined)
+      cfg.l2tp.subnet = this.cidr(l2.subnet, 'L2TP subnet');
     const ss = body.sstp as Record<string, unknown> | undefined;
     if (ss) {
-      if (ss.port !== undefined) cfg.sstp.port = this.port(ss.port, 'SSTP port');
-      if (ss.subnet !== undefined) cfg.sstp.subnet = this.cidr(ss.subnet, 'SSTP subnet');
+      if (ss.port !== undefined)
+        cfg.sstp.port = this.port(ss.port, 'SSTP port');
+      if (ss.subnet !== undefined)
+        cfg.sstp.subnet = this.cidr(ss.subnet, 'SSTP subnet');
     }
     this.save(cfg);
     this.logger.log('VPN server config updated');
@@ -137,8 +205,11 @@ export class VpnService {
   // ── host probes (best effort; never throw) ────────────────────────────
   private run(cmd: string, args: string[]): Promise<string | null> {
     return new Promise((resolve) => {
-      execFile(cmd, args, { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, out) =>
-        resolve(err ? null : out || ''),
+      execFile(
+        cmd,
+        args,
+        { timeout: 5000, maxBuffer: 1024 * 1024 },
+        (err, out) => resolve(err ? null : out || ''),
       );
     });
   }
@@ -158,7 +229,10 @@ export class VpnService {
     return k && WG_KEY.test(k) ? k : null;
   }
 
-  private async portListening(port: number, proto: 'tcp' | 'udp'): Promise<boolean> {
+  private async portListening(
+    port: number,
+    proto: 'tcp' | 'udp',
+  ): Promise<boolean> {
     // `ss -H -lun`/`-ltn` lists listening sockets; grep the port. Best effort.
     const flag = proto === 'udp' ? '-lun' : '-ltn';
     const out = await this.run('ss', ['-H', flag]);
@@ -184,7 +258,8 @@ export class VpnService {
         {
           type: 'wireguard' as VpnType,
           name: 'WireGuard',
-          blurb: 'Fast, modern, lowest overhead. Best default for CGNAT routers.',
+          blurb:
+            'Fast, modern, lowest overhead. Best default for CGNAT routers.',
           running: !!wgKey,
           listenPort: cfg.wireguard.port,
           subnet: cfg.wireguard.subnet,
@@ -197,7 +272,8 @@ export class VpnService {
         {
           type: 'openvpn' as VpnType,
           name: 'OpenVPN',
-          blurb: 'Widely compatible, works over TCP/UDP through most firewalls.',
+          blurb:
+            'Widely compatible, works over TCP/UDP through most firewalls.',
           running: ovUp,
           listenPort: cfg.openvpn.port,
           proto: cfg.openvpn.proto,
@@ -210,7 +286,8 @@ export class VpnService {
         {
           type: 'l2tp' as VpnType,
           name: 'L2TP / IPsec',
-          blurb: 'Native and easy on MikroTik. Uses a shared secret plus a login.',
+          blurb:
+            'Native and easy on MikroTik. Uses a shared secret plus a login.',
           running: l2Up,
           subnet: cfg.l2tp.subnet,
           serverIp: this.firstHostIp(cfg.l2tp.subnet),
@@ -221,7 +298,8 @@ export class VpnService {
         {
           type: 'sstp' as VpnType,
           name: 'SSTP',
-          blurb: 'TLS over TCP 443 — gets through almost any firewall or proxy. Needs a server certificate.',
+          blurb:
+            'TLS over TCP 443 — gets through almost any firewall or proxy. Needs a server certificate.',
           running: ssUp,
           listenPort: cfg.sstp.port,
           subnet: cfg.sstp.subnet,
@@ -423,7 +501,9 @@ export class VpnService {
         'EOF',
         'systemctl enable --now accel-ppp 2>/dev/null || true',
         `ufw allow ${cfg.sstp.port}/tcp 2>/dev/null || true`,
-        'echo "SSTP up on TCP ' + cfg.sstp.port + ' (TLS). Add a login per router in"',
+        'echo "SSTP up on TCP ' +
+          cfg.sstp.port +
+          ' (TLS). Add a login per router in"',
         'echo "  /etc/ppp/chap-secrets:  <routername> * <password> *"',
         'echo "The router must trust the server certificate (public CA = automatic)."',
       ].join('\n') +
@@ -434,23 +514,26 @@ export class VpnService {
   private sstpMikrotik(cfg: VpnConfig): string {
     const host = cfg.endpointHost || '<panel-host>';
     return [
-      '# RouterOS 7 — SSTP client to the panel (TLS on TCP ' + cfg.sstp.port + ').',
+      '# RouterOS 7 — SSTP client to the panel (TLS on TCP ' +
+        cfg.sstp.port +
+        ').',
       '# The panel needs a server certificate whose name matches ' + host + '.',
       '# Public cert → default verify works. Private CA → import it first:',
       '#   /certificate import file-name=panel-ca.crt',
       '/interface/sstp-client',
       `add name=jointbox-sstp connect-to=${host} http-port=${cfg.sstp.port} \\`,
       '    user=<routername> password=<password> profile=default-encryption \\',
-      '    add-default-route=no verify-server-certificate=no \\',
+      '    add-default-route=no verify-server-certificate=yes \\',
       '    comment="Jointbox management tunnel"',
-      '# Set verify-server-certificate=yes (and certificate=<ca>) once trusted.',
+      '# If the panel uses a private CA, import the CA and set certificate=<ca> before connecting.',
     ].join('\n');
   }
 
   private maskFor(cidr: string): string {
     const bits = Number(cidr.split('/')[1]);
     const m = [0, 0, 0, 0];
-    for (let i = 0; i < 32; i++) if (i < bits) m[Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+    for (let i = 0; i < 32; i++)
+      if (i < bits) m[Math.floor(i / 8)] |= 1 << (7 - (i % 8));
     return m.join('.');
   }
 
@@ -461,7 +544,12 @@ export class VpnService {
    * the operator still applies it on the device (we never push blindly to
    * third-party gear). WireGuard is the fast, low-overhead default.
    */
-  clientConfig(type: VpnType, vendor: string, name: string, overlayIp: string): string {
+  clientConfig(
+    type: VpnType,
+    vendor: string,
+    name: string,
+    overlayIp: string,
+  ): string {
     const nm = /^[A-Za-z0-9_-]{1,32}$/.test(name) ? name : 'router';
     const ip = this.assertIpStr(overlayIp);
     const cfg = this.getConfig();
@@ -474,7 +562,12 @@ export class VpnService {
     return this.l2tpClient(v, nm, host);
   }
 
-  private sstpClient(vendor: string, nm: string, host: string, cfg: VpnConfig): string {
+  private sstpClient(
+    vendor: string,
+    nm: string,
+    host: string,
+    cfg: VpnConfig,
+  ): string {
     const port = cfg.sstp.port;
     switch (vendor) {
       case 'linux':
@@ -500,22 +593,30 @@ export class VpnService {
           '/interface/sstp-client',
           `add name=jointbox-sstp connect-to=${host} http-port=${port} user=${nm} password=<password> \\`,
           '    profile=default-encryption add-default-route=no \\',
-          '    verify-server-certificate=no \\',
+          '    verify-server-certificate=yes \\',
           '    comment="Jointbox management tunnel"',
-          '# Tighten verify-server-certificate=yes once the panel cert is trusted on the router.',
+          '# If the panel uses a private CA, import the CA and set certificate=<ca> before connecting.',
         ].join('\n');
     }
   }
 
   private assertIpStr(ip: string): string {
-    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || ''));
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(
+      String(ip || ''),
+    );
     if (!m || m.slice(1).some((o) => Number(o) > 255)) {
       throw new BadRequestException(`"${ip}" is not a valid overlay IP.`);
     }
     return ip;
   }
 
-  private wgClient(vendor: string, nm: string, ip: string, host: string, cfg: VpnConfig): string {
+  private wgClient(
+    vendor: string,
+    nm: string,
+    ip: string,
+    host: string,
+    cfg: VpnConfig,
+  ): string {
     const port = cfg.wireguard.port;
     const mask = cfg.wireguard.subnet.split('/')[1];
     const panelIp = this.firstHostIp(cfg.wireguard.subnet);
@@ -566,7 +667,12 @@ export class VpnService {
     }
   }
 
-  private ovpnClient(vendor: string, nm: string, host: string, cfg: VpnConfig): string {
+  private ovpnClient(
+    vendor: string,
+    nm: string,
+    host: string,
+    cfg: VpnConfig,
+  ): string {
     const port = cfg.openvpn.port;
     const proto = cfg.openvpn.proto;
     switch (vendor) {
@@ -642,5 +748,132 @@ export class VpnService {
     const s = o.servers.find((x) => x.type === type);
     if (!s) throw new BadRequestException('Unknown VPN type.');
     return { script: s.install, mikrotik: s.mikrotik };
+  }
+
+  validateL2tpConfig(input: L2tpConfigInput): L2tpConfigPreview {
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const clean = (s?: string) => (typeof s === 'string' ? s.trim() : '');
+
+    const configurationName = clean(input.configurationName) || 'uplinko-l2tp';
+    const nasName = clean(input.nasName) || 'NAS';
+    const publicHost = clean(input.publicHost) || '';
+    const routerManagementIp = clean(input.routerManagementIp) || '';
+    const ipsecPsk = clean(input.ipsecPsk) || '';
+    const radiusSharedSecret = clean(input.radiusSharedSecret) || '';
+    const radiusServer = clean(input.radiusServer) || '';
+    const radiusSourceIp = clean(input.radiusSourceIp) || '';
+    const pppProfile = clean(input.pppProfile) || 'uplinko-vpn';
+    const clientPool = clean(input.clientPool) || 'uplinko-vpn';
+    const safeName = /^[A-Za-z0-9_. -]{1,128}$/;
+    const safeIdentifier = /^[A-Za-z0-9_.-]{1,64}$/;
+
+    if (!publicHost) errors.push('Public VPN hostname or IP is required.');
+    if (!routerManagementIp)
+      errors.push('Router management address is required.');
+    if (!input.l2tpEnabled && !input.ipsecEnabled)
+      errors.push('At least one of L2TP or IPsec must be enabled.');
+    if (!ipsecPsk) errors.push('IPsec PSK is required and must not be empty.');
+    if (!radiusServer) errors.push('RADIUS server hostname or IP is required.');
+    if (!radiusSharedSecret) errors.push('RADIUS shared secret is required.');
+
+    if (configurationName && !safeName.test(configurationName))
+      errors.push(
+        'Configuration name may contain only letters, numbers, spaces, dots, underscores, and hyphens.',
+      );
+    if (nasName && !safeName.test(nasName))
+      errors.push(
+        'NAS name may contain only letters, numbers, spaces, dots, underscores, and hyphens.',
+      );
+    if (publicHost && !this.isHostnameOrIp(publicHost))
+      errors.push('Public VPN host must be a valid hostname or IPv4 address.');
+    if (routerManagementIp && !this.isIpv4(routerManagementIp))
+      errors.push('Router management address must be an IPv4 address.');
+    if (radiusServer && !this.isHostnameOrIp(radiusServer))
+      errors.push('RADIUS server must be a valid hostname or IPv4 address.');
+    if (radiusSourceIp && !this.isIpv4(radiusSourceIp))
+      errors.push('RADIUS source IP must be a valid IPv4 address.');
+    if (!safeIdentifier.test(pppProfile))
+      errors.push(
+        'PPP profile may contain only letters, numbers, dots, underscores, and hyphens.',
+      );
+    if (!safeIdentifier.test(clientPool))
+      errors.push(
+        'Client pool may contain only letters, numbers, dots, underscores, and hyphens.',
+      );
+    if (input.maxSessions && input.maxSessions > 5000)
+      warnings.push(
+        'High session maximum may be incompatible with the router profile.',
+      );
+
+    const previewConfigurationName = safeName.test(configurationName)
+      ? configurationName
+      : 'uplinko-l2tp';
+    const previewNasName = safeName.test(nasName) ? nasName : 'NAS';
+    const previewPublicHost = this.isHostnameOrIp(publicHost)
+      ? publicHost
+      : '<invalid>';
+    const previewManagementIp = this.isIpv4(routerManagementIp)
+      ? routerManagementIp
+      : '<invalid>';
+    const previewPppProfile = safeIdentifier.test(pppProfile)
+      ? pppProfile
+      : 'uplinko-vpn';
+    const previewClientPool = safeIdentifier.test(clientPool)
+      ? clientPool
+      : 'uplinko-vpn';
+    const preview = [
+      '# Uplinko L2TP/IPsec preview',
+      `# NAS: ${previewNasName}`,
+      `# Configuration: ${previewConfigurationName}`,
+      `# Public endpoint: ${previewPublicHost}`,
+      `# Router management IP: ${previewManagementIp}`,
+      '# Keep the RADIUS and IPsec secrets masked in logs, UI, and previews.',
+      '/interface l2tp-server server set enabled=' +
+        (input.l2tpEnabled === false ? 'no' : 'yes'),
+      '/ip ipsec peer add address=' + previewPublicHost + ' secret=<masked>',
+      '/ppp profile add name=' + previewPppProfile + ' use-encryption=yes',
+      '/ip pool add name=' +
+        previewClientPool +
+        ' ranges=10.68.0.10-10.68.0.200',
+      '## RADIUS settings remain in the existing NAS + FreeRADIUS integration layer.',
+    ].join('\n');
+
+    return {
+      valid: errors.length === 0,
+      warnings,
+      errors,
+      masked: {
+        configurationName,
+        nasName,
+        publicHost,
+        routerManagementIp,
+        ipsecPsk: ipsecPsk ? '********' : '',
+        radiusSharedSecret: radiusSharedSecret ? '********' : '',
+        radiusServer,
+        radiusSourceIp,
+        pppProfile,
+        clientPool,
+      },
+      preview,
+    };
+  }
+
+  private isHostnameOrIp(value: string): boolean {
+    const host = value.trim();
+    if (!host) return false;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host))
+      return host.split('.').every((n) => Number(n) >= 0 && Number(n) <= 255);
+    return /^[A-Za-z0-9.-]{1,253}$/.test(host);
+  }
+
+  private isIpv4(value: string): boolean {
+    const host = value.trim();
+    if (!host) return false;
+    const parts = host.split('.');
+    if (parts.length !== 4) return false;
+    return parts.every(
+      (p) => /^\d+$/.test(p) && Number(p) >= 0 && Number(p) <= 255,
+    );
   }
 }

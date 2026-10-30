@@ -48,8 +48,39 @@ export function run(
   });
 }
 
+function shellForCommand(command: string): { cmd: string; args: string[] } {
+  const candidates: Array<{ cmd: string; args: string[] }> = [];
+
+  if (process.platform === 'win32') {
+    const bashCandidates = [
+      process.env.SHELL,
+      process.env.BASH,
+      'C:/Program Files/Git/bin/bash.exe',
+      'C:/Program Files/Git/usr/bin/bash.exe',
+      'C:/Program Files/Git/bin/sh.exe',
+    ].filter(Boolean) as string[];
+    for (const c of bashCandidates) {
+      if (existsSync(c)) {
+        candidates.push({ cmd: c, args: ['-lc', command] });
+        break;
+      }
+    }
+    if (!candidates.length) {
+      const cmd = process.env.ComSpec || 'C:/Windows/System32/cmd.exe';
+      candidates.push({ cmd, args: ['/d', '/s', '/c', command] });
+    }
+    return candidates[0];
+  }
+
+  if (existsSync('/bin/bash')) {
+    return { cmd: '/bin/bash', args: ['-lc', command] };
+  }
+  return { cmd: '/bin/sh', args: ['-c', command] };
+}
+
 export function runShell(cmd: string, timeoutMs = 30_000): Promise<RunResult> {
-  return run('/bin/sh', ['-c', cmd], timeoutMs);
+  const shell = shellForCommand(cmd);
+  return run(shell.cmd, shell.args, timeoutMs);
 }
 
 function readText(p: string): string | null {

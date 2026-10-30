@@ -54,15 +54,21 @@ export class RadiusAdminService {
   /** Reject anything outside the FreeRADIUS config tree (path-traversal safe). */
   private safePath(rel: string): string {
     // Plain file names only — no quotes, spaces or shell metacharacters.
-    if (!/^[A-Za-z0-9._\/-]+$/.test(String(rel || ''))) {
+    // Allow both POSIX and Windows separators because this service runs in a
+    // mixed Windows/Linux environment and path validation must stay consistent.
+    const raw = String(rel || '');
+    if (!/^[A-Za-z0-9._\\/-]+$/.test(raw)) {
       throw new BadRequestException('That is not a valid FreeRADIUS config path.');
     }
     const RAD = this.RAD;
-    const abs = path.resolve(RAD, rel.replace(/^\/+/, ''));
-    if (abs !== RAD && !abs.startsWith(RAD + path.sep)) {
+    const cleanRel = raw.replace(/^[/\\]+/, '');
+    const abs = path.resolve(RAD, cleanRel);
+    const rootNorm = RAD.replace(/[\\/]+$/, '');
+    const absNorm = abs.replace(/[\\/]+$/, '');
+    if (absNorm !== rootNorm && !absNorm.startsWith(rootNorm + path.sep)) {
       throw new BadRequestException('Path is outside the FreeRADIUS config directory.');
     }
-    const inside = path.relative(RAD, abs);
+    const inside = path.relative(RAD, abs).replace(/\\/g, '/');
     if (/^clients\.d(\/|$)/.test(inside)) {
       throw new BadRequestException(
         'clients.d/ holds the router list the panel generates from the encrypted vault — change routers on the NAS page instead.',
@@ -206,11 +212,21 @@ export class RadiusAdminService {
       const before = await fs.readlink(link).catch(() => null);
       const wasFile = before == null && (await fs.lstat(link).then(() => true).catch(() => false));
       if (wasFile) throw new BadRequestException(`mods-enabled/${name} is a regular file, not a link — edit it on the server.`);
-      if (enable) {
-        await fs.unlink(link).catch(() => undefined);
-        await fs.symlink(`../mods-available/${name}`, link);
-      } else {
-        await fs.unlink(link).catch(() => undefined);
+      try {
+        if (enable) {
+          await fs.unlink(link).catch(() => undefined);
+          await fs.symlink(`../mods-available/${name}`, link);
+        } else {
+          await fs.unlink(link).catch(() => undefined);
+        }
+      } catch (err: any) {
+        const code = err?.code;
+        if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP' || code === 'EINVAL') {
+          await fs.unlink(link).catch(() => undefined);
+          if (before != null) await fs.symlink(before, link).catch(() => undefined);
+          return { name, enabled: !enable, configOk: false, reverted: true, check: `Symlink creation is not supported on this host for mods-enabled/${name}.` };
+        }
+        throw err;
       }
       const check = await host.validateConfig();
       if (!check.ok) {
@@ -265,7 +281,9 @@ export class RadiusAdminService {
     if (typeof content !== 'string' || content.length > 2 * 1024 * 1024) {
       throw new BadRequestException('File content is missing or too large.');
     }
-    const relFromRad = path.relative(await fs.realpath(this.RAD).catch(() => this.RAD), abs);
+    const relFromRad = path
+      .relative(await fs.realpath(this.RAD).catch(() => this.RAD), abs)
+      .replace(/\\/g, '/');
     const modeBefore = this.vault.refreshMode();
     return host.withHostLock(async () => {
       const current = await fs.readFile(abs, 'utf8').catch(() => null);

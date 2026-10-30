@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Param, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
-import { VpnService, VpnType } from './vpn.service';
+import { L2tpConfigInput, VpnService, VpnType } from './vpn.service';
 
 /**
  * Panel VPN servers. Platform owner only: a VPN server is standing inbound
@@ -33,6 +33,12 @@ export class VpnController {
   install(@Param('type') type: string, @Req() req: any) {
     this.scope.assertPlatformOwner(req.user);
     return this.vpn.install(type as VpnType);
+  }
+
+  @Post('l2tp/preview')
+  validateL2tp(@Body() body: L2tpConfigInput, @Req() req: any) {
+    this.scope.assertPlatformOwner(req.user);
+    return this.vpn.validateL2tpConfig(body);
   }
 
   /**
