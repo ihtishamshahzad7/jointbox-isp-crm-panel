@@ -1,0 +1,1954 @@
+diff --git a/backend/.env.example b/backend/.env.example
+index 0397912..5975017 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -13,9 +13,19 @@ RADIUS_SERVER_IP="localhost"
+ RADIUS_AUTH_PORT=1812
+ RADIUS_ACCT_PORT=1813
+ 
+-# Admin credentials — must match prisma/seed.ts
++# First-boot admin credentials. Set your OWN strong passwords here — never
++# "admin123" (a value equal to a known default is treated as unset). The
++# backend REQUIRES ADMIN_PASSWORD to be set and refuses to start without it.
++# PLATFORM_ADMIN_PASSWORD is optional: if unset, a random one-time password is
++# generated at first boot and written to the bootstrap credentials file
++# (UPLINKO_STATE_DIR, default /var/lib/jointbox, mode 0600). Either way both
++# accounts must change their password at the first sign-in.
+ ADMIN_EMAIL=admin@jointbox.com
+-ADMIN_PASSWORD=admin123
++ADMIN_PASSWORD=change-me-to-a-strong-password
++PLATFORM_ADMIN_EMAIL=superadmin@jointbox.com
++PLATFORM_ADMIN_PASSWORD=
++# Where generated first-boot secrets are stored (0600). Optional.
++# UPLINKO_STATE_DIR=/var/lib/jointbox
+ 
+ # JWT Secret - MUST be the same in auth.module.ts and jwt.strategy.ts
+ JWT_SECRET=jb-prod-jwt-secret-20260724-a1b2c3d4e5f6g7h8
+diff --git a/backend/prisma/migrations/20261101120000_ledger_idempotency_key/migration.sql b/backend/prisma/migrations/20261101120000_ledger_idempotency_key/migration.sql
+new file mode 100644
+index 0000000..e4bd426
+--- /dev/null
++++ b/backend/prisma/migrations/20261101120000_ledger_idempotency_key/migration.sql
+@@ -0,0 +1,15 @@
++-- D2 idempotency: exactly-once financial operations.
++-- Safe on existing data: the column is NEW and NULL for every existing row, and
++-- the unique index is PARTIAL (only indexes non-NULL keys), so it cannot clash
++-- with any historical row. Additive and reversible.
++
++ALTER TABLE "subscriber_balance_ledger"
++  ADD COLUMN IF NOT EXISTS "idempotencyKey" VARCHAR(120);
++
++CREATE UNIQUE INDEX IF NOT EXISTS "subscriber_balance_ledger_idempotencyKey_key"
++  ON "subscriber_balance_ledger" ("idempotencyKey")
++  WHERE "idempotencyKey" IS NOT NULL;
++
++-- Rollback:
++--   DROP INDEX IF EXISTS "subscriber_balance_ledger_idempotencyKey_key";
++--   ALTER TABLE "subscriber_balance_ledger" DROP COLUMN IF EXISTS "idempotencyKey";
+diff --git a/backend/src/auth/auth-lockout.spec.ts b/backend/src/auth/auth-lockout.spec.ts
+new file mode 100644
+index 0000000..d03a980
+--- /dev/null
++++ b/backend/src/auth/auth-lockout.spec.ts
+@@ -0,0 +1,171 @@
++/**
++ * S1 — distributed login lockout (service-level).
++ *
++ * Proves the brute-force protection is backed by SHARED atomic counters, not a
++ * per-process map: two AuthService instances sharing one fake Redis lock each
++ * other out; an attacker who rotates the source IP still hits the per-account
++ * ceiling; an attacker who sprays many invented emails from one IP hits the
++ * per-IP ceiling; a success clears the counters; the window expires on its own;
++ * and when Redis is required but down, login fails closed instead of silently
++ * dropping protection.
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { UnauthorizedException, ServiceUnavailableException } from '@nestjs/common';
++import { AuthService } from './auth.service';
++
++/** A fake Redis shared by several AuthService instances. INCR/EXPIRE/TTL/GET/DEL. */
++function makeSharedRedis() {
++  const store = new Map<string, { n: number; expiresAt: number }>();
++  let ready = true;
++  const live = (k: string) => {
++    const e = store.get(k);
++    if (!e) return null;
++    if (e.expiresAt <= Date.now()) { store.delete(k); return null; }
++    return e;
++  };
++  const cache: any = {
++    isRedisReady: () => ready,
++    async incr(key: string, ttlSeconds: number) {
++      if (!ready) return null;
++      const e = live(key) ?? { n: 0, expiresAt: Date.now() + ttlSeconds * 1000 };
++      e.n += 1;
++      store.set(key, e);
++      return e.n;
++    },
++    async getCount(key: string) {
++      if (!ready) return null;
++      return live(key)?.n ?? 0;
++    },
++    async ttlSeconds(key: string) {
++      if (!ready) return null;
++      const e = live(key);
++      return e ? Math.ceil((e.expiresAt - Date.now()) / 1000) : -2;
++    },
++    async del(...keys: string[]) {
++      for (const k of keys) store.delete(k);
++    },
++  };
++  return {
++    cache,
++    store,
++    setReady: (v: boolean) => { ready = v; },
++    // Advance all TTLs as though `ms` elapsed.
++    advance: (ms: number) => { for (const e of store.values()) e.expiresAt -= ms; },
++  };
++}
++
++function svc(cache: any) {
++  // Only the lockout path is exercised; other deps are never touched by it.
++  return new AuthService({} as any, {} as any, {} as any, {} as any, {} as any, cache as any);
++}
++
++async function expectLocked(fn: () => Promise<any>) {
++  await expect(fn()).rejects.toBeInstanceOf(UnauthorizedException);
++}
++
++const OLD_ENV = process.env;
++beforeEach(() => { process.env = { ...OLD_ENV }; });
++afterAll(() => { process.env = OLD_ENV; });
++
++describe('AuthService distributed lockout (S1)', () => {
++  it('shares the counter across instances: fails on A lock the account on B', async () => {
++    const r = makeSharedRedis();
++    const a: any = svc(r.cache);
++    const b: any = svc(r.cache);
++    // 8 email+IP fails spread across two instances.
++    for (let i = 0; i < 4; i++) await a.registerFail('u@x.io', '1.1.1.1');
++    for (let i = 0; i < 4; i++) await b.registerFail('u@x.io', '1.1.1.1');
++    // Instance B — which only saw half the attempts — must now lock out.
++    await expectLocked(() => b.assertNotLocked('u@x.io', '1.1.1.1'));
++    // And so must A.
++    await expectLocked(() => a.assertNotLocked('u@x.io', '1.1.1.1'));
++  });
++
++  it('caps per-account guesses even when the source IP keeps changing', async () => {
++    const r = makeSharedRedis();
++    const s: any = svc(r.cache);
++    // 24 fails, each from a different address: under the per-IP and per-pair
++    // limits individually, but they all roll up to the one account counter.
++    for (let i = 0; i < 24; i++) await s.registerFail('victim@x.io', `10.0.0.${i}`);
++    // 25th different-IP attempt is still allowed (ceiling is 25)...
++    await s.assertNotLocked('victim@x.io', '10.0.0.200');
++    await s.registerFail('victim@x.io', '10.0.0.200');
++    // ...now the account is locked from a brand-new address.
++    await expectLocked(() => s.assertNotLocked('victim@x.io', '10.0.0.201'));
++  });
++
++  it('caps email-spraying: many invented emails from one IP', async () => {
++    const r = makeSharedRedis();
++    const s: any = svc(r.cache);
++    // 50 fails, each a different (non-existent) email, all from one address.
++    for (let i = 0; i < 50; i++) await s.registerFail(`ghost${i}@x.io`, '9.9.9.9');
++    // A 51st email from that IP is refused before the password is ever checked.
++    await expectLocked(() => s.assertNotLocked('ghost-new@x.io', '9.9.9.9'));
++    // A different IP is unaffected.
++    await s.assertNotLocked('ghost-new@x.io', '8.8.8.8');
++  });
++
++  it('clears the counters after a successful login', async () => {
++    const r = makeSharedRedis();
++    const s: any = svc(r.cache);
++    for (let i = 0; i < 7; i++) await s.registerFail('u@x.io', '1.1.1.1');
++    await s.clearFails('u@x.io', '1.1.1.1');
++    // Back to a clean slate: 7 more fails are needed again, not 1.
++    for (let i = 0; i < 7; i++) await s.registerFail('u@x.io', '1.1.1.1');
++    await s.assertNotLocked('u@x.io', '1.1.1.1'); // still under the limit of 8
++  });
++
++  it('lifts the lock once the window expires', async () => {
++    const r = makeSharedRedis();
++    const s: any = svc(r.cache);
++    for (let i = 0; i < 8; i++) await s.registerFail('u@x.io', '1.1.1.1');
++    await expectLocked(() => s.assertNotLocked('u@x.io', '1.1.1.1'));
++    r.advance(16 * 60_000); // 16 min later — past the 15-min window
++    await s.assertNotLocked('u@x.io', '1.1.1.1'); // allowed again
++  });
++
++  it('fails CLOSED when Redis is required but unreachable', async () => {
++    process.env.REDIS_REQUIRED = 'true';
++    const r = makeSharedRedis();
++    r.setReady(false); // Redis down
++    const s: any = svc(r.cache);
++    await expect(s.assertNotLocked('u@x.io', '1.1.1.1')).rejects.toBeInstanceOf(ServiceUnavailableException);
++  });
++
++  it('falls back to a local counter on a single-instance install (Redis not required)', async () => {
++    process.env.REDIS_REQUIRED = 'false';
++    const r = makeSharedRedis();
++    r.setReady(false); // no Redis at all
++    const s: any = svc(r.cache);
++    for (let i = 0; i < 8; i++) await s.registerFail('u@x.io', '1.1.1.1');
++    await expectLocked(() => s.assertNotLocked('u@x.io', '1.1.1.1'));
++  });
++
++  it('has no attacker-triggered global reset: unrelated traffic never frees a lock', async () => {
++    process.env.REDIS_REQUIRED = 'false';
++    const r = makeSharedRedis();
++    r.setReady(false); // in-memory path
++    const s: any = svc(r.cache);
++    // Lock a victim first.
++    for (let i = 0; i < 8; i++) await s.registerFail('victim@x.io', '1.1.1.1');
++    await expectLocked(() => s.assertNotLocked('victim@x.io', '1.1.1.1'));
++    // Unrelated attempts from other emails/IPs (the old code did a blanket
++    // .clear() on size overflow, which would have wiped the victim's lock).
++    for (let i = 0; i < 500; i++) await s.registerFail(`flood${i}@x.io`, `2.2.0.${i & 255}`);
++    // The victim is STILL locked — pruneMemory only evicts EXPIRED entries.
++    await expectLocked(() => s.assertNotLocked('victim@x.io', '1.1.1.1'));
++  });
++
++  it('pruneMemory evicts only expired entries, never an active lock', async () => {
++    process.env.REDIS_REQUIRED = 'false';
++    const r = makeSharedRedis();
++    r.setReady(false);
++    const s: any = svc(r.cache);
++    for (let i = 0; i < 8; i++) await s.registerFail('live@x.io', '1.1.1.1');
++    // Inject an already-expired entry, then prune.
++    s.loginAttempts.set('authfail:email:stale@x.io', { count: 99, until: Date.now() - 1 });
++    s.pruneMemory(Date.now());
++    expect(s.loginAttempts.has('authfail:email:stale@x.io')).toBe(false); // expired → gone
++    await expectLocked(() => s.assertNotLocked('live@x.io', '1.1.1.1')); // active → kept
++  });
++});
+diff --git a/backend/src/auth/auth-tenancy.spec.ts b/backend/src/auth/auth-tenancy.spec.ts
+index 4781333..847e933 100644
+--- a/backend/src/auth/auth-tenancy.spec.ts
++++ b/backend/src/auth/auth-tenancy.spec.ts
+@@ -87,7 +87,7 @@ describe('auth: refreshing an "act as" session keeps it one', () => {
+       verify: jest.fn((t: string) => JSON.parse(t)),
+       sign: jest.fn((p: any, o: any) => { signed.push({ p, o }); return 'tok'; }),
+     };
+-    return { s: new AuthService(prisma, jwtService, {} as any, {} as any, {} as any), signed };
++    return { s: new AuthService(prisma, jwtService, {} as any, {} as any, {} as any, {} as any), signed };
+   }
+ 
+   it('keeps the imp claim, counting down from when the session was opened', async () => {
+diff --git a/backend/src/auth/auth.service.ts b/backend/src/auth/auth.service.ts
+index 8036f10..4a575c7 100644
+--- a/backend/src/auth/auth.service.ts
++++ b/backend/src/auth/auth.service.ts
+@@ -21,6 +21,9 @@ import { randomUUID } from 'crypto';
+ import { LogsService } from '../logs/logs.service';
+ import { ScopeService, Actor } from '../common/scope.service';
+ import { EventsService } from '../common/events.service';
++import { CacheService, redisIsRequired } from '../common/cache.service';
++import { ServiceUnavailableException } from '@nestjs/common';
++import { clearBootstrapPassword } from '../common/bootstrap-credentials';
+ import * as bcrypt from 'bcrypt';
+ import { verifyTotp } from '../security/totp';
+ 
+@@ -43,44 +46,143 @@ export class AuthService {
+     private logsService: LogsService,
+     private scope: ScopeService,
+     private events: EventsService,
++    private cache: CacheService,
+   ) {}
+ 
+-  // Brute-force protection: per email+IP failed-attempt counter. After 8 fails
+-  // within the window the account/IP pair is locked out for 15 minutes. In
+-  // memory (per process) — good enough to defeat online guessing; pair with
+-  // fail2ban / a WAF for network-level protection.
++  // ─────────────────────────────────────────────────────────────
++  // Brute-force protection — SHARED across instances (S1).
++  //
++  // The source of truth is a set of Redis atomic counters, so every app
++  // instance sees the same tally. An attacker can no longer get a fresh
++  // allowance by hitting a different worker, rotating the source IP, or
++  // spraying one IP across many invented emails:
++  //   • email+IP  — the common case, 8 tries / 15 min
++  //   • email+*   — the SAME account from ANY address, 25 tries / 15 min
++  //   • ip+*      — ANY email from ONE address (spraying), 50 tries / 15 min
++  // Counters are fixed-window: TTL is set on the first failure and the whole
++  // window expires on its own (bounded), so a lock always lifts by itself.
++  //
++  // When Redis is the configured source of truth (`redisIsRequired()`) but is
++  // unreachable, login FAILS CLOSED — we never silently fall back to a
++  // per-process map that each worker could be bypassed on. On a single-instance
++  // install that has not opted into Redis, the in-memory map below is the
++  // intended, correct backend.
++  // ─────────────────────────────────────────────────────────────
+   private loginAttempts = new Map<string, { count: number; until: number }>();
+   private static readonly MAX_FAILS = 8;
++  private static readonly MAX_FAILS_ACCOUNT = 25;
++  private static readonly MAX_FAILS_IP = 50;
+   private static readonly LOCK_MS = 15 * 60_000;
++  private static readonly LOCK_SECONDS = 15 * 60;
++  /** Hard cap on the in-memory map so the fallback path cannot grow unbounded. */
++  private static readonly MEM_MAX_ENTRIES = 50_000;
++
++  private normEmail(email: string) {
++    return (email || '').toLowerCase();
++  }
++  private counterKeys(email: string, ip?: string): Array<{ key: string; max: number }> {
++    const e = this.normEmail(email);
++    const addr = ip && ip !== 'Unknown' ? ip : '';
++    return [
++      { key: `authfail:eip:${e}|${addr}`, max: AuthService.MAX_FAILS },
++      { key: `authfail:email:${e}`, max: AuthService.MAX_FAILS_ACCOUNT },
++      // Only meaningful when we actually have a source address.
++      ...(addr ? [{ key: `authfail:ip:${addr}`, max: AuthService.MAX_FAILS_IP }] : []),
++    ];
++  }
+ 
+-  private failKey(email: string, ip?: string) {
+-    return `${(email || '').toLowerCase()}|${ip || ''}`;
++  /** True while Redis is the authority for lockout counters. */
++  private lockoutUsesRedis(): boolean {
++    return this.cache.isRedisReady();
+   }
++
+   /**
+-   * Per email+IP, and per email from ANY address: rotating the source address
+-   * (or a forged X-Forwarded-For) used to give unlimited guesses at one
+-   * account. The per-account ceiling is higher so one noisy office does not
+-   * lock a colleague out.
++   * Throw if this email/IP is currently locked out. Reads the shared counters
++   * without mutating them. Fails closed when Redis is required but down.
+    */
+-  private static readonly MAX_FAILS_ACCOUNT = 25;
+-  private assertNotLocked(email: string, ip?: string) {
++  private async assertNotLocked(email: string, ip?: string): Promise<void> {
++    if (this.lockoutUsesRedis()) {
++      for (const { key, max } of this.counterKeys(email, ip)) {
++        const count = await this.cache.getCount(key);
++        if (count == null) {
++          // The shared counter went unreachable mid-check.
++          if (redisIsRequired()) throw this.lockoutUnavailable();
++          break; // tolerated single-instance: fall through to the memory map
++        }
++        if (count >= max) {
++          const ttl = await this.cache.ttlSeconds(key);
++          const secs = ttl && ttl > 0 ? ttl : AuthService.LOCK_SECONDS;
++          throw this.tooManyAttempts(secs);
++        }
++      }
++      if (this.lockoutUsesRedis()) return; // confirmed via Redis
++    }
++    // Redis not the authority here.
++    if (redisIsRequired()) throw this.lockoutUnavailable();
++    // Single-instance in-memory fallback.
+     const now = Date.now();
+-    const rec = this.loginAttempts.get(this.failKey(email, ip));
+-    const acct = this.loginAttempts.get(this.failKey(email, '*'));
+-    const locked = (rec && rec.count >= AuthService.MAX_FAILS && rec.until > now ? rec : null)
+-      || (acct && acct.count >= AuthService.MAX_FAILS_ACCOUNT && acct.until > now ? acct : null);
+-    if (locked) {
+-      const mins = Math.ceil((locked.until - now) / 60000);
+-      throw new UnauthorizedException(`Too many failed attempts. Try again in ${mins} minute(s).`);
++    for (const { key, max } of this.counterKeys(email, ip)) {
++      const rec = this.loginAttempts.get(key);
++      if (rec && rec.count >= max && rec.until > now) {
++        throw this.tooManyAttempts(Math.ceil((rec.until - now) / 1000));
++      }
+     }
+   }
+-  private registerFail(email: string, ip?: string) {
+-    for (const key of [this.failKey(email, ip), this.failKey(email, '*')]) {
++
++  /** Record one failed attempt against every counter. */
++  private async registerFail(email: string, ip?: string): Promise<void> {
++    if (this.lockoutUsesRedis()) {
++      let anyRedis = false;
++      for (const { key } of this.counterKeys(email, ip)) {
++        const n = await this.cache.incr(key, AuthService.LOCK_SECONDS);
++        if (n != null) anyRedis = true;
++      }
++      if (anyRedis) return;
++      // Redis dropped out between the ready-check and the write.
++      if (redisIsRequired()) return; // do not mirror into a map we won't trust
++    } else if (redisIsRequired()) {
++      return; // Redis is the authority; assertNotLocked already failed closed
++    }
++    // Single-instance in-memory fallback.
++    const now = Date.now();
++    for (const { key } of this.counterKeys(email, ip)) {
+       const rec = this.loginAttempts.get(key);
+-      const count = (rec && rec.until > Date.now() ? rec.count : 0) + 1;
+-      this.loginAttempts.set(key, { count, until: Date.now() + AuthService.LOCK_MS });
++      const count = (rec && rec.until > now ? rec.count : 0) + 1;
++      this.loginAttempts.set(key, { count, until: now + AuthService.LOCK_MS });
++    }
++    this.pruneMemory(now);
++  }
++
++  /** Clear every counter for this email/IP after a fully successful login. */
++  private async clearFails(email: string, ip?: string): Promise<void> {
++    const keys = this.counterKeys(email, ip).map((k) => k.key);
++    if (this.lockoutUsesRedis()) {
++      await this.cache.del(...keys); // del() also clears the memory mirror
+     }
+-    if (this.loginAttempts.size > 50_000) this.loginAttempts.clear();
++    for (const key of keys) this.loginAttempts.delete(key);
++  }
++
++  /**
++   * Evict only EXPIRED in-memory entries, and if still over the cap, the ones
++   * closest to expiry. Never a blanket clear — a global reset triggered by
++   * attacker traffic would wipe everyone's active locks at once.
++   */
++  private pruneMemory(now: number): void {
++    for (const [k, v] of this.loginAttempts) if (v.until <= now) this.loginAttempts.delete(k);
++    if (this.loginAttempts.size <= AuthService.MEM_MAX_ENTRIES) return;
++    const sorted = [...this.loginAttempts.entries()].sort((a, b) => a[1].until - b[1].until);
++    for (const [k] of sorted.slice(0, this.loginAttempts.size - AuthService.MEM_MAX_ENTRIES)) {
++      this.loginAttempts.delete(k);
++    }
++  }
++
++  private tooManyAttempts(seconds: number): UnauthorizedException {
++    const mins = Math.max(1, Math.ceil(seconds / 60));
++    return new UnauthorizedException(`Too many failed attempts. Try again in ${mins} minute(s).`);
++  }
++  private lockoutUnavailable(): ServiceUnavailableException {
++    // Deliberately generic: do not disclose the backing store to clients.
++    return new ServiceUnavailableException('Sign-in is temporarily unavailable. Please try again shortly.');
+   }
+ 
+   async login(
+@@ -91,7 +193,7 @@ export class AuthService {
+     code?: string,
+   ) {
+     // Reject early if this email+IP is currently locked out.
+-    this.assertNotLocked(email, ip);
++    await this.assertNotLocked(email, ip);
+ 
+     console.log('🔍 Looking for user:', email);
+ 
+@@ -112,7 +214,7 @@ export class AuthService {
+         failReason: 'User not found',
+       });
+ 
+-      this.registerFail(email, ip);
++      await this.registerFail(email, ip);
+       throw new UnauthorizedException(
+         'Invalid email or password',
+       );
+@@ -139,7 +241,7 @@ export class AuthService {
+         failReason: 'Invalid credentials',
+       });
+ 
+-      this.registerFail(email, ip);
++      await this.registerFail(email, ip);
+       throw new UnauthorizedException(
+         'Invalid email or password',
+       );
+@@ -195,12 +297,11 @@ export class AuthService {
+           status: 'FAILED',
+           failReason: 'Invalid 2FA code',
+         });
+-        this.registerFail(email, ip);
++        await this.registerFail(email, ip);
+         throw new UnauthorizedException('Invalid two-factor code');
+       }
+     }
+-    this.loginAttempts.delete(this.failKey(email, ip));
+-    this.loginAttempts.delete(this.failKey(email, '*'));
++    await this.clearFails(email, ip);
+ 
+     // Phase 4A: login anomaly flag — first login from a new IP is recorded 🔍
+     if (ip && ip !== 'Unknown') {
+@@ -591,6 +692,11 @@ export class AuthService {
+     });
+     invalidateAccountStatus(userId);
+ 
++    // One-time use: once an owner picks their own password, drop the generated
++    // first-boot secret from the credentials file so it cannot be reused.
++    if (user.role === 'SUPER_ADMIN') clearBootstrapPassword('platform');
++    else if (user.role === 'ADMIN') clearBootstrapPassword('company');
++
+     const token = this.jwtService.sign(
+       {
+         sub: user.id,
+diff --git a/backend/src/auth/staff-boundary.spec.ts b/backend/src/auth/staff-boundary.spec.ts
+index b6acf73..dd9bae6 100644
+--- a/backend/src/auth/staff-boundary.spec.ts
++++ b/backend/src/auth/staff-boundary.spec.ts
+@@ -38,7 +38,7 @@ describe('staff never manage the account they work for', () => {
+   it('staff cannot switch into any account; nobody switches into a company or upward', async () => {
+     const { prisma, scope } = scopeWith();
+     prisma.activityLog = { create: jest.fn(() => ({ catch: () => undefined })) };
+-    const auth = new AuthService(prisma, { sign: () => 'T' } as any, {} as any, scope, {} as any);
++    const auth = new AuthService(prisma, { sign: () => 'T' } as any, {} as any, scope, {} as any, {} as any);
+     await expect(auth.impersonate({ sub: 11, role: 'SALES' }, 10)).rejects.toBeInstanceOf(ForbiddenException);
+     await expect(auth.impersonate({ sub: 11, role: 'SALES' }, 12)).rejects.toBeInstanceOf(ForbiddenException);
+     await expect(auth.impersonate({ sub: 13, role: 'SUB_RESELLER' }, 12)).rejects.toBeInstanceOf(ForbiddenException);
+diff --git a/backend/src/billing-ext/billing-ext-wallet.concurrency.int.mjs b/backend/src/billing-ext/billing-ext-wallet.concurrency.int.mjs
+new file mode 100644
+index 0000000..2bc4ce3
+--- /dev/null
++++ b/backend/src/billing-ext/billing-ext-wallet.concurrency.int.mjs
+@@ -0,0 +1,32 @@
++import { Client } from 'pg';
++import { execFileSync, spawnSync } from 'child_process';
++import fs from 'fs'; import os from 'os';
++const PGBIN='/usr/lib/postgresql/16/bin'; const WORK=fs.mkdtempSync(os.tmpdir()+'/d2-'); const PGDATA=WORK+'/data'; const SOCK=WORK+'/sock'; const PORT=55470;
++fs.mkdirSync(PGDATA,{recursive:true}); fs.mkdirSync(SOCK,{recursive:true});
++spawnSync('chown',['-R','postgres',WORK]);
++const run=(c,a)=>spawnSync('sudo',['-u','postgres',PGBIN+'/'+c,...a],{stdio:'ignore'});
++run('initdb',['-D',PGDATA,'-A','trust','-U','postgres']);
++run('pg_ctl',['-D',PGDATA,'-o',`-p ${PORT} -k ${SOCK} -c listen_addresses=127.0.0.1 -c max_connections=400`,'-w','start']);
++const url=`postgresql://postgres@127.0.0.1:${PORT}/postgres`;
++const sql=async(q,p)=>{const c=new Client({connectionString:url});await c.connect();const r=await c.query(q,p);await c.end();return r;};
++try{
++  await sql('CREATE TABLE bal(id int primary key, balance double precision)');
++  await sql('INSERT INTO bal VALUES (1,0)');
++  // 200 concurrent atomic increments of +1 → expect 200
++  const N=100;
++  await Promise.all(Array.from({length:N},async()=>{
++    const c=new Client({connectionString:url});await c.connect();
++    await c.query('UPDATE bal SET balance = balance + 1 WHERE id=1'); await c.end();
++  }));
++  const atomic=(await sql('SELECT balance FROM bal WHERE id=1')).rows[0].balance;
++  // Demonstrate the OLD read-modify-write race on a second row
++  await sql('INSERT INTO bal VALUES (2,0)');
++  await Promise.all(Array.from({length:N},async()=>{
++    const c=new Client({connectionString:url});await c.connect();
++    const cur=(await c.query('SELECT balance FROM bal WHERE id=2')).rows[0].balance;
++    await c.query('UPDATE bal SET balance = $1 WHERE id=2',[cur+1]); await c.end();
++  }));
++  const rmw=(await sql('SELECT balance FROM bal WHERE id=2')).rows[0].balance;
++  console.log(`atomic increment final = ${atomic} (expected ${N}) → ${atomic===N?'CORRECT':'WRONG'}`);
++  console.log(`read-modify-write final = ${rmw} (expected ${N}) → ${rmw<N?'LOST UPDATES (demonstrates the bug the fix avoids)':'no race observed'}`);
++}finally{ run('pg_ctl',['-D',PGDATA,'-m','immediate','stop']); fs.rmSync(WORK,{recursive:true,force:true}); }
+diff --git a/backend/src/billing-ext/billing-ext-wallet.spec.ts b/backend/src/billing-ext/billing-ext-wallet.spec.ts
+new file mode 100644
+index 0000000..7ebacdb
+--- /dev/null
++++ b/backend/src/billing-ext/billing-ext-wallet.spec.ts
+@@ -0,0 +1,118 @@
++/**
++ * D2 — wallet concurrency & financial integrity (service-level).
++ *
++ * The Prisma client is mocked with a stateful, snapshot/rollback `$transaction`
++ * so these tests prove the SERVICE behaviour: atomic increment (not absolute
++ * write), ledger+balance in one transaction, idempotent exactly-once, rollback
++ * on ledger failure, and the non-negative guard. The DB-level concurrency
++ * guarantee is proven separately against real Postgres (see
++ * billing-ext-wallet.concurrency.int.ts).
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { BillingExtService } from './billing-ext.service';
++
++function makePrisma() {
++  const state = { balance: null as null | number, ledger: [] as any[] };
++  const db = {
++    subscriberBalance: {
++      findUnique: async () => (state.balance == null ? null : { subscriberId: 1, balance: state.balance, reservedBalance: 0, currency: 'PKR' }),
++      upsert: async ({ create, update }: any) => {
++        if (state.balance == null) state.balance = create.balance;
++        else state.balance = Math.round((state.balance + update.balance.increment) * 100) / 100;
++        return { subscriberId: 1, balance: state.balance, reservedBalance: 0, currency: 'PKR' };
++      },
++      update: async ({ data }: any) => {
++        state.balance = Math.round(((state.balance ?? 0) + data.balance.increment) * 100) / 100;
++        return { subscriberId: 1, balance: state.balance, reservedBalance: 0, currency: 'PKR' };
++      },
++    },
++    subscriberBalanceLedger: {
++      findUnique: async ({ where }: any) => state.ledger.find((l) => l.idempotencyKey && l.idempotencyKey === where.idempotencyKey) ?? null,
++      create: async ({ data }: any) => {
++        if (data.idempotencyKey && state.ledger.some((l) => l.idempotencyKey === data.idempotencyKey)) {
++          const e: any = new Error('unique'); e.code = 'P2002'; throw e;
++        }
++        state.ledger.push(data); return data;
++      },
++    },
++  };
++  const prisma = {
++    subscriberBalance: db.subscriberBalance,
++    subscriberBalanceLedger: db.subscriberBalanceLedger,
++    // snapshot/restore models a real transaction's atomic rollback.
++    $transaction: async (fn: any) => {
++      const snap = { balance: state.balance, ledger: [...state.ledger] };
++      try { return await fn(db); }
++      catch (e) { state.balance = snap.balance; state.ledger = snap.ledger; throw e; }
++    },
++  };
++  return { prisma, state };
++}
++
++function svcWith(prisma: any) {
++  const scope = { assertSubscriberVisible: async () => undefined };
++  return new BillingExtService(prisma as any, scope as any);
++}
++
++const ACTOR = { id: 1, email: 'a@b.c' };
++
++describe('BillingExtService wallet (D2)', () => {
++  it('applies top-ups with atomic increment and a matching ledger entry', async () => {
++    const { prisma, state } = makePrisma();
++    const svc = svcWith(prisma);
++    await svc.topUp(1, { amount: 100 }, ACTOR);
++    await svc.topUp(1, { amount: 50.5 }, ACTOR);
++    expect(state.balance).toBe(150.5);
++    expect(state.ledger).toHaveLength(2);
++    expect(state.ledger[1].balanceAfter).toBe(150.5); // ledger matches balance
++  });
++
++  it('uses atomic increment, never an absolute balance write', async () => {
++    const { prisma } = makePrisma();
++    const upsertSpy = jest.spyOn(prisma.subscriberBalance, 'upsert');
++    await svcWith(prisma).topUp(1, { amount: 10 }, ACTOR);
++    const arg = upsertSpy.mock.calls[0][0] as any;
++    expect(arg.update.balance).toEqual({ increment: 10 }); // atomic, not {balance: n}
++  });
++
++  it('is idempotent: a duplicate payment reference never applies twice', async () => {
++    const { prisma, state } = makePrisma();
++    const svc = svcWith(prisma);
++    await svc.topUp(1, { amount: 200, reference: 'PAY-9' }, ACTOR);
++    await svc.topUp(1, { amount: 200, reference: 'PAY-9' }, ACTOR); // retry/callback dup
++    expect(state.balance).toBe(200);
++    expect(state.ledger).toHaveLength(1);
++  });
++
++  it('rolls back the balance when the ledger write fails (same transaction)', async () => {
++    const { prisma, state } = makePrisma();
++    jest.spyOn(prisma.subscriberBalanceLedger, 'create').mockRejectedValueOnce(new Error('ledger down'));
++    const svc = svcWith(prisma);
++    await expect(svc.topUp(1, { amount: 100 }, ACTOR)).rejects.toThrow(/ledger down/);
++    expect(state.balance).toBeNull(); // increment rolled back
++    expect(state.ledger).toHaveLength(0);
++  });
++
++  it('rejects a concurrent duplicate at the unique key (P2002 → rollback)', async () => {
++    const { prisma, state } = makePrisma();
++    const svc = svcWith(prisma);
++    await svc.topUp(1, { amount: 100, reference: 'PAY-1' }, ACTOR);
++    // A racing duplicate that passed the fast-path, then loses the unique-index
++    // race: create() throws P2002. The increment must roll back.
++    const e: any = new Error('unique'); e.code = 'P2002';
++    jest.spyOn(prisma.subscriberBalanceLedger, 'create').mockRejectedValueOnce(e);
++    await expect(svc.topUp(1, { amount: 100, reference: 'PAY-2' }, ACTOR)).rejects.toThrow(/already processed/i);
++    expect(state.balance).toBe(100); // racing op rolled back
++  });
++
++  it('enforces the non-negative rule for guarded deductions, atomically', async () => {
++    const { prisma, state } = makePrisma();
++    const svc = svcWith(prisma);
++    await svc.topUp(1, { amount: 30 }, ACTOR);
++    await expect(svc.adjust(1, { amount: -50, enforceBalance: true }, ACTOR)).rejects.toThrow(/Insufficient balance/i);
++    expect(state.balance).toBe(30); // deduction rolled back
++    // A deduction within balance succeeds.
++    await svc.adjust(1, { amount: -20, enforceBalance: true }, ACTOR);
++    expect(state.balance).toBe(10);
++  });
++});
+diff --git a/backend/src/billing-ext/billing-ext.service.ts b/backend/src/billing-ext/billing-ext.service.ts
+index b69a315..88a68f2 100644
+--- a/backend/src/billing-ext/billing-ext.service.ts
++++ b/backend/src/billing-ext/billing-ext.service.ts
+@@ -1,4 +1,4 @@
+-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
++import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+ import { PrismaService } from '../prisma/prisma.service';
+ import { ScopeService, Actor } from '../common/scope.service';
+ 
+@@ -242,6 +242,8 @@ export class BillingExtService {
+       actorId: actor?.id ?? actor?.sub,
+       actorName: actor?.name ?? actor?.email ?? null,
+       reference: body.reference ?? null,
++      // Exactly-once when the caller supplies a payment/callback reference.
++      idempotencyKey: body.idempotencyKey ?? (body.reference ? `topup:${body.reference}` : null),
+     });
+   }
+ 
+@@ -256,6 +258,10 @@ export class BillingExtService {
+       actorId: actor?.id ?? actor?.sub,
+       actorName: actor?.name ?? actor?.email ?? null,
+       reference: body.reference ?? null,
++      idempotencyKey: body.idempotencyKey ?? null,
++      // A debit may opt into the non-negative rule without changing existing
++      // credit/adjustment semantics (default off preserves current behavior).
++      disallowNegative: body.enforceBalance === true && +body.amount < 0,
+     });
+   }
+ 
+@@ -267,32 +273,63 @@ export class BillingExtService {
+     type: 'TOPUP' | 'RENEWAL' | 'PACKAGE_PURCHASE' | 'REFUND' | 'ADJUSTMENT' | 'TRANSFER' | 'REVERSAL' | 'FEE' | 'REWARD';
+     amount: number; description: string; reference?: string | null;
+     actorType: string; actorId?: number; actorName?: string | null;
++    /** When set, a retried/duplicated operation with the same key never applies twice. */
++    idempotencyKey?: string | null;
++    /** When true, the operation is rejected if it would drive the balance below zero. */
++    disallowNegative?: boolean;
+   }) {
++    // Preserve the existing 2-decimal rounding (D1 Decimal migration is separate).
++    const amount = Math.round(entry.amount * 100) / 100;
+     return this.prisma.$transaction(async (db) => {
+-      let bal = await db.subscriberBalance.findUnique({ where: { subscriberId: subId } });
+-      if (!bal) {
+-        bal = await db.subscriberBalance.create({
+-          data: { subscriberId: subId, balance: 0, reservedBalance: 0, currency: 'PKR' },
++      // Idempotency fast-path: if this exact operation already landed, return the
++      // current balance without re-applying (handles payment-callback retries).
++      if (entry.idempotencyKey) {
++        const seen = await db.subscriberBalanceLedger.findUnique({
++          where: { idempotencyKey: entry.idempotencyKey },
+         });
++        if (seen) {
++          return (
++            (await db.subscriberBalance.findUnique({ where: { subscriberId: subId } })) ??
++            { subscriberId: subId, balance: 0, reservedBalance: 0, currency: 'PKR' }
++          );
++        }
+       }
+-      const newBalance = Math.round((bal.balance + entry.amount) * 100) / 100;
+-      const updated = await db.subscriberBalance.update({
++      // Atomic increment — the database adds to the current value, so concurrent
++      // top-ups/deductions can never overwrite each other (no lost update). The
++      // upsert also covers the first-ever mutation without a create/update race.
++      const updated = await db.subscriberBalance.upsert({
+         where: { subscriberId: subId },
+-        data: { balance: newBalance },
+-      });
+-      await db.subscriberBalanceLedger.create({
+-        data: {
+-          subscriberId: subId,
+-          type: entry.type,
+-          amount: entry.amount,
+-          balanceAfter: newBalance,
+-          reference: entry.reference ?? null,
+-          description: entry.description,
+-          actorType: entry.actorType,
+-          actorId: entry.actorId ?? null,
+-          actorName: entry.actorName ?? null,
+-        },
++        create: { subscriberId: subId, balance: amount, reservedBalance: 0, currency: 'PKR' },
++        update: { balance: { increment: amount } },
+       });
++      // Enforce the non-negative rule atomically where the caller requires it;
++      // throwing rolls back the increment (correct under concurrent deductions).
++      if (entry.disallowNegative && updated.balance < 0) {
++        throw new BadRequestException('Insufficient balance for this operation.');
++      }
++      try {
++        await db.subscriberBalanceLedger.create({
++          data: {
++            subscriberId: subId,
++            type: entry.type,
++            amount,
++            balanceAfter: updated.balance,
++            reference: entry.reference ?? null,
++            idempotencyKey: entry.idempotencyKey ?? null,
++            description: entry.description,
++            actorType: entry.actorType,
++            actorId: entry.actorId ?? null,
++            actorName: entry.actorName ?? null,
++          },
++        });
++      } catch (e: any) {
++        // A concurrent duplicate won the unique-key race: roll back our increment
++        // by failing the transaction — the operation is applied exactly once.
++        if (e?.code === 'P2002') {
++          throw new ConflictException('This financial operation was already processed.');
++        }
++        throw e;
++      }
+       return updated;
+     });
+   }
+@@ -428,24 +465,31 @@ export class BillingExtService {
+       if (original.subscriberId && refundAmount > 0) {
+         const bal = await db.subscriberBalance.findUnique({ where: { subscriberId: original.subscriberId } });
+         if (bal) {
+-          const newBalance = Math.round((bal.balance + refundAmount) * 100) / 100;
+-          await db.subscriberBalance.update({
+-            where: { subscriberId: original.subscriberId },
+-            data: { balance: newBalance },
+-          });
+-          await db.subscriberBalanceLedger.create({
+-            data: {
+-              subscriberId: original.subscriberId,
+-              type: 'REFUND',
+-              amount: refundAmount,
+-              balanceAfter: newBalance,
+-              reference: `INV-${invoiceId}-REVERSAL`,
+-              description: `Refund from invoice reversal (${mode})`,
+-              actorType: 'STAFF',
+-              actorId: actor?.id ?? actor?.sub,
+-              actorName: actor?.name ?? actor?.email ?? null,
+-            },
+-          });
++          const refund = Math.round(refundAmount * 100) / 100;
++          const idempotencyKey = `reversal-refund:INV-${invoiceId}`;
++          // Idempotent: re-running a reversal never refunds the wallet twice.
++          const seen = await db.subscriberBalanceLedger.findUnique({ where: { idempotencyKey } });
++          if (!seen) {
++            // Atomic increment — no lost update against concurrent wallet activity.
++            const updated = await db.subscriberBalance.update({
++              where: { subscriberId: original.subscriberId },
++              data: { balance: { increment: refund } },
++            });
++            await db.subscriberBalanceLedger.create({
++              data: {
++                subscriberId: original.subscriberId,
++                type: 'REFUND',
++                amount: refund,
++                balanceAfter: updated.balance,
++                reference: `INV-${invoiceId}-REVERSAL`,
++                idempotencyKey,
++                description: `Refund from invoice reversal (${mode})`,
++                actorType: 'STAFF',
++                actorId: actor?.id ?? actor?.sub,
++                actorName: actor?.name ?? actor?.email ?? null,
++              },
++            });
++          }
+         }
+       }
+ 
+diff --git a/backend/src/common/bootstrap-credentials.spec.ts b/backend/src/common/bootstrap-credentials.spec.ts
+new file mode 100644
+index 0000000..f832f70
+--- /dev/null
++++ b/backend/src/common/bootstrap-credentials.spec.ts
+@@ -0,0 +1,93 @@
++/**
++ * S3 — secure first-boot admin credentials.
++ *
++ * Proves there is no hardcoded default: an operator value is used as-is, a
++ * legacy "admin123" is refused, an unset value yields a cryptographically
++ * random one-time secret written 0600, the secret is REUSED on later boots
++ * (not regenerated → no reset-on-restart), and clearing it after the first
++ * password change makes it one-time.
++ */
++import * as fs from 'fs';
++import * as os from 'os';
++import * as path from 'path';
++import {
++  resolveBootstrapPassword,
++  clearBootstrapPassword,
++  generatePassword,
++  INSECURE_DEFAULTS,
++  bootstrapCredFile,
++} from './bootstrap-credentials';
++
++let tmpDir: string;
++const OLD_ENV = process.env;
++
++beforeEach(() => {
++  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'uplinko-boot-'));
++  process.env = { ...OLD_ENV };
++  process.env.BOOTSTRAP_CRED_FILE = path.join(tmpDir, 'bootstrap-credentials.json');
++  delete process.env.PLATFORM_ADMIN_PASSWORD;
++  delete process.env.ADMIN_PASSWORD;
++});
++afterEach(() => {
++  process.env = OLD_ENV;
++  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
++});
++
++describe('bootstrap credentials (S3)', () => {
++  it('uses an operator-set env password as-is and writes no file', () => {
++    process.env.PLATFORM_ADMIN_PASSWORD = 'My$trongOne';
++    const r = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++    expect(r).toMatchObject({ password: 'My$trongOne', source: 'env' });
++    expect(fs.existsSync(bootstrapCredFile())).toBe(false);
++  });
++
++  it('treats a legacy insecure default as unset and generates instead', () => {
++    expect(INSECURE_DEFAULTS.has('admin123')).toBe(true);
++    process.env.PLATFORM_ADMIN_PASSWORD = 'admin123';
++    const r = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++    expect(r.source).toBe('generated');
++    expect(r.password).not.toBe('admin123');
++    expect(r.password.length).toBeGreaterThanOrEqual(20);
++  });
++
++  it('generates a random secret, persists it 0600, and reuses it next boot', () => {
++    const first = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++    expect(first.source).toBe('generated');
++    expect(first.persisted).toBe(true);
++    // File is 0600.
++    const mode = fs.statSync(bootstrapCredFile()).mode & 0o777;
++    expect(mode).toBe(0o600);
++    // A second resolve (next boot) REUSES the same value — no new secret, no reset.
++    const second = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++    expect(second.source).toBe('file');
++    expect(second.password).toBe(first.password);
++  });
++
++  it('keeps separate secrets per scope', () => {
++    const p = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++    const c = resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
++    expect(p.password).not.toBe(c.password);
++    // Both persisted in the one file.
++    const store = JSON.parse(fs.readFileSync(bootstrapCredFile(), 'utf8'));
++    expect(Object.keys(store).sort()).toEqual(['company', 'platform']);
++  });
++
++  it('clears a secret after first password change (one-time use)', () => {
++    resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++    resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
++    clearBootstrapPassword('platform');
++    const store = JSON.parse(fs.readFileSync(bootstrapCredFile(), 'utf8'));
++    expect('platform' in store).toBe(false);
++    expect('company' in store).toBe(true);
++    // After the other is cleared too, the file is removed entirely.
++    clearBootstrapPassword('company');
++    expect(fs.existsSync(bootstrapCredFile())).toBe(false);
++  });
++
++  it('generatePassword returns URL-safe high-entropy strings', () => {
++    const a = generatePassword();
++    const b = generatePassword();
++    expect(a).not.toBe(b);
++    expect(a).toMatch(/^[A-Za-z0-9_-]{20,}$/);
++  });
++});
+diff --git a/backend/src/common/bootstrap-credentials.ts b/backend/src/common/bootstrap-credentials.ts
+new file mode 100644
+index 0000000..6fbf9b2
+--- /dev/null
++++ b/backend/src/common/bootstrap-credentials.ts
+@@ -0,0 +1,126 @@
++/**
++ * FIRST-BOOT ADMIN CREDENTIALS — NO HARDCODED DEFAULT (S3).
++ *
++ * The platform (SUPER_ADMIN) and the first company (ADMIN) need a password the
++ * very first time the database comes up with no users. Shipping a known default
++ * (`admin123`) meant every fresh install was briefly reachable by anyone who
++ * read the README — and the privileged platform account had no env requirement
++ * at all, so it stayed on the default indefinitely.
++ *
++ * Instead:
++ *   • If the operator set a password in the environment, that is used.
++ *   • Otherwise a cryptographically random password is GENERATED ONCE and
++ *     written to a 0600 credentials file (dir 0700). The operator reads it from
++ *     that file; it is never printed to the application log on every restart.
++ *   • The same resolved value is reused on later boots (read back from the
++ *     file), so the account is NOT reset — and no NEW secret is minted — each
++ *     time the process restarts.
++ *   • `mustChangePassword` forces a change at first sign-in, and once that
++ *     happens the entry is cleared from the file (`clearBootstrapPassword`), so
++ *     the bootstrap secret is strictly one-time.
++ *
++ * The password value lives only in the file and the (hashed) user row — never
++ * in logs, never in an API response.
++ */
++import * as crypto from 'crypto';
++import * as fs from 'fs';
++import * as path from 'path';
++
++/** A known legacy default we must never mint a new account on. */
++export const INSECURE_DEFAULTS = new Set(['admin123', 'password', 'changeme', '']);
++
++/** Where the generated bootstrap secrets are kept (0600). */
++export function bootstrapCredFile(): string {
++  if (process.env.BOOTSTRAP_CRED_FILE) return process.env.BOOTSTRAP_CRED_FILE;
++  const dir = process.env.UPLINKO_STATE_DIR || '/var/lib/jointbox';
++  return path.join(dir, 'bootstrap-credentials.json');
++}
++
++type Store = Record<string, string>;
++
++function readStore(): Store {
++  try {
++    const raw = fs.readFileSync(bootstrapCredFile(), 'utf8');
++    const parsed = JSON.parse(raw);
++    return parsed && typeof parsed === 'object' ? parsed : {};
++  } catch {
++    return {};
++  }
++}
++
++/** Write the store with locked-down permissions. Returns false if it could not. */
++function writeStore(store: Store): boolean {
++  const file = bootstrapCredFile();
++  try {
++    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
++    fs.writeFileSync(file, JSON.stringify(store, null, 2), { mode: 0o600 });
++    // Re-assert on overwrite — writeFileSync does not re-chmod an existing file.
++    fs.chmodSync(file, 0o600);
++    try {
++      fs.chmodSync(path.dirname(file), 0o700);
++    } catch {
++      /* dir may be shared (e.g. /var/lib/jointbox) — file perms are what matter */
++    }
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++/** A URL-safe 24-character random password (~144 bits). */
++export function generatePassword(): string {
++  return crypto.randomBytes(18).toString('base64url');
++}
++
++export type BootstrapResolution = {
++  password: string;
++  /** 'env' = operator-provided; 'file' = reused generated; 'generated' = new this boot. */
++  source: 'env' | 'file' | 'generated';
++  /** When generated: whether it was persisted to the file (false = could not write). */
++  persisted?: boolean;
++  /** The file it was (or should have been) written to. */
++  file?: string;
++};
++
++/**
++ * Resolve the password to seed an account with. `scope` is a stable key
++ * ('platform' / 'company') so each account keeps its own secret.
++ *
++ * An environment value equal to a known insecure default is treated as unset,
++ * so a legacy `.env` carrying `admin123` still produces a secure account.
++ */
++export function resolveBootstrapPassword(scope: string, envVar: string): BootstrapResolution {
++  const env = (process.env[envVar] || '').trim();
++  if (env && !INSECURE_DEFAULTS.has(env)) return { password: env, source: 'env' };
++
++  const store = readStore();
++  if (store[scope]) return { password: store[scope], source: 'file', persisted: true, file: bootstrapCredFile() };
++
++  const password = generatePassword();
++  store[scope] = password;
++  const persisted = writeStore(store);
++  return { password, source: 'generated', persisted, file: bootstrapCredFile() };
++}
++
++/**
++ * Remove a scope's secret once the owner has chosen their own password
++ * (one-time use). Best-effort: never throws. Deletes the file when empty.
++ */
++export function clearBootstrapPassword(scope: string): void {
++  try {
++    const store = readStore();
++    if (!(scope in store)) return;
++    delete store[scope];
++    if (Object.keys(store).length === 0) {
++      try {
++        fs.unlinkSync(bootstrapCredFile());
++      } catch {
++        /* already gone */
++      }
++      return;
++    }
++    writeStore(store);
++  } catch {
++    /* best-effort cleanup */
++  }
++}
+diff --git a/backend/src/common/cache.service.ts b/backend/src/common/cache.service.ts
+index f1f4898..c4becd4 100644
+--- a/backend/src/common/cache.service.ts
++++ b/backend/src/common/cache.service.ts
+@@ -198,6 +198,37 @@ export class CacheService implements OnModuleDestroy {
+     }
+   }
+ 
++  /**
++   * Read a counter written by `incr()` without touching it. Returns null when
++   * the key is absent or Redis is not available, so a caller can tell "no
++   * attempts recorded" apart from "the shared counter is unreachable".
++   */
++  async getCount(key: string): Promise<number | null> {
++    if (this.redis?.status !== 'ready') return null;
++    try {
++      const raw = await this.redis.get(key);
++      if (raw == null) return 0;
++      const n = Number(raw);
++      return Number.isFinite(n) ? n : 0;
++    } catch {
++      return null;
++    }
++  }
++
++  /**
++   * Seconds remaining before a key expires. -2 = no such key, -1 = no TTL set,
++   * null = Redis unavailable. Used to tell a locked-out caller how long is left
++   * without resetting their window.
++   */
++  async ttlSeconds(key: string): Promise<number | null> {
++    if (this.redis?.status !== 'ready') return null;
++    try {
++      return await this.redis.ttl(key);
++    } catch {
++      return null;
++    }
++  }
++
+   /** True when reads and writes are actually hitting Redis, not the local map. */
+   isRedisReady(): boolean {
+     return this.redis?.status === 'ready';
+diff --git a/backend/src/common/platform-account.ts b/backend/src/common/platform-account.ts
+index 626707c..687cbbf 100644
+--- a/backend/src/common/platform-account.ts
++++ b/backend/src/common/platform-account.ts
+@@ -21,14 +21,17 @@
+  */
+ 
+ import * as bcrypt from 'bcrypt';
++import { resolveBootstrapPassword } from './bootstrap-credentials';
+ 
+ /**
+- * The platform login every installation ships with. Known, like any
+- * installer default — which is why the panel refuses to be used on it: the
+- * first sign-in must choose a new password (mustChangePassword).
++ * The platform login every installation ships with. The address is known; the
++ * password is NOT (no hardcoded default) — it is operator-set or a generated
++ * one-time secret, and the panel refuses to be used until the first sign-in
++ * chooses a new password (mustChangePassword). See bootstrap-credentials.ts.
+  */
+ export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@jointbox.com').trim().toLowerCase();
+-const PLATFORM_DEFAULT_PASSWORD = () => process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
++/** Resolve the platform bootstrap password (env, reused, or newly generated). */
++const platformBootstrap = () => resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
+ 
+ const DOWNLINE_ROLES = [
+   'RESELLER',
+@@ -111,21 +114,57 @@ async function nameCompany(prisma: any, company: Acct): Promise<void> {
+   await prisma.user.update({ where: { id: company.id }, data: { name } });
+ }
+ 
+-async function createPlatformAccount(prisma: any, from: Acct) {
++async function createPlatformAccount(prisma: any, from: Acct, log: { warn: (m: string) => void } = console) {
+   const email = await platformEmailFor(prisma, from);
+-  return prisma.user.create({
++  // UPGRADE PATH: the platform is split off an account that already runs the
++  // business, so reuse THAT account's existing password hash — the operator
++  // already knows it, no new secret is minted, and no hardcoded default is
++  // involved. Only if that hash is somehow missing do we fall back to a
++  // generated one-time secret.
++  let passwordHash = from.password && from.password.length > 0 ? from.password : null;
++  let boot: ReturnType<typeof platformBootstrap> | null = null;
++  if (!passwordHash) {
++    boot = platformBootstrap();
++    passwordHash = await bcrypt.hash(boot.password, 10);
++  }
++  const created = await prisma.user.create({
+     data: {
+       name: 'Platform Owner',
+       email,
+-      // The installation default (admin123 unless PLATFORM_ADMIN_PASSWORD is
+-      // set). The first sign-in must choose a new one.
+-      password: await bcrypt.hash(PLATFORM_DEFAULT_PASSWORD(), 10),
++      password: passwordHash,
+       role: 'SUPER_ADMIN',
+       isActive: true,
+       mustChangePassword: true,
+     },
+     select: { id: true, email: true },
+   });
++  if (boot) announceBootstrap(log, 'Platform', email, boot);
++  return created;
++}
++
++/**
++ * Tell the operator HOW to obtain the first-boot password, never WHAT it is.
++ * A generated secret is written to the 0600 credentials file and only the file
++ * path is logged; an operator-set one is not mentioned at all.
++ */
++function announceBootstrap(
++  log: { warn: (m: string) => void },
++  label: string,
++  email: string,
++  boot: { source: string; persisted?: boolean; file?: string; password: string },
++): void {
++  if (boot.source === 'env') return; // operator already knows it
++  if (boot.source === 'file') return; // already announced on the boot that created it
++  if (boot.persisted) {
++    log.warn(`🔐 ${label} account ${email}: first-boot password written to ${boot.file} (read it there, then change it at first sign-in).`);
++  } else {
++    // Could not persist — the operator has no other way to learn it, so print
++    // it this once with a loud instruction to set the env var instead.
++    log.warn(
++      `🔐 ${label} account ${email}: could not write ${boot.file}. One-time password: ${boot.password}\n` +
++        `   Set PLATFORM_ADMIN_PASSWORD / ADMIN_PASSWORD or make the state dir writable so this is never printed.`,
++    );
++  }
+ }
+ 
+ /** Give owner-less business rows to the company that has been running them. */
+@@ -234,7 +273,7 @@ async function splitInside(
+       );
+       return { action: 'promoted', platformEmail: root.email };
+     }
+-    const p = await createPlatformAccount(prisma, root);
++    const p = await createPlatformAccount(prisma, root, log);
+     await prisma.user.updateMany({
+       where: { role: 'ADMIN', parentId: null, isDemo: false },
+       data: { parentId: p.id },
+@@ -255,7 +294,7 @@ async function splitInside(
+   let result: PlatformSplitResult = { action: 'none' };
+   for (const sa of owners) {
+     if (!(await runsBusiness(prisma, sa.id))) continue;
+-    const p = await createPlatformAccount(prisma, sa);
++    const p = await createPlatformAccount(prisma, sa, log);
+     // Other companies hosted under this account move up to the platform —
+     // left under it, they would become part of its company.
+     await prisma.user.updateMany({
+@@ -282,16 +321,17 @@ async function splitInside(
+ }
+ 
+ /**
+- * THE PLATFORM LOGIN IS superadmin@jointbox.com — AND admin123 UNTIL ITS OWNER
+- * CHOOSES THEIR OWN PASSWORD.
++ * THE PLATFORM LOGIN IS superadmin@jointbox.com. ITS PASSWORD IS NEVER TOUCHED
++ * HERE (S3).
+  *
+  *  • Email: the platform account always signs in as superadmin@jointbox.com
+  *    (PLATFORM_ADMIN_EMAIL), whenever that address is free. Changing it does
+  *    not sign anyone out — the session belongs to the account, not the email.
+- *  • Password: only a platform account still waiting for its first password
+- *    change (mustChangePassword) is put on the default. Once the owner signs
+- *    in and picks a password the flag clears, and a password somebody chose is
+- *    never overwritten. Every open session is signed out when it is reset.
++ *  • Password: left exactly as createPlatformAccount (or the operator) set it.
++ *    It is NOT re-hashed to a default on every boot — doing so reset a
++ *    never-logged-in account to a known value on each restart, which is the
++ *    bug S3 fixes. The account is created with mustChangePassword, so the
++ *    first sign-in forces a new password regardless.
+  */
+ export async function ensurePlatformLogin(
+   prisma: any,
+@@ -300,32 +340,20 @@ export async function ensurePlatformLogin(
+   const sa = await prisma.user.findFirst({
+     where: { role: 'SUPER_ADMIN', isDemo: false, isActive: true },
+     orderBy: { id: 'asc' },
+-    select: { id: true, email: true, password: true, mustChangePassword: true },
++    select: { id: true, email: true },
+   });
+   if (!sa) return null;
+ 
+-  const data: any = {};
+-  if (String(sa.email).toLowerCase() !== PLATFORM_DEFAULT_EMAIL) {
+-    const taken = await prisma.user.findUnique({ where: { email: PLATFORM_DEFAULT_EMAIL }, select: { id: true } });
+-    if (!taken) data.email = PLATFORM_DEFAULT_EMAIL;
++  // Email normalization only — never the password.
++  if (String(sa.email).toLowerCase() === PLATFORM_DEFAULT_EMAIL) {
++    return { email: sa.email, changed: false };
+   }
+-  if (sa.mustChangePassword) {
+-    const onDefault = !!sa.password && (await bcrypt.compare(PLATFORM_DEFAULT_PASSWORD(), sa.password).catch(() => false));
+-    if (!onDefault) {
+-      data.password = await bcrypt.hash(PLATFORM_DEFAULT_PASSWORD(), 10);
+-      data.tokenVersion = { increment: 1 };
+-    }
+-  }
+-  if (!Object.keys(data).length) return { email: sa.email, changed: false };
++  const taken = await prisma.user.findUnique({ where: { email: PLATFORM_DEFAULT_EMAIL }, select: { id: true } });
++  if (taken) return { email: sa.email, changed: false };
+ 
+-  await prisma.user.update({ where: { id: sa.id }, data });
+-  const email = data.email || sa.email;
+-  log.warn(
+-    data.password
+-      ? `👑 Super admin login: ${email} — default password (PLATFORM_ADMIN_PASSWORD or admin123); it must be changed at first sign-in.`
+-      : `👑 Super admin login is now ${email} (was ${sa.email}); its password is unchanged.`,
+-  );
+-  return { email, changed: true };
++  await prisma.user.update({ where: { id: sa.id }, data: { email: PLATFORM_DEFAULT_EMAIL } });
++  log.warn(`👑 Super admin login is now ${PLATFORM_DEFAULT_EMAIL} (was ${sa.email}); its password is unchanged.`);
++  return { email: PLATFORM_DEFAULT_EMAIL, changed: true };
+ }
+ 
+ /**
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index 5f5f925..bf87874 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -20,6 +20,7 @@ import { AppModule } from './app.module';
+ import { PrismaService } from './prisma/prisma.service';
+ import { PrismaExceptionFilter } from './common/prisma-exception.filter';
+ import { ensureInstallationCurrency, ensurePlatformAccount, ensurePlatformLogin, PLATFORM_DEFAULT_EMAIL } from './common/platform-account';
++import { resolveBootstrapPassword, type BootstrapResolution } from './common/bootstrap-credentials';
+ import { SecurityService } from './security/security.service';
+ 
+ // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
+@@ -30,6 +31,27 @@ import { SecurityService } from './security/security.service';
+ // these fields as `string | null`. Must run before any response is written.
+ (BigInt.prototype as any).toJSON = function () { return String(this); };
+ 
++/**
++ * Tell the operator HOW to retrieve the first-boot password, never WHAT it is.
++ * An operator-set password is not mentioned; a generated one is pointed to in
++ * the 0600 file and printed to the log only as a last resort if it could not be
++ * written there. Runs once, at account creation — never on later restarts.
++ */
++function announceFirstBootPassword(label: string, email: string, boot: BootstrapResolution) {
++  if (boot.source === 'env') {
++    console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email} (password from its environment variable; must be changed at first login).`);
++    return;
++  }
++  if (boot.persisted) {
++    console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email}. Generated password written to ${boot.file} — read it there, then change it at first login.`);
++    return;
++  }
++  console.warn(
++    `🔐 First-boot: ${label} ${email}: could not write ${boot.file}. One-time password: ${boot.password}\n` +
++      `   Set PLATFORM_ADMIN_PASSWORD / ADMIN_PASSWORD or make the state dir writable so this is never printed again.`,
++  );
++}
++
+ // First-boot bootstrap: create the default super-admin if the DB has no users.
+ // Runs on every startup but is idempotent — only fires on a brand-new database
+ // (e.g. right after `prisma migrate deploy` on a fresh Ubuntu install).
+@@ -48,35 +70,38 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
+        * first sign-in: every route except change-password answers 403 until
+        * then. Neither password is printed — the operator set them in .env.
+        */
+-      const platformPassword = process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
++      // No hardcoded default: operator-set, or a generated one-time secret
++      // written to the 0600 bootstrap credentials file. Both accounts must
++      // change their password at the first sign-in (mustChangePassword).
++      const platformBoot = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
+       const platform = await prisma.user.create({
+         data: {
+           name: 'Platform Owner',
+           email: PLATFORM_DEFAULT_EMAIL,
+-          password: await bcrypt.hash(platformPassword, 10),
++          password: await bcrypt.hash(platformBoot.password, 10),
+           role: 'SUPER_ADMIN',
+           isActive: true,
+           mustChangePassword: true,
+         },
+         select: { id: true },
+       });
++      announceFirstBootPassword('Super admin', PLATFORM_DEFAULT_EMAIL, platformBoot);
++
+       const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+       if (email !== PLATFORM_DEFAULT_EMAIL) {
++        const companyBoot = resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
+         await prisma.user.create({
+           data: {
+             name: 'My ISP',
+             email,
+-            password: await bcrypt.hash(process.env.ADMIN_PASSWORD || 'admin123', 10),
++            password: await bcrypt.hash(companyBoot.password, 10),
+             role: 'ADMIN',
+             parentId: platform.id,
+             isActive: true,
+             mustChangePassword: true,
+           },
+         });
+-      }
+-      console.log(`👑 First-boot: super admin login → ${PLATFORM_DEFAULT_EMAIL} (password: PLATFORM_ADMIN_PASSWORD, default admin123; must be changed at first login)`);
+-      if (email !== PLATFORM_DEFAULT_EMAIL) {
+-        console.log(`👤 First-boot: company login → ${email} (password: ADMIN_PASSWORD from .env; must be changed at first login)`);
++        announceFirstBootPassword('Company', email, companyBoot);
+       }
+       return;
+     }
+diff --git a/backend/src/nas/radius-sync.service.ts b/backend/src/nas/radius-sync.service.ts
+index 3eab1bb..1e93b53 100644
+--- a/backend/src/nas/radius-sync.service.ts
++++ b/backend/src/nas/radius-sync.service.ts
+@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
+ import { Pool } from 'pg';
+ import { allocateIpv6, ipv6AutoConfig } from './ipv6-alloc';
+ import { PrismaService } from '../prisma/prisma.service';
+-import { demoSessionExclusionSql } from '../common/scope.service';
++import { demoSessionExclusionSql } from '../common/scope.service';
+ import { RadiusClientVaultService } from './radius-client-vault.service';
+ 
+ /**
+@@ -27,6 +27,14 @@ export interface ActiveSessionsOpts {
+   q?: string;
+   sortBy?: string;
+   sortOrder?: 'asc' | 'desc';
++  /**
++   * Tenant scope pushed into SQL. When provided (non-null), only sessions whose
++   * username is in this list are returned/counted — so a reseller's page and
++   * total are computed in the database, never by fetching the whole server and
++   * filtering in Node. An EMPTY array means "owns nothing" → zero results.
++   * `null`/undefined = no scope restriction (platform admin).
++   */
++  usernames?: string[] | null;
+ }
+ 
+ /** Whitelisted ORDER BY targets for live sessions — column names and the two
+@@ -810,42 +818,42 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
+   // ─────────────────────────────────────────────────────────────
+   // NAS MANAGEMENT
+   // ─────────────────────────────────────────────────────────────
+-  /** Legacy compatibility: the application NAS row is now the source of truth. */
+-  async addNasToRadius(nasIp: string, nasName: string, _secret: string): Promise<void> {
+-    this.ensureConnected();
+-    const nas = await this.prisma.nas.findFirst({ where: { nasIp } });
+-    if (!nas) throw new Error('NAS ' + nasIp + ' is not registered in the application database');
+-    await this.prisma.nas.update({ where: { id: nas.id }, data: { shortname: nasName, nasname: nasIp } });
+-    await this.reloadFreeradius();
+-  }
+-
+-  async removeNasFromRadius(nasIp: string): Promise<void> {
+-    this.logger.log('RADIUS client removal requested for ' + nasIp + '; application NAS lifecycle remains authoritative');
+-  }
+-
+-  async getAllNasFromRadius(): Promise<any[]> {
+-    try {
+-      const rows = await this.prisma.nas.findMany({ select: { id: true, nasIp: true, nasname: true, shortname: true, isActive: true, radiusSecretEnc: true }, orderBy: { id: 'asc' } });
+-      return rows.map((row) => ({ id: row.id, nasname: row.nasname, shortname: row.shortname, isActive: row.isActive, secretConfigured: !!row.radiusSecretEnc }));
+-    } catch (error: any) { this.logger.error('Failed to get NAS client list: ' + error.message); return []; }
+-  }
+-
+-  async getNasByIp(nasIp: string): Promise<any> {
+-    const row = await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true, nasIp: true, nasname: true, shortname: true, isActive: true, radiusSecretEnc: true } });
+-    return row ? { ...row, secretConfigured: !!row.radiusSecretEnc } : null;
+-  }
+-
+-  async isNasRegistered(nasIp: string): Promise<boolean> {
+-    try { return !!(await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true } })); } catch { return false; }
+-  }
+-
+-  async updateNasSecret(nasIp: string, _newSecret: string): Promise<void> {
+-    this.ensureConnected();
+-    const nas = await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true } });
+-    if (!nas) throw new Error('NAS ' + nasIp + ' is not registered');
+-    throw new Error('Use NasService.update() to change the RADIUS secret so it is encrypted in the vault.');
+-  }
+-
++  /** Legacy compatibility: the application NAS row is now the source of truth. */
++  async addNasToRadius(nasIp: string, nasName: string, _secret: string): Promise<void> {
++    this.ensureConnected();
++    const nas = await this.prisma.nas.findFirst({ where: { nasIp } });
++    if (!nas) throw new Error('NAS ' + nasIp + ' is not registered in the application database');
++    await this.prisma.nas.update({ where: { id: nas.id }, data: { shortname: nasName, nasname: nasIp } });
++    await this.reloadFreeradius();
++  }
++
++  async removeNasFromRadius(nasIp: string): Promise<void> {
++    this.logger.log('RADIUS client removal requested for ' + nasIp + '; application NAS lifecycle remains authoritative');
++  }
++
++  async getAllNasFromRadius(): Promise<any[]> {
++    try {
++      const rows = await this.prisma.nas.findMany({ select: { id: true, nasIp: true, nasname: true, shortname: true, isActive: true, radiusSecretEnc: true }, orderBy: { id: 'asc' } });
++      return rows.map((row) => ({ id: row.id, nasname: row.nasname, shortname: row.shortname, isActive: row.isActive, secretConfigured: !!row.radiusSecretEnc }));
++    } catch (error: any) { this.logger.error('Failed to get NAS client list: ' + error.message); return []; }
++  }
++
++  async getNasByIp(nasIp: string): Promise<any> {
++    const row = await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true, nasIp: true, nasname: true, shortname: true, isActive: true, radiusSecretEnc: true } });
++    return row ? { ...row, secretConfigured: !!row.radiusSecretEnc } : null;
++  }
++
++  async isNasRegistered(nasIp: string): Promise<boolean> {
++    try { return !!(await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true } })); } catch { return false; }
++  }
++
++  async updateNasSecret(nasIp: string, _newSecret: string): Promise<void> {
++    this.ensureConnected();
++    const nas = await this.prisma.nas.findFirst({ where: { nasIp }, select: { id: true } });
++    if (!nas) throw new Error('NAS ' + nasIp + ' is not registered');
++    throw new Error('Use NasService.update() to change the RADIUS secret so it is encrypted in the vault.');
++  }
++
+   // RADIUS STATUS & MONITORING
+   // ─────────────────────────────────────────────────────────────
+   async isRadiusAlive(): Promise<{
+@@ -916,6 +924,11 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
+       if (nasIp) {
+         query += ' AND nasipaddress = $' + params.push(nasIp);
+       }
++      // Tenant scope, enforced in SQL. An empty list = owns nothing → no rows.
++      if (opts.usernames != null) {
++        if (opts.usernames.length === 0) return [];
++        query += ` AND username = ANY($${params.push(opts.usernames)}::text[])`;
++      }
+       // Server-mode search (Network page): username / IP / MAC / NAS.
+       const q = (opts.q ?? '').trim();
+       if (q) {
+@@ -945,7 +958,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
+ 
+   /** COUNT of the same live-session window getActiveSessions() selects, for
+    *  the DataTable's "X–Y of Z" pager. Must mirror the WHERE exactly. */
+-  async countActiveSessions(nasIp?: string, q?: string): Promise<number> {
++  async countActiveSessions(nasIp?: string, q?: string, usernames?: string[] | null): Promise<number> {
+     try {
+       this.ensureConnected();
+       const params: any[] = [];
+@@ -959,6 +972,11 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
+       if (nasIp) {
+         query += ' AND nasipaddress = $' + params.push(nasIp);
+       }
++      // Tenant scope, mirrored from getActiveSessions so the total matches.
++      if (usernames != null) {
++        if (usernames.length === 0) return 0;
++        query += ` AND username = ANY($${params.push(usernames)}::text[])`;
++      }
+       const likeQ = (q ?? '').trim();
+       if (likeQ) {
+         const like = `%${likeQ}%`;
+diff --git a/backend/src/network/live-sessions-scope.spec.ts b/backend/src/network/live-sessions-scope.spec.ts
+new file mode 100644
+index 0000000..75aa5e7
+--- /dev/null
++++ b/backend/src/network/live-sessions-scope.spec.ts
+@@ -0,0 +1,77 @@
++/**
++ * P2 — server-side session scoping.
++ *
++ * Proves a non-admin's live-sessions page and total are computed in the DB with
++ * the caller's own usernames pushed into the query (bounded pagination), not by
++ * fetching every session on the server and filtering/slicing in Node. A platform
++ * admin passes no restriction.
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { NetworkService } from './network.service';
++
++function harness(opts: { admin: boolean; scopedUsernames?: string[]; rows?: any[]; total?: number }) {
++  const calls: any = { get: [], count: [] };
++  const radiusSync = {
++    async getActiveSessions(nasIp: string | undefined, o: any = {}) { calls.get.push({ nasIp, o }); return opts.rows ?? []; },
++    async countActiveSessions(nasIp: string | undefined, q: any, usernames: any) { calls.count.push({ nasIp, q, usernames }); return opts.total ?? 0; },
++  };
++  const scope = {
++    isAdmin: () => opts.admin,
++    subscriberWhere: async () => ({ userId: { in: [7, 8] } }),
++  };
++  const prisma = {
++    subscriber: {
++      async findMany() {
++        return (opts.scopedUsernames ?? []).map((u) => ({ username: u }));
++      },
++    },
++  };
++  const svc: any = Object.create(NetworkService.prototype);
++  svc.radiusSync = radiusSync; svc.scope = scope; svc.prisma = prisma;
++  // enrichSessions is exercised elsewhere; stub it to echo the rows it is given.
++  svc.enrichSessions = async (rows: any[]) => rows.map((r) => ({ username: r.username }));
++  return { svc, calls };
++}
++
++describe('NetworkService.liveSessions scoping (P2)', () => {
++  it('non-admin: pushes its own usernames into BOTH the page query and the count', async () => {
++    const h = harness({ admin: false, scopedUsernames: ['a', 'b'], rows: [{ username: 'a' }], total: 1 });
++    const res: any = await h.svc.liveSessions(undefined, { role: 'RESELLER' }, { page: 2, limit: 25 });
++    // Page query carried the scope + real LIMIT/OFFSET — not a Node slice.
++    expect(h.calls.get[0].o.usernames).toEqual(['a', 'b']);
++    expect(h.calls.get[0].o.limit).toBe(25);
++    expect(h.calls.get[0].o.offset).toBe(25); // (page 2 - 1) * 25
++    // Count carried the same scope.
++    expect(h.calls.count[0].usernames).toEqual(['a', 'b']);
++    expect(res).toEqual({ items: [{ username: 'a' }], total: 1, page: 2, pageSize: 25 });
++  });
++
++  it('non-admin with no subscribers: empty scope is passed (DB returns nothing)', async () => {
++    const h = harness({ admin: false, scopedUsernames: [], rows: [], total: 0 });
++    const res: any = await h.svc.liveSessions(undefined, { role: 'SUB_RESELLER' }, { page: 1, limit: 50 });
++    expect(h.calls.get[0].o.usernames).toEqual([]); // radius-sync short-circuits this to []
++    expect(h.calls.count[0].usernames).toEqual([]);
++    expect(res.total).toBe(0);
++  });
++
++  it('platform admin: no username restriction (null), full server view', async () => {
++    const h = harness({ admin: true, rows: [{ username: 'x' }], total: 1 });
++    await h.svc.liveSessions(undefined, { role: 'SUPER_ADMIN' }, { page: 1, limit: 50 });
++    expect(h.calls.get[0].o.usernames).toBeNull();
++    expect(h.calls.count[0].usernames).toBeNull();
++  });
++
++  it('legacy (non-paged) non-admin call is also scoped in SQL', async () => {
++    const h = harness({ admin: false, scopedUsernames: ['a'], rows: [{ username: 'a' }] });
++    const res: any = await h.svc.liveSessions(undefined, { role: 'RETAILER' });
++    expect(Array.isArray(res)).toBe(true); // legacy array shape
++    expect(h.calls.get[0].o.usernames).toEqual(['a']);
++    expect(h.calls.count.length).toBe(0); // no count in legacy shape
++  });
++
++  it('caps page size at 200', async () => {
++    const h = harness({ admin: true, rows: [], total: 0 });
++    await h.svc.liveSessions(undefined, { role: 'SUPER_ADMIN' }, { page: 1, limit: 99999 });
++    expect(h.calls.get[0].o.limit).toBe(200);
++  });
++});
+diff --git a/backend/src/network/network.service.ts b/backend/src/network/network.service.ts
+index 7c607c4..1b8c74f 100644
+--- a/backend/src/network/network.service.ts
++++ b/backend/src/network/network.service.ts
+@@ -65,31 +65,49 @@ export class NetworkService {
+    */
+   async liveSessions(nasIp?: string, actor?: any, opts: ActiveSessionsOpts & { page?: number; limit?: number } = {}): Promise<LiveSession[] | LiveSessionPage> {
+     const paged = opts?.page !== undefined || opts?.limit !== undefined;
++    /**
++     * Below the platform, EVERY shape is scoped to the caller's own subscribers
++     * in the SQL itself: we resolve the subtree's usernames once and pass them
++     * to the radacct query as a filter. Previously a dealer's page was a slice
++     * of the whole server's sessions fetched into Node and filtered afterwards —
++     * which showed near-empty pages, the installation-wide online count, and
++     * pulled every live session on the box into memory on each request.
++     * Platform admins pass `null` → no restriction, exactly as before.
++     */
++    const scopedUsernames = actor && !this.scope.isAdmin(actor.role)
++      ? await this.scopedUsernames(actor)
++      : null;
++
+     if (!paged) {
+-      const rows = await this.radiusSync.getActiveSessions(nasIp).catch(() => []);
++      const rows = await this.radiusSync
++        .getActiveSessions(nasIp, { usernames: scopedUsernames })
++        .catch(() => []);
+       return this.enrichSessions(rows, actor);
+     }
+     const page = Math.max(1, Number(opts.page) || 1);
+     const take = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
+     const offset = (page - 1) * take;
+     const q = `${opts.q ?? ''}`.trim() || undefined;
+-    /**
+-     * Below the platform, the page and the total must be of the caller's OWN
+-     * sessions: paging the whole server and filtering afterwards showed a
+-     * dealer near-empty pages and the installation-wide online count.
+-     */
+-    if (actor && !this.scope.isAdmin(actor.role)) {
+-      const all = await this.radiusSync.getActiveSessions(nasIp, { q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []);
+-      const mine = await this.enrichSessions(all, actor);
+-      return { items: mine.slice(offset, offset + take), total: mine.length, page, pageSize: take };
+-    }
+     const [total, rawRows] = await Promise.all([
+-      this.radiusSync.countActiveSessions(nasIp, q),
+-      this.radiusSync.getActiveSessions(nasIp, { limit: take, offset, q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []),
++      this.radiusSync.countActiveSessions(nasIp, q, scopedUsernames),
++      this.radiusSync
++        .getActiveSessions(nasIp, { limit: take, offset, q, sortBy: opts.sortBy, sortOrder: opts.sortOrder, usernames: scopedUsernames })
++        .catch(() => []),
+     ]);
+     return { items: await this.enrichSessions(rawRows, actor), total, page, pageSize: take };
+   }
+ 
++  /**
++   * The usernames of every subscriber in the caller's subtree — the tenant
++   * scope, resolved once and pushed into the radacct SQL. Bounded to the
++   * caller's own subscribers, not the whole installation.
++   */
++  private async scopedUsernames(actor: any): Promise<string[]> {
++    const where = await this.scope.subscriberWhere(actor);
++    const subs = await this.prisma.subscriber.findMany({ where, select: { username: true } });
++    return subs.map((s) => s.username).filter(Boolean) as string[];
++  }
++
+   /** Join live radacct rows to subscriber identity — scoped, enriched, and
+    *  shaped for both the legacy array and the server-mode page. */
+   private async enrichSessions(rows: any[], actor?: any) {
+@@ -166,12 +184,12 @@ export class NetworkService {
+    * straight at the MikroTik API and remove /ppp/active, and we only report
+    * success when something actually cut the session.
+    */
+-  /**
+-   * `why` names the panel feature that asked for the cut (operator-kick,
+-   * plan-change, static-ip-change, fup-block…). It is stored with the session
+-   * action log so the Logs → Disconnect log can say HOW a customer was dropped,
+-   * not just the RADIUS cause the router reported.
+-   */
++  /**
++   * `why` names the panel feature that asked for the cut (operator-kick,
++   * plan-change, static-ip-change, fup-block…). It is stored with the session
++   * action log so the Logs → Disconnect log can say HOW a customer was dropped,
++   * not just the RADIUS cause the router reported.
++   */
+   async disconnect(username: string, actor?: any, why?: string) {
+     const rows = await this.prisma.$queryRaw<Array<any>>`
+       SELECT acctsessionid, nasipaddress, framedipaddress
+diff --git a/backend/src/subscribers/router-presence.spec.ts b/backend/src/subscribers/router-presence.spec.ts
+new file mode 100644
+index 0000000..ed868bc
+--- /dev/null
++++ b/backend/src/subscribers/router-presence.spec.ts
+@@ -0,0 +1,108 @@
++/**
++ * P1 — router presence fan-out.
++ *
++ * Proves the sweep is bounded (never all routers at once), times each NAS out,
++ * excludes demo NAS, caches the union, and collapses concurrent cache-miss
++ * callers into a single sweep (single-flight).
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { SubscribersService } from './subscribers.service';
++import { DEMO_NAS_SERVER } from '../common/scope.service';
++
++function makeHarness(opts: {
++  nases: any[];
++  getUsers: (n: any) => Promise<Array<{ username: string }>>;
++}) {
++  const store = new Map<string, any>();
++  const cache = {
++    async get(k: string) { return store.has(k) ? store.get(k) : null; },
++    async set(k: string, v: any) { store.set(k, v); },
++  };
++  let active = 0;
++  let peak = 0;
++  const mikrotik = {
++    async getActivePppoeUsers(ip: string) {
++      active++; peak = Math.max(peak, active);
++      try { return await opts.getUsers({ ip }); }
++      finally { active--; }
++    },
++  };
++  const queries: any[] = [];
++  const prisma = {
++    nas: {
++      async findMany(args: any) { queries.push(args); return opts.nases; },
++    },
++  };
++  // Bypass the real DI constructor; wire only what routerPresence touches.
++  const svc: any = Object.create(SubscribersService.prototype);
++  svc.cache = cache; svc.prisma = prisma; svc.mikrotik = mikrotik;
++  return { svc, store, getPeak: () => peak, queries };
++}
++
++const OLD_ENV = process.env;
++beforeEach(() => { process.env = { ...OLD_ENV }; });
++afterAll(() => { process.env = OLD_ENV; });
++
++const nas = (ip: string, extra: any = {}) => ({ nasIp: ip, apiPort: 8728, apiUsername: 'api', apiPassword: 'p', server: null, ...extra });
++
++describe('SubscribersService.routerPresence (P1)', () => {
++  it('bounds concurrency to NAS_POLL_CONCURRENCY', async () => {
++    process.env.NAS_POLL_CONCURRENCY = '5';
++    const nases = Array.from({ length: 40 }, (_, i) => nas(`10.0.0.${i}`));
++    const h = makeHarness({
++      nases,
++      getUsers: async () => { await new Promise((r) => setTimeout(r, 10)); return [{ username: 'u' }]; },
++    });
++    const set = await h.svc.routerPresence();
++    expect(h.getPeak()).toBeLessThanOrEqual(5); // never 40 at once
++    expect(set.has('u')).toBe(true);
++  });
++
++  it('times a hung NAS out and still returns the reachable ones', async () => {
++    process.env.NAS_POLL_CONCURRENCY = '10';
++    process.env.NAS_API_TIMEOUT_MS = '1000';
++    const h = makeHarness({
++      nases: [nas('10.0.0.1'), nas('10.0.0.2')],
++      getUsers: async ({ ip }: any) => {
++        if (ip === '10.0.0.1') return new Promise(() => {}); // never resolves
++        return [{ username: 'live' }];
++      },
++    });
++    const start = Date.now();
++    const set = await h.svc.routerPresence();
++    expect(Date.now() - start).toBeLessThan(1500); // did not hang on the dead NAS
++    expect(set.has('live')).toBe(true);
++    expect(set.size).toBe(1);
++  });
++
++  it('excludes demo NAS at the query level', async () => {
++    const h = makeHarness({ nases: [], getUsers: async () => [] });
++    await h.svc.routerPresence();
++    const where = h.queries[0].where;
++    expect(where.OR).toEqual([{ server: null }, { server: { not: DEMO_NAS_SERVER } }]);
++    expect(where.apiUsername).toEqual({ not: null });
++  });
++
++  it('caches the union for reuse (second call hits cache, no re-sweep)', async () => {
++    let sweeps = 0;
++    const h = makeHarness({
++      nases: [nas('10.0.0.1')],
++      getUsers: async () => { sweeps++; return [{ username: 'u' }]; },
++    });
++    await h.svc.routerPresence();
++    await h.svc.routerPresence();
++    expect(sweeps).toBe(1); // second call served from cache
++    expect(h.store.get('subs:router-presence')).toEqual(['u']);
++  });
++
++  it('single-flight: concurrent cache-miss callers run ONE sweep', async () => {
++    let sweeps = 0;
++    const h = makeHarness({
++      nases: [nas('10.0.0.1')],
++      getUsers: async () => { sweeps++; await new Promise((r) => setTimeout(r, 20)); return [{ username: 'u' }]; },
++    });
++    const [a, b, c] = await Promise.all([h.svc.routerPresence(), h.svc.routerPresence(), h.svc.routerPresence()]);
++    expect(sweeps).toBe(1);
++    for (const s of [a, b, c]) expect(s.has('u')).toBe(true);
++  });
++});
+diff --git a/backend/src/subscribers/subscribers.service.ts b/backend/src/subscribers/subscribers.service.ts
+index 7f39328..5eeafa1 100644
+--- a/backend/src/subscribers/subscribers.service.ts
++++ b/backend/src/subscribers/subscribers.service.ts
+@@ -10,7 +10,8 @@ import { CacheService } from '../common/cache.service';
+ import { QueueService } from '../common/queue.service';
+ import { AccountingService } from '../accounting/accounting.service';
+ import { NotificationsService } from '../notifications/notifications.service';
+-import { ScopeService, Actor } from '../common/scope.service';
++import { ScopeService, Actor, DEMO_NAS_SERVER } from '../common/scope.service';
++import { mapLimit, withTimeout } from '../common/concurrency';
+ import { LicenceCapacityService } from '../licence/licence-capacity.service';
+ import { ResellerPricingService } from '../organization/reseller-pricing.service';
+ import { InvoicesService } from '../invoices/invoices.service';
+@@ -987,33 +988,62 @@ export class SubscribersService implements OnModuleInit {
+    * Returned lower-cased because RADIUS usernames are case-insensitive in
+    * practice and MikroTik may report a different case than we stored.
+    */
++  /** De-dupes concurrent cache-miss recomputations so one slow sweep is not
++   *  started N times at once (single-flight). */
++  private routerPresenceInFlight: Promise<Set<string>> | null = null;
++
+   private async routerPresence(): Promise<Set<string>> {
+     try {
+-      const arr = await this.cache.wrap<string[]>('subs:router-presence', 20, async () => {
+-        const nases = await this.prisma.nas.findMany({
+-          where: { apiUsername: { not: null } },
+-          select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+-        });
+-        const online = new Set<string>();
+-        await Promise.all(
+-          nases.map(async (n) => {
+-            if (!n.nasIp || !n.apiUsername) return;
+-            try {
+-              const users = await this.mikrotik.getActivePppoeUsers(
+-                n.nasIp, n.apiPort || 8728, n.apiUsername, n.apiPassword || '',
+-              );
+-              for (const u of users) if (u?.username) online.add(String(u.username).toLowerCase());
+-            } catch { /* unreachable router → contributes nothing */ }
+-          }),
+-        );
+-        return [...online];
+-      });
+-      return new Set(arr || []);
++      const cached = await this.cache.get<string[]>('subs:router-presence');
++      if (cached) return new Set(cached);
++      // Single-flight: the first caller on a cache miss runs the sweep; every
++      // other caller that arrives before it finishes awaits the same promise.
++      if (this.routerPresenceInFlight) return await this.routerPresenceInFlight;
++      this.routerPresenceInFlight = this.computeRouterPresence();
++      try {
++        return await this.routerPresenceInFlight;
++      } finally {
++        this.routerPresenceInFlight = null;
++      }
+     } catch {
+       return new Set();
+     }
+   }
+ 
++  /**
++   * Poll every API-capable NAS for its /ppp/active list with BOUNDED
++   * concurrency and a per-NAS timeout — never an unbounded Promise.all that
++   * opens a socket to all routers at once and stalls behind the slowest one.
++   * Demo NAS are excluded (no real device to reach). Result cached 20s.
++   */
++  private async computeRouterPresence(): Promise<Set<string>> {
++    const nases = await this.prisma.nas.findMany({
++      where: {
++        apiUsername: { not: null },
++        // Invented demo NAS have no real router — never open an API socket.
++        OR: [{ server: null }, { server: { not: DEMO_NAS_SERVER } }],
++      },
++      select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
++    });
++    const online = new Set<string>();
++    const limit = Math.max(1, Number(process.env.NAS_POLL_CONCURRENCY) || 20);
++    const perNasTimeoutMs = Math.max(1000, Number(process.env.NAS_API_TIMEOUT_MS) || 8000);
++    // mapLimit catches each worker's error, so an unreachable or timed-out
++    // router contributes nothing and never aborts the sweep.
++    await mapLimit(nases, limit, async (n) => {
++      if (!n.nasIp || !n.apiUsername) return;
++      const users = await withTimeout(
++        this.mikrotik.getActivePppoeUsers(n.nasIp, n.apiPort || 8728, n.apiUsername, n.apiPassword || ''),
++        perNasTimeoutMs,
++        `router-presence ${n.nasIp}`,
++      );
++      for (const u of users) if (u?.username) online.add(String(u.username).toLowerCase());
++    });
++    const arr = [...online];
++    await this.cache.set('subs:router-presence', arr, 20);
++    return new Set(arr);
++  }
++
+   async attachLiveStatus(rows: any[]): Promise<any[]> {
+     if (!Array.isArray(rows) || rows.length === 0) return rows;
+     const usernames = rows.map((r) => r?.username).filter(Boolean) as string[];
+diff --git a/backend/src/users/platform-companies.spec.ts b/backend/src/users/platform-companies.spec.ts
+index 15c8744..e2eac8d 100644
+--- a/backend/src/users/platform-companies.spec.ts
++++ b/backend/src/users/platform-companies.spec.ts
+@@ -127,7 +127,7 @@ describe('platform account signing in as a company', () => {
+     };
+     const jwt: any = { sign: jest.fn(() => 'TOKEN') };
+     const scope: any = { assertUser: jest.fn(async () => undefined) };
+-    const svc = new AuthService(prisma, jwt, {} as any, scope, {} as any);
++    const svc = new AuthService(prisma, jwt, {} as any, scope, {} as any, {} as any);
+     return svc;
+   }
+ 
+diff --git a/install.sh b/install.sh
+index 4b7535e..df4f61a 100644
+--- a/install.sh
++++ b/install.sh
+@@ -290,17 +290,27 @@ cd "$APP_DIR/backend"
+ # SECRETS_KEY was never set), and a new key makes every one unreadable — every
+ # router would stop authenticating. Keep what is there; generate only on a
+ # first install.
+-KEEP_JWT=""; KEEP_SK=""
++KEEP_JWT=""; KEEP_SK=""; KEEP_PLATFORM_PW=""; KEEP_ADMIN_PW=""
+ if [ -f .env ]; then
+   cp -a .env ".env.bak-$(date +%Y%m%d-%H%M%S)" && chmod 600 .env.bak-* 2>/dev/null || true
+   KEEP_JWT="$(sed -n -E 's/^JWT_SECRET="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
+   KEEP_SK="$(sed -n -E 's/^SECRETS_KEY="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
++  KEEP_PLATFORM_PW="$(sed -n -E 's/^PLATFORM_ADMIN_PASSWORD="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
++  KEEP_ADMIN_PW="$(sed -n -E 's/^ADMIN_PASSWORD="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
+   # Never had SECRETS_KEY: existing secrets were encrypted with JWT_SECRET.
+   [ -z "$KEEP_SK" ] && KEEP_SK="$KEEP_JWT"
+   [ -n "$KEEP_JWT" ] && ok "Existing JWT_SECRET / SECRETS_KEY kept (encrypted secrets stay readable)"
+ fi
++# A legacy .env may carry the old published default — never keep that; mint a
++# fresh random one instead, so an upgrade stops shipping admin123.
++[ "$KEEP_PLATFORM_PW" = "admin123" ] && KEEP_PLATFORM_PW=""
++[ "$KEEP_ADMIN_PW" = "admin123" ] && KEEP_ADMIN_PW=""
+ JWT_SECRET_VAL="${KEEP_JWT:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
+ SECRETS_KEY_VAL="${KEEP_SK:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
++# First-boot login passwords: random per install, never a hardcoded default.
++# Both must still be changed at the first sign-in (mustChangePassword).
++PLATFORM_ADMIN_PW_VAL="${KEEP_PLATFORM_PW:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
++ADMIN_PW_VAL="${KEEP_ADMIN_PW:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
+ cat > .env <<EOF
+ # connection_limit is PER PROCESS. With pm2 cluster + a worker you may have many
+ # processes; keep each modest so the total stays under Postgres max_connections
+@@ -317,10 +327,10 @@ SECRETS_KEY="$SECRETS_KEY_VAL"
+ # the first sign-in. (The backend refuses to start without ADMIN_PASSWORD set.)
+ #   super admin (platform: companies, licence, server)
+ PLATFORM_ADMIN_EMAIL=superadmin@jointbox.com
+-PLATFORM_ADMIN_PASSWORD=admin123
++PLATFORM_ADMIN_PASSWORD=$PLATFORM_ADMIN_PW_VAL
+ #   the first ISP company (subscribers, routers, franchises, billing)
+ ADMIN_EMAIL=admin@jointbox.com
+-ADMIN_PASSWORD=admin123
++ADMIN_PASSWORD=$ADMIN_PW_VAL
+ # Sessions re-authenticate against the panel on this interval (see docs).
+ RADIUS_SESSION_TIMEOUT=86400
+ # Scale tuning — see scripts/SCALING.md
+@@ -642,9 +652,11 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
+ 
+   Panel      http://$SERVER_IP:$WEB_PORT
+   API        http://$SERVER_IP:$API_PORT
+-  Super admin  superadmin@jointbox.com / admin123   ${Y}← companies, licence, server${N}
+-  Company      admin@jointbox.com / admin123        ${Y}← subscribers, routers, billing${N}
+-               ${Y}Both ask for a new password at the first sign-in.${N}
++  Super admin  superadmin@jointbox.com   ${Y}← companies, licence, server${N}
++  Company      admin@jointbox.com        ${Y}← subscribers, routers, billing${N}
++               ${Y}Passwords are random per install — see PLATFORM_ADMIN_PASSWORD${N}
++               ${Y}and ADMIN_PASSWORD in $APP_DIR/backend/.env. Both ask for a${N}
++               ${Y}new password at the first sign-in.${N}
+ 
+   Database   $DB_NAME
+   DB user    $DB_USER
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index c9143e7..6c4abda 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -3095,6 +3095,11 @@ model SubscriberBalanceLedger {
+   amount       Float // positive = credit, negative = debit
+   balanceAfter Float
+   reference    String?                    @db.VarChar(64) // invoice, payment, manual note
++  /// Optional idempotency key for exactly-once financial operations (top-ups,
++  /// callbacks, reversals). A unique index (where not null) makes a retried or
++  /// duplicated operation fail at the database rather than double-apply. New
++  /// column — all existing rows are NULL, and Postgres permits many NULLs.
++  idempotencyKey String?                  @unique @db.VarChar(120)
+   description  String?                    @db.VarChar(500)
+   /// Actor who triggered the change. SYSTEM for scheduled jobs, PORTAL for
+   /// self-service, or a staff user id.

@@ -1,0 +1,1728 @@
+diff --git a/backend/prisma/migrations/20261101140000_nas_snmp_monitoring/migration.sql b/backend/prisma/migrations/20261101140000_nas_snmp_monitoring/migration.sql
+new file mode 100644
+index 0000000..65aa6cc
+--- /dev/null
++++ b/backend/prisma/migrations/20261101140000_nas_snmp_monitoring/migration.sql
+@@ -0,0 +1,65 @@
++-- Stage 2 — per-NAS SNMP monitoring state & events.
++-- Additive and safe on a live database: two new tables, no change to existing
++-- tables or data. All objects use IF NOT EXISTS so a re-run is a no-op.
++--
++-- Rollback:
++--   DROP TABLE IF EXISTS "nas_event";
++--   DROP TABLE IF EXISTS "nas_snmp_state";
++
++-- ── Per-NAS operational state (1:1 with nas) ────────────────────────────────
++CREATE TABLE IF NOT EXISTS "nas_snmp_state" (
++  "nasId"               INTEGER      NOT NULL,
++  "status"              VARCHAR(20)  NOT NULL DEFAULT 'unknown',
++  "lastPollAt"          TIMESTAMP(3),
++  "lastSuccessAt"       TIMESTAMP(3),
++  "lastErrorAt"         TIMESTAMP(3),
++  "lastError"           VARCHAR(300),
++  "consecutiveFailures" INTEGER      NOT NULL DEFAULT 0,
++  "nextPollAt"          TIMESTAMP(3),
++  "sysDescr"            VARCHAR(300),
++  "uptimeSec"           INTEGER,
++  "updatedAt"           TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  CONSTRAINT "nas_snmp_state_pkey" PRIMARY KEY ("nasId")
++);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'nas_snmp_state_nasId_fkey') THEN
++    ALTER TABLE "nas_snmp_state"
++      ADD CONSTRAINT "nas_snmp_state_nasId_fkey"
++      FOREIGN KEY ("nasId") REFERENCES "nas"("id") ON DELETE CASCADE ON UPDATE CASCADE;
++  END IF;
++END $$;
++
++CREATE INDEX IF NOT EXISTS "nas_snmp_state_status_idx"     ON "nas_snmp_state" ("status");
++CREATE INDEX IF NOT EXISTS "nas_snmp_state_nextPollAt_idx" ON "nas_snmp_state" ("nextPollAt");
++
++-- ── Monitoring lifecycle events ─────────────────────────────────────────────
++CREATE TABLE IF NOT EXISTS "nas_event" (
++  "id"             SERIAL       NOT NULL,
++  "nasId"          INTEGER      NOT NULL,
++  "type"           VARCHAR(32)  NOT NULL,
++  "severity"       VARCHAR(12)  NOT NULL DEFAULT 'info',
++  "message"        VARCHAR(400) NOT NULL,
++  "details"        JSONB,
++  "ts"             TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  "ownerId"        INTEGER,
++  "acknowledged"   BOOLEAN      NOT NULL DEFAULT false,
++  "acknowledgedAt" TIMESTAMP(3),
++  "acknowledgedBy" INTEGER,
++  CONSTRAINT "nas_event_pkey" PRIMARY KEY ("id")
++);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'nas_event_nasId_fkey') THEN
++    ALTER TABLE "nas_event"
++      ADD CONSTRAINT "nas_event_nasId_fkey"
++      FOREIGN KEY ("nasId") REFERENCES "nas"("id") ON DELETE CASCADE ON UPDATE CASCADE;
++  END IF;
++END $$;
++
++CREATE INDEX IF NOT EXISTS "nas_event_nasId_ts_idx"        ON "nas_event" ("nasId", "ts");
++CREATE INDEX IF NOT EXISTS "nas_event_nasId_type_ts_idx"   ON "nas_event" ("nasId", "type", "ts");
++CREATE INDEX IF NOT EXISTS "nas_event_acknowledged_ts_idx" ON "nas_event" ("acknowledged", "ts");
++CREATE INDEX IF NOT EXISTS "nas_event_ownerId_ts_idx"      ON "nas_event" ("ownerId", "ts");
+diff --git a/backend/src/nas/nas-snmp-config.spec.ts b/backend/src/nas/nas-snmp-config.spec.ts
+new file mode 100644
+index 0000000..3dcd0e3
+--- /dev/null
++++ b/backend/src/nas/nas-snmp-config.spec.ts
+@@ -0,0 +1,100 @@
++/**
++ * Stage 2 — SNMP config validation, normalisation, and secret redaction.
++ */
++import { BadRequestException } from '@nestjs/common';
++import { clampInt, normalizeMonitoredPorts, assertSnmpConfigValid, normalizeSnmpVersion } from './nas-snmp-config';
++import { sanitizeNas } from './nas-credentials';
++
++describe('SNMP config helpers (Stage 2)', () => {
++  describe('clampInt', () => {
++    it('clamps into range and defaults non-numbers', () => {
++      expect(clampInt(5, 10, 100, 30)).toBe(10);
++      expect(clampInt(99999, 10, 100, 30)).toBe(100);
++      expect(clampInt('abc', 10, 100, 30)).toBe(30);
++      expect(clampInt(42, 10, 100, 30)).toBe(42);
++    });
++  });
++
++  describe('normalizeMonitoredPorts', () => {
++    it('accepts arrays, CSV and JSON; null when empty', () => {
++      expect(normalizeMonitoredPorts(['ether1', 'ether2'])).toBe('["ether1","ether2"]');
++      expect(normalizeMonitoredPorts('ether1, ether2')).toBe('["ether1","ether2"]');
++      expect(normalizeMonitoredPorts('["vlan10"]')).toBe('["vlan10"]');
++      expect(normalizeMonitoredPorts('')).toBeNull();
++      expect(normalizeMonitoredPorts(null)).toBeNull();
++    });
++  });
++
++  describe('assertSnmpConfigValid — never a silent downgrade', () => {
++    it('allows v2c without extra validation', () => {
++      expect(() => assertSnmpConfigValid({ snmpVersion: 'V2C' }, {})).not.toThrow();
++    });
++
++    it('accepts a complete SNMPv3 authPriv configuration', () => {
++      expect(() => assertSnmpConfigValid({}, {
++        snmpVersion: 'V3', snmpV3User: 'netops', snmpV3SecLevel: 'authPriv',
++        snmpV3AuthProto: 'SHA', snmpV3AuthPass: 'enc:auth', snmpV3PrivProto: 'AES', snmpV3PrivPass: 'enc:priv',
++      })).not.toThrow();
++    });
++
++    it('rejects v3 with no username', () => {
++      expect(() => assertSnmpConfigValid({}, { snmpVersion: 'V3', snmpV3SecLevel: 'authPriv' }))
++        .toThrow(BadRequestException);
++    });
++
++    it('rejects v3 with no / invalid security level', () => {
++      expect(() => assertSnmpConfigValid({}, { snmpVersion: 'V3', snmpV3User: 'u' }))
++        .toThrow(/security level/i);
++    });
++
++    it('rejects authPriv missing the privacy passphrase (no silent downgrade)', () => {
++      expect(() => assertSnmpConfigValid({}, {
++        snmpVersion: 'V3', snmpV3User: 'u', snmpV3SecLevel: 'authPriv',
++        snmpV3AuthProto: 'SHA', snmpV3AuthPass: 'enc:auth', snmpV3PrivProto: 'AES', // no priv pass
++      })).toThrow(/privacy passphrase/i);
++    });
++
++    it('rejects authNoPriv missing the auth passphrase', () => {
++      expect(() => assertSnmpConfigValid({}, {
++        snmpVersion: 'V3', snmpV3User: 'u', snmpV3SecLevel: 'authNoPriv', snmpV3AuthProto: 'SHA',
++      })).toThrow(/authentication passphrase/i);
++    });
++
++    it('uses EXISTING stored passphrases when the update only changes the level', () => {
++      // Passphrases already stored; the update just (re)affirms authPriv.
++      expect(() => assertSnmpConfigValid(
++        { snmpVersion: 'V3', snmpV3User: 'u', snmpV3AuthProto: 'SHA', snmpV3AuthPass: 'enc:a', snmpV3PrivProto: 'AES', snmpV3PrivPass: 'enc:p' },
++        { snmpV3SecLevel: 'authPriv' },
++      )).not.toThrow();
++    });
++  });
++
++  describe('normalizeSnmpVersion', () => {
++    it('maps UI and enum forms to the Prisma enum, default V2C', () => {
++      expect(normalizeSnmpVersion('1')).toBe('V1');
++      expect(normalizeSnmpVersion('2c')).toBe('V2C');
++      expect(normalizeSnmpVersion('3')).toBe('V3');
++      expect(normalizeSnmpVersion('V3')).toBe('V3');
++      expect(normalizeSnmpVersion('nonsense')).toBe('V2C');
++    });
++  });
++
++  describe('secret redaction', () => {
++    it('masks SNMP community and v3 passphrases, exposes has-flags only', () => {
++      const out: any = sanitizeNas({
++        id: 1, nasname: 'n1',
++        snmpCommunity: 'enc:v1:supersecret',
++        snmpV3AuthPass: 'enc:v1:authsecret',
++        snmpV3PrivPass: 'enc:v1:privsecret',
++        snmpV3User: 'netops',
++      });
++      expect(out.snmpCommunity).not.toContain('supersecret');
++      expect(out.snmpV3AuthPass).not.toContain('authsecret');
++      expect(out.snmpV3PrivPass).not.toContain('privsecret');
++      expect(out.hasSnmpCommunity).toBe(true);
++      expect(out.hasSnmpV3AuthPass).toBe(true);
++      expect(out.hasSnmpV3PrivPass).toBe(true);
++      expect(out.snmpV3User).toBe('netops'); // username is not a secret
++    });
++  });
++});
+diff --git a/backend/src/nas/nas-snmp-config.ts b/backend/src/nas/nas-snmp-config.ts
+new file mode 100644
+index 0000000..811c2e5
+--- /dev/null
++++ b/backend/src/nas/nas-snmp-config.ts
+@@ -0,0 +1,78 @@
++import { BadRequestException } from '@nestjs/common';
++
++/**
++ * Per-NAS SNMP configuration helpers (Stage 2).
++ *
++ * Kept out of nas.service so the validation — the part that enforces "never a
++ * silent downgrade to a weaker SNMPv3 level or to v2c" — can be unit-tested on
++ * its own, without constructing the whole NAS service graph.
++ */
++
++/**
++ * Accept the SNMP version in either the UI form ("1" / "2c" / "3") or the DB
++ * enum ("V1" / "V2C" / "V3") and always return the enum Prisma expects. An
++ * unrecognised value defaults to V2C (the previous default) rather than throwing.
++ */
++export function normalizeSnmpVersion(v: any): 'V1' | 'V2C' | 'V3' {
++  const s = String(v ?? '').trim().toUpperCase();
++  if (s === '1' || s === 'V1') return 'V1';
++  if (s === '3' || s === 'V3') return 'V3';
++  return 'V2C'; // "2", "2c", "V2C", or anything else
++}
++
++/** Clamp a numeric config value into a safe range, falling back to a default. */
++export function clampInt(v: any, min: number, max: number, dflt: number): number {
++  const n = Math.round(Number(v));
++  if (!Number.isFinite(n)) return dflt;
++  return Math.min(max, Math.max(min, n));
++}
++
++/**
++ * Normalise monitoredPorts to a JSON string array (or null = monitor all).
++ * Accepts an array or a comma/space separated string from the form.
++ */
++export function normalizeMonitoredPorts(v: string | string[] | null | undefined): string | null {
++  if (v == null) return null;
++  let arr: string[];
++  if (Array.isArray(v)) arr = v;
++  else {
++    const s = String(v).trim();
++    if (!s) return null;
++    try { const p = JSON.parse(s); arr = Array.isArray(p) ? p : String(s).split(/[,\s]+/); }
++    catch { arr = s.split(/[,\s]+/); }
++  }
++  const clean = arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 256);
++  return clean.length ? JSON.stringify(clean) : null;
++}
++
++/**
++ * Validate the RESULTING SNMP configuration (existing row merged with the
++ * pending update). Enforces that an SNMPv3 security level has the credentials it
++ * requires — never a silent downgrade to a weaker level or to v2c.
++ */
++export function assertSnmpConfigValid(existing: any, update: Record<string, any>): void {
++  const pick = (k: string) => (k in update ? update[k] : existing?.[k]);
++  const version = pick('snmpVersion');
++  if (version !== 'V3') return; // v1/v2c community is validated by masking only
++
++  const user = (pick('snmpV3User') || '').toString().trim();
++  if (!user) throw new BadRequestException('SNMPv3 requires a username.');
++
++  const level = (pick('snmpV3SecLevel') || '').toString().trim();
++  if (!['noAuthNoPriv', 'authNoPriv', 'authPriv'].includes(level)) {
++    throw new BadRequestException('Choose an SNMPv3 security level (authPriv is recommended).');
++  }
++  const authPresent = 'snmpV3AuthPass' in update ? !!update.snmpV3AuthPass : !!existing?.snmpV3AuthPass;
++  const privPresent = 'snmpV3PrivPass' in update ? !!update.snmpV3PrivPass : !!existing?.snmpV3PrivPass;
++  const authProto = (pick('snmpV3AuthProto') || '').toString().toUpperCase();
++  const privProto = (pick('snmpV3PrivProto') || '').toString().toUpperCase();
++
++  if (level === 'authNoPriv' || level === 'authPriv') {
++    if (!['MD5', 'SHA'].includes(authProto)) throw new BadRequestException('Select an SNMPv3 authentication protocol (SHA recommended).');
++    if (!authPresent) throw new BadRequestException('SNMPv3 authentication requires an authentication passphrase.');
++  }
++  if (level === 'authPriv') {
++    if (!['DES', 'AES'].includes(privProto)) throw new BadRequestException('Select an SNMPv3 privacy protocol (AES recommended).');
++    if (!privPresent) throw new BadRequestException('SNMPv3 authPriv requires a privacy passphrase.');
++  }
++}
+diff --git a/backend/src/nas/nas.service.ts b/backend/src/nas/nas.service.ts
+index 29bb8c4..5093957 100644
+--- a/backend/src/nas/nas.service.ts
++++ b/backend/src/nas/nas.service.ts
+@@ -11,6 +11,7 @@ import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credential
+ import { nasIpProblem, secretProblem } from './radius-clients-render';
+ import { RadiusClientVaultService } from './radius-client-vault.service';
+ import { assertCompanyCanAdd } from '../common/company-plan';
++import { clampInt, normalizeMonitoredPorts, assertSnmpConfigValid, normalizeSnmpVersion } from './nas-snmp-config';
+ 
+ @Injectable()
+ export class NasService implements OnModuleInit {
+@@ -599,6 +600,9 @@ export class NasService implements OnModuleInit {
+     deviceType?: string;
+     apiEnabled?: boolean; apiPollSec?: number;
+     snmpEnabled?: boolean; snmpPort?: number; snmpCommunity?: string; snmpVersion?: string; snmpPollSec?: number;
++    snmpTimeoutMs?: number; snmpRetries?: number; monitoredPorts?: string | string[] | null;
++    snmpV3User?: string; snmpV3SecLevel?: string; snmpV3AuthProto?: string; snmpV3AuthPass?: string;
++    snmpV3PrivProto?: string; snmpV3PrivPass?: string;
+     syslogEnabled?: boolean; syslogPort?: number;
+   }, actor?: any) {
+     await this.assertNasOwner(id, actor);
+@@ -662,13 +666,51 @@ export class NasService implements OnModuleInit {
+     if (data.snmpCommunity !== undefined && !isMask(data.snmpCommunity)) {
+       updateData.snmpCommunity = encField(this.secrets, data.snmpCommunity);
+     }
+-    if (data.snmpVersion !== undefined)   updateData.snmpVersion   = data.snmpVersion as any;
+-    if (data.snmpPollSec !== undefined)   updateData.snmpPollSec   = data.snmpPollSec;
++    if (data.snmpVersion !== undefined)   updateData.snmpVersion   = normalizeSnmpVersion(data.snmpVersion);
++    if (data.snmpPollSec !== undefined)   updateData.snmpPollSec   = clampInt(data.snmpPollSec, 10, 86400, 30);
++    if (data.snmpTimeoutMs !== undefined) updateData.snmpTimeoutMs = clampInt(data.snmpTimeoutMs, 500, 30000, 4000);
++    if (data.snmpRetries !== undefined)   updateData.snmpRetries   = clampInt(data.snmpRetries, 0, 5, 1);
++    if (data.monitoredPorts !== undefined) updateData.monitoredPorts = normalizeMonitoredPorts(data.monitoredPorts);
++    // SNMPv3 username + protocols (non-secret). Passphrases are masked like the
++    // community: a masked value means "unchanged", never overwrite with bullets.
++    if (data.snmpV3User !== undefined)      updateData.snmpV3User      = (data.snmpV3User || '').trim() || null;
++    if (data.snmpV3SecLevel !== undefined)  updateData.snmpV3SecLevel  = data.snmpV3SecLevel || null;
++    if (data.snmpV3AuthProto !== undefined) updateData.snmpV3AuthProto = (data.snmpV3AuthProto || '').toUpperCase() || null;
++    if (data.snmpV3PrivProto !== undefined) updateData.snmpV3PrivProto = (data.snmpV3PrivProto || '').toUpperCase() || null;
++    if (data.snmpV3AuthPass !== undefined && !isMask(data.snmpV3AuthPass)) {
++      updateData.snmpV3AuthPass = encField(this.secrets, data.snmpV3AuthPass);
++    }
++    if (data.snmpV3PrivPass !== undefined && !isMask(data.snmpV3PrivPass)) {
++      updateData.snmpV3PrivPass = encField(this.secrets, data.snmpV3PrivPass);
++    }
+     if (data.syslogEnabled !== undefined) updateData.syslogEnabled = data.syslogEnabled;
+     if (data.syslogPort !== undefined)    updateData.syslogPort    = data.syslogPort;
+ 
++    // Validate the RESULTING SNMP config (existing values + this change) so a
++    // partial update cannot leave an SNMPv3 device without the credentials its
++    // security level requires. Never silently downgrade.
++    assertSnmpConfigValid(existingNas, updateData);
++
+     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
+ 
++    // Stage 2: record a monitoring enabled/disabled event on the toggle, so the
++    // NAS event timeline shows who turned it on/off and when.
++    if (data.snmpEnabled !== undefined && data.snmpEnabled !== existingNas.snmpEnabled) {
++      await this.prisma.nasEvent.create({
++        data: {
++          nasId: id,
++          type: data.snmpEnabled ? 'monitoring_enabled' : 'monitoring_disabled',
++          severity: 'info',
++          message: data.snmpEnabled ? 'SNMP monitoring enabled.' : 'SNMP monitoring disabled.',
++          ownerId: existingNas.ownerId ?? null,
++        },
++      }).catch(() => undefined);
++      // When monitoring is turned off, reflect it in the operational state.
++      if (!data.snmpEnabled) {
++        await this.prisma.nasSnmpState.updateMany({ where: { nasId: id }, data: { status: 'disabled', nextPollAt: null } }).catch(() => undefined);
++      }
++    }
++
+     const ipChanged     = data.nasIp   && data.nasIp.trim() !== existingNas.nasIp;
+     const secretChanged = data.secret !== undefined && !isMask(data.secret);
+     const nameChanged   = (data.nasName && data.nasName !== existingNas.shortname) || (data.shortname && data.shortname !== existingNas.shortname);
+diff --git a/backend/src/telemetry/device-health.service.ts b/backend/src/telemetry/device-health.service.ts
+index 51226e5..ae29213 100644
+--- a/backend/src/telemetry/device-health.service.ts
++++ b/backend/src/telemetry/device-health.service.ts
+@@ -1,12 +1,31 @@
+ import { Injectable, Logger } from '@nestjs/common';
+-import { Cron, CronExpression } from '@nestjs/schedule';
++import { Cron } from '@nestjs/schedule';
+ import { PrismaService } from '../prisma/prisma.service';
+ import { isPrimaryInstance } from '../common/cluster-util';
+ import { IF, IF_HC, IF_EXTRA, IF_OPER_UP, healthProfileFor, HealthOid } from './oids';
+ import { SecretsService } from '../common/secrets.service';
+ import { decField } from '../nas/nas-credentials';
+-import { NON_DEMO_OWNED } from '../common/scope.service';
+-import { snmpEnabled } from '../common/snmp-enabled';
++
++/** How a failed poll is classified. Drives NasSnmpState.status + event type. */
++export type SnmpErrorKind = 'timeout' | 'auth_error' | 'config_error' | 'unreachable' | 'error';
++
++/** The outcome of one poll, consumed by SnmpMonitorService. `message` is always
++ *  redacted and operator-friendly — it never contains a credential. */
++export type SnmpPollResult = {
++  ok: boolean;
++  kind: 'ok' | SnmpErrorKind;
++  message?: string;
++  sysDescr?: string | null;
++  uptimeSec?: number | null;
++  responseMs?: number;
++  cpu?: number | null;
++  memory?: number | null;
++  interfaces?: number;
++  interfacesUp?: number;
++  interfacesDown?: number;
++  downInterfaces?: string[];
++  rebooted?: boolean;
++};
+ 
+ /**
+  * DEVICE HEALTH + INTERFACE RATE COLLECTOR.
+@@ -31,7 +50,6 @@ import { snmpEnabled } from '../common/snmp-enabled';
+ export class DeviceHealthService {
+   private readonly log = new Logger('DeviceHealth');
+   private snmp: any = null;
+-  private busy = false;
+   /** Previous counter reading per NAS+ifIndex, for the delta. */
+   private prev = new Map<string, { rx: bigint; tx: bigint; inErr: number; outErr: number; inDis: number; outDis: number; at: number }>();
+   /** Previous uptime per NAS, to detect a reboot (counters reset). */
+@@ -46,43 +64,72 @@ export class DeviceHealthService {
+     }
+   }
+ 
+-  @Cron(CronExpression.EVERY_30_SECONDS)
+-  async tick() {
+-    if (!snmpEnabled()) return;
+-    if (!this.snmp || this.busy || !isPrimaryInstance()) return;
+-    this.busy = true;
+-    try {
+-      const list = await this.prisma.nas.findMany({
+-        // See NON_DEMO_OWNED: demo routers do not exist, so polling them can
+-        // only ever produce failures and false alerts.
+-        where: { AND: [{ snmpEnabled: true, isActive: true }, NON_DEMO_OWNED] },
+-        select: {
+-          id: true, nasname: true, nasIp: true, deviceType: true,
+-          snmpCommunity: true, snmpPort: true, snmpVersion: true, monitoredPorts: true,
+-          snmpTimeoutMs: true, snmpRetries: true,
+-        },
+-      });
+-      for (const nas of list) {
+-        await this.collect(nas).catch((e) =>
+-          this.log.warn(`Health poll failed for ${nas.nasname}: ${e?.message || e}`));
+-      }
+-    } finally {
+-      this.busy = false;
+-    }
+-  }
++  /**
++   * STAGE 2: scheduling moved to SnmpMonitorService, which owns per-NAS
++   * intervals, bounded concurrency, backoff and single-flight. This service is
++   * now the stateless COLLECTOR — it polls one device and returns a classified
++   * result. It no longer runs its own 30-second global sweep (which polled every
++   * enabled NAS on a fixed interval with no backoff). `snmpAvailable()` lets the
++   * monitor skip entirely when net-snmp is missing.
++   */
++  snmpAvailable(): boolean { return !!this.snmp; }
++
++  /** The NAS columns a poll needs. Shared so the monitor selects the same set. */
++  static readonly POLL_SELECT = {
++    id: true, nasname: true, nasIp: true, deviceType: true,
++    snmpCommunity: true, snmpPort: true, snmpVersion: true, monitoredPorts: true,
++    snmpTimeoutMs: true, snmpRetries: true,
++    snmpV3User: true, snmpV3SecLevel: true, snmpV3AuthProto: true,
++    snmpV3AuthPass: true, snmpV3PrivProto: true, snmpV3PrivPass: true,
++  } as const;
+ 
+   // ── SNMP plumbing ────────────────────────────────────────────
+   private host(nas: any) { return String(nas.nasIp || '').trim(); }
+ 
+   private session(nas: any) {
+-    const version = nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;
++    const opts = {
++      port: nas.snmpPort || 161,
++      timeout: nas.snmpTimeoutMs || 4000,
++      retries: nas.snmpRetries ?? 1,
++    };
++    // ── SNMPv3 (USM) ──────────────────────────────────────────────────────
++    // Preferred for real deployments: per-user auth + privacy, no shared
++    // community on the wire. We NEVER silently downgrade — the security level
++    // is exactly what the operator configured, and authPriv requires both
++    // passphrases to be present (validated at save time).
++    if (nas.snmpVersion === 'V3') {
++      const level = this.v3Level(nas.snmpV3SecLevel);
++      const user: any = { name: nas.snmpV3User || '', level };
++      if (level !== this.snmp.SecurityLevel.noAuthNoPriv) {
++        user.authProtocol = (nas.snmpV3AuthProto || 'SHA').toUpperCase() === 'MD5'
++          ? this.snmp.AuthProtocols.md5 : this.snmp.AuthProtocols.sha;
++        user.authKey = decField(this.secrets, nas.snmpV3AuthPass);
++      }
++      if (level === this.snmp.SecurityLevel.authPriv) {
++        user.privProtocol = (nas.snmpV3PrivProto || 'AES').toUpperCase() === 'DES'
++          ? this.snmp.PrivProtocols.des : this.snmp.PrivProtocols.aes;
++        user.privKey = decField(this.secrets, nas.snmpV3PrivPass);
++      }
++      return this.snmp.createV3Session(this.host(nas), user, { ...opts, version: this.snmp.Version3 });
++    }
++    // ── SNMPv1 / v2c ──────────────────────────────────────────────────────
+     // The community is encrypted at rest; decField() also passes legacy
+     // plaintext values through unchanged.
++    const version = nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;
+     const community = decField(this.secrets, nas.snmpCommunity) || 'public';
+-    return this.snmp.createSession(this.host(nas), community, {
+-      port: nas.snmpPort || 161, version,
+-      timeout: nas.snmpTimeoutMs || 4000, retries: nas.snmpRetries ?? 1,
+-    });
++    return this.snmp.createSession(this.host(nas), community, { ...opts, version });
++  }
++
++  /** Map our stored security-level string to net-snmp's enum. */
++  private v3Level(level?: string | null) {
++    switch (String(level || '').trim()) {
++      case 'authPriv': return this.snmp.SecurityLevel.authPriv;
++      case 'authNoPriv': return this.snmp.SecurityLevel.authNoPriv;
++      case 'noAuthNoPriv': return this.snmp.SecurityLevel.noAuthNoPriv;
++      // No configured level → the safest that still works with just a username
++      // is noAuthNoPriv; config validation steers operators to authPriv.
++      default: return this.snmp.SecurityLevel.noAuthNoPriv;
++    }
+   }
+ 
+   /** Walk one OID base → Map(trailing index → value). */
+@@ -321,6 +368,13 @@ export class DeviceHealthService {
+     if (dm.count || im.count) {
+       this.log.log(`Retention: pruned ${dm.count} device and ${im.count} interface samples older than ${days}d.`);
+     }
++
++    // Monitoring EVENTS are kept on their OWN, longer window — they are
++    // low-volume (state transitions only) and useful for incident review well
++    // after the high-frequency metrics have aged out. Separate knob.
++    const eventDays = Number(process.env.EVENT_RETENTION_DAYS || 90);
++    const ev = await this.prisma.nasEvent.deleteMany({ where: { ts: { lt: new Date(Date.now() - eventDays * 86400_000) } } }).catch(() => ({ count: 0 }));
++    if (ev.count) this.log.log(`Retention: pruned ${ev.count} NAS events older than ${eventDays}d.`);
+   }
+ 
+   /**
+@@ -335,6 +389,8 @@ export class DeviceHealthService {
+         id: true, nasname: true, nasIp: true, deviceType: true, snmpEnabled: true,
+         snmpCommunity: true, snmpPort: true, snmpVersion: true,
+         snmpTimeoutMs: true, snmpRetries: true,
++        snmpV3User: true, snmpV3SecLevel: true, snmpV3AuthProto: true,
++        snmpV3AuthPass: true, snmpV3PrivProto: true, snmpV3PrivPass: true,
+       },
+     });
+     if (!nas) return { ok: false, error: 'NAS not found.' };
+@@ -391,11 +447,28 @@ export class DeviceHealthService {
+   }
+ 
+   // ── One device ───────────────────────────────────────────────
+-  private async collect(nas: any) {
+-    if (!this.host(nas)) return;
++  /**
++   * Poll ONE device and persist its metrics. Returns a classified result so the
++   * monitor can record state and raise events without re-probing. A failed
++   * probe writes NO metrics (so missing data is never recorded as zero) and
++   * returns a redacted, operator-friendly reason — never the credential.
++   */
++  async collectOne(nas: any): Promise<SnmpPollResult> {
++    if (!this.snmp) return { ok: false, kind: 'error', message: 'net-snmp is not installed on the server.' };
++    if (!this.host(nas)) return { ok: false, kind: 'config_error', message: 'This NAS has no IP address configured.' };
+     const session = this.session(nas);
+     const startedAt = Date.now();
+     try {
++      // Reachability + auth probe FIRST. Classifies timeout vs auth vs config
++      // before we attempt the full walk, and confirms the device actually
++      // answered — so we never fabricate metrics for an unreachable NAS.
++      const probe = await this.probe(session, [IF.sysUpTime, IF.sysDescr]);
++      if (!probe.ok) return { ok: false, ...this.classifyError(probe.err) };
++
++      const sysDescr = String(probe.values.get(IF.sysDescr) ?? '').slice(0, 300) || null;
++      const probeTicks = this.num(probe.values.get(IF.sysUpTime));
++      const sysUptimeSec = probeTicks == null ? null : Math.round(probeTicks / 100);
++
+       const health = await this.readHealth(session, nas.deviceType);
+       const snmpMs = Date.now() - startedAt;
+ 
+@@ -429,10 +502,13 @@ export class DeviceHealthService {
+ 
+       const now = Date.now();
+       const rows: any[] = [];
++      let ifUp = 0, ifDown = 0;
++      const downInterfaces: string[] = [];
+ 
+       for (const [ifIndex, status] of oper) {
+         const name = String(names.get(ifIndex) ?? descr.get(ifIndex) ?? `if${ifIndex}`);
+         if (allowed && !allowed.has(String(ifIndex).toLowerCase()) && !allowed.has(name.toLowerCase())) continue;
++        if (Number(status) === IF_OPER_UP) ifUp++; else { ifDown++; downInterfaces.push(name.slice(0, 96)); }
+ 
+         const use64 = hcIn.has(ifIndex) || hcOut.has(ifIndex);
+         const rx = this.big(use64 ? hcIn.get(ifIndex) : in32.get(ifIndex));
+@@ -491,11 +567,68 @@ export class DeviceHealthService {
+       if (rows.length) await this.prisma.interfaceMetric.createMany({ data: rows });
+ 
+       if (rebooted) this.log.warn(`${nas.nasname}: uptime went backwards — device rebooted, counter baseline reset.`);
++      return {
++        ok: true, kind: 'ok',
++        sysDescr, uptimeSec: health.uptime ?? sysUptimeSec,
++        responseMs: snmpMs,
++        cpu: health.cpu ?? null, memory: health.memory ?? null,
++        interfacesUp: ifUp, interfacesDown: ifDown, interfaces: ifUp + ifDown,
++        downInterfaces,
++        rebooted,
++      };
++    } catch (e: any) {
++      return { ok: false, ...this.classifyError(e) };
+     } finally {
+       try { session.close(); } catch { /* already closed */ }
+     }
+   }
+ 
++  /**
++   * A reachability probe that SURFACES the error (unlike get(), which swallows
++   * it), so the monitor can tell timeout from auth from config failure.
++   */
++  private probe(session: any, oids: string[]): Promise<{ ok: boolean; err?: any; values: Map<string, any> }> {
++    return new Promise((resolve) => {
++      const values = new Map<string, any>();
++      let settled = false;
++      let timer: NodeJS.Timeout | null = null;
++      const done = (ok: boolean, err?: any) => {
++        if (settled) return;
++        settled = true;
++        if (timer) clearTimeout(timer);
++        resolve({ ok, err, values });
++      };
++      try {
++        session.get(oids, (err: any, vbs: any[]) => {
++          if (err) return done(false, err);
++          if (Array.isArray(vbs)) for (const vb of vbs) { if (!this.snmp.isVarbindError(vb)) values.set(String(vb.oid), vb.value); }
++          done(values.size > 0, values.size ? undefined : new Error('empty SNMP response'));
++        });
++      } catch (e) { done(false, e); }
++      timer = setTimeout(() => done(false, new Error('probe timed out')), 15_000);
++      timer.unref?.();
++    });
++  }
++
++  /**
++   * Map a net-snmp error to a stable kind + a FIXED, operator-friendly message.
++   * The message is never built from the raw error text or the credential, so a
++   * reason stored on NasSnmpState or shown in the UI can never leak a secret.
++   */
++  private classifyError(err: any): { kind: SnmpErrorKind; message: string } {
++    const sig = `${err?.name || ''} ${String(err?.message || err || '')}`;
++    if (/TimedOut|timed out|timeout/i.test(sig)) {
++      return { kind: 'timeout', message: 'No SNMP reply (timeout). Check the device is reachable, SNMP is enabled, and UDP is open to this server.' };
++    }
++    if (/Authentication|security|engine|usmStats|RequestFailed|AuthError|not in time window|wrong digest/i.test(sig)) {
++      return { kind: 'auth_error', message: 'SNMP authentication failed. Check the community or SNMPv3 username, passphrases and security level.' };
++    }
++    if (/empty SNMP response/i.test(sig)) {
++      return { kind: 'unreachable', message: 'The device did not return the expected SNMP data. Check the SNMP service and view/ACL configuration.' };
++    }
++    return { kind: 'error', message: 'SNMP poll failed.' };
++  }
++
+   /**
+    * Counter delta → bits per second, handling wrap.
+    *
+diff --git a/backend/src/telemetry/snmp-collector.spec.ts b/backend/src/telemetry/snmp-collector.spec.ts
+new file mode 100644
+index 0000000..bf6ea7b
+--- /dev/null
++++ b/backend/src/telemetry/snmp-collector.spec.ts
+@@ -0,0 +1,116 @@
++/**
++ * Stage 2 — DeviceHealthService.collectOne: classification, no-fabrication,
++ * counter handling and SNMPv3 session construction.
++ *
++ * net-snmp is replaced with a fake session so these run without a device. The
++ * key guarantees: a failed probe writes NO metrics (unreachable data is never
++ * recorded as zero), errors are classified without leaking the credential, and
++ * SNMPv3 builds an authPriv USM session.
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { DeviceHealthService } from './device-health.service';
++import { IF } from './oids';
++
++function makePrisma() {
++  const writes = { device: 0, iface: 0 };
++  const prisma: any = {
++    deviceMetric: { createMany: async () => { writes.device++; return { count: 1 }; } },
++    interfaceMetric: { createMany: async () => { writes.iface++; return { count: 1 }; } },
++  };
++  return { prisma, writes };
++}
++const secrets = { decryptValue: (v: string) => v, encryptValue: (v: string) => v } as any;
++
++/** A fake net-snmp whose session behaviour is scripted per test. */
++function fakeSnmp(session: any) {
++  const created: any = { v3: null, v2: null };
++  return {
++    Version1: 0, Version2c: 1, Version3: 3,
++    SecurityLevel: { noAuthNoPriv: 1, authNoPriv: 2, authPriv: 3 },
++    AuthProtocols: { md5: 'md5', sha: 'sha' },
++    PrivProtocols: { des: 'des', aes: 'aes' },
++    isVarbindError: () => false,
++    createSession: (host: string, community: string, opts: any) => { created.v2 = { host, community, opts }; return session; },
++    createV3Session: (host: string, user: any, opts: any) => { created.v3 = { host, user, opts }; return session; },
++    _created: created,
++  };
++}
++
++function svc(prisma: any, snmp: any) {
++  const s: any = new DeviceHealthService(prisma, secrets);
++  s.snmp = snmp; // override the require('net-snmp') from the constructor
++  return s;
++}
++
++describe('DeviceHealthService.collectOne (Stage 2 collector)', () => {
++  it('classifies a timeout and writes NO metrics (no fabricated zeros)', async () => {
++    const { prisma, writes } = makePrisma();
++    const session = { get: (_o: any, cb: any) => cb(Object.assign(new Error('Request timed out'), { name: 'RequestTimedOutError' })), close: () => {} };
++    const snmp = fakeSnmp(session);
++    const r = await svc(prisma, snmp).collectOne({ id: 1, nasname: 'n1', nasIp: '10.0.0.1', snmpVersion: 'V2C', snmpCommunity: 'public' });
++    expect(r.ok).toBe(false);
++    expect(r.kind).toBe('timeout');
++    expect(r.message).not.toContain('public'); // never leaks the community
++    expect(writes.device).toBe(0);
++    expect(writes.iface).toBe(0);
++  });
++
++  it('classifies an SNMPv3 authentication failure', async () => {
++    const { prisma } = makePrisma();
++    const session = { get: (_o: any, cb: any) => cb(new Error('Authentication failure')), close: () => {} };
++    const r = await svc(prisma, fakeSnmp(session)).collectOne({
++      id: 1, nasname: 'n1', nasIp: '10.0.0.1', snmpVersion: 'V3',
++      snmpV3User: 'u', snmpV3SecLevel: 'authPriv', snmpV3AuthProto: 'SHA', snmpV3AuthPass: 'secretpass', snmpV3PrivProto: 'AES', snmpV3PrivPass: 'privpass',
++    });
++    expect(r.ok).toBe(false);
++    expect(r.kind).toBe('auth_error');
++    expect(r.message).not.toMatch(/secretpass|privpass/); // no credential in the message
++  });
++
++  it('builds an SNMPv3 authPriv USM session from the stored fields', async () => {
++    const { prisma } = makePrisma();
++    const session = { get: (_o: any, cb: any) => cb(new Error('timeout')), close: () => {} };
++    const snmp = fakeSnmp(session);
++    await svc(prisma, snmp).collectOne({
++      id: 1, nasname: 'n1', nasIp: '10.0.0.1', snmpVersion: 'V3',
++      snmpV3User: 'netops', snmpV3SecLevel: 'authPriv', snmpV3AuthProto: 'SHA', snmpV3AuthPass: 'a', snmpV3PrivProto: 'AES', snmpV3PrivPass: 'p',
++    });
++    expect(snmp._created.v3).toBeTruthy();
++    expect(snmp._created.v2).toBeNull(); // never silently used a community session
++    expect(snmp._created.v3.user).toMatchObject({ name: 'netops', level: 3, authProtocol: 'sha', privProtocol: 'aes' });
++  });
++
++  it('succeeds on a good probe, returns identity, and records metrics', async () => {
++    const { prisma, writes } = makePrisma();
++    const session = {
++      get: (oids: string[], cb: any) => cb(null, oids.map((o) => ({
++        oid: o,
++        value: o === IF.sysUpTime ? 123456 : o === IF.sysDescr ? 'RouterOS 7.x' : 0,
++      }))),
++      // no interfaces in this fake walk → first poll records health/snmpMs only
++      subtree: (_oid: string, _m: number, _perVb: any, done: any) => done(),
++      close: () => {},
++    };
++    const r = await svc(prisma, fakeSnmp(session)).collectOne({ id: 1, nasname: 'n1', nasIp: '10.0.0.1', snmpVersion: 'V2C', snmpCommunity: 'public', deviceType: 'MIKROTIK' });
++    expect(r.ok).toBe(true);
++    expect(r.sysDescr).toMatch(/RouterOS/);
++    expect(r.uptimeSec).toBe(Math.round(123456 / 100));
++    expect(writes.device).toBe(1); // snmpMs (+health) persisted
++  });
++
++  it('rate(): a 64-bit counter decrease is a reset → 0, not a negative spike', () => {
++    const { prisma } = makePrisma();
++    const s: any = svc(prisma, fakeSnmp({}));
++    expect(s.rate(1000n, 500n, true, 10)).toBe(0);           // 64-bit reset → 0
++    expect(s.rate(100n, 900n, true, 8)).toBe((800 * 8) / 8); // normal delta
++    // 32-bit wrap: prev near max, cur small → wrap math, not 0
++    const wrap = s.rate((2n ** 32n) - 100n, 100n, false, 1);
++    expect(wrap).toBe(200 * 8);
++  });
++
++  it('no IP configured is a config_error, not a crash', async () => {
++    const { prisma } = makePrisma();
++    const r = await svc(prisma, fakeSnmp({})).collectOne({ id: 1, nasname: 'n1', nasIp: '', snmpVersion: 'V2C' });
++    expect(r).toMatchObject({ ok: false, kind: 'config_error' });
++  });
++});
+diff --git a/backend/src/telemetry/snmp-monitor.service.ts b/backend/src/telemetry/snmp-monitor.service.ts
+new file mode 100644
+index 0000000..004565b
+--- /dev/null
++++ b/backend/src/telemetry/snmp-monitor.service.ts
+@@ -0,0 +1,307 @@
++import { Injectable, Logger, NotFoundException } from '@nestjs/common';
++import { Cron, CronExpression } from '@nestjs/schedule';
++import { PrismaService } from '../prisma/prisma.service';
++import { EventsService } from '../common/events.service';
++import { isPrimaryInstance } from '../common/cluster-util';
++import { NON_DEMO_OWNED } from '../common/scope.service';
++import { mapLimit, withTimeout } from '../common/concurrency';
++import { DeviceHealthService, SnmpPollResult } from './device-health.service';
++
++/**
++ * PER-NAS SNMP MONITOR (Stage 2).
++ *
++ * Owns the SCHEDULING that device-health.service used to do in a fixed 30-second
++ * global sweep. The problems that got SNMP switched off — every device polled on
++ * one interval, no backoff, demo routers probed, a CRITICAL alert on every
++ * failed packet — are fixed here:
++ *
++ *   • opt-in PER NAS (snmpEnabled) and demo routers excluded in the query;
++ *   • each NAS has its OWN interval (snmpPollSec), tracked by nextPollAt;
++ *   • bounded worker concurrency + a hard per-NAS timeout, so one slow or
++ *     unreachable device never stalls the others;
++ *   • single-flight: a NAS already being polled is skipped, and nextPollAt is
++ *     claimed optimistically so overlapping ticks can't double-poll it;
++ *   • exponential backoff on repeated failure, so a dead NAS is tried less and
++ *     less often instead of every cycle;
++ *   • events are written on STATE TRANSITIONS only (reachable↔unreachable, …)
++ *     and resource thresholds have a cooldown, so there is no alert storm.
++ *
++ * Runs on the primary instance only (isPrimaryInstance), so the cluster polls
++ * each device once. Disable entirely with SNMP_MONITOR=off.
++ */
++@Injectable()
++export class SnmpMonitorService {
++  private readonly log = new Logger('SnmpMonitor');
++  /** NAS ids currently being polled in THIS process (single-flight guard). */
++  private readonly inFlight = new Set<number>();
++  /** Last operationally-down interface set per NAS, for interface_down/up. */
++  private readonly prevDown = new Map<number, Set<string>>();
++  private dispatching = false;
++
++  constructor(
++    private prisma: PrismaService,
++    private health: DeviceHealthService,
++    private events: EventsService,
++  ) {}
++
++  private enabled(): boolean {
++    return process.env.SNMP_MONITOR !== 'off';
++  }
++  private concurrency(): number {
++    return Math.max(1, Number(process.env.SNMP_MONITOR_CONCURRENCY) || 10);
++  }
++  private maxBackoffSec(): number {
++    return Math.max(60, Number(process.env.SNMP_MONITOR_MAX_BACKOFF_SEC) || 900);
++  }
++  private cpuHigh(): number {
++    return Math.max(1, Number(process.env.SNMP_CPU_HIGH_PCT) || 90);
++  }
++  /** Memory is stored as % USED; "low available" means used ≥ this. */
++  private memHigh(): number {
++    return Math.max(1, Number(process.env.SNMP_MEM_HIGH_PCT) || 90);
++  }
++  private thresholdCooldownMs(): number {
++    return Math.max(60_000, Number(process.env.SNMP_ALERT_COOLDOWN_SEC || 1800) * 1000);
++  }
++
++  /**
++   * Light dispatcher — runs often, but only polls the NAS that are actually DUE
++   * (nextPollAt ≤ now), so each device keeps its own cadence.
++   */
++  @Cron(CronExpression.EVERY_10_SECONDS)
++  async dispatch(): Promise<void> {
++    if (!this.enabled() || !this.health.snmpAvailable() || !isPrimaryInstance()) return;
++    if (this.dispatching) return; // never overlap dispatch runs
++    this.dispatching = true;
++    try {
++      const due = await this.selectDue();
++      if (!due.length) return;
++      await mapLimit(due, this.concurrency(), (nas) => this.pollNas(nas));
++    } catch (e: any) {
++      this.log.warn(`SNMP dispatch failed: ${e?.message || e}`);
++    } finally {
++      this.dispatching = false;
++    }
++  }
++
++  /** NAS that are enabled, real (not demo), active, and due (or never polled). */
++  private async selectDue(): Promise<any[]> {
++    const now = new Date();
++    const rows = await this.prisma.nas.findMany({
++      where: {
++        AND: [
++          { snmpEnabled: true, isActive: true },
++          NON_DEMO_OWNED,
++          { OR: [{ snmpState: { is: null } }, { snmpState: { nextPollAt: null } }, { snmpState: { nextPollAt: { lte: now } } }] },
++        ],
++      },
++      select: { ...DeviceHealthService.POLL_SELECT, snmpPollSec: true, ownerId: true },
++    });
++    // Skip any NAS a previous tick is still polling.
++    return rows.filter((n) => !this.inFlight.has(n.id));
++  }
++
++  /** Poll one NAS, update its state, and raise events on transitions. */
++  private async pollNas(nas: any): Promise<void> {
++    if (this.inFlight.has(nas.id)) return;
++    this.inFlight.add(nas.id);
++    const intervalSec = Math.max(10, Number(nas.snmpPollSec) || 30);
++    // Claim the next slot BEFORE polling so an overlapping tick won't re-pick it
++    // even if this poll runs long. Backoff may push it further out on failure.
++    await this.claimNextPoll(nas.id, intervalSec);
++
++    const prev = await this.prisma.nasSnmpState.findUnique({ where: { nasId: nas.id } }).catch(() => null);
++    const prevStatus: string = prev?.status ?? 'unknown';
++
++    let result: SnmpPollResult;
++    try {
++      // Hard ceiling over the whole poll: covers the full interface walk, not
++      // just one request's timeout, so a half-answering device still releases
++      // the worker slot.
++      const budgetMs = ((nas.snmpTimeoutMs || 4000) * ((nas.snmpRetries ?? 1) + 1)) + 25_000;
++      result = await withTimeout(this.health.collectOne(nas), budgetMs, `snmp ${nas.nasname}`);
++    } catch (e: any) {
++      result = { ok: false, kind: 'timeout', message: 'SNMP poll exceeded its time budget.' };
++    } finally {
++      this.inFlight.delete(nas.id);
++    }
++
++    const newStatus = result.ok ? 'ok' : result.kind;
++    await this.writeState(nas, result, newStatus, intervalSec);
++    await this.raiseEvents(nas, prevStatus, newStatus, result);
++  }
++
++  /** Optimistically push nextPollAt out by one interval (single-flight claim). */
++  private async claimNextPoll(nasId: number, intervalSec: number): Promise<void> {
++    const next = new Date(Date.now() + intervalSec * 1000);
++    await this.prisma.nasSnmpState.upsert({
++      where: { nasId },
++      create: { nasId, nextPollAt: next },
++      update: { nextPollAt: next },
++    }).catch(() => undefined);
++  }
++
++  private async writeState(nas: any, r: SnmpPollResult, status: string, intervalSec: number): Promise<void> {
++    const now = new Date();
++    const failures = r.ok ? 0 : ((await this.prisma.nasSnmpState.findUnique({ where: { nasId: nas.id }, select: { consecutiveFailures: true } }).catch(() => null))?.consecutiveFailures ?? 0) + 1;
++    // Backoff: on failure, wait interval·2^(failures-1), capped. On success, the
++    // normal interval. (claimNextPoll already set the normal interval; we only
++    // need to push it further on failure.)
++    let nextPollAt: Date;
++    if (r.ok) {
++      nextPollAt = new Date(now.getTime() + intervalSec * 1000);
++    } else {
++      const backoff = Math.min(intervalSec * Math.pow(2, Math.max(0, failures - 1)), this.maxBackoffSec());
++      nextPollAt = new Date(now.getTime() + backoff * 1000);
++    }
++    const common = {
++      status,
++      lastPollAt: now,
++      consecutiveFailures: failures,
++      nextPollAt,
++      ...(r.ok
++        ? { lastSuccessAt: now, lastError: null, sysDescr: r.sysDescr ?? null, uptimeSec: r.uptimeSec ?? null }
++        : { lastErrorAt: now, lastError: (r.message ?? 'SNMP poll failed.').slice(0, 300) }),
++    };
++    await this.prisma.nasSnmpState.upsert({
++      where: { nasId: nas.id },
++      create: { nasId: nas.id, ...common },
++      update: common,
++    }).catch((e) => this.log.warn(`State write failed for ${nas.nasname}: ${e?.message || e}`));
++  }
++
++  /** Create events for state transitions + resource thresholds (deduped). */
++  private async raiseEvents(nas: any, prevStatus: string, newStatus: string, r: SnmpPollResult): Promise<void> {
++    // ── Reachability transition ──────────────────────────────────────────
++    if (newStatus !== prevStatus) {
++      if (newStatus === 'ok' && prevStatus !== 'unknown') {
++        await this.emit(nas, 'poll_recovered', 'info', `${nas.nasname} is answering SNMP again.`, { sysDescr: r.sysDescr ?? null });
++      } else if (newStatus !== 'ok') {
++        const map: Record<string, { type: string; sev: string; msg: string }> = {
++          timeout: { type: 'timeout', sev: 'warning', msg: `${nas.nasname} is not responding to SNMP (timeout).` },
++          unreachable: { type: 'unreachable', sev: 'critical', msg: `${nas.nasname} is unreachable over SNMP.` },
++          auth_error: { type: 'auth_error', sev: 'critical', msg: `SNMP authentication is failing for ${nas.nasname}.` },
++          config_error: { type: 'config_error', sev: 'warning', msg: `${nas.nasname} SNMP is misconfigured.` },
++          error: { type: 'poll_failed', sev: 'warning', msg: `SNMP polling failed for ${nas.nasname}.` },
++        };
++        const e = map[newStatus] ?? map.error;
++        await this.emit(nas, e.type, e.sev, e.msg, { reason: r.message ?? null });
++      }
++    }
++    if (!r.ok) return; // thresholds only make sense on a good read
++
++    // ── Resource thresholds (cooldown-deduped) ───────────────────────────
++    if (r.cpu != null && r.cpu >= this.cpuHigh()) {
++      await this.emitThrottled(nas, 'cpu_high', 'warning', `${nas.nasname} CPU at ${Math.round(r.cpu)}%.`, { cpu: r.cpu, threshold: this.cpuHigh() });
++    }
++    if (r.memory != null && r.memory >= this.memHigh()) {
++      await this.emitThrottled(nas, 'memory_low', 'warning', `${nas.nasname} memory ${Math.round(r.memory)}% used.`, { memoryUsedPct: r.memory, threshold: this.memHigh() });
++    }
++
++    // ── Interface up/down transitions (per-interface, deduped by set diff) ─
++    const down = new Set((r.downInterfaces ?? []).map((n) => String(n)));
++    const before = this.prevDown.get(nas.id) ?? new Set<string>();
++    const newlyDown = [...down].filter((n) => !before.has(n));
++    const newlyUp = [...before].filter((n) => !down.has(n));
++    if (newlyDown.length) {
++      await this.emit(nas, 'interface_down', 'warning', `${nas.nasname}: ${newlyDown.length} interface(s) went down.`, { interfaces: newlyDown.slice(0, 50) });
++    }
++    if (newlyUp.length) {
++      await this.emit(nas, 'interface_up', 'info', `${nas.nasname}: ${newlyUp.length} interface(s) came back up.`, { interfaces: newlyUp.slice(0, 50) });
++    }
++    this.prevDown.set(nas.id, down);
++  }
++
++  /** Emit only if no same-type event for this NAS within the cooldown. */
++  private async emitThrottled(nas: any, type: string, severity: string, message: string, details: any): Promise<void> {
++    const since = new Date(Date.now() - this.thresholdCooldownMs());
++    const recent = await this.prisma.nasEvent.findFirst({
++      where: { nasId: nas.id, type, ts: { gte: since } }, select: { id: true },
++    }).catch(() => null);
++    if (recent) return;
++    await this.emit(nas, type, severity, message, details);
++  }
++
++  // ── Read API (tenant scope is enforced by the controller via assertNas) ───
++
++  /**
++   * Operational status for the NAS monitoring panel: state + latest metrics +
++   * interface up/down counts. Returns NO credentials — only non-secret fields.
++   */
++  async getStatus(nasId: number) {
++    const [state, metrics, ifaces] = await Promise.all([
++      this.prisma.nasSnmpState.findUnique({ where: { nasId } }).catch(() => null),
++      this.prisma.$queryRawUnsafe<Array<{ metric: string; value: number; ts: Date }>>(
++        `SELECT DISTINCT ON (metric) metric, value, ts
++           FROM device_metric WHERE "nasId" = $1 AND ts >= NOW() - INTERVAL '1 hour'
++          ORDER BY metric, ts DESC`, nasId).catch(() => []),
++      this.prisma.$queryRawUnsafe<Array<{ up: boolean; n: number }>>(
++        `SELECT up, COUNT(*)::int AS n FROM (
++            SELECT DISTINCT ON ("ifIndex") "ifIndex", up FROM interface_metric
++             WHERE "nasId" = $1 AND ts >= NOW() - INTERVAL '30 minutes'
++             ORDER BY "ifIndex", ts DESC
++          ) s GROUP BY up`, nasId).catch(() => []),
++    ]);
++    const latest: Record<string, { value: number; ts: Date }> = {};
++    for (const m of metrics) latest[m.metric] = { value: Number(m.value), ts: m.ts };
++    let ifUp = 0, ifDown = 0;
++    for (const r of ifaces) { if (r.up) ifUp = Number(r.n); else ifDown = Number(r.n); }
++    return {
++      status: state?.status ?? 'unknown',
++      lastPollAt: state?.lastPollAt ?? null,
++      lastSuccessAt: state?.lastSuccessAt ?? null,
++      lastErrorAt: state?.lastErrorAt ?? null,
++      lastError: state?.lastError ?? null,
++      consecutiveFailures: state?.consecutiveFailures ?? 0,
++      nextPollAt: state?.nextPollAt ?? null,
++      sysDescr: state?.sysDescr ?? null,
++      uptimeSec: state?.uptimeSec ?? null,
++      metrics: {
++        cpu: latest.cpu?.value ?? null,
++        memory: latest.memory?.value ?? null,
++        uptime: latest.uptime?.value ?? null,
++        temperature: latest.temperature?.value ?? null,
++        snmpMs: latest.snmpMs?.value ?? null,
++        updatedAt: latest.snmpMs?.ts ?? latest.cpu?.ts ?? null,
++      },
++      interfaces: { up: ifUp, down: ifDown, total: ifUp + ifDown },
++    };
++  }
++
++  /** Paginated NAS events (cursor by id desc, bounded page size). */
++  async listEvents(nasId: number, opts: { limit?: number; cursor?: number; type?: string; acknowledged?: boolean } = {}) {
++    const take = Math.min(Math.max(Number(opts.limit) || 25, 1), 100);
++    const where: any = { nasId };
++    if (opts.type) where.type = opts.type;
++    if (opts.acknowledged !== undefined) where.acknowledged = opts.acknowledged;
++    if (opts.cursor) where.id = { lt: Number(opts.cursor) };
++    const rows = await this.prisma.nasEvent.findMany({ where, orderBy: { id: 'desc' }, take: take + 1 });
++    const hasMore = rows.length > take;
++    const items = hasMore ? rows.slice(0, take) : rows;
++    return { items, nextCursor: hasMore ? items[items.length - 1].id : null, pageSize: take };
++  }
++
++  /** Acknowledge one event (must belong to the given NAS). */
++  async ackEvent(nasId: number, eventId: number, userId?: number) {
++    const ev = await this.prisma.nasEvent.findFirst({ where: { id: eventId, nasId }, select: { id: true } });
++    if (!ev) throw new NotFoundException('Event not found.');
++    return this.prisma.nasEvent.update({
++      where: { id: eventId },
++      data: { acknowledged: true, acknowledgedAt: new Date(), acknowledgedBy: userId ?? null },
++    });
++  }
++
++  /** Persist a NasEvent and push it to the live feed, scoped to the NAS owner. */
++  async emit(nas: any, type: string, severity: string, message: string, details?: any): Promise<void> {
++    try {
++      await this.prisma.nasEvent.create({
++        data: { nasId: nas.id, type, severity, message: message.slice(0, 400), details: details ?? undefined, ownerId: nas.ownerId ?? null },
++      });
++      // Reuse the existing live-feed/notification channel — NOT a second alerting
++      // system. Scoped so only the owner and accounts above it receive it.
++      this.events.broadcast('nas-event', { nasId: nas.id, type, severity, message, ownerUserId: nas.ownerId ?? undefined });
++    } catch (e: any) {
++      this.log.warn(`Event write failed for ${nas.nasname}: ${e?.message || e}`);
++    }
++  }
++}
+diff --git a/backend/src/telemetry/snmp-monitor.spec.ts b/backend/src/telemetry/snmp-monitor.spec.ts
+new file mode 100644
+index 0000000..221f10f
+--- /dev/null
++++ b/backend/src/telemetry/snmp-monitor.spec.ts
+@@ -0,0 +1,211 @@
++/**
++ * Stage 2 — SNMP monitor worker: scheduling, state, events, backoff, API.
++ *
++ * DeviceHealthService.collectOne is mocked so these tests exercise the
++ * ORCHESTRATION — state transitions, event dedup/recovery, exponential backoff,
++ * single-flight, "one failed NAS does not block others", disabled handling, and
++ * the read API — without a real SNMP device.
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { SnmpMonitorService } from './snmp-monitor.service';
++
++/** Stateful in-memory prisma double for nas / nasSnmpState / nasEvent. */
++function makePrisma(seed: { nas?: any[] } = {}) {
++  const states = new Map<number, any>();
++  const events: any[] = [];
++  let eventId = 1;
++  const prisma: any = {
++    nas: { findMany: async () => (seed.nas ?? []) },
++    nasSnmpState: {
++      findUnique: async ({ where }: any) => states.get(where.nasId) ?? null,
++      upsert: async ({ where, create, update }: any) => {
++        const cur = states.get(where.nasId);
++        const next = cur ? { ...cur, ...update } : { nasId: where.nasId, consecutiveFailures: 0, ...create };
++        states.set(where.nasId, next);
++        return next;
++      },
++      updateMany: async ({ where, data }: any) => {
++        const cur = states.get(where.nasId); if (cur) states.set(where.nasId, { ...cur, ...data });
++        return { count: cur ? 1 : 0 };
++      },
++    },
++    nasEvent: {
++      create: async ({ data }: any) => { const e = { id: eventId++, ts: new Date(), ...data }; events.push(e); return e; },
++      findFirst: async ({ where }: any) => {
++        // ack lookup: by id (+ nasId)
++        if (where.id !== undefined && typeof where.id === 'number') {
++          return events.find((e) => e.id === where.id && e.nasId === where.nasId) ?? null;
++        }
++        // cooldown lookup: most recent same-type within window
++        const since = where.ts?.gte ? new Date(where.ts.gte).getTime() : 0;
++        return [...events].reverse().find((e) => e.nasId === where.nasId && e.type === where.type && (e.ts?.getTime?.() ?? 0) >= since) ?? null;
++      },
++      findMany: async ({ where = {}, take = 25 }: any) => {
++        let rows = events.filter((e) => e.nasId === where.nasId);
++        if (where.type) rows = rows.filter((e) => e.type === where.type);
++        if (where.acknowledged !== undefined) rows = rows.filter((e) => !!e.acknowledged === where.acknowledged);
++        if (where.id?.lt) rows = rows.filter((e) => e.id < where.id.lt);
++        rows = rows.sort((a, b) => b.id - a.id).slice(0, take);
++        return rows;
++      },
++      update: async ({ where, data }: any) => { const e = events.find((x) => x.id === where.id); Object.assign(e, data); return e; },
++    },
++    $queryRawUnsafe: async () => [],
++  };
++  return { prisma, states, events };
++}
++
++function makeHealth(results: Record<number, any> | ((nas: any) => any)) {
++  const calls: any[] = [];
++  return {
++    snmpAvailable: () => true,
++    collectOne: async (nas: any) => {
++      calls.push({ id: nas.id, at: Date.now() });
++      const r = typeof results === 'function' ? results(nas) : results[nas.id];
++      return r ?? { ok: true, kind: 'ok', sysDescr: 'X', uptimeSec: 10, cpu: 5, memory: 5, downInterfaces: [] };
++    },
++    calls,
++  };
++}
++const events = () => ({ broadcast: jest.fn() });
++const svcWith = (prisma: any, health: any) => new SnmpMonitorService(prisma, health as any, events() as any);
++const nas = (id: number, extra: any = {}) => ({ id, nasname: `nas${id}`, nasIp: `10.0.0.${id}`, snmpPollSec: 30, snmpTimeoutMs: 4000, snmpRetries: 1, ownerId: 1, ...extra });
++
++describe('SnmpMonitorService (Stage 2 worker)', () => {
++  it('first successful poll records ok state and stays quiet (no spurious event)', async () => {
++    const { prisma, states, events: ev } = makePrisma();
++    const h = makeHealth({ 1: { ok: true, kind: 'ok', sysDescr: 'RouterOS', uptimeSec: 100, cpu: 10, memory: 20, downInterfaces: [] } });
++    await (svcWith(prisma, h) as any).pollNas(nas(1));
++    expect(states.get(1).status).toBe('ok');
++    expect(states.get(1).consecutiveFailures).toBe(0);
++    expect(states.get(1).lastSuccessAt).toBeTruthy();
++    expect(ev.length).toBe(0); // unknown→ok is not an alert
++  });
++
++  it('emits a transition event on failure and a recovery event when it comes back', async () => {
++    const { prisma, states, events: ev } = makePrisma();
++    let mode: any = { ok: false, kind: 'timeout', message: 'No SNMP reply (timeout).' };
++    const h = makeHealth(() => mode);
++    const svc: any = svcWith(prisma, h);
++    await svc.pollNas(nas(1));
++    expect(states.get(1).status).toBe('timeout');
++    expect(ev.filter((e) => e.type === 'timeout').length).toBe(1);
++    // Second failure of the SAME kind → deduped (no new event).
++    await svc.pollNas(nas(1));
++    expect(ev.filter((e) => e.type === 'timeout').length).toBe(1);
++    // Recovery.
++    mode = { ok: true, kind: 'ok', sysDescr: 'RouterOS', uptimeSec: 100, downInterfaces: [] };
++    await svc.pollNas(nas(1));
++    expect(states.get(1).status).toBe('ok');
++    expect(ev.filter((e) => e.type === 'poll_recovered').length).toBe(1);
++  });
++
++  it('applies exponential backoff on repeated failures', async () => {
++    const { prisma, states } = makePrisma();
++    const h = makeHealth(() => ({ ok: false, kind: 'unreachable', message: 'unreachable' }));
++    const svc: any = svcWith(prisma, h);
++    const nextAfter = async () => { await svc.pollNas(nas(1)); return new Date(states.get(1).nextPollAt).getTime() - Date.now(); };
++    const b1 = await nextAfter();
++    const b2 = await nextAfter();
++    const b3 = await nextAfter();
++    expect(states.get(1).consecutiveFailures).toBe(3);
++    expect(b2).toBeGreaterThan(b1); // 30s → 60s
++    expect(b3).toBeGreaterThan(b2); // → 120s
++  });
++
++  it('never fabricates success on failure: no sysDescr/uptime recorded', async () => {
++    const { prisma, states } = makePrisma();
++    const h = makeHealth(() => ({ ok: false, kind: 'auth_error', message: 'SNMP authentication failed.' }));
++    await (svcWith(prisma, h) as any).pollNas(nas(1));
++    const s = states.get(1);
++    expect(s.status).toBe('auth_error');
++    expect(s.lastError).toMatch(/authentication/i);
++    expect(s.lastSuccessAt).toBeUndefined();
++    expect(s.sysDescr).toBeUndefined();
++  });
++
++  it('single-flight: a NAS already in flight is not polled again', async () => {
++    const { prisma } = makePrisma();
++    const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
++    const svc: any = svcWith(prisma, h);
++    svc.inFlight.add(1);
++    await svc.pollNas(nas(1));
++    expect(h.calls.length).toBe(0); // skipped while in flight
++  });
++
++  it('dispatch: one failing NAS does not block the others (bounded fan-out)', async () => {
++    const { prisma, states } = makePrisma({ nas: [nas(1), nas(2), nas(3)] });
++    const h = makeHealth((n: any) => n.id === 2
++      ? Promise.reject(new Error('boom')) // simulate collectOne throwing
++      : { ok: true, kind: 'ok', downInterfaces: [] });
++    // collectOne that throws for nas 2 — the monitor must still poll 1 and 3.
++    const svc: any = svcWith(prisma, h);
++    await svc.dispatch();
++    expect(states.get(1)?.status).toBe('ok');
++    expect(states.get(3)?.status).toBe('ok');
++    // nas 2 got a state too (timeout from the thrown error budget path)
++    expect(states.get(2)).toBeTruthy();
++  });
++
++  it('cpu_high alert fires once then is suppressed within the cooldown', async () => {
++    const { prisma, events: ev } = makePrisma();
++    const h = makeHealth(() => ({ ok: true, kind: 'ok', cpu: 97, memory: 10, downInterfaces: [] }));
++    const svc: any = svcWith(prisma, h);
++    await svc.pollNas(nas(1));
++    await svc.pollNas(nas(1));
++    expect(ev.filter((e) => e.type === 'cpu_high').length).toBe(1); // cooldown-deduped
++  });
++
++  it('interface_down then interface_up on set change', async () => {
++    const { prisma, events: ev } = makePrisma();
++    let down: string[] = ['ether5'];
++    const h = makeHealth(() => ({ ok: true, kind: 'ok', cpu: 5, memory: 5, downInterfaces: down }));
++    const svc: any = svcWith(prisma, h);
++    await svc.pollNas(nas(1));
++    expect(ev.filter((e) => e.type === 'interface_down').length).toBe(1);
++    down = []; // recovered
++    await svc.pollNas(nas(1));
++    expect(ev.filter((e) => e.type === 'interface_up').length).toBe(1);
++  });
++
++  it('disabled: dispatch does nothing when SNMP_MONITOR=off', async () => {
++    const prev = process.env.SNMP_MONITOR;
++    process.env.SNMP_MONITOR = 'off';
++    const { prisma, states } = makePrisma({ nas: [nas(1)] });
++    const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
++    await (svcWith(prisma, h) as any).dispatch();
++    expect(states.size).toBe(0);
++    expect(h.calls.length).toBe(0);
++    process.env.SNMP_MONITOR = prev;
++  });
++
++  describe('read API', () => {
++    it('paginates events with a bounded page size and cursor', async () => {
++      const { prisma, events: store } = makePrisma();
++      for (let i = 0; i < 5; i++) store.push({ id: i + 1, nasId: 1, type: 'timeout', ts: new Date() });
++      const svc: any = svcWith(prisma, makeHealth(() => ({ ok: true, kind: 'ok' })));
++      const page1 = await svc.listEvents(1, { limit: 2 });
++      expect(page1.items.length).toBe(2);
++      expect(page1.nextCursor).toBe(4); // ids 5,4 returned, next < 4
++      const page2 = await svc.listEvents(1, { limit: 2, cursor: page1.nextCursor });
++      expect(page2.items.map((e: any) => e.id)).toEqual([3, 2]);
++    });
++
++    it('caps page size at 100', async () => {
++      const { prisma } = makePrisma();
++      const svc: any = svcWith(prisma, makeHealth(() => ({ ok: true, kind: 'ok' })));
++      const res = await svc.listEvents(1, { limit: 99999 });
++      expect(res.pageSize).toBe(100);
++    });
++
++    it('ack marks an event and rejects a foreign event id', async () => {
++      const { prisma, events: store } = makePrisma();
++      store.push({ id: 10, nasId: 1, type: 'timeout', ts: new Date(), acknowledged: false });
++      const svc: any = svcWith(prisma, makeHealth(() => ({ ok: true, kind: 'ok' })));
++      const acked = await svc.ackEvent(1, 10, 42);
++      expect(acked.acknowledged).toBe(true);
++      expect(acked.acknowledgedBy).toBe(42);
++      await expect(svc.ackEvent(1, 999, 42)).rejects.toThrow(/not found/i);
++    });
++  });
++});
+diff --git a/backend/src/telemetry/telemetry.controller.ts b/backend/src/telemetry/telemetry.controller.ts
+index 34fb84c..2d169aa 100644
+--- a/backend/src/telemetry/telemetry.controller.ts
++++ b/backend/src/telemetry/telemetry.controller.ts
+@@ -2,6 +2,7 @@ import { Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards } fro
+ import { TelemetryService } from './telemetry.service';
+ import { NasMonitorService } from './nas-monitor.service';
+ import { DeviceHealthService } from './device-health.service';
++import { SnmpMonitorService } from './snmp-monitor.service';
+ import { LiveTrafficService } from './live-traffic.service';
+ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+ import { PermissionsGuard } from '../security/permissions.guard';
+@@ -16,6 +17,7 @@ export class TelemetryController {
+     private readonly health: DeviceHealthService,
+     private readonly scope: ScopeService,
+     private readonly live: LiveTrafficService,
++    private readonly snmp: SnmpMonitorService,
+   ) {}
+ 
+   // REMOVED: GET nas/:id/discover-interfaces — port registration was part of
+@@ -33,6 +35,46 @@ export class TelemetryController {
+     return this.health.testSnmp(id);
+   }
+ 
++  /**
++   * Stage 2 — current SNMP monitoring status for one NAS: state, last poll,
++   * latest metrics and interface up/down counts. No credentials are returned.
++   */
++  @Get('nas/:id/snmp-status')
++  async snmpStatus(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
++    await this.scope.assertNas(req.user, id);
++    return this.snmp.getStatus(id);
++  }
++
++  /** Stage 2 — paginated monitoring events for one NAS (cursor by id, bounded). */
++  @Get('nas/:id/snmp-events')
++  async snmpEvents(
++    @Param('id', ParseIntPipe) id: number,
++    @Req() req: any,
++    @Query('limit') limit?: string,
++    @Query('cursor') cursor?: string,
++    @Query('type') type?: string,
++    @Query('acknowledged') acknowledged?: string,
++  ) {
++    await this.scope.assertNas(req.user, id);
++    return this.snmp.listEvents(id, {
++      limit: limit ? Number(limit) : undefined,
++      cursor: cursor ? Number(cursor) : undefined,
++      type: type?.trim() || undefined,
++      acknowledged: acknowledged === undefined ? undefined : acknowledged === 'true',
++    });
++  }
++
++  /** Stage 2 — acknowledge one monitoring event. */
++  @Post('nas/:id/snmp-events/:eventId/ack')
++  async ackEvent(
++    @Param('id', ParseIntPipe) id: number,
++    @Param('eventId', ParseIntPipe) eventId: number,
++    @Req() req: any,
++  ) {
++    await this.scope.assertNas(req.user, id);
++    return this.snmp.ackEvent(id, eventId, req.user?.sub);
++  }
++
+   /** Device health history (CPU/memory/temperature/SNMP response) for the graphs. */
+   @Get('nas/:id/health-history')
+   async healthHistory(
+diff --git a/backend/src/telemetry/telemetry.module.ts b/backend/src/telemetry/telemetry.module.ts
+index f085d31..9a26e16 100644
+--- a/backend/src/telemetry/telemetry.module.ts
++++ b/backend/src/telemetry/telemetry.module.ts
+@@ -7,6 +7,7 @@ import { TelemetryService } from './telemetry.service';
+ import { LinkAggregatorService } from './link-aggregator.service';
+ import { NasMonitorService } from './nas-monitor.service';
+ import { DeviceHealthService } from './device-health.service';
++import { SnmpMonitorService } from './snmp-monitor.service';
+ import { LiveTrafficService } from './live-traffic.service';
+ 
+ /**
+@@ -30,6 +31,7 @@ import { LiveTrafficService } from './live-traffic.service';
+     LinkAggregatorService,
+     NasMonitorService,
+     DeviceHealthService,
++    SnmpMonitorService,
+     LiveTrafficService,
+   ],
+   exports: [
+@@ -37,6 +39,7 @@ import { LiveTrafficService } from './live-traffic.service';
+     LinkAggregatorService,
+     NasMonitorService,
+     DeviceHealthService,
++    SnmpMonitorService,
+     LiveTrafficService,
+   ],
+ })
+diff --git a/frontend/app/nas/[id]/lib.ts b/frontend/app/nas/[id]/lib.ts
+index 9d16458..33ddbf3 100644
+--- a/frontend/app/nas/[id]/lib.ts
++++ b/frontend/app/nas/[id]/lib.ts
+@@ -38,6 +38,15 @@ export interface NasRecord {
+   snmpPollSec?: number;
+   snmpTimeoutMs?: number;
+   snmpRetries?: number;
++  // SNMPv3 (USM) — passphrases are never sent to the browser; only has-flags are.
++  snmpV3User?: string | null;
++  snmpV3SecLevel?: string | null;
++  snmpV3AuthProto?: string | null;
++  snmpV3PrivProto?: string | null;
++  snmpV3AuthPass?: string;
++  hasSnmpV3AuthPass?: boolean;
++  snmpV3PrivPass?: string;
++  hasSnmpV3PrivPass?: boolean;
+   nasIdentifier?: string | null;
+   monitoredPorts?: string | null;
+   _count?: { subscribers: number };
+diff --git a/frontend/app/nas/[id]/monitoring-status.tsx b/frontend/app/nas/[id]/monitoring-status.tsx
+new file mode 100644
+index 0000000..a96b512
+--- /dev/null
++++ b/frontend/app/nas/[id]/monitoring-status.tsx
+@@ -0,0 +1,158 @@
++"use client";
++
++/**
++ * SNMP MONITORING STATUS (Stage 2).
++ *
++ * A compact, operator-focused panel for one NAS: current monitoring health,
++ * last successful poll, latest real metrics, and the recent event timeline with
++ * acknowledge. Every value comes from the backend — unavailable metrics are
++ * shown as "—", never fabricated as zero. No credentials are ever requested or
++ * displayed here.
++ */
++import React from "react";
++import API from "../../components/api";
++import { Panel, Kpi, StatusChip, EmptyState, Spinner, Btn, severityOf } from "./ui";
++
++type Status = {
++  status: string;
++  lastPollAt: string | null;
++  lastSuccessAt: string | null;
++  lastErrorAt: string | null;
++  lastError: string | null;
++  consecutiveFailures: number;
++  nextPollAt: string | null;
++  sysDescr: string | null;
++  uptimeSec: number | null;
++  metrics: { cpu: number | null; memory: number | null; uptime: number | null; temperature: number | null; snmpMs: number | null; updatedAt: string | null };
++  interfaces: { up: number; down: number; total: number };
++};
++type NasEvent = { id: number; type: string; severity: string; message: string; ts: string; acknowledged: boolean };
++
++const H = () => ({ "Content-Type": "application/json", Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("token") : ""}` });
++
++const STATUS_LEVEL: Record<string, "ok" | "warn" | "bad" | "off" | "unknown"> = {
++  ok: "ok", timeout: "warn", config_error: "warn",
++  unreachable: "bad", auth_error: "bad", poll_failed: "warn",
++  disabled: "off", unknown: "unknown",
++};
++const STATUS_TEXT: Record<string, string> = {
++  ok: "Healthy", timeout: "Timing out", unreachable: "Unreachable",
++  auth_error: "Auth failing", config_error: "Misconfigured", poll_failed: "Polling failed",
++  disabled: "Monitoring off", unknown: "Not polled yet",
++};
++
++function ago(iso: string | null): string {
++  if (!iso) return "never";
++  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
++  if (s < 60) return `${s}s ago`;
++  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
++  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
++  return `${Math.floor(s / 86400)}d ago`;
++}
++function uptimeText(sec: number | null): string {
++  if (sec == null) return "—";
++  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
++  return `${d}d ${h}h`;
++}
++
++export function MonitoringStatus({ nasId, snmpEnabled, snmpVersion }: { nasId: number; snmpEnabled?: boolean; snmpVersion?: string }) {
++  const [status, setStatus] = React.useState<Status | null>(null);
++  const [events, setEvents] = React.useState<NasEvent[] | null>(null);
++  const [loading, setLoading] = React.useState(true);
++  const [error, setError] = React.useState<string | null>(null);
++
++  const load = React.useCallback(async () => {
++    try {
++      setError(null);
++      const [s, e] = await Promise.all([
++        fetch(`${API}/telemetry/nas/${nasId}/snmp-status`, { headers: H() }),
++        fetch(`${API}/telemetry/nas/${nasId}/snmp-events?limit=10`, { headers: H() }),
++      ]);
++      if (s.status === 403 || e.status === 403) { setError("You don't have permission to view monitoring for this device."); return; }
++      if (!s.ok) { setError("Could not load monitoring status."); return; }
++      setStatus(await s.json());
++      setEvents(e.ok ? (await e.json()).items : []);
++    } catch {
++      setError("Could not reach the server.");
++    } finally {
++      setLoading(false);
++    }
++  }, [nasId]);
++
++  React.useEffect(() => {
++    load();
++    const t = setInterval(load, 15000);
++    return () => clearInterval(t);
++  }, [load]);
++
++  const ack = async (eventId: number) => {
++    await fetch(`${API}/telemetry/nas/${nasId}/snmp-events/${eventId}/ack`, { method: "POST", headers: H() }).catch(() => {});
++    load();
++  };
++
++  if (snmpEnabled === false) {
++    return (
++      <Panel title="SNMP monitoring" sub="Per-device polling — opt-in">
++        <EmptyState
++          title="Monitoring is off for this device"
++          hint="Enable SNMP in Configuration (and set the community or SNMPv3 credentials). The monitor then polls on this device's own interval, stores real metrics, and raises events on reachability changes."
++        />
++      </Panel>
++    );
++  }
++  if (loading) return <Panel title="SNMP monitoring"><Spinner label="Loading monitoring status…" /></Panel>;
++  if (error) return <Panel title="SNMP monitoring"><EmptyState title="Unavailable" hint={error} /></Panel>;
++  if (!status) return <Panel title="SNMP monitoring"><EmptyState title="No status yet" hint="The monitor has not recorded a poll for this device." /></Panel>;
++
++  const level = STATUS_LEVEL[status.status] ?? "unknown";
++  const m = status.metrics;
++  const fmt = (v: number | null, suffix = "") => (v == null ? "—" : `${v}${suffix}`);
++
++  return (
++    <Panel
++      title="SNMP monitoring"
++      sub={status.sysDescr ? status.sysDescr.slice(0, 80) : `SNMP ${snmpVersion ?? ""}`.trim()}
++      actions={<StatusChip level={level} text={STATUS_TEXT[status.status] ?? status.status} detail={status.lastSuccessAt ? `last OK ${ago(status.lastSuccessAt)}` : undefined} />}
++    >
++      {/* Last error — only on a current failure, redacted on the server. */}
++      {level !== "ok" && status.lastError && (
++        <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "rgba(211,64,83,.08)", color: "#B4283C", fontSize: 13 }}>
++          {status.lastError}
++          {status.consecutiveFailures > 1 ? <em style={{ opacity: .7, fontStyle: "normal" }}> · {status.consecutiveFailures} consecutive failures</em> : null}
++        </div>
++      )}
++
++      {/* Latest real metrics. "—" means not available, never a fake 0. */}
++      <div className="nd-kpis" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
++        <Kpi label="Last poll" value={ago(status.lastPollAt)} sub={status.nextPollAt ? `next ${ago(status.nextPollAt).replace(" ago", "")} out` : undefined} />
++        <Kpi label="Uptime" value={uptimeText(status.uptimeSec ?? m.uptime)} />
++        <Kpi label="CPU" value={fmt(m.cpu, "%")} color={m.cpu != null && m.cpu >= 90 ? "#D34053" : undefined} />
++        <Kpi label="Memory used" value={fmt(m.memory, "%")} color={m.memory != null && m.memory >= 90 ? "#D34053" : undefined} />
++        <Kpi label="SNMP response" value={m.snmpMs == null ? "—" : `${Math.round(m.snmpMs)}ms`} />
++        <Kpi label="Interfaces" value={status.interfaces.total ? `${status.interfaces.up}/${status.interfaces.total} up` : "—"} sub={status.interfaces.down ? `${status.interfaces.down} down` : undefined} color={status.interfaces.down ? "#B45309" : undefined} />
++      </div>
++
++      {/* Recent events. */}
++      <div style={{ marginTop: 16 }}>
++        <div className="nd-group-label">Recent events</div>
++        {!events || events.length === 0 ? (
++          <div style={{ fontSize: 13, color: "var(--muted, #64748B)", padding: "8px 0" }}>No monitoring events recorded.</div>
++        ) : (
++          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
++            {events.map((ev) => {
++              const sev = severityOf(ev.severity);
++              return (
++                <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, padding: "6px 10px", borderRadius: 8, background: "var(--panel-2, rgba(100,116,139,.06))" }}>
++                  <span style={{ flex: "0 0 auto", color: sev.color, background: sev.bg, borderRadius: 6, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>{sev.label}</span>
++                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ev.message}>{ev.message}</span>
++                  <span style={{ flex: "0 0 auto", color: "var(--muted, #94A3B8)" }}>{ago(ev.ts)}</span>
++                  {!ev.acknowledged && <Btn size="sm" variant="default" onClick={() => ack(ev.id)}>Ack</Btn>}
++                </div>
++              );
++            })}
++          </div>
++        )}
++      </div>
++    </Panel>
++  );
++}
+diff --git a/frontend/app/nas/[id]/tabs-config.tsx b/frontend/app/nas/[id]/tabs-config.tsx
+index 9bbbbb5..81ed656 100644
+--- a/frontend/app/nas/[id]/tabs-config.tsx
++++ b/frontend/app/nas/[id]/tabs-config.tsx
+@@ -46,6 +46,14 @@ export function ConfigTab() {
+       snmpPollSec: nas?.snmpPollSec ?? 30,
+       snmpTimeoutMs: nas?.snmpTimeoutMs ?? 1000,
+       snmpRetries: nas?.snmpRetries ?? 3,
++      monitoredPorts: nas?.monitoredPorts ? (() => { try { return JSON.parse(nas.monitoredPorts).join(", "); } catch { return nas.monitoredPorts; } })() : "",
++      // SNMPv3 (USM). Passphrases are masked — a masked value is left unchanged.
++      snmpV3User: nas?.snmpV3User ?? "",
++      snmpV3SecLevel: nas?.snmpV3SecLevel ?? "authPriv",
++      snmpV3AuthProto: nas?.snmpV3AuthProto ?? "SHA",
++      snmpV3AuthPass: nas?.hasSnmpV3AuthPass ? MASK : "",
++      snmpV3PrivProto: nas?.snmpV3PrivProto ?? "AES",
++      snmpV3PrivPass: nas?.hasSnmpV3PrivPass ? MASK : "",
+     });
+     setEditing(true);
+   };
+@@ -69,11 +77,21 @@ export function ConfigTab() {
+         snmpPollSec: Number(form.snmpPollSec) || 30,
+         snmpTimeoutMs: Number(form.snmpTimeoutMs) || 1000,
+         snmpRetries: Number(form.snmpRetries) || 3,
++        monitoredPorts: form.monitoredPorts ?? "",
+       };
++      // SNMPv3 identity + protocols are only meaningful on v3.
++      if (form.snmpVersion === "3") {
++        body.snmpV3User = form.snmpV3User;
++        body.snmpV3SecLevel = form.snmpV3SecLevel;
++        body.snmpV3AuthProto = form.snmpV3AuthProto;
++        body.snmpV3PrivProto = form.snmpV3PrivProto;
++      }
+       // Masked values are sent but the backend treats them as "unchanged".
+       if (form.apiPassword) body.apiPassword = form.apiPassword;
+       if (form.secret) body.secret = form.secret;
+       if (form.snmpCommunity) body.snmpCommunity = form.snmpCommunity;
++      if (form.snmpV3AuthPass) body.snmpV3AuthPass = form.snmpV3AuthPass;
++      if (form.snmpV3PrivPass) body.snmpV3PrivPass = form.snmpV3PrivPass;
+ 
+       const r = await apiSend<any>(`/nas/${nas?.id}`, "PUT", body);
+       if (!r) throw new Error("Save failed — no response from server");
+@@ -166,6 +184,24 @@ export function ConfigTab() {
+               <input type="number" value={form.snmpTimeoutMs} onChange={(e) => set("snmpTimeoutMs", e.target.value)} />
+               <input type="number" value={form.snmpRetries} onChange={(e) => set("snmpRetries", e.target.value)} />
+             </div></Field>
++            <Field label="Monitored interfaces" hint="Comma-separated names/indexes, e.g. ether1, vlan100. Blank = all."><input className="nd-mono" value={form.monitoredPorts} onChange={(e) => set("monitoredPorts", e.target.value)} placeholder="all interfaces" /></Field>
++
++            {form.snmpVersion === "3" && (
++              <>
++                <div className="nd-group-label" style={{ gridColumn: "1 / -1" }}>SNMPv3 (USM) — authPriv recommended</div>
++                <Field label="v3 username"><input className="nd-mono" value={form.snmpV3User} onChange={(e) => set("snmpV3User", e.target.value)} /></Field>
++                <Field label="Security level"><select value={form.snmpV3SecLevel} onChange={(e) => set("snmpV3SecLevel", e.target.value)}><option value="authPriv">authPriv (recommended)</option><option value="authNoPriv">authNoPriv</option><option value="noAuthNoPriv">noAuthNoPriv</option></select></Field>
++                <Field label="Auth protocol"><select value={form.snmpV3AuthProto} onChange={(e) => set("snmpV3AuthProto", e.target.value)}><option value="SHA">SHA</option><option value="MD5">MD5</option></select></Field>
++                <Field label="Auth passphrase" hint="Masked = keep current."><input type="password" className="nd-mono" value={form.snmpV3AuthPass} onChange={(e) => set("snmpV3AuthPass", e.target.value)} placeholder={MASK} /></Field>
++                <Field label="Privacy protocol"><select value={form.snmpV3PrivProto} onChange={(e) => set("snmpV3PrivProto", e.target.value)}><option value="AES">AES</option><option value="DES">DES</option></select></Field>
++                <Field label="Privacy passphrase" hint="Masked = keep current."><input type="password" className="nd-mono" value={form.snmpV3PrivPass} onChange={(e) => set("snmpV3PrivPass", e.target.value)} placeholder={MASK} /></Field>
++              </>
++            )}
++            {form.snmpVersion === "2c" && form.snmpEnabled && (
++              <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "#B45309" }}>
++                SNMPv2c sends the community in clear text. Prefer SNMPv3 (authPriv) on untrusted networks.
++              </div>
++            )}
+           </div>
+ 
+           {saveErr && <div className="nd-config-err">{saveErr}</div>}
+diff --git a/frontend/app/nas/[id]/tabs-health.tsx b/frontend/app/nas/[id]/tabs-health.tsx
+index e0207c6..b96307f 100644
+--- a/frontend/app/nas/[id]/tabs-health.tsx
++++ b/frontend/app/nas/[id]/tabs-health.tsx
+@@ -9,11 +9,14 @@ import React from "react";
+ import { useNasDetail } from "./context";
+ import { Panel, EmptyState } from "./ui";
+ import { DeviceHealth } from "../device-health";
++import { MonitoringStatus } from "./monitoring-status";
+ 
+ export function HealthTab() {
+   const { nasId, nas } = useNasDetail();
+   return (
+     <div className="nd-root">
++      {/* Stage 2: per-device SNMP monitoring status, events and ack. */}
++      <MonitoringStatus nasId={nasId} snmpEnabled={nas?.snmpEnabled} snmpVersion={nas?.snmpVersion} />
+       <Panel title="Device health" sub="Stored SNMP poller data — every point is a real measurement" actions={
+         <span className="nd-updated">sampled every {nas?.snmpPollSec ?? 30}s when enabled</span>
+       }>
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index c9143e7..647dc6d 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -500,9 +500,84 @@ model Nas {
+   /// L2TP/IPsec configuration and lifecycle for this NAS.
+   l2tpConfig NasL2tpConfig? @relation("NasL2tpConfig")
+ 
++  /// Per-NAS SNMP monitoring operational state (Stage 2). 1:1, created lazily
++  /// by the monitor on the first poll — a NAS with monitoring off has none.
++  snmpState NasSnmpState? @relation("NasSnmpState")
++  /// Monitoring lifecycle events (reachable/unreachable/auth-fail/…), Stage 2.
++  snmpEvents NasEvent[]   @relation("NasSnmpEvents")
++
+   @@index([nasname])
+   @@map("nas")
+ }
++/// ───────────────────────────────────────────────────────────────────────────
++/// STAGE 2 — PER-NAS SNMP MONITORING STATE & EVENTS
++/// ───────────────────────────────────────────────────────────────────────────
++
++/// Operational state of SNMP monitoring for ONE NAS. Kept in its own row rather
++/// than on `nas` so a poll every few seconds does not churn the hot NAS record
++/// (and its FreeRADIUS-client columns). Written only by the monitor worker.
++model NasSnmpState {
++  nasId Int @id
++  /// unknown | ok | unreachable | auth_error | timeout | config_error | disabled
++  status             String    @default("unknown") @db.VarChar(20)
++  /// When monitoring last ATTEMPTED a poll (success or failure).
++  lastPollAt         DateTime?
++  /// When monitoring last SUCCEEDED.
++  lastSuccessAt      DateTime?
++  /// When the last failure occurred.
++  lastErrorAt        DateTime?
++  /// Short, operator-friendly, REDACTED reason for the last failure. Never a
++  /// credential or raw secret — see the monitor's redaction.
++  lastError          String?   @db.VarChar(300)
++  /// Consecutive failures, drives exponential backoff. Reset to 0 on success.
++  consecutiveFailures Int      @default(0)
++  /// Earliest time the scheduler may poll this NAS again (backoff + interval).
++  nextPollAt         DateTime?
++  /// Last sysDescr / uptime seen on a successful poll, for the status panel.
++  sysDescr           String?   @db.VarChar(300)
++  uptimeSec          Int?
++  updatedAt          DateTime  @updatedAt
++
++  nas Nas @relation("NasSnmpState", fields: [nasId], references: [id], onDelete: Cascade)
++
++  @@index([status])
++  @@index([nextPollAt])
++  @@map("nas_snmp_state")
++}
++
++/// A monitoring lifecycle event for a NAS. Created on STATE TRANSITIONS only
++/// (not on every failed poll), so storage stays bounded and alerts do not storm.
++model NasEvent {
++  id        Int      @id @default(autoincrement())
++  nasId     Int
++  /// reachable | unreachable | auth_error | timeout | config_error |
++  /// poll_failed | poll_recovered | interface_down | interface_up |
++  /// cpu_high | memory_low | monitoring_enabled | monitoring_disabled |
++  /// metric_unavailable
++  type      String   @db.VarChar(32)
++  /// info | warning | critical
++  severity  String   @default("info") @db.VarChar(12)
++  /// Short operator-friendly description. REDACTED — never a secret.
++  message   String   @db.VarChar(400)
++  /// Structured, non-sensitive detail (ifIndex, value, threshold, …).
++  details   Json?
++  ts        DateTime @default(now())
++  /// Who owns the NAS at event time — denormalised so event queries can be
++  /// tenant-scoped without a join back through nas → owner on every read.
++  ownerId   Int?
++
++  acknowledged   Boolean   @default(false)
++  acknowledgedAt DateTime?
++  acknowledgedBy Int?
++
++  nas Nas @relation("NasSnmpEvents", fields: [nasId], references: [id], onDelete: Cascade)
++
++  @@index([nasId, ts])
++  @@index([nasId, type, ts])
++  @@index([acknowledged, ts])
++  @@index([ownerId, ts])
++  @@map("nas_event")
++}
+ 
+ /// A WireGuard management tunnel to one router.
+ ///

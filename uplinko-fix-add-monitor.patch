@@ -1,0 +1,147 @@
+diff --git a/backend/src/monitoring/monitor-add.spec.ts b/backend/src/monitoring/monitor-add.spec.ts
+new file mode 100644
+index 0000000..8ba6631
+--- /dev/null
++++ b/backend/src/monitoring/monitor-add.spec.ts
+@@ -0,0 +1,50 @@
++/**
++ * Bug fix — "Add monitor doesn't work".
++ *
++ * Root cause: create() called assertDestination() which HARD-FAILS when the
++ * backend cannot resolve the hostname via DNS (common on an on-prem panel with
++ * no outbound DNS for the Node process). Adding any host by NAME threw
++ * SsrfBlocked("DNS lookup failed"), so the add silently failed.
++ *
++ * Fix: monitor create/update tolerate an unresolved name (allowUnresolved) — the
++ * device is added and reported unreachable until it answers — while a name that
++ * RESOLVES to a forbidden address (loopback / metadata) is still blocked, and
++ * HTTP/TCP checks stay strict.
++ */
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++import { MonitoringService } from './monitoring.service';
++import { assertDestination } from '../security/outbound-guard';
++
++function svc() {
++  const prisma: any = { monitorTarget: { create: async ({ data }: any) => ({ id: 1, ...data }) } };
++  const scope: any = { actorId: () => 1, isAdmin: () => false, descendantIds: async () => [1], rootId: async () => 1 };
++  return new MonitoringService(prisma, scope, { broadcast: () => {} } as any, {} as any);
++}
++const actor: any = { sub: 1, id: 1, role: 'ADMIN' };
++
++describe('Add monitor (bug fix)', () => {
++  it('adds a private-IP ICMP monitor', async () => {
++    const r: any = await svc().create({ host: '192.168.7.9', name: 'gateway', groupName: 'Core' }, actor);
++    expect(r).toMatchObject({ host: '192.168.7.9', name: 'gateway', checkType: 'ICMP', ownerId: 1 });
++  });
++
++  it('adds a hostname even when the backend cannot resolve DNS (the bug)', async () => {
++    // .invalid never resolves (RFC 2606), so this reproduces the DNS failure
++    // that used to block the add. It must now succeed.
++    const r: any = await svc().create({ host: 'router.example.invalid', name: 'tower-7' }, actor);
++    expect(r).toMatchObject({ host: 'router.example.invalid', checkType: 'ICMP' });
++  });
++
++  it('still rejects an empty host', async () => {
++    await expect(svc().create({ host: '' }, actor)).rejects.toThrow(/host/i);
++  });
++
++  it('still rejects a malformed host', async () => {
++    await expect(svc().create({ host: 'has spaces/and?junk' }, actor)).rejects.toThrow(/invalid/i);
++  });
++
++  it('SSRF still blocked: a literal loopback/metadata address is refused even with allowUnresolved', async () => {
++    await expect(assertDestination('127.0.0.1', 'OPERATOR_NETWORK', { allowUnresolved: true })).rejects.toThrow(/loopback/i);
++    await expect(assertDestination('169.254.169.254', 'OPERATOR_NETWORK', { allowUnresolved: true })).rejects.toThrow(/metadata|link-local/i);
++  });
++});
+diff --git a/backend/src/monitoring/monitoring.service.ts b/backend/src/monitoring/monitoring.service.ts
+index e44778c..0274251 100644
+--- a/backend/src/monitoring/monitoring.service.ts
++++ b/backend/src/monitoring/monitoring.service.ts
+@@ -176,7 +176,7 @@ export class MonitoringService {
+     const host = String(data.host || '').trim();
+     if (!host) throw new BadRequestException('A host (IP or hostname) is required.');
+     if (!/^[a-zA-Z0-9._:-]{1,255}$/.test(host)) throw new BadRequestException('That host looks invalid — use an IP or hostname.');
+-    await assertDestination(host, 'OPERATOR_NETWORK');
++    await assertDestination(host, 'OPERATOR_NETWORK', { allowUnresolved: true });
+     return this.prisma.monitorTarget.create({
+       data: {
+         name: String(data.name || host).trim().slice(0, 120),
+@@ -287,7 +287,7 @@ export class MonitoringService {
+     if (data.host !== undefined) {
+       const host = String(data.host).trim();
+       if (!/^[a-zA-Z0-9._:-]{1,255}$/.test(host)) throw new BadRequestException('That host looks invalid — use an IP or hostname.');
+-      await assertDestination(host, 'OPERATOR_NETWORK');
++      await assertDestination(host, 'OPERATOR_NETWORK', { allowUnresolved: true });
+       patch.host = host;
+     }
+     if (data.groupName !== undefined) patch.groupName = data.groupName ? String(data.groupName).trim().slice(0, 80) : null;
+@@ -378,7 +378,11 @@ export class MonitoringService {
+      * that later resolves somewhere else (DNS rebinding) is caught too.
+      */
+     try {
+-      await assertDestination(t.host, 'OPERATOR_NETWORK');
++      // ICMP tolerates an unresolved name: the system `ping` resolves it, and a
++      // transient DNS hiccup must not turn a reachable device "down". A name
++      // that resolves to a forbidden address is still blocked. HTTP/TCP stay
++      // strict — they open a real socket and must resolve to an allowed IP.
++      await assertDestination(t.host, 'OPERATOR_NETWORK', { allowUnresolved: type === 'ICMP' });
+     } catch (e: any) {
+       return { up: false, ms: null, loss: 100, status: null, detail: e?.message || 'destination not allowed' };
+     }
+diff --git a/backend/src/security/outbound-guard.ts b/backend/src/security/outbound-guard.ts
+index 0d6ee3a..6055abf 100644
+--- a/backend/src/security/outbound-guard.ts
++++ b/backend/src/security/outbound-guard.ts
+@@ -228,13 +228,24 @@ export function normaliseNumericHost(host: string): string {
+   return h;
+ }
+ 
+-/** Resolve a hostname to EVERY address it has. */
+-async function resolveAll(host: string): Promise<string[]> {
++/**
++ * Resolve a hostname to EVERY address it has.
++ *
++ * `allowUnresolved` is for the monitoring case: an operator adds a device by
++ * name that this process cannot resolve right now (no outbound DNS configured
++ * for the Node process, a device that is simply offline, or a name served only
++ * by a resolver the box reaches later). Blocking creation on that is wrong — the
++ * monitor should exist and report the device as unreachable until it answers.
++ * When set, a lookup FAILURE yields `[]` (nothing to connect-guard yet) instead
++ * of throwing; a name that DOES resolve is still fully checked below.
++ */
++async function resolveAll(host: string, allowUnresolved = false): Promise<string[]> {
+   if (net.isIP(host)) return [host];
+   try {
+     const results = await dns.promises.lookup(host, { all: true, verbatim: true });
+     return results.map((r) => r.address);
+   } catch (e: any) {
++    if (allowUnresolved) return [];
+     throw new SsrfBlocked(host, '-', `DNS lookup failed (${e?.code || e?.message || 'unknown'})`);
+   }
+ }
+@@ -253,6 +264,7 @@ async function resolveAll(host: string): Promise<string[]> {
+ export async function assertDestination(
+   hostOrUrl: string,
+   profile: OutboundProfile,
++  opts: { allowUnresolved?: boolean } = {},
+ ): Promise<{ host: string; addresses: string[] }> {
+   const raw = String(hostOrUrl || '').trim();
+   if (!raw) throw new SsrfBlocked('(empty)', '-', 'no destination given');
+@@ -275,8 +287,14 @@ export async function assertDestination(
+ 
+   host = normaliseNumericHost(host.replace(/^\[|\]$/g, ''));
+ 
+-  const addresses = await resolveAll(host);
+-  if (addresses.length === 0) throw new SsrfBlocked(host, '-', 'resolved to no addresses');
++  const addresses = await resolveAll(host, opts.allowUnresolved);
++  if (addresses.length === 0) {
++    // Unresolved + tolerated: nothing to connect-guard yet. The caller that
++    // actually opens a socket (HTTP/TCP) does NOT pass allowUnresolved, so it
++    // still refuses to connect to a name it cannot resolve to an allowed IP.
++    if (opts.allowUnresolved) return { host, addresses: [] };
++    throw new SsrfBlocked(host, '-', 'resolved to no addresses');
++  }
+ 
+   for (const addr of addresses) {
+     const verdict = classify(addr, profile);
