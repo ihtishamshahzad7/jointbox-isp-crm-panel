@@ -171,8 +171,6 @@ export default function DisconnectsPanel({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [openRow, setOpenRow] = useState<string | null>(null);
-  const [allReasons, setAllReasons] = useState(false);
-  const [breakdownExpanded, setBreakdownExpanded] = useState(false);
   const [failed, setFailed] = useState<Failed | null>(null);
   const [failedOffset, setFailedOffset] = useState(0);
   const [failedErr, setFailedErr] = useState("");
@@ -287,12 +285,8 @@ export default function DisconnectsPanel({
   const standard = (data?.causes || []).filter((c) => c.standard);
   const extra = (data?.causes || []).filter((c) => !c.standard && c.count > 0);
   const maxCause = Math.max(1, ...standard.map((c) => c.count), ...extra.map((c) => c.count));
-  const reasonChips = (data?.causes || [])
-    .filter((c) => allReasons || c.count > 0 || c.key === cause)
-    .sort((a, b) => (allReasons ? (a.standard === b.standard ? (a.code || 99) - (b.code || 99) : a.standard ? -1 : 1) : b.count - a.count));
   const sel = cause ? byKey.get(cause) : null;
   const selCat = category ? data?.categories.find((c) => c.id === category) : null;
-  const t = data?.totals;
 
   // The log, grouped by the day each session ended.
   const groups = useMemo(() => {
@@ -349,11 +343,7 @@ export default function DisconnectsPanel({
 
   return (
     <div id={s.root} className={`${s.page}${busy && data ? " " + s.loading : ""}`}>
-      <header className={s.head}>
-        <div>
-          <h2>Disconnect log</h2>
-          <p>Ended sessions with router and client details.</p>
-        </div>
+      <header className={s.head} aria-label="Disconnect filters">
         <div className={s.controls}>
           {!hideTimeRange && <div className={s.seg} role="group" aria-label="Time window">
             {WINDOWS.map(([h, label]) => (
@@ -372,168 +362,67 @@ export default function DisconnectsPanel({
 
       {err && <div className={s.error} role="alert">{err}</div>}
 
-      {/* ── Summary ── */}
-      <section className={s.stats} aria-label="Summary">
-        <Stat label="Sessions ended" value={nf(t?.ended)} sub={data ? `in the last ${WINDOWS.find(([h]) => h === data.window.sinceHours)?.[1] || `${data.window.sinceHours}h`}` : "…"} />
-        <Stat label="Customers affected" value={nf(t?.customers)} sub="had at least one disconnect" />
-        <Stat label="Need attention" value={nf(t?.abnormal)} warn={!!t?.abnormal}
-          sub={t ? `${pct(t.abnormalShare)} were faults or line drops` : "…"} />
-        <Stat label="Online now" value={nf(t?.openNow)} sub="sessions reporting in" />
-        <Stat label="Average session" value={dur(t?.avgSessionSec)} sub="before it ended" />
-        <Stat label="Most common" value={t?.topCause ? t.topCause.label : "—"}
-          sub={t?.topCause ? `${nf(t.topCause.count)} sessions` : "nothing ended yet"} />
-      </section>
-
-      {/* ── Filters ── */}
-      <section className={s.filters} aria-label="Filter the log">
-        <div className={s.filterRow}>
-          {!hideSearch && <label className={s.findWrap} htmlFor="disc-find">
-            <span className={s.findIcon} aria-hidden>⌕</span>
-            <input id="disc-find" className={s.findBox} value={visibleFindInput} placeholder="Find a username, MAC address or IP"
-              onChange={(e) => {
-                setFindInput(e.target.value);
-                onSearchTextChange?.(e.target.value);
-              }} autoComplete="off" spellCheck={false} />
-            {findInput && <button type="button" className={s.findClear} aria-label="Clear search" onClick={() => setFindInput("")}>×</button>}
-          </label>}
-          <div className={s.typeRow} role="group" aria-label="How it ended">
-            {(data?.categories || []).filter((c) => c.count > 0 || category === c.id).map((c) => (
-              <button key={c.id} type="button" className={s.catPick} style={catVar(c.id)} aria-pressed={category === c.id}
-                title={c.about} onClick={() => pickCategory(c.id)}>
-                <i />{c.label} <b>{nf(c.count)}</b>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className={s.reasonRow} role="group" aria-label="Reason">
-          <span className={s.filterLabel}>Reason</span>
-          <button type="button" className={s.reasonAll} aria-pressed={!cause && !category} onClick={clearSel}>All · {nf(t?.ended)}</button>
-          {reasonChips.map((c) => (
-            <button key={c.key} type="button" className={s.reasonPick} aria-pressed={cause === c.key}
-              onClick={() => pickCause(c.key)} title={`${c.description}\n${c.meaning}`}>
-              <CauseBadge compact cause={{ ...c, label: `${c.label} · ${nf(c.count)}` }} title="" />
-            </button>
-          ))}
-          <button type="button" className={s.moreLink} onClick={() => setAllReasons((v) => !v)}>
-            {allReasons ? "Only reasons that happened" : "Show all 18 reasons"}
-          </button>
-        </div>
-      </section>
-
-      {/* ── Selection detail ── */}
-      {(sel || selCat) && (
-        <section className={s.focus} style={catVar(sel ? sel.category : selCat!.id)} aria-live="polite">
-          <div className={s.focusHead}>
-            <div className={s.focusTitle}>
-              <span className={`${s.num}${sel?.code ? "" : " " + s.dot}`} style={catVar(sel ? sel.category : selCat!.id)}>{sel ? (sel.code || "•") : "•"}</span>
-              <div>
-                <h3>{sel ? sel.label : selCat!.label} {sel && <SeverityTag severity={sel.severity} />}</h3>
-                <p>{sel ? sel.description : selCat!.about}</p>
-              </div>
-            </div>
-            <button type="button" className={s.clear} onClick={clearSel}>Show all reasons</button>
-          </div>
-          {sel && (
-            <dl className={s.explain}>
-              <div><dt>What it usually means</dt><dd>{sel.meaning}</dd></div>
-              <div><dt>What to check</dt><dd>{sel.action}</dd></div>
-              <div>
-                <dt>In this window</dt>
-                <dd>
-                  {nf(sel.count)} session{sel.count === 1 ? "" : "s"} ({pct(sel.share)}) · {nf(sel.customers)} customer{sel.customers === 1 ? "" : "s"}
-                  <br />Average session {dur(sel.avgSessionSec)} · last {ago(sel.lastAt)}
-                  <br /><span className={s.faint}>{sel.code ? `Code ${sel.code} · ` : ""}{sel.key}</span>
-                </dd>
-              </div>
-            </dl>
-          )}
-        </section>
-      )}
-
-      {/* ── Mass drops: many customers on one NAS within a minute ── */}
-      {!!data?.massDrops?.length && (
-        <section className={s.massBox} aria-label="Mass drops">
-          <div className={s.massHead}>
-            <span className={s.massIcon} aria-hidden>!</span>
-            <div>
-              <h3>{data.massDrops.length === 1 ? "Mass drop detected" : `${data.massDrops.length} mass drops detected`}</h3>
-              <p>Several customers on the same NAS went down within a minute of each other — an outage, not single faults.</p>
-            </div>
-          </div>
-          <ul className={s.massList}>
-            {data.massDrops.map((m) => (
-              <li key={`${m.nasIp}-${m.from}`}>
-                <button type="button" className={s.massItem} onClick={() => { setNasIp(m.nasIp); setOffset(0); toLog(); }}
-                  title="Show only this NAS in the log">
-                  <b>{m.nasName || m.nasIp}</b>
-                  <span className={s.faint}>{m.nasName ? m.nasIp : ""}</span>
-                  <span>{full(m.from)}{m.to !== m.from ? ` – ${clock(m.to)}` : ""}</span>
-                  <span className={s.massCount}>{m.customers} customers</span>
-                  {m.topCause && <span className={s.faint}>mostly {m.topCause.label}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* ── THE LOG ── */}
-      <section className={s.panel} ref={logRef} aria-label="Disconnect log">
-        <div className={s.panelHead}>
-          <h3>Disconnect log</h3>
-          <span>{(sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}</span>
-        </div>
-        {!data ? (
-          <div className={s.empty}>Loading the disconnect log…</div>
-        ) : !data.records.length ? (
-          <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
-        ) : (
-          <>
-            <ol className={s.feed}>
-              {groups.map((g) => (
-                <li key={g.key} className={s.dayGroup}>
-                  <div className={s.dayHead}><span>{g.label}</span><em>{g.items.length} disconnect{g.items.length === 1 ? "" : "s"}</em></div>
-                  <ol className={s.events}>
-                    {g.items.map((r) => (
-                      <EventRow key={r.id} r={r} open={openRow === r.id} onToggle={() => setOpenRow(openRow === r.id ? null : r.id)} />
-                    ))}
-                  </ol>
-                </li>
-              ))}
-            </ol>
-            <div className={s.pager}>
-              <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.recordsTotal))} of {nf(data.recordsTotal)}</span>
-              <div>
-                <button type="button" className={s.linkBtn} disabled={offset === 0 || busy} onClick={() => { setOffset((o) => Math.max(0, o - PAGE)); toLog(); }}>← Newer</button>
-                <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.recordsTotal || busy} onClick={() => { setOffset((o) => o + PAGE); toLog(); }}>Older →</button>
-              </div>
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* ── Breakdown ── */}
       <div className={s.breakdown}>
-        <button
-          type="button"
-          className={s.breakdownToggle}
-          aria-expanded={breakdownExpanded}
-          aria-controls="disconnect-breakdown"
-          onClick={() => setBreakdownExpanded((expanded) => !expanded)}
-        >
-          <span>{breakdownExpanded ? "Hide breakdown" : "Show breakdown"}</span>
-          <svg className={s.breakdownChevron} viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m6 3 5 5-5 5" />
-          </svg>
-        </button>
         <div
           id="disconnect-breakdown"
-          className={`${s.breakdownContent} ${breakdownExpanded ? s.breakdownExpanded : ""}`}
-          aria-hidden={!breakdownExpanded}
-          inert={!breakdownExpanded}
+          className={s.breakdownContent}
+          aria-label="Breakdown for this window"
         >
           <div className={s.breakdownInner}>
             <div className={s.subHead} role="heading" aria-level={3}>Breakdown for this window</div>
+            {(sel || selCat) && (
+              <section className={s.focus} style={catVar(sel ? sel.category : selCat!.id)} aria-live="polite">
+                <div className={s.focusHead}>
+                  <div className={s.focusTitle}>
+                    <span className={`${s.num}${sel?.code ? "" : " " + s.dot}`} style={catVar(sel ? sel.category : selCat!.id)}>{sel ? (sel.code || "•") : "•"}</span>
+                    <div>
+                      <h3>{sel ? sel.label : selCat!.label} {sel && <SeverityTag severity={sel.severity} />}</h3>
+                      <p>{sel ? sel.description : selCat!.about}</p>
+                    </div>
+                  </div>
+                  <button type="button" className={s.clear} onClick={clearSel}>Show all reasons</button>
+                </div>
+                {sel && (
+                  <dl className={s.explain}>
+                    <div><dt>What it usually means</dt><dd>{sel.meaning}</dd></div>
+                    <div><dt>What to check</dt><dd>{sel.action}</dd></div>
+                    <div>
+                      <dt>In this window</dt>
+                      <dd>
+                        {nf(sel.count)} session{sel.count === 1 ? "" : "s"} ({pct(sel.share)}) · {nf(sel.customers)} customer{sel.customers === 1 ? "" : "s"}
+                        <br />Average session {dur(sel.avgSessionSec)} · last {ago(sel.lastAt)}
+                        <br /><span className={s.faint}>{sel.code ? `Code ${sel.code} · ` : ""}{sel.key}</span>
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+              </section>
+            )}
+            {!!data?.massDrops?.length && (
+              <section className={s.massBox} aria-label="Mass drops">
+                <div className={s.massHead}>
+                  <span className={s.massIcon} aria-hidden>!</span>
+                  <div>
+                    <h3>{data.massDrops.length === 1 ? "Mass drop detected" : `${data.massDrops.length} mass drops detected`}</h3>
+                    <p>Several customers on the same NAS went down within a minute of each other — an outage, not single faults.</p>
+                  </div>
+                </div>
+                <ul className={s.massList}>
+                  {data.massDrops.map((m) => (
+                    <li key={`${m.nasIp}-${m.from}`}>
+                      <button type="button" className={s.massItem} onClick={() => { setNasIp(m.nasIp); setOffset(0); toLog(); }}
+                        title="Show only this NAS in the log">
+                        <b>{m.nasName || m.nasIp}</b>
+                        <span className={s.faint}>{m.nasName ? m.nasIp : ""}</span>
+                        <span>{full(m.from)}{m.to !== m.from ? ` – ${clock(m.to)}` : ""}</span>
+                        <span className={s.massCount}>{m.customers} customers</span>
+                        {m.topCause && <span className={s.faint}>mostly {m.topCause.label}</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             <div className={s.twoCol}>
         <section className={s.panel}>
           <div className={s.panelHead}>
@@ -656,9 +545,45 @@ export default function DisconnectsPanel({
           ))}
         </div>
       </section>
+
           </div>
         </div>
       </div>
+
+      <section className={s.panel} ref={logRef} aria-label="Disconnect log">
+        <div className={s.panelHead}>
+          <h3>Disconnect log</h3>
+          <span>{(sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}</span>
+        </div>
+        {!data ? (
+          <div className={s.empty}>Loading the disconnect log…</div>
+        ) : !data.records.length ? (
+          <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
+        ) : (
+          <>
+            <ol className={s.feed}>
+              {groups.map((g) => (
+                <li key={g.key} className={s.dayGroup}>
+                  <div className={s.dayHead}><span>{g.label}</span><em>{g.items.length} disconnect{g.items.length === 1 ? "" : "s"}</em></div>
+                  <ol className={s.events}>
+                    {g.items.map((r) => (
+                      <EventRow key={r.id} r={r} open={openRow === r.id} onToggle={() => setOpenRow(openRow === r.id ? null : r.id)} />
+                    ))}
+                  </ol>
+                </li>
+              ))}
+            </ol>
+            <div className={s.pager}>
+              <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.recordsTotal))} of {nf(data.recordsTotal)}</span>
+              <div>
+                <button type="button" className={s.linkBtn} disabled={offset === 0 || busy} onClick={() => { setOffset((o) => Math.max(0, o - PAGE)); toLog(); }}>← Newer</button>
+                <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.recordsTotal || busy} onClick={() => { setOffset((o) => o + PAGE); toLog(); }}>Older →</button>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
     </div>
   );
 }
@@ -866,16 +791,6 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
         </div>
       )}
     </li>
-  );
-}
-
-function Stat({ label, value, sub, warn }: { label: string; value: React.ReactNode; sub?: React.ReactNode; warn?: boolean }) {
-  return (
-    <div className={s.stat}>
-      <span className={s.statLabel}>{label}</span>
-      <span className={`${s.statValue}${warn ? " " + s.statWarn : ""}`}>{value}</span>
-      {sub && <span className={s.statSub}>{sub}</span>}
-    </div>
   );
 }
 

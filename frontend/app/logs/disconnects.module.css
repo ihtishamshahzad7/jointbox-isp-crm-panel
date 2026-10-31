@@ -18,14 +18,6 @@
 .select, .userBox { height: 32px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; padding: 0 10px; min-width: 0; }
 .userBox { width: 170px; }
 
-/* ── Summary strip ──────────────────────────────────────────── */
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
-.stat { padding: 12px 14px; display: grid; gap: 3px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 0 -1px -1px 0; min-width: 0; }
-.statLabel { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
-.statValue { font-size: 20px; font-weight: 850; font-variant-numeric: tabular-nums; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.statSub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.statWarn { color: #d97706; }
-
 /* ── Panels ─────────────────────────────────────────────────── */
 .panel { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 14px; min-width: 0; }
 .panelHead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -33,31 +25,14 @@
 .panelHead span { font-size: 11px; color: var(--muted); }
 .twoCol { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px; }
 .breakdown { display: grid; gap: 10px; min-width: 0; }
-.breakdownToggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; font-weight: 750; text-align: left; cursor: pointer; transition: border-color .18s ease, background .18s ease; }
-.breakdownToggle:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 4%, var(--surface)); }
-.breakdownToggle:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
-.breakdownChevron { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .22s ease; }
-.breakdownToggle[aria-expanded="true"] .breakdownChevron { transform: rotate(90deg); }
-.breakdownContent { display: grid; grid-template-rows: 0fr; min-width: 0; opacity: 0; transition: grid-template-rows .24s ease, opacity .18s ease; }
-.breakdownExpanded { grid-template-rows: 1fr; opacity: 1; }
-.breakdownInner { display: grid; gap: 14px; min-height: 0; overflow: hidden; }
-@media (prefers-reduced-motion: reduce) {
-  .breakdownContent, .breakdownChevron { transition: none; }
-}
+.breakdownContent { display: grid; min-width: 0; }
+.breakdownInner { display: grid; gap: 14px; min-width: 0; }
 
 /* Category split */
 .split { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--surface-2); }
 .split button { border: 0; padding: 0; height: 100%; background: var(--cat); cursor: pointer; min-width: 3px; transition: opacity .15s ease; }
 .split button:hover { opacity: .85; }
 .split button:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
-.splitLegend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.catPick { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 999px; padding: 4px 10px 4px 6px; font: inherit; font-size: 11.5px; cursor: pointer; }
-.catPick i { width: 10px; height: 10px; border-radius: 3px; background: var(--cat); }
-.catPick b { font-variant-numeric: tabular-nums; }
-.catPick em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
-.catPick[aria-pressed="true"] { border-color: var(--cat); background: color-mix(in srgb, var(--cat) 12%, transparent); }
-.catPick.zero { opacity: .55; }
-
 /* Trend */
 .chart { width: 100%; height: auto; display: block; overflow: visible; }
 .chart text { fill: var(--muted); font-size: 10px; font-family: inherit; }
@@ -164,23 +139,12 @@
   .cause, .split button, .chev, .loading { transition: none; }
 }
 
-/* ── Filters ────────────────────────────────────────────────── */
-.filters { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px; }
-.filterRow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* ── Search ──────────────────────────────────────────────────── */
 .findWrap { position: relative; flex: 1 1 280px; min-width: 0; display: flex; align-items: center; }
 .findIcon { position: absolute; left: 11px; font-size: 15px; color: var(--muted); pointer-events: none; }
 .findBox { width: 100%; height: 36px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; padding: 0 32px 0 32px; }
 .findBox:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 1px; }
-.findClear { position: absolute; right: 6px; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; }
-.typeRow { display: flex; gap: 6px; flex-wrap: wrap; }
-.reasonRow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.filterLabel { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
-.reasonAll { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; }
-.reasonAll[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.reasonPick { border: 2px solid transparent; background: transparent; padding: 0; border-radius: 999px; cursor: pointer; }
-.reasonPick[aria-pressed="true"] { border-color: var(--accent); }
-.reasonPick:focus-visible, .reasonAll:focus-visible, .moreLink:focus-visible, .findClear:focus-visible, .barName:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
-.moreLink { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; padding: 4px 6px; }
+.barName:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
 
 /* ── The log ────────────────────────────────────────────────── */
 .feed, .events { list-style: none; margin: 0; padding: 0; }
@@ -251,14 +215,13 @@
    its colour from the theme tokens instead, through the root id. */
 #root { color: var(--text); }
 #root .head h2, #root .panelHead h3, #root .focusTitle h3, #root .causeName, #root .causeCount,
-#root .statValue, #root .who, #root .barTop strong, #root .catPick, #root .table td,
+#root .who, #root .barTop strong, #root .table td,
 #root .explain dd, #root .detailGrid b, #root .detailNote, #root .detailNote div,
 #root .cause, #root .clear, #root .linkBtn, #root .select, #root .userBox { color: var(--text); }
-#root .eyebrow, #root .head p, #root .panelHead span, #root .statLabel, #root .statSub, #root .causeKey,
+#root .eyebrow, #root .head p, #root .panelHead span, #root .causeKey,
 #root .causeDesc, #root .causeMeta, #root .barTop span, #root .faint, #root .whoSub, #root .table th,
-#root .explain dt, #root .detailGrid span, #root .subHead, #root .empty, #root .pager, #root .catPick em,
+#root .explain dt, #root .detailGrid span, #root .subHead, #root .empty, #root .pager,
 #root .causeCount small, #root .chartEmpty, #root .focusTitle p { color: var(--muted); }
-#root .statWarn { color: #d97706; }
 #root .seg button { color: var(--muted); }
 #root .seg button[aria-pressed="true"] { color: #fff; }
 #root .table tbody tr, #root .table tbody tr:hover { background: transparent; }
@@ -268,11 +231,10 @@
 #root .detail td { background: var(--surface-2); }
 #root div:not([class]), #root span:not([class]), #root p:not([class]) { color: inherit; }
 #root .evName, #root .evTime b, #root .factV, #root .howText, #root .barName, #root .cellMain,
-#root .avatar, #root .reasonAll, #root .findBox, #root .legendRow b, #root .evMain { color: var(--text); }
-#root .evUser, #root .evTime span, #root .factK, #root .dayHead, #root .filterLabel, #root .legendRow,
+#root .avatar, #root .findBox, #root .legendRow b, #root .evMain { color: var(--text); }
+#root .evUser, #root .evTime span, #root .factK, #root .dayHead, #root .legendRow,
 #root .findIcon, #root .findClear { color: var(--muted); }
 #root .howTag { color: #fff; }
-#root .moreLink { color: var(--accent); }
 #root li { color: var(--text); }
 #root .detailGrid div > span, #root .dayHead em { color: var(--muted); }
 #root .massHead h3, #root .massItem, #root .massItem b, #root .viewSwitch button, #root .flag, #root .logLines code { color: var(--text); }

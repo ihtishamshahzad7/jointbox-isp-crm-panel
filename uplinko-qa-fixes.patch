@@ -1,0 +1,1297 @@
+diff --git a/frontend/app/logs/disconnects-panel.tsx b/frontend/app/logs/disconnects-panel.tsx
+index 7e335c2..1627645 100644
+--- a/frontend/app/logs/disconnects-panel.tsx
++++ b/frontend/app/logs/disconnects-panel.tsx
+@@ -171,8 +171,6 @@ export default function DisconnectsPanel({
+   const [busy, setBusy] = useState(false);
+   const [err, setErr] = useState("");
+   const [openRow, setOpenRow] = useState<string | null>(null);
+-  const [allReasons, setAllReasons] = useState(false);
+-  const [breakdownExpanded, setBreakdownExpanded] = useState(false);
+   const [failed, setFailed] = useState<Failed | null>(null);
+   const [failedOffset, setFailedOffset] = useState(0);
+   const [failedErr, setFailedErr] = useState("");
+@@ -287,12 +285,8 @@ export default function DisconnectsPanel({
+   const standard = (data?.causes || []).filter((c) => c.standard);
+   const extra = (data?.causes || []).filter((c) => !c.standard && c.count > 0);
+   const maxCause = Math.max(1, ...standard.map((c) => c.count), ...extra.map((c) => c.count));
+-  const reasonChips = (data?.causes || [])
+-    .filter((c) => allReasons || c.count > 0 || c.key === cause)
+-    .sort((a, b) => (allReasons ? (a.standard === b.standard ? (a.code || 99) - (b.code || 99) : a.standard ? -1 : 1) : b.count - a.count));
+   const sel = cause ? byKey.get(cause) : null;
+   const selCat = category ? data?.categories.find((c) => c.id === category) : null;
+-  const t = data?.totals;
+ 
+   // The log, grouped by the day each session ended.
+   const groups = useMemo(() => {
+@@ -349,76 +343,32 @@ export default function DisconnectsPanel({
+ 
+   return (
+     <div id={s.root} className={`${s.page}${busy && data ? " " + s.loading : ""}`}>
++      {/* ── Compact controls: time range + NAS + search ── */}
+       <header className={s.head}>
+-        <div>
+-          <h2>Disconnect log</h2>
+-          <p>Ended sessions with router and client details.</p>
+-        </div>
+         <div className={s.controls}>
+           {!hideTimeRange && <div className={s.seg} role="group" aria-label="Time window">
+             {WINDOWS.map(([h, label]) => (
+               <button key={h} type="button" aria-pressed={hours === h} onClick={() => { changeHours(h); setOffset(0); }}>{label}</button>
+             ))}
+           </div>}
+-          <select id="disc-router" className={s.select} value={nasIp} aria-label="NAS"
++          <select id="disc-router" className={s.select} value={nasIp} aria-label="NAS / router"
+             onChange={(e) => { setNasIp(e.target.value); setOffset(0); }}>
+             <option value="">All NAS / routers</option>
+             {Object.entries(routerOptions).map(([ip, name]) => (
+               <option key={ip} value={ip}>{name ? `${name} (${ip})` : ip}</option>
+             ))}
+           </select>
+-        </div>
+-      </header>
+-
+-      {err && <div className={s.error} role="alert">{err}</div>}
+-
+-      {/* ── Summary ── */}
+-      <section className={s.stats} aria-label="Summary">
+-        <Stat label="Sessions ended" value={nf(t?.ended)} sub={data ? `in the last ${WINDOWS.find(([h]) => h === data.window.sinceHours)?.[1] || `${data.window.sinceHours}h`}` : "…"} />
+-        <Stat label="Customers affected" value={nf(t?.customers)} sub="had at least one disconnect" />
+-        <Stat label="Need attention" value={nf(t?.abnormal)} warn={!!t?.abnormal}
+-          sub={t ? `${pct(t.abnormalShare)} were faults or line drops` : "…"} />
+-        <Stat label="Online now" value={nf(t?.openNow)} sub="sessions reporting in" />
+-        <Stat label="Average session" value={dur(t?.avgSessionSec)} sub="before it ended" />
+-        <Stat label="Most common" value={t?.topCause ? t.topCause.label : "—"}
+-          sub={t?.topCause ? `${nf(t.topCause.count)} sessions` : "nothing ended yet"} />
+-      </section>
+-
+-      {/* ── Filters ── */}
+-      <section className={s.filters} aria-label="Filter the log">
+-        <div className={s.filterRow}>
+           {!hideSearch && <label className={s.findWrap} htmlFor="disc-find">
+             <span className={s.findIcon} aria-hidden>⌕</span>
+             <input id="disc-find" className={s.findBox} value={visibleFindInput} placeholder="Find a username, MAC address or IP"
+-              onChange={(e) => {
+-                setFindInput(e.target.value);
+-                onSearchTextChange?.(e.target.value);
+-              }} autoComplete="off" spellCheck={false} />
++              onChange={(e) => { setFindInput(e.target.value); onSearchTextChange?.(e.target.value); }} autoComplete="off" spellCheck={false} />
+             {findInput && <button type="button" className={s.findClear} aria-label="Clear search" onClick={() => setFindInput("")}>×</button>}
+           </label>}
+-          <div className={s.typeRow} role="group" aria-label="How it ended">
+-            {(data?.categories || []).filter((c) => c.count > 0 || category === c.id).map((c) => (
+-              <button key={c.id} type="button" className={s.catPick} style={catVar(c.id)} aria-pressed={category === c.id}
+-                title={c.about} onClick={() => pickCategory(c.id)}>
+-                <i />{c.label} <b>{nf(c.count)}</b>
+-              </button>
+-            ))}
+-          </div>
++          {(cause || category) && <button type="button" className={s.linkBtn} onClick={clearSel}>Clear reason filter</button>}
+         </div>
+-        <div className={s.reasonRow} role="group" aria-label="Reason">
+-          <span className={s.filterLabel}>Reason</span>
+-          <button type="button" className={s.reasonAll} aria-pressed={!cause && !category} onClick={clearSel}>All · {nf(t?.ended)}</button>
+-          {reasonChips.map((c) => (
+-            <button key={c.key} type="button" className={s.reasonPick} aria-pressed={cause === c.key}
+-              onClick={() => pickCause(c.key)} title={`${c.description}\n${c.meaning}`}>
+-              <CauseBadge compact cause={{ ...c, label: `${c.label} · ${nf(c.count)}` }} title="" />
+-            </button>
+-          ))}
+-          <button type="button" className={s.moreLink} onClick={() => setAllReasons((v) => !v)}>
+-            {allReasons ? "Only reasons that happened" : "Show all 18 reasons"}
+-          </button>
+-        </div>
+-      </section>
++      </header>
++
++      {err && <div className={s.error} role="alert">{err}</div>}
+ 
+       {/* ── Selection detail ── */}
+       {(sel || selCat) && (
+@@ -477,61 +427,9 @@ export default function DisconnectsPanel({
+         </section>
+       )}
+ 
+-      {/* ── THE LOG ── */}
+-      <section className={s.panel} ref={logRef} aria-label="Disconnect log">
+-        <div className={s.panelHead}>
+-          <h3>Disconnect log</h3>
+-          <span>{(sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}</span>
+-        </div>
+-        {!data ? (
+-          <div className={s.empty}>Loading the disconnect log…</div>
+-        ) : !data.records.length ? (
+-          <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
+-        ) : (
+-          <>
+-            <ol className={s.feed}>
+-              {groups.map((g) => (
+-                <li key={g.key} className={s.dayGroup}>
+-                  <div className={s.dayHead}><span>{g.label}</span><em>{g.items.length} disconnect{g.items.length === 1 ? "" : "s"}</em></div>
+-                  <ol className={s.events}>
+-                    {g.items.map((r) => (
+-                      <EventRow key={r.id} r={r} open={openRow === r.id} onToggle={() => setOpenRow(openRow === r.id ? null : r.id)} />
+-                    ))}
+-                  </ol>
+-                </li>
+-              ))}
+-            </ol>
+-            <div className={s.pager}>
+-              <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.recordsTotal))} of {nf(data.recordsTotal)}</span>
+-              <div>
+-                <button type="button" className={s.linkBtn} disabled={offset === 0 || busy} onClick={() => { setOffset((o) => Math.max(0, o - PAGE)); toLog(); }}>← Newer</button>
+-                <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.recordsTotal || busy} onClick={() => { setOffset((o) => o + PAGE); toLog(); }}>Older →</button>
+-              </div>
+-            </div>
+-          </>
+-        )}
+-      </section>
+-
+-      {/* ── Breakdown ── */}
++      {/* ── Breakdown for this window — always visible ── */}
+       <div className={s.breakdown}>
+-        <button
+-          type="button"
+-          className={s.breakdownToggle}
+-          aria-expanded={breakdownExpanded}
+-          aria-controls="disconnect-breakdown"
+-          onClick={() => setBreakdownExpanded((expanded) => !expanded)}
+-        >
+-          <span>{breakdownExpanded ? "Hide breakdown" : "Show breakdown"}</span>
+-          <svg className={s.breakdownChevron} viewBox="0 0 16 16" aria-hidden="true">
+-            <path d="m6 3 5 5-5 5" />
+-          </svg>
+-        </button>
+-        <div
+-          id="disconnect-breakdown"
+-          className={`${s.breakdownContent} ${breakdownExpanded ? s.breakdownExpanded : ""}`}
+-          aria-hidden={!breakdownExpanded}
+-          inert={!breakdownExpanded}
+-        >
++        <div id="disconnect-breakdown" className={`${s.breakdownContent} ${s.breakdownExpanded}`}>
+           <div className={s.breakdownInner}>
+             <div className={s.subHead} role="heading" aria-level={3}>Breakdown for this window</div>
+             <div className={s.twoCol}>
+@@ -659,6 +557,41 @@ export default function DisconnectsPanel({
+           </div>
+         </div>
+       </div>
++
++      {/* ── Actual disconnect records ── */}
++      <section className={s.panel} ref={logRef} aria-label="Disconnect records">
++        <div className={s.panelHead}>
++          <h3>Disconnect log</h3>
++          <span>{(sel ? `Ended by ${sel.label} · ` : selCat ? `${selCat.label} · ` : find || username ? `Matching “${username || find}” · ` : "") + (data ? `${nf(data.recordsTotal)} entr${data.recordsTotal === 1 ? "y" : "ies"} · newest first` : "…")}</span>
++        </div>
++        {!data ? (
++          <div className={s.empty}>Loading the disconnect log…</div>
++        ) : !data.records.length ? (
++          <div className={s.empty}>No sessions ended {find || username ? "for that search " : ""}{sel ? `with ${sel.label} ` : ""}in this window.</div>
++        ) : (
++          <>
++            <ol className={s.feed}>
++              {groups.map((g) => (
++                <li key={g.key} className={s.dayGroup}>
++                  <div className={s.dayHead}><span>{g.label}</span><em>{g.items.length} disconnect{g.items.length === 1 ? "" : "s"}</em></div>
++                  <ol className={s.events}>
++                    {g.items.map((r) => (
++                      <EventRow key={r.id} r={r} open={openRow === r.id} onToggle={() => setOpenRow(openRow === r.id ? null : r.id)} />
++                    ))}
++                  </ol>
++                </li>
++              ))}
++            </ol>
++            <div className={s.pager}>
++              <span>{nf(offset + 1)}–{nf(Math.min(offset + PAGE, data.recordsTotal))} of {nf(data.recordsTotal)}</span>
++              <div>
++                <button type="button" className={s.linkBtn} disabled={offset === 0 || busy} onClick={() => { setOffset((o) => Math.max(0, o - PAGE)); toLog(); }}>← Newer</button>
++                <button type="button" className={s.linkBtn} disabled={offset + PAGE >= data.recordsTotal || busy} onClick={() => { setOffset((o) => o + PAGE); toLog(); }}>Older →</button>
++              </div>
++            </div>
++          </>
++        )}
++      </section>
+     </div>
+   );
+ }
+@@ -869,16 +802,6 @@ function EventRow({ r, open, onToggle }: { r: RecordRow; open: boolean; onToggle
+   );
+ }
+ 
+-function Stat({ label, value, sub, warn }: { label: string; value: React.ReactNode; sub?: React.ReactNode; warn?: boolean }) {
+-  return (
+-    <div className={s.stat}>
+-      <span className={s.statLabel}>{label}</span>
+-      <span className={`${s.statValue}${warn ? " " + s.statWarn : ""}`}>{value}</span>
+-      {sub && <span className={s.statSub}>{sub}</span>}
+-    </div>
+-  );
+-}
+-
+ function Field({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
+   return <div><span>{k}</span><b className={mono ? s.ip : undefined}>{v}</b></div>;
+ }
+diff --git a/frontend/app/logs/page.tsx b/frontend/app/logs/page.tsx
+index 02456db..9fd9846 100644
+--- a/frontend/app/logs/page.tsx
++++ b/frontend/app/logs/page.tsx
+@@ -32,16 +32,12 @@ const dateTime = (value: string | Date) => new Date(value).toLocaleString(undefi
+ 
+ // ── Primary Logs sections ────────────────────────────────────────
+ export const LOG_VIEWS = [
+-  { id: "overview", label: "Overall Stats", description: "See disconnect trends, customer impact, and all termination causes." },
+   { id: "connections", label: "Connections", description: "Investigate connection events, network records, and failed activations." },
+-  { id: "sessions", label: "Sessions", description: "Review RADIUS accounting sessions and recorded disconnect causes." },
+-  { id: "authentication", label: "AAA", description: "Review authentication records, accounting, and RADIUS diagnostics." },
++  { id: "sessions", label: "Sessions", description: "Review RADIUS accounting sessions, disconnect analysis, and recorded termination causes." },
++  { id: "authentication", label: "Authentication & AAA", description: "Review authentication records, accounting, and RADIUS diagnostics." },
+   { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
+ ];
+ const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
+-  overview: [
+-    { id: "disconnects", label: "Disconnect Analysis" },
+-  ],
+   connections: [
+     { id: "console", label: "Connection Events" },
+     { id: "network", label: "NAS & Network" },
+@@ -67,21 +63,22 @@ const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
+   ],
+ };
+ const DEFAULT_LOG_FEATURES: Record<string, string> = {
+-  overview: "disconnects",
+   connections: "console",
+   sessions: "live",
+   authentication: "subscriber",
+   audit: "activity",
+ };
++// Disconnect Analysis moved under Sessions; legacy "overview" links resolve there.
+ const LEGACY_LOG_TABS: Record<string, string> = {
+-  overview: "overview", stats: "overview", "overall-stats": "overview",
++  overview: "sessions", stats: "sessions", "overall-stats": "sessions",
+   console: "connections", network: "connections", failed: "connections",
+-  timeline: "sessions", radsess: "sessions", disconnects: "overview",
++  timeline: "sessions", radsess: "sessions", disconnects: "sessions",
+   authrec: "authentication", login: "audit", radius: "authentication",
+   sessions: "sessions", actrec: "audit", activity: "audit", system: "audit",
+   aaa: "authentication",
+ };
+ const LEGACY_LOG_FEATURES: Record<string, string> = {
++  overview: "disconnects", stats: "disconnects", "overall-stats": "disconnects",
+   disconnects: "disconnects", console: "console", network: "network", failed: "failed",
+   timeline: "timeline", radsess: "accounting",
+   authrec: "subscriber", login: "security", radius: "health",
+@@ -105,7 +102,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
+ } = {}) {
+   const router = useRouter();
+   const [darkMode] = useState(true);
+-  const [internalTab, setInternalTab] = useState("overview");
++  const [internalTab, setInternalTab] = useState("sessions");
+   const activeTab = embedded && view && onViewChange ? view : internalTab;
+   const [featureByTab, setFeatureByTab] = useState(DEFAULT_LOG_FEATURES);
+   const [auditEntity, setAuditEntity] = useState("");
+@@ -167,7 +164,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
+     if (activeTab === "connections") setFilterSeverity(id === "network" ? "ERROR" : "ALL");
+     if (
+       (activeTab === "connections" && (id === "failed" || id === "nas")) ||
+-      ((activeTab === "overview" || activeTab === "sessions") && id === "disconnects") ||
++      (activeTab === "sessions" && id === "disconnects") ||
+       (activeTab === "authentication" && id === "disconnects") ||
+       (activeTab === "audit" && id === "system")
+     ) setFocusUser("");
+@@ -188,7 +185,6 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
+   const accountFilterAvailable =
+     activeFeature !== "nas" &&
+     !(activeTab === "connections" && activeFeature === "failed") &&
+-    !(activeTab === "overview" && activeFeature === "disconnects") &&
+     !(activeTab === "sessions" && activeFeature === "disconnects") &&
+     !(activeTab === "authentication" && activeFeature === "disconnects") &&
+     !(activeTab === "audit" && activeFeature === "system");
+@@ -353,7 +349,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
+       const params = new URLSearchParams(window.location.search);
+       const legacyKey = params.get("logTab") || params.get("tab") || "";
+       const destination = resolveLogTab(legacyKey);
+-      setInternalTab(destination || "overview");
++      setInternalTab(destination || "sessions");
+       setAuditEntity(params.get("entity") || "");
+       setAuditEntityId(params.get("entityId") || "");
+       const requestedFeature = params.get("logFeature") || LEGACY_LOG_FEATURES[legacyKey];
+@@ -1239,10 +1235,10 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
+           )}
+ 
+           {/* ═══════════════ TAB: DISCONNECT REASONS (all 18 RFC 2866 causes) ═══════════════ */}
+-          {(activeTab === "overview" || activeTab === "sessions" || activeTab === "authentication") && activeFeature === "disconnects" && (
++          {(activeTab === "sessions" || activeTab === "authentication") && activeFeature === "disconnects" && (
+             <>
+               <h2 style={{ fontSize: 15, margin: "20px 0 9px" }}>
+-                {activeTab === "overview" ? "Disconnect Analysis" : "Disconnect report"}
++                Disconnect Analysis
+               </h2>
+               <DisconnectsPanel
+                 refreshKey={refreshKey}
+diff --git a/frontend/app/network-center/page.tsx b/frontend/app/network-center/page.tsx
+index 17d1f99..7d0c964 100644
+--- a/frontend/app/network-center/page.tsx
++++ b/frontend/app/network-center/page.tsx
+@@ -34,9 +34,9 @@ export default function NetworkCenter() {
+           { id: "ops", label: "Operations", hint: "Alerts, router health and what needs attention now.", render: () => <Operations /> },
+           { id: "noc", label: "NOC / Uptime", hint: "Segment health, uptime and the outage timeline.", render: () => <Noc /> },
+           { id: "live", label: "Live Network", hint: "Who is online right now, per router.", render: () => <LiveNetwork /> },
+-          { id: "nas", label: "NAS / Routers", hint: "Your MikroTiks and their RADIUS settings.", render: () => <Nas /> },
++          { id: "nas", label: "NAS / Routers", render: () => <Nas /> },
+           { id: "fiber", label: "FTTH / Fiber", hint: "OLTs, PON ports, ONUs and fiber topology.", render: () => <Fiber /> },
+-          { id: "pools", label: "IP Pools", hint: "Address ranges handed out to customers automatically.", render: () => <IpPools /> },
++          { id: "pools", label: "IP Pools", render: () => <IpPools /> },
+           { id: "static", label: "Static IPs", hint: "Fixed addresses sold as a monthly add-on.", render: () => <StaticIps /> },
+           ...(isOwner ? [{ id: "prefixes", label: "Prefix Register", hint: "Routed blocks, VLANs and transit links for corporate clients.", render: () => <Prefixes /> }] : []),
+           { id: "outages", label: "Outages & Power", hint: "Load-shedding, power cuts and network faults.", render: () => <Outages /> },
+diff --git a/frontend/e2e/logs-tabs.spec.ts b/frontend/e2e/logs-tabs.spec.ts
+index 35f4b08..5fca9e7 100644
+--- a/frontend/e2e/logs-tabs.spec.ts
++++ b/frontend/e2e/logs-tabs.spec.ts
+@@ -1,807 +1,173 @@
+ import { test, expect } from "@playwright/test";
+ 
+-const EMAIL = process.env.E2E_EMAIL;
+-const PASSWORD = process.env.E2E_PASSWORD;
+-
+-const isLogResponse = (url: string, endpoint: string) => {
+-  const parsed = new URL(url);
+-  return parsed.pathname.endsWith(`/logs/${endpoint}`);
+-};
+-
+-test.describe("Logs workspace tabs", () => {
+-  test("collapses and expands the disconnect breakdown at desktop and mobile widths", async ({ page }) => {
+-    const now = new Date().toISOString();
+-    const report = {
+-      window: { sinceHours: 168, from: now, to: now, unit: "day" },
+-      totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+-      causes: [],
+-      categories: [],
+-      trend: { unit: "day", partial: false, buckets: [] },
+-      routers: [],
+-      customers: [],
+-      records: [],
+-      recordsTotal: 0,
+-      massDrops: [],
+-    };
+-
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-breakdown-test-token"));
+-    await page.route("**/api/**", async (route) => {
+-      const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+-      const fixtures: Record<string, unknown> = {
+-        "/profile": {},
+-        "/users": [],
+-        "/logs/network": { logs: [], total: 0 },
+-        "/logs/stats": { hourly: [] },
+-        "/logs/disconnects": report,
+-      };
+-      const fixture = fixtures[path];
+-      await route.fulfill({
+-        status: fixture === undefined ? 404 : 200,
+-        contentType: "application/json",
+-        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+-      });
+-    });
+-
+-    await page.goto("/logs?logTab=overview&logFeature=disconnects");
+-    const panel = page.getByRole("tabpanel");
+-    const disconnectLog = panel.getByRole("region", { name: "Disconnect log" });
+-    const breakdown = page.locator("#disconnect-breakdown");
+-    const breakdownHeading = panel.getByRole("heading", { name: "Breakdown for this window" });
+-    const toggle = panel.getByRole("button", { name: "Show breakdown" });
+-
+-    await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+-    await expect(toggle).toHaveAttribute("aria-controls", "disconnect-breakdown");
+-    await expect(breakdown).toHaveAttribute("aria-hidden", "true");
+-    await expect(breakdownHeading).toBeHidden();
+-
+-    for (const viewport of [
+-      { width: 1440, height: 900 },
+-      { width: 1024, height: 768 },
+-      { width: 768, height: 900 },
+-      { width: 430, height: 844 },
+-      { width: 375, height: 812 },
+-      { width: 320, height: 700 },
+-    ]) {
+-      await page.setViewportSize(viewport);
+-      await panel.getByRole("button", { name: "Show breakdown" }).click();
+-      await expect(panel.getByRole("button", { name: "Hide breakdown" })).toHaveAttribute("aria-expanded", "true");
+-      await expect(breakdown).toHaveAttribute("aria-hidden", "false");
+-      await expect(breakdownHeading).toBeVisible();
+-      await expect(panel.getByRole("heading", { name: "Who or what ended them" })).toBeVisible();
+-      await expect(panel.getByRole("heading", { name: "By NAS / router" })).toBeVisible();
+-      await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
+-
+-      await panel.getByRole("button", { name: "Hide breakdown" }).click();
+-      await expect(panel.getByRole("button", { name: "Show breakdown" })).toHaveAttribute("aria-expanded", "false");
+-      await expect(breakdown).toHaveAttribute("aria-hidden", "true");
+-      await expect(breakdownHeading).toBeHidden();
+-      await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+-    }
+-  });
+-
+-  test("opens Overall Stats from the app navigation and keeps all cause cards usable on mobile", async ({ page }) => {
+-    const now = new Date().toISOString();
+-    const causeNames = [
+-      "User Request", "Lost Carrier", "Lost Service", "Idle Timeout", "Session Timeout",
+-      "Admin Reset", "Admin Reboot", "Port Error", "NAS Error", "NAS Request", "NAS Reboot",
+-      "Port Unneeded", "Port Preempted", "Port Suspended", "Service Unavailable", "Callback",
+-      "User Error", "Host Request",
+-    ];
+-    const causes = causeNames.map((label, index) => ({
+-      code: index + 1,
+-      key: label.replaceAll(" ", "-"),
+-      label,
+-      description: `Definition for ${label}.`,
+-      meaning: `Meaning for ${label}.`,
+-      action: `Check ${label}.`,
+-      category: "customer",
+-      severity: "normal",
+-      standard: true,
+-      count: index + 1,
+-      share: (index + 1) / 171,
+-      customers: index + 1,
+-      avgSessionSec: 60,
+-      lastAt: now,
+-    }));
+-    const requestedUrls: string[] = [];
+-
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-disconnects-test-token"));
+-    await page.route("**/api/**", async (route) => {
+-      const url = new URL(route.request().url());
+-      requestedUrls.push(url.toString());
+-      const path = url.pathname.replace(/^\/api/, "");
+-      const report = {
+-        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+-        totals: { ended: 171, openNow: 0, customers: 171, avgSessionSec: 60, abnormal: 0, abnormalShare: 0, topCause: null },
+-        causes,
+-        categories: [],
+-        trend: { unit: "day", partial: false, buckets: [] },
+-        routers: [],
+-        customers: [],
+-        records: [],
+-        recordsTotal: 0,
+-        massDrops: [],
+-      };
+-      const fixtures: Record<string, unknown> = {
+-        "/profile": {},
+-        "/users": [],
+-        "/logs/network": { logs: [], total: 0 },
+-        "/logs/stats": { hourly: [] },
+-        "/logs/disconnects": report,
+-      };
+-      const fixture = fixtures[path];
+-      await route.fulfill({
+-        status: fixture === undefined ? 404 : 200,
+-        contentType: "application/json",
+-        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+-      });
+-    });
+-
+-    if ((page.viewportSize()?.width ?? 1280) <= 640) {
+-      await page.goto("/logs?logTab=overview&logFeature=disconnects");
+-    } else {
+-      await page.goto("/dashboard");
+-      await page.getByRole("button", { name: "Logs", exact: true }).click();
+-    }
+-    await expect(page).toHaveURL(/\/logs(?:\?.*)?$/);
+-    const panel = page.getByRole("tabpanel");
+-    const overallTab = page.getByRole("tab", { name: "Overall Stats" });
+-    await expect(overallTab).toHaveAttribute("aria-selected", "true");
+-    await expect(panel.getByRole("heading", { name: "Disconnect Analysis" })).toBeVisible();
+-    const disconnectLog = panel.getByRole("region", { name: "Disconnect log" });
+-    await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+-    const breakdownHeading = panel.getByRole("heading", { name: "Breakdown for this window" });
+-    const breakdownToggle = panel.getByRole("button", { name: "Show breakdown" });
+-    await expect(breakdownToggle).toHaveAttribute("aria-expanded", "false");
+-    await expect(breakdownToggle).toHaveAttribute("aria-controls", "disconnect-breakdown");
+-    await expect(breakdownHeading).toBeHidden();
+-    await breakdownToggle.click();
+-    await expect(panel.getByRole("button", { name: "Hide breakdown" })).toHaveAttribute("aria-expanded", "true");
+-    await expect(breakdownHeading).toBeVisible();
+-    await expect(panel.getByRole("heading", { name: "Who or what ended them" })).toBeVisible();
+-    await expect(panel.getByRole("heading", { name: "By NAS / router" })).toBeVisible();
+-    await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
+-
+-    const causeSection = panel.getByRole("heading", { name: "All 18 termination causes" }).locator("xpath=../..");
+-    const cards = causeSection.getByRole("button");
+-    await expect(cards).toHaveCount(18);
+-    const cardText = await cards.allTextContents();
+-    for (const [index, label] of causeNames.entries()) {
+-      expect(cardText[index]).toContain(label);
+-      expect(cardText[index]).toContain(String(index + 1));
+-    }
+-
+-    const filteredRequest = page.waitForRequest((request) => {
+-      const url = new URL(request.url());
+-      return url.pathname.endsWith("/logs/disconnects") && url.searchParams.get("cause") === "User-Request";
+-    });
+-    await cards.first().click();
+-    await filteredRequest;
+-    await expect(cards.first()).toHaveAttribute("aria-pressed", "true");
+-
+-    for (const viewport of [
+-      { width: 1440, height: 900 },
+-      { width: 1024, height: 768 },
+-      { width: 768, height: 900 },
+-      { width: 430, height: 844 },
+-      { width: 375, height: 812 },
+-      { width: 320, height: 700 },
+-    ]) {
+-      await page.setViewportSize(viewport);
+-      const hideBreakdown = panel.getByRole("button", { name: "Hide breakdown" });
+-      await hideBreakdown.click();
+-      await expect(breakdownHeading).toBeHidden();
+-      await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+-      await panel.getByRole("button", { name: "Show breakdown" }).click();
+-      await expect(breakdownHeading).toBeVisible();
+-      await expect.poll(() => page.evaluate(
+-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+-      )).toBe(true);
+-      const box = await cards.first().boundingBox();
+-      expect(box?.width).toBeLessThanOrEqual(viewport.width);
+-      expect(box?.height).toBeGreaterThanOrEqual(44);
+-      if (viewport.width <= 430) {
+-        const bottomNav = page.getByRole("navigation", { name: "Section" });
+-        await expect(bottomNav.getByRole("button")).toHaveCount(5);
+-        for (const label of ["Overall Stats", "Connections", "Sessions", "AAA", "Audit Trail"]) {
+-          await expect(bottomNav.getByRole("button", { name: label })).toBeVisible();
+-        }
+-      }
+-    }
+-    await page.goto("/logs/session/disconnect-analysis");
+-    await expect(page).toHaveURL(/\/logs\?logTab=overview&logFeature=disconnects$/);
+-    await expect(page.getByRole("tab", { name: "Overall Stats" })).toHaveAttribute("aria-selected", "true");
+-    expect(requestedUrls.some((url) => new URL(url).pathname.endsWith("/logs/disconnects"))).toBe(true);
+-  });
+-
+-  test("keeps section URLs in sync with refresh and browser history", async ({ page }) => {
+-    const now = new Date().toISOString();
+-    const fixtures: Record<string, unknown> = {
+-      "/logs/disconnects": {
+-        window: { sinceHours: 24, from: now, to: now, unit: "hour" },
+-        totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+-        causes: [], categories: [], trend: { unit: "hour", partial: false, buckets: [] },
+-        routers: [], customers: [], records: [], recordsTotal: 0, massDrops: [],
+-      },
+-      "/logs/network": { logs: [], total: 0 },
+-      "/logs/radius-sessions": { items: [] },
+-      "/logs/sessions": [],
+-    };
+-
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-history-test-token"));
+-    await page.route("**/api/**", async (route) => {
+-      const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+-      const fixture = fixtures[path] ?? { logs: [], total: 0, items: [] };
+-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture) });
+-    });
+-
+-    await page.goto("/logs");
+-    const overallTab = page.getByRole("tab", { name: "Overall Stats" });
+-    const connectionsTab = page.getByRole("tab", { name: "Connections" });
+-    const sessionsTab = page.getByRole("tab", { name: "Sessions" });
+-    await expect(overallTab).toHaveAttribute("aria-selected", "true");
+-    await connectionsTab.click();
+-    await expect(page).toHaveURL(/logTab=connections&logFeature=console/);
+-    await sessionsTab.click();
+-    await expect(page).toHaveURL(/logTab=sessions&logFeature=live/);
+-
+-    await page.goBack();
+-    await expect(connectionsTab).toHaveAttribute("aria-selected", "true");
+-    await page.goForward();
+-    await expect(sessionsTab).toHaveAttribute("aria-selected", "true");
+-    await page.reload();
+-    await expect(sessionsTab).toHaveAttribute("aria-selected", "true");
+-  });
+-
+-  test("switches main Logs sections and loads each category's data source", async ({ page }) => {
+-    test.setTimeout(90_000);
+-    const requestedPaths: string[] = [];
+-    const pageErrors: Error[] = [];
+-    const now = new Date().toISOString();
+-    const dataPaths = [
+-      "/logs/network",
+-      "/logs/radius-sessions",
+-      "/logs/radius-auth",
+-      "/logs/activity",
+-      "/logs/disconnects",
+-    ];
+-    const heldPaths = new Set(dataPaths);
+-    const gates = new Map<string, Promise<void>>();
+-    const releaseGates = new Map<string, () => void>();
+-    for (const path of dataPaths) {
+-      let release!: () => void;
+-      gates.set(path, new Promise<void>((resolve) => { release = resolve; }));
+-      releaseGates.set(path, release);
+-    }
++/**
++ * Logs workspace — Disconnect Analysis and main navigation.
++ *
++ * These tests enforce the REQUIRED behavior (not the old collapsible design):
++ *   • The Disconnect breakdown is visible immediately after navigation —
++ *     no "Show breakdown" / "Hide breakdown" toggle, not aria-hidden, not inert.
++ *   • The six upper summary cards are gone.
++ *   • All 18 RFC 2866 termination causes remain available, and reason filters work.
++ *   • The actual disconnect records remain accessible (with pagination).
++ *   • Exactly four main tabs: Connections, Sessions, Authentication & AAA, Audit Trail.
++ *   • Disconnect Analysis lives under Sessions; legacy ?logTab=overview still resolves.
++ * Verified at mobile and desktop viewport sizes.
++ */
++
++const VIEWPORTS = [
++  { width: 1440, height: 900 },
++  { width: 1280, height: 800 },
++  { width: 1024, height: 768 },
++  { width: 768, height: 1024 },
++  { width: 430, height: 844 },
++  { width: 375, height: 812 },
++];
++
++// 18 standard RFC 2866 causes so the "All 18 termination causes" grid renders.
++const CAUSES = Array.from({ length: 18 }, (_, i) => ({
++  code: i + 1,
++  key: `cause-${i + 1}`,
++  label: `Cause ${i + 1}`,
++  description: `Description ${i + 1}`,
++  meaning: `Meaning ${i + 1}`,
++  action: `Check ${i + 1}`,
++  category: "customer",
++  severity: "info",
++  standard: true,
++  count: i === 0 ? 5 : 0,
++  share: i === 0 ? 1 : 0,
++  customers: i === 0 ? 3 : 0,
++  avgSessionSec: 120,
++  lastAt: new Date().toISOString(),
++}));
++
++function makeReport() {
++  const now = new Date().toISOString();
++  return {
++    window: { sinceHours: 168, from: now, to: now, unit: "day" },
++    totals: { ended: 5, openNow: 1, customers: 3, avgSessionSec: 120, abnormal: 1, abnormalShare: 0.2, topCause: { key: "cause-1", label: "Cause 1", count: 5 } },
++    causes: CAUSES,
++    categories: [{ id: "customer", label: "Customer side", about: "Ended by the customer", count: 5, share: 1 }],
++    trend: { unit: "day", partial: false, buckets: [{ at: now, counts: { customer: 5 } }] },
++    routers: [{ nasIp: "10.0.0.1", name: "Core NAS", count: 5, abnormal: 1, top: [{ key: "cause-1", label: "Cause 1", count: 5 }] }],
++    customers: [{ username: "u1", subscriberId: 1, fullName: "User One", count: 5, abnormal: 1, lastAt: now, lastKey: "cause-1", top: [{ key: "cause-1", label: "Cause 1", count: 5 }] }],
++    records: [{
++      id: "r1", sessionId: "s1", username: "u1", subscriberId: 1, fullName: "User One",
++      nasIp: "10.0.0.1", nasName: "Core NAS", nasPortId: "1", nasPortType: "eth", framedIp: "100.64.0.2",
++      mac: "aa:bb:cc:dd:ee:ff", service: null, start: now, stop: now, durationSec: 120,
++      downloadBytes: 1000, uploadBytes: 500, rawCause: "User-Request",
++      terminateCode: 1, terminateKey: "cause-1", terminateLabel: "Cause 1", terminateDescription: "Description 1",
++      terminateMeaning: "Meaning 1", terminateAction: "Check 1", terminateCategory: "customer", terminateSeverity: "info",
++    }],
++    recordsTotal: 1,
++    massDrops: [],
++  };
++}
++
++async function mockApi(page: import("@playwright/test").Page) {
++  await page.addInitScript(() => localStorage.setItem("token", "logs-test-token"));
++  await page.route("**/api/**", async (route) => {
++    const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+     const fixtures: Record<string, unknown> = {
+       "/profile": {},
+       "/users": [],
+       "/logs/network": { logs: [], total: 0 },
+       "/logs/stats": { hourly: [] },
+-      "/logs/system": { logs: [] },
+-      "/logs/sessions": [],
+-      "/logs/radius-sessions": { items: [] },
+-      "/logs/failed-activations": [],
+-      "/logs/activity": { logs: [], total: 0 },
+-      "/logs/radius-auth": { logs: [], total: 0 },
+-      "/logs/login": { logs: [], total: 0 },
+-      "/logs/radius/diagnostics": {
+-        summary: { ok: 0, warnings: 0, failures: 0 },
+-        checks: [],
+-        staleSessions: [],
+-      },
+-      "/logs/disconnects": {
+-        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+-        totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+-        causes: [],
+-        categories: [],
+-        trend: { unit: "day", partial: false, buckets: [] },
+-        routers: [],
+-        customers: [],
+-        records: [],
+-        recordsTotal: 0,
+-        massDrops: [],
+-      },
+-      "/logs/failed-logins": {
+-        totals: { attempts: 0, bursts: 0, customers: 0, capped: false },
+-        reasons: [],
+-        items: [],
+-        total: 0,
+-      },
++      "/logs/disconnects": makeReport(),
++      "/logs/failed-logins": { totals: { attempts: 0, bursts: 0, customers: 0, capped: false }, reasons: [], items: [], total: 0 },
+     };
+-
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-tabs-test-token"));
+-    page.on("pageerror", (error) => pageErrors.push(error));
+-    await page.route("**/api/**", async (route) => {
+-      const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+-      requestedPaths.push(path);
+-      if (heldPaths.has(path)) await gates.get(path);
+-      const fixture = fixtures[path];
+-      await route.fulfill({
+-        status: fixture === undefined ? 404 : 200,
+-        contentType: "application/json",
+-        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+-      });
++    const fixture = fixtures[path];
++    await route.fulfill({
++      status: fixture === undefined ? 404 : 200,
++      contentType: "application/json",
++      body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+     });
+-
+-    await page.goto("/logs");
+-    const panel = page.getByRole("tabpanel");
+-    await expect(page.getByRole("tablist", { name: "Logs sections" }).getByRole("tab")).toHaveCount(5);
+-    await expect.poll(() => requestedPaths.includes("/logs/disconnects")).toBe(true);
+-
+-    const views = [
+-      { label: "Overall Stats", heading: "Disconnect Analysis", endpoint: "/logs/disconnects", empty: "All 18 termination causes" },
+-      { label: "Connections", heading: "Connection events", endpoint: "/logs/network", empty: "No records." },
+-      { label: "Sessions", heading: "Live PPPoE sessions", endpoint: "/logs/radius-sessions", empty: "No records." },
+-      { label: "AAA", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
+-      { label: "Audit Trail", heading: "User activity", endpoint: "/logs/activity", empty: "No records." },
+-    ];
+-
+-    for (const view of views) {
+-      const tab = page.getByRole("tab", { name: view.label });
+-      await expect(tab).toBeVisible();
+-      const box = await tab.boundingBox();
+-      if (!box) throw new Error(`The ${view.label} tab has no clickable bounds.`);
+-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+-      await expect(tab).toHaveAttribute("aria-selected", "true");
+-      await expect(panel.getByRole("heading", { name: view.heading })).toBeVisible();
+-      heldPaths.delete(view.endpoint);
+-      releaseGates.get(view.endpoint)?.();
+-      await expect(panel).toContainText(view.empty);
+-      await expect.poll(() => requestedPaths.includes(view.endpoint)).toBe(true);
+-
+-      if (view.label === "Connections") {
+-        const subtabs = page.getByRole("navigation", { name: "Connections pages" });
+-        await expect(subtabs.getByRole("button")).toHaveCount(4);
+-        for (const label of ["Connection Events", "NAS & Network", "Failed Connections", "Connection Diagnostics"]) {
+-          await expect(subtabs.getByRole("button", { name: label })).toBeVisible();
+-        }
+-        await subtabs.getByRole("button", { name: "NAS & Network" }).click();
+-        await expect(subtabs.getByRole("button", { name: "NAS & Network" })).toHaveAttribute("aria-current", "page");
+-        await subtabs.getByRole("button", { name: "Connection Events" }).click();
+-      }
+-      if (view.label === "Sessions") {
+-        const subtabs = page.getByRole("navigation", { name: "Sessions pages" });
+-        await expect(subtabs.getByRole("button")).toHaveCount(4);
+-        for (const label of ["Active Sessions", "Accounting Logs", "Session History", "Disconnect Analysis"]) {
+-          await expect(subtabs.getByRole("button", { name: label })).toBeVisible();
+-        }
+-        await subtabs.getByRole("button", { name: "Disconnect Analysis" }).click();
+-        await expect(subtabs.getByRole("button", { name: "Disconnect Analysis" })).toHaveAttribute("aria-current", "page");
+-        await subtabs.getByRole("button", { name: "Active Sessions" }).click();
+-      }
+-      if (view.label === "AAA") {
+-        const subtabs = page.getByRole("navigation", { name: "AAA pages" });
+-        await expect(subtabs.getByRole("button")).toHaveCount(3);
+-        for (const label of ["Authentication Records", "AAA / RADIUS Server", "Disconnect Analysis"]) {
+-          await expect(subtabs.getByRole("button", { name: label })).toBeVisible();
+-        }
+-        await subtabs.getByRole("button", { name: "AAA / RADIUS Server" }).click();
+-        await expect(panel.getByRole("heading", { name: "RADIUS diagnostics" })).toBeVisible();
+-        await subtabs.getByRole("button", { name: "Authentication Records" }).click();
+-      }
+-      if (view.label === "Audit Trail") {
+-        const subtabs = page.getByRole("navigation", { name: "Audit Trail pages" });
+-        await expect(subtabs.getByRole("button")).toHaveCount(4);
+-        for (const label of ["User Activity", "CRUD & Record Changes", "Security & Access", "System & Configuration"]) {
+-          await expect(subtabs.getByRole("button", { name: label })).toBeVisible();
+-        }
+-      }
+-    }
+-
+-    expect(pageErrors).toEqual([]);
+   });
++}
+ 
+-  test("renders only the selected category's records", async ({ page }) => {
+-    const now = new Date().toISOString();
+-    const requestedPaths: string[] = [];
+-    const fixtures: Record<string, unknown> = {
+-      "/profile": {},
+-      "/users": [],
+-      "/logs/network": { logs: [{
+-        id: "network-connection",
+-        loggedAt: now,
+-        username: "connection-only-subscriber",
+-        eventType: "PPP_SESSION_START",
+-        severity: "INFO",
+-        message: "Connection-only event",
+-      }], total: 1 },
+-      "/logs/stats": { hourly: [], totals: { login: 0, activity: 0, network: 1, system: 0 } },
+-      "/logs/failed-activations": [],
+-      "/logs/sessions": [],
+-      "/logs/radius-sessions": {
+-        items: [{
+-          id: "session-record",
+-          username: "session-only-subscriber",
+-          sessionId: "session-only-id",
+-          sessionState: "unknown",
+-          start: now,
+-        }],
+-      },
+-      "/logs/radius-auth": {
+-        logs: [{
+-          id: "aaa-record",
+-          username: "aaa-only-subscriber",
+-          authdate: now,
+-          result: "Reject",
+-          reason: "Access-Reject",
+-        }],
+-        total: 1,
+-      },
+-      "/logs/login": { logs: [], total: 0 },
+-      "/logs/radius/diagnostics": {
+-        summary: { ok: 0, warnings: 0, failures: 0 },
+-        checks: [],
+-        staleSessions: [],
+-      },
+-      "/logs/activity": {
+-        logs: [{
+-          id: "audit-record",
+-          action: "AUDIT_ONLY_ACTION",
+-          entity: "Subscriber",
+-          entityId: 7,
+-          createdAt: now,
+-        }],
+-        total: 1,
+-      },
+-      "/logs/system": { logs: [], total: 0 },
+-      "/logs/disconnects": {
+-        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+-        totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+-        causes: [],
+-        categories: [],
+-        trend: { unit: "day", partial: false, buckets: [] },
+-        routers: [],
+-        customers: [],
+-        records: [],
+-        recordsTotal: 0,
+-        massDrops: [],
+-      },
+-      "/logs/failed-logins": {
+-        totals: { attempts: 0, bursts: 0, customers: 0, capped: false },
+-        reasons: [],
+-        items: [],
+-        total: 0,
+-      },
+-    };
+-
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-tab-isolation-test-token"));
+-    await page.route("**/api/**", async (route) => {
+-      const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+-      requestedPaths.push(path);
+-      const fixture = fixtures[path];
+-      await route.fulfill({
+-        status: fixture === undefined ? 404 : 200,
+-        contentType: "application/json",
+-        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+-      });
+-    });
++test.describe("Disconnect Analysis — breakdown is always visible", () => {
++  for (const viewport of VIEWPORTS) {
++    test(`breakdown visible immediately, no toggle, no summary cards @ ${viewport.width}px`, async ({ page }) => {
++      await page.setViewportSize(viewport);
++      await mockApi(page);
+ 
+-    await page.goto("/logs");
+-    const panel = page.getByRole("tabpanel");
+-    await expect.poll(() => requestedPaths.includes("/logs/disconnects")).toBe(true);
+-    await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
+-    expect(requestedPaths).not.toContain("/logs/network");
+-    expect(requestedPaths).not.toContain("/logs/radius-sessions");
+-    expect(requestedPaths).not.toContain("/logs/radius-auth");
+-    expect(requestedPaths).not.toContain("/logs/activity");
++      // Legacy overview URL must still resolve to the disconnect analysis view.
++      await page.goto("/logs?logTab=overview&logFeature=disconnects");
+ 
+-    await page.getByRole("tab", { name: "Connections" }).click();
+-    await expect.poll(() => requestedPaths.includes("/logs/network")).toBe(true);
+-    await expect(panel).toContainText("connection-only-subscriber");
+-    await expect(panel).not.toContainText("session-only-subscriber");
+-    await expect(panel).not.toContainText("aaa-only-subscriber");
+-    await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
++      const breakdown = page.locator("#disconnect-breakdown");
++      const breakdownHeading = page.getByRole("heading", { name: "Breakdown for this window" });
+ 
+-    await page.getByRole("tab", { name: "Sessions" }).click();
+-    await expect(panel).toContainText("session-only-subscriber");
+-    await expect(panel).not.toContainText("connection-only-subscriber");
+-    await expect(panel).not.toContainText("aaa-only-subscriber");
+-    await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
++      // 1. Breakdown heading visible immediately — no click required.
++      await expect(breakdownHeading).toBeVisible();
+ 
+-    await page.getByRole("tab", { name: "AAA" }).click();
+-    await expect(panel.getByRole("heading", { name: "Subscriber RADIUS authentication" })).toBeVisible();
+-    await expect(panel).toContainText("aaa-only-subscriber");
+-    await expect(panel).not.toContainText("session-only-subscriber");
+-    await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
++      // 2. Container is not hidden and not inert.
++      await expect(breakdown).not.toHaveAttribute("aria-hidden", "true");
++      await expect(breakdown).not.toHaveAttribute("inert", /.*/);
+ 
+-    await page.getByRole("tab", { name: "Audit Trail" }).click();
+-    await expect(panel).toContainText("AUDIT_ONLY_ACTION");
+-    await expect(panel).not.toContainText("aaa-only-subscriber");
+-    await expect(panel).not.toContainText("session-only-subscriber");
++      // 3. No Show/Hide breakdown toggle exists.
++      await expect(page.getByRole("button", { name: /show breakdown/i })).toHaveCount(0);
++      await expect(page.getByRole("button", { name: /hide breakdown/i })).toHaveCount(0);
+ 
+-    for (const viewport of [
+-      { width: 1440, height: 900 },
+-      { width: 1024, height: 768 },
+-      { width: 390, height: 844 },
+-      { width: 320, height: 700 },
+-    ]) {
+-      await page.setViewportSize(viewport);
+-      await expect.poll(() => page.evaluate(
+-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+-      )).toBe(true);
+-      for (const tab of [
+-        "Overall Stats",
+-        "Connections",
+-        "Sessions",
+-        "AAA",
+-        "Audit Trail",
+-      ]) {
+-        await page.getByRole("tab", { name: tab }).click();
+-        await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+-      }
+-      if (viewport.width <= 390) {
+-        const bottomNav = page.getByRole("navigation", { name: "Section" });
+-        for (const tab of ["Overall Stats", "Connections", "Sessions", "AAA", "Audit Trail"]) {
+-          await bottomNav.getByRole("button", { name: tab }).click();
+-          await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+-        }
++      // 4. The six upper summary cards are absent. (Labels unique to those
++      // cards — "Need attention" is intentionally excluded because it also
++      // legitimately appears as a column header / NAS bar label in the breakdown.)
++      for (const label of ["Sessions ended", "Customers affected", "Online now", "Average session", "Most common"]) {
++        await expect(page.getByText(label, { exact: true })).toHaveCount(0);
+       }
+-    }
+-  });
+-
+-  test("applies category filters, shared search, refresh, pagination, and event details", async ({ page }) => {
+-    const now = new Date().toISOString();
+-    const requestedUrls: string[] = [];
+-    const auditRows = Array.from({ length: 51 }, (_, index) => ({
+-      id: `audit-${index + 1}`,
+-      action: index === 50 ? "AUDIT_LAST_PAGE_ACTION" : index === 0 ? "AUDIT_FIRST_ACTION" : `AUDIT_ACTION_${index + 1}`,
+-      entity: "Subscriber",
+-      entityId: index + 1,
+-      details: `recorded audit detail ${index + 1}`,
+-      createdAt: now,
+-      user: { id: 8, name: "Test Actor", role: "ADMIN" },
+-      ipAddress: "192.0.2.10",
+-      traceId: `trace-${index + 1}`,
+-    }));
+-    const fixtures: Record<string, unknown> = {
+-      "/profile": {},
+-      "/users": [],
+-      "/logs/network": { logs: [{
+-        id: "network-detail",
+-        loggedAt: now,
+-        username: "details-subscriber",
+-        eventType: "PPP_SESSION_START",
+-        severity: "INFO",
+-        message: "Selected connection detail",
+-        nas: { nasname: "test-router", nasIp: "192.0.2.1" },
+-        nasIp: "192.0.2.1",
+-        callerId: "00:11:22:33:44:55",
+-        sessionId: "session-detail",
+-      }], total: 1 },
+-      "/logs/stats": { hourly: [], totals: { login: 0, activity: 0, network: 1, system: 0 } },
+-      "/logs/failed-activations": [],
+-      "/logs/sessions": [],
+-      "/logs/radius-sessions": { items: [] },
+-      "/logs/radius-auth": { logs: [], total: 0 },
+-      "/logs/login": { logs: [], total: 0 },
+-      "/logs/radius/diagnostics": {
+-        summary: { ok: 0, warnings: 0, failures: 0 },
+-        checks: [],
+-        staleSessions: [],
+-      },
+-      "/logs/activity": { logs: auditRows, total: auditRows.length },
+-      "/logs/system": { logs: [], total: 0 },
+-      "/logs/disconnects": {
+-        window: { sinceHours: 168, from: now, to: now, unit: "day" },
+-        totals: { ended: 0, openNow: 0, customers: 0, avgSessionSec: null, abnormal: 0, abnormalShare: 0, topCause: null },
+-        causes: [],
+-        categories: [],
+-        trend: { unit: "day", partial: false, buckets: [] },
+-        routers: [],
+-        customers: [],
+-        records: [],
+-        recordsTotal: 0,
+-        massDrops: [],
+-      },
+-      "/logs/failed-logins": {
+-        totals: { attempts: 0, bursts: 0, customers: 0, capped: false },
+-        reasons: [],
+-        items: [],
+-        total: 0,
+-      },
+-    };
+ 
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-controls-test-token"));
+-    await page.route("**/api/**", async (route) => {
+-      const requestUrl = new URL(route.request().url());
+-      const path = requestUrl.pathname.replace(/^\/api/, "");
+-      requestedUrls.push(requestUrl.toString());
+-      let fixture = fixtures[path];
+-      if (path === "/logs/activity") {
+-        const offset = Number(requestUrl.searchParams.get("offset") || 0);
+-        const limit = Number(requestUrl.searchParams.get("limit") || 50);
+-        fixture = { logs: auditRows.slice(offset, offset + limit), total: auditRows.length };
++      // 5. Breakdown content + all 18 causes available.
++      await expect(page.getByRole("heading", { name: "Who or what ended them" })).toBeVisible();
++      await expect(page.getByRole("heading", { name: "By NAS / router" })).toBeVisible();
++      await expect(page.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
++      for (const c of CAUSES) {
++        await expect(page.getByText(c.label, { exact: true }).first()).toBeVisible();
+       }
+-      await route.fulfill({
+-        status: fixture === undefined ? 404 : 200,
+-        contentType: "application/json",
+-        body: JSON.stringify(fixture ?? { message: "No test fixture for this API path." }),
+-      });
+-    });
+-
+-    await page.goto("/logs");
+-    const panel = page.getByRole("tabpanel");
+-    await page.getByRole("tab", { name: "Connections" }).click();
+-    await expect(panel).toContainText("details-subscriber");
+-    await panel.getByText("details-subscriber").click();
+-    await expect(panel).toContainText("Selected connection detail");
+-    await expect(panel).toContainText("test-router");
+-    await expect(panel).toContainText("00:11:22:33:44:55");
+-    await page.getByRole("button", { name: "Close event details" }).click();
+ 
+-    await page.getByRole("button", { name: /filters/i }).click();
+-    await page.getByRole("button", { name: "ERROR", exact: true }).click();
+-    await expect.poll(() => requestedUrls.some((url) => {
+-      const parsed = new URL(url);
+-      return parsed.pathname.endsWith("/logs/network") && parsed.searchParams.get("severity") === "ERROR";
+-    })).toBe(true);
++      // 6. Actual disconnect records remain accessible.
++      await expect(page.getByRole("region", { name: "Disconnect records" })).toBeVisible();
++      await expect(page.getByRole("region", { name: "Disconnect records" }).getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+ 
+-    await page.getByRole("tab", { name: "Sessions" }).click();
+-    await page.getByLabel("Time range").selectOption("6h");
+-    await expect.poll(() => requestedUrls.some((url) => {
+-      const parsed = new URL(url);
+-      return parsed.pathname.endsWith("/logs/radius-sessions") && parsed.searchParams.get("sinceHours") === "6";
+-    })).toBe(true);
++      // 7. No horizontal overflow of the document.
++      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
++      expect(overflow).toBeLessThanOrEqual(1);
++    });
++  }
+ 
+-    await page.getByRole("tab", { name: "Audit Trail" }).click();
+-    await expect(panel).toContainText("AUDIT_FIRST_ACTION");
+-    const search = page.getByRole("textbox", { name: "Search logs" });
+-    await search.fill("AUDIT_QUERY");
+-    await expect.poll(() => requestedUrls.some((url) => {
+-      const parsed = new URL(url);
+-      return parsed.pathname.endsWith("/logs/activity") && parsed.searchParams.get("q") === "AUDIT_QUERY";
+-    })).toBe(true);
++  test("reason filter: clicking a cause card filters the log", async ({ page }) => {
++    await page.setViewportSize({ width: 1280, height: 800 });
++    await mockApi(page);
+ 
+-    const priorAuditRequests = requestedUrls.filter((url) => new URL(url).pathname.endsWith("/logs/activity")).length;
+-    await page.getByRole("button", { name: /refresh/i }).click();
+-    await expect.poll(() => requestedUrls.filter((url) =>
+-      new URL(url).pathname.endsWith("/logs/activity"),
+-    ).length).toBeGreaterThan(priorAuditRequests);
++    const filtered = page.waitForRequest((req) => {
++      const u = new URL(req.url());
++      return u.pathname.endsWith("/logs/disconnects") && u.searchParams.get("cause") === "cause-1";
++    });
+ 
+-    await page.getByRole("button", { name: "2", exact: true }).click();
+-    await expect(panel).toContainText("AUDIT_LAST_PAGE_ACTION");
+-    await expect.poll(() => requestedUrls.some((url) => {
+-      const parsed = new URL(url);
+-      return parsed.pathname.endsWith("/logs/activity") && parsed.searchParams.get("offset") === "50";
+-    })).toBe(true);
+-    await panel.getByText("AUDIT_LAST_PAGE_ACTION").click();
+-    if (await panel.getByLabel("Selected event details").isVisible()) {
+-      await expect(panel.getByLabel("Selected event details")).toBeVisible();
+-    } else {
+-      await expect(page.getByRole("dialog", { name: "Record details" })).toBeVisible();
+-    }
+-    await expect(panel).toContainText("recorded audit detail 51");
++    await page.goto("/logs?logTab=overview&logFeature=disconnects");
++    await expect(page.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
++    await page.getByRole("button", { name: /Cause 1/ }).first().click();
++    await filtered; // the log re-queried with the selected reason
+   });
++});
+ 
+-  test("shows API failures in each Logs category", async ({ page }) => {
+-    const pageErrors: Error[] = [];
+-    const failingPaths = new Set([
+-      "/logs/network",
+-      "/logs/radius-sessions",
+-      "/logs/radius-auth",
+-      "/logs/activity",
+-      "/logs/disconnects",
+-    ]);
+-    const fixtures: Record<string, unknown> = {
+-      "/profile": {},
+-      "/users": [],
+-      "/logs/stats": { hourly: [] },
+-      "/logs/system": { logs: [] },
+-      "/logs/sessions": [],
+-      "/logs/failed-activations": [],
+-      "/logs/login": { logs: [], total: 0 },
+-      "/logs/radius/diagnostics": {
+-        summary: { ok: 0, warnings: 0, failures: 0 },
+-        checks: [],
+-        staleSessions: [],
+-      },
+-    };
+-
+-    await page.addInitScript(() => localStorage.setItem("token", "logs-tabs-error-test-token"));
+-    page.on("pageerror", (error) => pageErrors.push(error));
+-    await page.route("**/api/**", async (route) => {
+-      const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
+-      const failed = failingPaths.has(path);
+-      const fixture = fixtures[path];
+-      const body = failed && path === "/logs/disconnects"
+-        ? {}
+-        : fixture ?? { message: "Unavailable in this test." };
+-      await route.fulfill({
+-        status: failed ? 503 : fixture === undefined ? 404 : 200,
+-        contentType: "application/json",
+-        body: JSON.stringify(body),
+-      });
+-    });
+-
++test.describe("Logs main navigation — exactly four tabs", () => {
++  test("shows four main tabs and no Overall Stats tab", async ({ page }) => {
++    await page.setViewportSize({ width: 1280, height: 800 });
++    await mockApi(page);
+     await page.goto("/logs");
+-    const views = [
+-      { label: "Overall Stats", heading: "Disconnect Analysis", error: "Could not load disconnects (HTTP 503)." },
+-      { label: "Connections", heading: "Connection events", error: "Unable to load records (HTTP 503)." },
+-      { label: "Sessions", heading: "Live PPPoE sessions", error: "Unable to load records (HTTP 503)." },
+-      { label: "AAA", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
+-      { label: "Audit Trail", heading: "User activity", error: "Unable to load records (HTTP 503)." },
+-    ];
+ 
+-    for (const view of views) {
+-      const tab = page.getByRole("tab", { name: view.label });
+-      await expect(tab).toBeVisible();
+-      const box = await tab.boundingBox();
+-      if (!box) throw new Error(`The ${view.label} tab has no clickable bounds.`);
+-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+-      await expect(tab).toHaveAttribute("aria-selected", "true");
+-      await expect(page.getByRole("tabpanel").getByRole("heading", { name: view.heading })).toBeVisible();
+-      await expect(page.getByRole("alert").filter({ hasText: view.error })).toBeVisible();
++    for (const label of ["Connections", "Sessions", "Authentication & AAA", "Audit Trail"]) {
++      await expect(page.getByRole("tab", { name: label })).toBeVisible();
+     }
+-    expect(pageErrors).toEqual([]);
++    // The fifth tab is gone everywhere, including mobile navigation.
++    await expect(page.getByRole("tab", { name: "Overall Stats" })).toHaveCount(0);
++    await expect(page.getByRole("tab")).toHaveCount(4);
+   });
+ 
+-  test("switches each main Logs section and renders its real API response", async ({ page }) => {
+-    test.skip(
+-      !EMAIL || !PASSWORD,
+-      "Set E2E_EMAIL and E2E_PASSWORD for an authorized Logs account.",
+-    );
+-
+-    await page.goto("/login");
+-    await page.getByLabel(/email/i).fill(EMAIL!);
+-    await page.getByLabel(/password/i).fill(PASSWORD!);
+-    await page.getByRole("button", { name: /sign in/i }).click();
+-    await expect(page).not.toHaveURL(/\/login/, { timeout: 20_000 });
+-
+-    await page.goto("/logs");
+-
+-    const connectionsTab = page.getByRole("tab", { name: "Connections" });
+-    const networkResponse = page.waitForResponse((response) =>
+-      isLogResponse(response.url(), "network"),
+-    );
+-    await connectionsTab.click();
+-    await expect(connectionsTab).toHaveAttribute("aria-selected", "true");
+-    await expect(page.getByRole("heading", { name: "Connection events" })).toBeVisible();
+-    const networkApiResponse = await networkResponse;
+-    expect(networkApiResponse.status()).toBe(200);
+-    const network = await networkApiResponse.json();
+-    expect(Array.isArray(network.logs)).toBe(true);
+-
+-    const sessionsTab = page.getByRole("tab", { name: "Sessions" });
+-    const sessionsResponse = page.waitForResponse((response) =>
+-      isLogResponse(response.url(), "radius-sessions"),
+-    );
+-    await sessionsTab.click();
+-    await expect(sessionsTab).toHaveAttribute("aria-selected", "true");
+-    await expect(page.getByRole("heading", { name: "Live PPPoE sessions" })).toBeVisible();
+-    const sessionsApiResponse = await sessionsResponse;
+-    expect(sessionsApiResponse.status()).toBe(200);
+-    const sessions = await sessionsApiResponse.json();
+-    expect(Array.isArray(sessions.items)).toBe(true);
+-
+-    const authenticationTab = page.getByRole("tab", { name: "AAA" });
+-    const radiusAuthResponse = page.waitForResponse((response) =>
+-      isLogResponse(response.url(), "radius-auth"),
+-    );
+-    await authenticationTab.click();
+-    await expect(authenticationTab).toHaveAttribute("aria-selected", "true");
+-    await expect(page.getByRole("heading", { name: "Subscriber RADIUS authentication" })).toBeVisible();
+-    const radiusAuthApiResponse = await radiusAuthResponse;
+-    expect(radiusAuthApiResponse.status()).toBe(200);
+-    const radiusAuth = await radiusAuthApiResponse.json();
+-    expect(Array.isArray(radiusAuth.logs)).toBe(true);
+-    expect(JSON.stringify(radiusAuth)).not.toMatch(/subscriber-password|chap-response/i);
+-
+-    const auditTab = page.getByRole("tab", { name: "Audit Trail" });
+-    const activityResponse = page.waitForResponse((response) =>
+-      isLogResponse(response.url(), "activity"),
+-    );
+-    await auditTab.click();
+-    await expect(auditTab).toHaveAttribute("aria-selected", "true");
+-    await expect(page.getByRole("heading", { name: "User activity" })).toBeVisible();
+-    const activityApiResponse = await activityResponse;
+-    expect(activityApiResponse.status()).toBe(200);
+-    const activity = await activityApiResponse.json();
+-    expect(Array.isArray(activity.logs)).toBe(true);
+-
+-    await connectionsTab.click();
+-    await expect(connectionsTab).toHaveAttribute("aria-selected", "true");
+-    await expect(page.getByRole("heading", { name: "Connection events" })).toBeVisible();
++  test("Disconnect Analysis is reachable under Sessions", async ({ page }) => {
++    await page.setViewportSize({ width: 1280, height: 800 });
++    await mockApi(page);
++    await page.goto("/logs?logTab=sessions&logFeature=disconnects");
++    await expect(page.getByRole("heading", { name: "Breakdown for this window" })).toBeVisible();
++    await expect(page.getByRole("region", { name: "Disconnect records" })).toBeVisible();
+   });
+ });

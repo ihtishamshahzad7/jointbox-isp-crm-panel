@@ -54,5 +54,6 @@ test("Insights excludes Logs while the main Logs route remains available", async
 
   await page.goto("/logs?logTab=overview&logFeature=disconnects");
   await expect(page).toHaveURL(/\/logs\?logTab=overview&logFeature=disconnects$/);
-  await expect(page.getByRole("heading", { name: "Disconnect Analysis" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Breakdown for this window" })).toBeVisible();
 });

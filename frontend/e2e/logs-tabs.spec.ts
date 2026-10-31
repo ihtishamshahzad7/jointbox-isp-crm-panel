@@ -9,7 +9,7 @@ const isLogResponse = (url: string, endpoint: string) => {
 };
 
 test.describe("Logs workspace tabs", () => {
-  test("collapses and expands the disconnect breakdown at desktop and mobile widths", async ({ page }) => {
+  test("keeps the disconnect breakdown visible without redundant summaries at every viewport", async ({ page }) => {
     const now = new Date().toISOString();
     const report = {
       window: { sinceHours: 168, from: now, to: now, unit: "day" },
@@ -44,43 +44,42 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/logs?logTab=overview&logFeature=disconnects");
     const panel = page.getByRole("tabpanel");
-    const disconnectLog = panel.getByRole("region", { name: "Disconnect log" });
     const breakdown = page.locator("#disconnect-breakdown");
     const breakdownHeading = panel.getByRole("heading", { name: "Breakdown for this window" });
-    const toggle = panel.getByRole("button", { name: "Show breakdown" });
-
-    await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(toggle).toHaveAttribute("aria-controls", "disconnect-breakdown");
-    await expect(breakdown).toHaveAttribute("aria-hidden", "true");
-    await expect(breakdownHeading).toBeHidden();
+    await expect(breakdownHeading).toBeVisible();
+    await expect(breakdown).not.toHaveAttribute("aria-hidden", "true");
+    expect(await breakdown.evaluate((element) => !element.hasAttribute("inert"))).toBe(true);
+    await expect(panel.getByRole("button", { name: /show breakdown|hide breakdown/i })).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "Time range" })).toBeVisible();
+    await expect(panel.getByRole("combobox", { name: "NAS" })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "Disconnect log" })).toHaveCount(1);
+    await expect(panel).not.toContainText("Ended sessions with router and client details.");
+    for (const summary of ["Sessions ended", "Customers affected", "Need attention", "Online now", "Average session", "Most common"]) {
+      await expect(panel.getByText(summary, { exact: true })).toHaveCount(0);
+    }
+    await expect(panel.getByRole("heading", { name: "Who or what ended them" })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "Over time" })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "By NAS / router" })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "Customers who disconnected most" })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
+    await expect(panel.getByRole("region", { name: "Disconnect log" })).toBeVisible();
 
     for (const viewport of [
       { width: 1440, height: 900 },
+      { width: 1280, height: 800 },
       { width: 1024, height: 768 },
       { width: 768, height: 900 },
       { width: 430, height: 844 },
       { width: 375, height: 812 },
-      { width: 320, height: 700 },
     ]) {
       await page.setViewportSize(viewport);
-      await panel.getByRole("button", { name: "Show breakdown" }).click();
-      await expect(panel.getByRole("button", { name: "Hide breakdown" })).toHaveAttribute("aria-expanded", "true");
-      await expect(breakdown).toHaveAttribute("aria-hidden", "false");
       await expect(breakdownHeading).toBeVisible();
-      await expect(panel.getByRole("heading", { name: "Who or what ended them" })).toBeVisible();
-      await expect(panel.getByRole("heading", { name: "By NAS / router" })).toBeVisible();
-      await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
-
-      await panel.getByRole("button", { name: "Hide breakdown" }).click();
-      await expect(panel.getByRole("button", { name: "Show breakdown" })).toHaveAttribute("aria-expanded", "false");
-      await expect(breakdown).toHaveAttribute("aria-hidden", "true");
-      await expect(breakdownHeading).toBeHidden();
-      await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+      await expect(panel.getByRole("region", { name: "Disconnect log" })).toBeVisible();
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     }
   });
 
-  test("opens Overall Stats from the app navigation and keeps all cause cards usable on mobile", async ({ page }) => {
+  test("keeps all 18 causes and the disconnect log available under Sessions at every viewport", async ({ page }) => {
     const now = new Date().toISOString();
     const causeNames = [
       "User Request", "Lost Carrier", "Lost Service", "Idle Timeout", "Session Timeout",
@@ -119,8 +118,36 @@ test.describe("Logs workspace tabs", () => {
         trend: { unit: "day", partial: false, buckets: [] },
         routers: [],
         customers: [],
-        records: [],
-        recordsTotal: 0,
+        records: [{
+          id: "disconnect-1",
+          sessionId: "session-1",
+          username: "test-subscriber",
+          subscriberId: 7,
+          fullName: "Test Subscriber",
+          nasIp: "192.0.2.1",
+          nasName: "Test NAS",
+          nasPortId: "ether1",
+          nasPortType: "Ethernet",
+          framedIp: "198.51.100.10",
+          mac: "00:11:22:33:44:55",
+          service: "pppoe",
+          start: now,
+          stop: now,
+          durationSec: 60,
+          downloadBytes: 1024,
+          uploadBytes: 512,
+          rawCause: "1",
+          terminateCode: 1,
+          terminateKey: "User-Request",
+          terminateLabel: "User Request",
+          terminateDescription: "The user requested disconnection.",
+          terminateMeaning: "The subscriber disconnected normally.",
+          terminateAction: "No action required.",
+          terminateCategory: "customer",
+          terminateSeverity: "normal",
+          how: { by: "customer", title: "Subscriber requested disconnect", detail: null, actor: null, method: null, source: "cause", steps: [] },
+        }],
+        recordsTotal: 1,
         massDrops: [],
       };
       const fixtures: Record<string, unknown> = {
@@ -138,30 +165,22 @@ test.describe("Logs workspace tabs", () => {
       });
     });
 
-    if ((page.viewportSize()?.width ?? 1280) <= 640) {
-      await page.goto("/logs?logTab=overview&logFeature=disconnects");
-    } else {
-      await page.goto("/dashboard");
-      await page.getByRole("button", { name: "Logs", exact: true }).click();
-    }
+    await page.goto("/logs?logTab=overview&logFeature=disconnects");
     await expect(page).toHaveURL(/\/logs(?:\?.*)?$/);
     const panel = page.getByRole("tabpanel");
-    const overallTab = page.getByRole("tab", { name: "Overall Stats" });
-    await expect(overallTab).toHaveAttribute("aria-selected", "true");
-    await expect(panel.getByRole("heading", { name: "Disconnect Analysis" })).toBeVisible();
+    const tabs = page.getByRole("tablist", { name: "Logs sections" }).getByRole("tab");
+    await expect(tabs).toHaveCount(4);
+    await expect(page.getByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("navigation", { name: "Sessions pages" }).getByRole("button", { name: "Disconnect Analysis" })).toHaveAttribute("aria-current", "page");
     const disconnectLog = panel.getByRole("region", { name: "Disconnect log" });
-    await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
+    await expect(disconnectLog).toContainText("Test Subscriber");
     const breakdownHeading = panel.getByRole("heading", { name: "Breakdown for this window" });
-    const breakdownToggle = panel.getByRole("button", { name: "Show breakdown" });
-    await expect(breakdownToggle).toHaveAttribute("aria-expanded", "false");
-    await expect(breakdownToggle).toHaveAttribute("aria-controls", "disconnect-breakdown");
-    await expect(breakdownHeading).toBeHidden();
-    await breakdownToggle.click();
-    await expect(panel.getByRole("button", { name: "Hide breakdown" })).toHaveAttribute("aria-expanded", "true");
     await expect(breakdownHeading).toBeVisible();
     await expect(panel.getByRole("heading", { name: "Who or what ended them" })).toBeVisible();
     await expect(panel.getByRole("heading", { name: "By NAS / router" })).toBeVisible();
     await expect(panel.getByRole("heading", { name: "All 18 termination causes" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: /show breakdown|hide breakdown/i })).toHaveCount(0);
+    await expect(panel.getByText("Sessions ended", { exact: true })).toHaveCount(0);
 
     const causeSection = panel.getByRole("heading", { name: "All 18 termination causes" }).locator("xpath=../..");
     const cards = causeSection.getByRole("button");
@@ -182,18 +201,13 @@ test.describe("Logs workspace tabs", () => {
 
     for (const viewport of [
       { width: 1440, height: 900 },
+      { width: 1280, height: 800 },
       { width: 1024, height: 768 },
       { width: 768, height: 900 },
       { width: 430, height: 844 },
       { width: 375, height: 812 },
-      { width: 320, height: 700 },
     ]) {
       await page.setViewportSize(viewport);
-      const hideBreakdown = panel.getByRole("button", { name: "Hide breakdown" });
-      await hideBreakdown.click();
-      await expect(breakdownHeading).toBeHidden();
-      await expect(disconnectLog.getByRole("heading", { name: "Disconnect log" })).toBeVisible();
-      await panel.getByRole("button", { name: "Show breakdown" }).click();
       await expect(breakdownHeading).toBeVisible();
       await expect.poll(() => page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -203,15 +217,15 @@ test.describe("Logs workspace tabs", () => {
       expect(box?.height).toBeGreaterThanOrEqual(44);
       if (viewport.width <= 430) {
         const bottomNav = page.getByRole("navigation", { name: "Section" });
-        await expect(bottomNav.getByRole("button")).toHaveCount(5);
-        for (const label of ["Overall Stats", "Connections", "Sessions", "AAA", "Audit Trail"]) {
+        await expect(bottomNav.getByRole("button")).toHaveCount(4);
+        for (const label of ["Connections", "Sessions", "Authentication & AAA", "Audit Trail"]) {
           await expect(bottomNav.getByRole("button", { name: label })).toBeVisible();
         }
       }
     }
     await page.goto("/logs/session/disconnect-analysis");
-    await expect(page).toHaveURL(/\/logs\?logTab=overview&logFeature=disconnects$/);
-    await expect(page.getByRole("tab", { name: "Overall Stats" })).toHaveAttribute("aria-selected", "true");
+    await expect(page).toHaveURL(/\/logs\?logTab=sessions&logFeature=disconnects$/);
+    await expect(page.getByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true");
     expect(requestedUrls.some((url) => new URL(url).pathname.endsWith("/logs/disconnects"))).toBe(true);
   });
 
@@ -237,14 +251,13 @@ test.describe("Logs workspace tabs", () => {
     });
 
     await page.goto("/logs");
-    const overallTab = page.getByRole("tab", { name: "Overall Stats" });
     const connectionsTab = page.getByRole("tab", { name: "Connections" });
     const sessionsTab = page.getByRole("tab", { name: "Sessions" });
-    await expect(overallTab).toHaveAttribute("aria-selected", "true");
+    await expect(sessionsTab).toHaveAttribute("aria-selected", "true");
     await connectionsTab.click();
     await expect(page).toHaveURL(/logTab=connections&logFeature=console/);
     await sessionsTab.click();
-    await expect(page).toHaveURL(/logTab=sessions&logFeature=live/);
+    await expect(page).toHaveURL(/logTab=sessions&logFeature=disconnects/);
 
     await page.goBack();
     await expect(connectionsTab).toHaveAttribute("aria-selected", "true");
@@ -327,14 +340,13 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/logs");
     const panel = page.getByRole("tabpanel");
-    await expect(page.getByRole("tablist", { name: "Logs sections" }).getByRole("tab")).toHaveCount(5);
+    await expect(page.getByRole("tablist", { name: "Logs sections" }).getByRole("tab")).toHaveCount(4);
     await expect.poll(() => requestedPaths.includes("/logs/disconnects")).toBe(true);
 
     const views = [
-      { label: "Overall Stats", heading: "Disconnect Analysis", endpoint: "/logs/disconnects", empty: "All 18 termination causes" },
+      { label: "Sessions", heading: "Breakdown for this window", endpoint: "/logs/disconnects", empty: "All 18 termination causes" },
       { label: "Connections", heading: "Connection events", endpoint: "/logs/network", empty: "No records." },
-      { label: "Sessions", heading: "Live PPPoE sessions", endpoint: "/logs/radius-sessions", empty: "No records." },
-      { label: "AAA", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
+      { label: "Authentication & AAA", heading: "Subscriber RADIUS authentication", endpoint: "/logs/radius-auth", empty: "No records." },
       { label: "Audit Trail", heading: "User activity", endpoint: "/logs/activity", empty: "No records." },
     ];
 
@@ -364,17 +376,20 @@ test.describe("Logs workspace tabs", () => {
       if (view.label === "Sessions") {
         const subtabs = page.getByRole("navigation", { name: "Sessions pages" });
         await expect(subtabs.getByRole("button")).toHaveCount(4);
-        for (const label of ["Active Sessions", "Accounting Logs", "Session History", "Disconnect Analysis"]) {
+        for (const label of ["Disconnect Analysis", "Active Sessions", "Accounting Logs", "Session History"]) {
           await expect(subtabs.getByRole("button", { name: label })).toBeVisible();
         }
+        await subtabs.getByRole("button", { name: "Active Sessions" }).click();
+        await expect(page.getByRole("tabpanel").getByRole("heading", { name: "Live PPPoE sessions" })).toBeVisible();
+        heldPaths.delete("/logs/radius-sessions");
+        releaseGates.get("/logs/radius-sessions")?.();
         await subtabs.getByRole("button", { name: "Disconnect Analysis" }).click();
         await expect(subtabs.getByRole("button", { name: "Disconnect Analysis" })).toHaveAttribute("aria-current", "page");
-        await subtabs.getByRole("button", { name: "Active Sessions" }).click();
       }
-      if (view.label === "AAA") {
-        const subtabs = page.getByRole("navigation", { name: "AAA pages" });
-        await expect(subtabs.getByRole("button")).toHaveCount(3);
-        for (const label of ["Authentication Records", "AAA / RADIUS Server", "Disconnect Analysis"]) {
+      if (view.label === "Authentication & AAA") {
+        const subtabs = page.getByRole("navigation", { name: "Authentication & AAA pages" });
+        await expect(subtabs.getByRole("button")).toHaveCount(2);
+        for (const label of ["Authentication Records", "AAA / RADIUS Server"]) {
           await expect(subtabs.getByRole("button", { name: label })).toBeVisible();
         }
         await subtabs.getByRole("button", { name: "AAA / RADIUS Server" }).click();
@@ -495,12 +510,13 @@ test.describe("Logs workspace tabs", () => {
     await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
 
     await page.getByRole("tab", { name: "Sessions" }).click();
+    await page.getByRole("navigation", { name: "Sessions pages" }).getByRole("button", { name: "Active Sessions" }).click();
     await expect(panel).toContainText("session-only-subscriber");
     await expect(panel).not.toContainText("connection-only-subscriber");
     await expect(panel).not.toContainText("aaa-only-subscriber");
     await expect(panel).not.toContainText("AUDIT_ONLY_ACTION");
 
-    await page.getByRole("tab", { name: "AAA" }).click();
+    await page.getByRole("tab", { name: "Authentication & AAA" }).click();
     await expect(panel.getByRole("heading", { name: "Subscriber RADIUS authentication" })).toBeVisible();
     await expect(panel).toContainText("aaa-only-subscriber");
     await expect(panel).not.toContainText("session-only-subscriber");
@@ -513,27 +529,29 @@ test.describe("Logs workspace tabs", () => {
 
     for (const viewport of [
       { width: 1440, height: 900 },
+      { width: 1280, height: 800 },
       { width: 1024, height: 768 },
-      { width: 390, height: 844 },
-      { width: 320, height: 700 },
+      { width: 768, height: 900 },
+      { width: 430, height: 844 },
+      { width: 375, height: 812 },
     ]) {
       await page.setViewportSize(viewport);
       await expect.poll(() => page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       )).toBe(true);
       for (const tab of [
-        "Overall Stats",
         "Connections",
         "Sessions",
-        "AAA",
+        "Authentication & AAA",
         "Audit Trail",
       ]) {
         await page.getByRole("tab", { name: tab }).click();
         await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
       }
-      if (viewport.width <= 390) {
+      if (viewport.width <= 430) {
         const bottomNav = page.getByRole("navigation", { name: "Section" });
-        for (const tab of ["Overall Stats", "Connections", "Sessions", "AAA", "Audit Trail"]) {
+        await expect(bottomNav.getByRole("button")).toHaveCount(4);
+        for (const tab of ["Connections", "Sessions", "Authentication & AAA", "Audit Trail"]) {
           await bottomNav.getByRole("button", { name: tab }).click();
           await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
         }
@@ -717,10 +735,9 @@ test.describe("Logs workspace tabs", () => {
 
     await page.goto("/logs");
     const views = [
-      { label: "Overall Stats", heading: "Disconnect Analysis", error: "Could not load disconnects (HTTP 503)." },
+      { label: "Sessions", heading: "Breakdown for this window", error: "Could not load disconnects (HTTP 503)." },
       { label: "Connections", heading: "Connection events", error: "Unable to load records (HTTP 503)." },
-      { label: "Sessions", heading: "Live PPPoE sessions", error: "Unable to load records (HTTP 503)." },
-      { label: "AAA", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
+      { label: "Authentication & AAA", heading: "Subscriber RADIUS authentication", error: "Unable to load records (HTTP 503)." },
       { label: "Audit Trail", heading: "User activity", error: "Unable to load records (HTTP 503)." },
     ];
 
@@ -764,18 +781,20 @@ test.describe("Logs workspace tabs", () => {
     expect(Array.isArray(network.logs)).toBe(true);
 
     const sessionsTab = page.getByRole("tab", { name: "Sessions" });
+    await sessionsTab.click();
+    const activeSessions = page.getByRole("navigation", { name: "Sessions pages" }).getByRole("button", { name: "Active Sessions" });
     const sessionsResponse = page.waitForResponse((response) =>
       isLogResponse(response.url(), "radius-sessions"),
     );
-    await sessionsTab.click();
-    await expect(sessionsTab).toHaveAttribute("aria-selected", "true");
+    await activeSessions.click();
+    await expect(activeSessions).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("heading", { name: "Live PPPoE sessions" })).toBeVisible();
     const sessionsApiResponse = await sessionsResponse;
     expect(sessionsApiResponse.status()).toBe(200);
     const sessions = await sessionsApiResponse.json();
     expect(Array.isArray(sessions.items)).toBe(true);
 
-    const authenticationTab = page.getByRole("tab", { name: "AAA" });
+    const authenticationTab = page.getByRole("tab", { name: "Authentication & AAA" });
     const radiusAuthResponse = page.waitForResponse((response) =>
       isLogResponse(response.url(), "radius-auth"),
     );

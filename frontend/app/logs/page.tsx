@@ -32,16 +32,12 @@ const dateTime = (value: string | Date) => new Date(value).toLocaleString(undefi
 
 // ── Primary Logs sections ────────────────────────────────────────
 export const LOG_VIEWS = [
-  { id: "overview", label: "Overall Stats", description: "See disconnect trends, customer impact, and all termination causes." },
-  { id: "connections", label: "Connections", description: "Investigate connection events, network records, and failed activations." },
-  { id: "sessions", label: "Sessions", description: "Review RADIUS accounting sessions and recorded disconnect causes." },
-  { id: "authentication", label: "AAA", description: "Review authentication records, accounting, and RADIUS diagnostics." },
-  { id: "audit", label: "Audit Trail", description: "Review administrative activity and system events." },
+  { id: "connections", label: "Connections" },
+  { id: "sessions", label: "Sessions" },
+  { id: "authentication", label: "Authentication & AAA" },
+  { id: "audit", label: "Audit Trail" },
 ];
 const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
-  overview: [
-    { id: "disconnects", label: "Disconnect Analysis" },
-  ],
   connections: [
     { id: "console", label: "Connection Events" },
     { id: "network", label: "NAS & Network" },
@@ -49,15 +45,14 @@ const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
     { id: "nas", label: "Connection Diagnostics" },
   ],
   sessions: [
+    { id: "disconnects", label: "Disconnect Analysis" },
     { id: "live", label: "Active Sessions" },
     { id: "accounting", label: "Accounting Logs" },
     { id: "timeline", label: "Session History" },
-    { id: "disconnects", label: "Disconnect Analysis" },
   ],
   authentication: [
     { id: "subscriber", label: "Authentication Records" },
     { id: "health", label: "AAA / RADIUS Server" },
-    { id: "disconnects", label: "Disconnect Analysis" },
   ],
   audit: [
     { id: "activity", label: "User Activity" },
@@ -67,21 +62,21 @@ const LOG_FEATURES: Record<string, Array<{ id: string; label: string }>> = {
   ],
 };
 const DEFAULT_LOG_FEATURES: Record<string, string> = {
-  overview: "disconnects",
   connections: "console",
-  sessions: "live",
+  sessions: "disconnects",
   authentication: "subscriber",
   audit: "activity",
 };
 const LEGACY_LOG_TABS: Record<string, string> = {
-  overview: "overview", stats: "overview", "overall-stats": "overview",
+  overview: "sessions", stats: "sessions", "overall-stats": "sessions",
   console: "connections", network: "connections", failed: "connections",
-  timeline: "sessions", radsess: "sessions", disconnects: "overview",
+  timeline: "sessions", radsess: "sessions", disconnects: "sessions",
   authrec: "authentication", login: "audit", radius: "authentication",
   sessions: "sessions", actrec: "audit", activity: "audit", system: "audit",
   aaa: "authentication",
 };
 const LEGACY_LOG_FEATURES: Record<string, string> = {
+  overview: "disconnects", stats: "disconnects", "overall-stats": "disconnects",
   disconnects: "disconnects", console: "console", network: "network", failed: "failed",
   timeline: "timeline", radsess: "accounting",
   authrec: "subscriber", login: "security", radius: "health",
@@ -98,14 +93,14 @@ const resolveLogTab = (value: string | null) => {
 
 /**
  * The page is opened from its dedicated application navigation entry; legacy
- * links continue to resolve to the same five-section Logs workspace.
+ * links continue to resolve to the four-section Logs workspace.
  */
 export default function LogsPage({ embedded = false, view, onViewChange }: {
   embedded?: boolean; view?: string; onViewChange?: (id: string) => void;
 } = {}) {
   const router = useRouter();
   const [darkMode] = useState(true);
-  const [internalTab, setInternalTab] = useState("overview");
+  const [internalTab, setInternalTab] = useState("sessions");
   const activeTab = embedded && view && onViewChange ? view : internalTab;
   const [featureByTab, setFeatureByTab] = useState(DEFAULT_LOG_FEATURES);
   const [auditEntity, setAuditEntity] = useState("");
@@ -167,8 +162,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
     if (activeTab === "connections") setFilterSeverity(id === "network" ? "ERROR" : "ALL");
     if (
       (activeTab === "connections" && (id === "failed" || id === "nas")) ||
-      ((activeTab === "overview" || activeTab === "sessions") && id === "disconnects") ||
-      (activeTab === "authentication" && id === "disconnects") ||
+      (activeTab === "sessions" && id === "disconnects") ||
       (activeTab === "audit" && id === "system")
     ) setFocusUser("");
     if (!embedded && typeof window !== "undefined") {
@@ -188,9 +182,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
   const accountFilterAvailable =
     activeFeature !== "nas" &&
     !(activeTab === "connections" && activeFeature === "failed") &&
-    !(activeTab === "overview" && activeFeature === "disconnects") &&
     !(activeTab === "sessions" && activeFeature === "disconnects") &&
-    !(activeTab === "authentication" && activeFeature === "disconnects") &&
     !(activeTab === "audit" && activeFeature === "system");
   const canShowAccountFilter = accounts.length > 0 && accountFilterAvailable;
   const onRecordsChange = useCallback((rows: any[], total: number) => {
@@ -353,7 +345,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
       const params = new URLSearchParams(window.location.search);
       const legacyKey = params.get("logTab") || params.get("tab") || "";
       const destination = resolveLogTab(legacyKey);
-      setInternalTab(destination || "overview");
+      setInternalTab(destination || "sessions");
       setAuditEntity(params.get("entity") || "");
       setAuditEntityId(params.get("entityId") || "");
       const requestedFeature = params.get("logFeature") || LEGACY_LOG_FEATURES[legacyKey];
@@ -657,10 +649,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
 
           {/* ═══════════════ FILTER BAR ═══════════════ */}
           <header className="logs-heading">
-            <div>
-              <h1><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" /></svg> Logs</h1>
-              <p>{tabs.find((tab) => tab.id === activeTab)?.description}</p>
-            </div>
+            <h1><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" /></svg> Logs</h1>
           </header>
           <nav className="logs-side" role="tablist" aria-label="Logs sections">
             {tabs.map((tab, index) => (
@@ -1239,11 +1228,7 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
           )}
 
           {/* ═══════════════ TAB: DISCONNECT REASONS (all 18 RFC 2866 causes) ═══════════════ */}
-          {(activeTab === "overview" || activeTab === "sessions" || activeTab === "authentication") && activeFeature === "disconnects" && (
-            <>
-              <h2 style={{ fontSize: 15, margin: "20px 0 9px" }}>
-                {activeTab === "overview" ? "Disconnect Analysis" : "Disconnect report"}
-              </h2>
+          {activeTab === "sessions" && activeFeature === "disconnects" && (
               <DisconnectsPanel
                 refreshKey={refreshKey}
                 searchText={search}
@@ -1255,7 +1240,6 @@ export default function LogsPage({ embedded = false, view, onViewChange }: {
                 hideTimeRange
                 hideSearch
               />
-            </>
           )}
 
           {/* ═══════════════ TAB: FAILED ACTIVATIONS ═══════════════ */}
