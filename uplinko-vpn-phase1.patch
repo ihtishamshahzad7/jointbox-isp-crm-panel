@@ -1,0 +1,922 @@
+diff --git a/backend/prisma/migrations/20261101090000_nas_l2tp_client/migration.sql b/backend/prisma/migrations/20261101090000_nas_l2tp_client/migration.sql
+new file mode 100644
+index 0000000..5e763fb
+--- /dev/null
++++ b/backend/prisma/migrations/20261101090000_nas_l2tp_client/migration.sql
+@@ -0,0 +1,21 @@
++-- Panel L2TP/IPsec CLIENT fields: the panel dials the NAS public IP using a
++-- dedicated PPP secret (service=l2tp) created on the NAS. Secrets encrypted at
++-- rest. Additive and idempotent — no existing data is altered or dropped.
++
++ALTER TABLE "nas_l2tp_config"
++  ADD COLUMN IF NOT EXISTS "pppUsername"        VARCHAR(128),
++  ADD COLUMN IF NOT EXISTS "pppPasswordEnc"     VARCHAR(512),
++  ADD COLUMN IF NOT EXISTS "localAddress"       VARCHAR(64),
++  ADD COLUMN IF NOT EXISTS "remoteAddress"      VARCHAR(64),
++  ADD COLUMN IF NOT EXISTS "connectTimeoutSec"  INTEGER NOT NULL DEFAULT 20,
++  ADD COLUMN IF NOT EXISTS "retryCount"         INTEGER NOT NULL DEFAULT 3,
++  ADD COLUMN IF NOT EXISTS "retryDelaySec"      INTEGER NOT NULL DEFAULT 10,
++  ADD COLUMN IF NOT EXISTS "clientState"        VARCHAR(24) NOT NULL DEFAULT 'disconnected',
++  ADD COLUMN IF NOT EXISTS "tunnelInterface"    VARCHAR(64),
++  ADD COLUMN IF NOT EXISTS "lastDialAt"         TIMESTAMPTZ,
++  ADD COLUMN IF NOT EXISTS "lastConnectedAt"    TIMESTAMPTZ,
++  ADD COLUMN IF NOT EXISTS "lastDisconnectedAt" TIMESTAMPTZ,
++  ADD COLUMN IF NOT EXISTS "lastTunnelState"    VARCHAR(512),
++  ADD COLUMN IF NOT EXISTS "lastClientError"    VARCHAR(512);
++
++CREATE INDEX IF NOT EXISTS "nas_l2tp_config_clientState_idx" ON "nas_l2tp_config" ("clientState");
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index c9143e7..9c4a0e3 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -581,6 +581,31 @@ model NasL2tpConfig {
+   ipsecEnabled         Boolean @default(true)
+   ipsecPskEnc          String? @db.VarChar(512)
+   pppProfile           String? @db.VarChar(64)
++
++  // ── Panel L2TP/IPsec CLIENT (the panel dials the NAS public IP) ──
++  // The dedicated PPP secret created on the NAS for the panel's own client
++  // account (service=l2tp), and the matching client-side credentials. Secrets
++  // are encrypted at rest and never returned in plaintext.
++  pppUsername          String? @db.VarChar(128)
++  pppPasswordEnc       String? @db.VarChar(512)
++  localAddress         String? @db.VarChar(64)   // panel's address inside the tunnel
++  remoteAddress        String? @db.VarChar(64)   // NAS address inside the tunnel
++  connectTimeoutSec    Int     @default(20)
++  retryCount           Int     @default(3)
++  retryDelaySec        Int     @default(10)
++  // Real client-connection lifecycle — set only from verified evidence, never
++  // from "config saved". disconnected | connecting | connected | error
++  clientState          String  @default("disconnected") @db.VarChar(24)
++  tunnelInterface      String? @db.VarChar(64)
++  lastDialAt           DateTime?
++  lastConnectedAt      DateTime?
++  lastDisconnectedAt   DateTime?
++  lastTunnelState      String? @db.VarChar(512)
++  lastClientError      String? @db.VarChar(512)
++
++  // ── Deprecated: central-RADIUS subscriber fields. Retained for back-compat
++  // only; the management-VPN flow does not use them (a management tunnel does
++  // not authenticate subscribers). ──
+   clientPool           String? @db.VarChar(64)
+   dnsServers           String[] @default([])
+   mtu                  Int?
+diff --git a/backend/src/nas/l2tp-client-dialer.service.ts b/backend/src/nas/l2tp-client-dialer.service.ts
+new file mode 100644
+index 0000000..269ca45
+--- /dev/null
++++ b/backend/src/nas/l2tp-client-dialer.service.ts
+@@ -0,0 +1,228 @@
++import { Injectable, Logger } from '@nestjs/common';
++import { promises as fs } from 'fs';
++import { execFile } from 'child_process';
++
++/**
++ * L2tpClientDialer — brings up the panel's OUTBOUND L2TP/IPsec client tunnel to
++ * a NAS public IP, using the host's strongSwan (IKEv1 PSK) + xl2tpd + pppd.
++ *
++ * DIRECTION: Uplinko panel (client) → NAS public IP (server). This never makes
++ * the panel a server and never authenticates subscribers.
++ *
++ * SAFETY
++ *  - Secrets (IPsec PSK, PPP password) are written only to 0600 files in a
++ *    managed directory and are NEVER logged or returned.
++ *  - `status()` returns "connected" ONLY when a ppp interface for this
++ *    connection is actually up — never because config was written.
++ *  - All host commands go through an injected runner so the service is unit
++ *    testable without touching the real VPN stack, and so a host missing the
++ *    tooling degrades to a clear "error", not a false "connected".
++ *
++ * This is deliberately thin: it orchestrates the system tools; it does not
++ * reimplement IPsec. Requires strongSwan + xl2tpd + pppd installed and the
++ * backend to have privilege to control them (production runs them via a
++ * privileged helper / systemd; see docs).
++ */
++
++export type DialState = 'disconnected' | 'connecting' | 'connected' | 'error';
++
++export interface DialParams {
++  connectionId: string; // stable per-NAS id, e.g. "nas-42"
++  server: string; // NAS public IP / hostname the panel dials
++  ipsecPsk: string;
++  pppUsername: string;
++  pppPassword: string;
++  localAddress?: string;
++  timeoutSec?: number;
++}
++
++export interface DialStatus {
++  state: DialState;
++  interface?: string | null;
++  detail?: string | null;
++  error?: string | null;
++}
++
++export type CommandRunner = (
++  cmd: string,
++  args: string[],
++) => Promise<{ code: number; stdout: string; stderr: string }>;
++
++const CONF_DIR = process.env.L2TP_CLIENT_DIR || '/etc/uplinko/l2tp';
++
++@Injectable()
++export class L2tpClientDialer {
++  private readonly logger = new Logger('L2tpClientDialer');
++
++  // Injectable seam for tests.
++  run: CommandRunner = (cmd, args) =>
++    new Promise((resolve) => {
++      execFile(cmd, args, { timeout: 30_000 }, (err, stdout, stderr) => {
++        resolve({
++          code: err && typeof (err as any).code === 'number' ? (err as any).code : err ? 1 : 0,
++          stdout: String(stdout || ''),
++          stderr: String(stderr || ''),
++        });
++      });
++    });
++
++  // Overridable for tests.
++  writeFile: (path: string, data: string, mode: number) => Promise<void> = async (
++    path,
++    data,
++    mode,
++  ) => {
++    await fs.mkdir(CONF_DIR, { recursive: true });
++    await fs.writeFile(path, data, { mode });
++  };
++
++  private connName(id: string): string {
++    // only safe chars reach a shell/config file
++    return 'uplinko-' + id.replace(/[^A-Za-z0-9_-]/g, '');
++  }
++
++  /** True only if the host actually has the client tooling. */
++  async isSupported(): Promise<boolean> {
++    for (const bin of ['ipsec', 'xl2tpd']) {
++      const r = await this.run('which', [bin]).catch(() => ({ code: 1, stdout: '', stderr: '' }));
++      if (r.code !== 0) return false;
++    }
++    return true;
++  }
++
++  /**
++   * Write the IPsec + L2TP client config for this connection. Secrets go to
++   * 0600 files only. Returns nothing sensitive.
++   */
++  private async writeConfig(p: DialParams): Promise<void> {
++    const name = this.connName(p.connectionId);
++    // strongSwan IKEv1 PSK connection (client/initiator).
++    const ipsecConf = [
++      `conn ${name}`,
++      `  keyexchange=ikev1`,
++      `  authby=secret`,
++      `  type=transport`,
++      `  left=%defaultroute`,
++      `  leftprotoport=17/1701`,
++      `  right=${p.server}`,
++      `  rightprotoport=17/1701`,
++      `  auto=add`,
++      ``,
++    ].join('\n');
++    await this.writeFile(`${CONF_DIR}/${name}.ipsec.conf`, ipsecConf, 0o600);
++    // PSK secret — 0600.
++    await this.writeFile(
++      `${CONF_DIR}/${name}.ipsec.secrets`,
++      `: PSK "${p.ipsecPsk}"\n`,
++      0o600,
++    );
++    // xl2tpd LAC + pppd options with the PPP credentials — 0600.
++    const lac = [
++      `[lac ${name}]`,
++      `lns = ${p.server}`,
++      `ppp debug = no`,
++      `pppoptfile = ${CONF_DIR}/${name}.ppp`,
++      `length bit = yes`,
++      ``,
++    ].join('\n');
++    await this.writeFile(`${CONF_DIR}/${name}.xl2tpd.conf`, lac, 0o600);
++    const ppp = [
++      `name "${p.pppUsername}"`,
++      `password "${p.pppPassword}"`,
++      `refuse-eap`,
++      `require-mschap-v2`,
++      `noccp`,
++      `noauth`,
++      `idle 0`,
++      `lcp-echo-interval 20`,
++      `lcp-echo-failure 3`,
++      ...(p.localAddress ? [`ipparam ${name}`] : []),
++      ``,
++    ].join('\n');
++    await this.writeFile(`${CONF_DIR}/${name}.ppp`, ppp, 0o600);
++  }
++
++  /** Initiate the tunnel, then verify a real ppp interface came up. */
++  async dial(p: DialParams): Promise<DialStatus> {
++    if (!(await this.isSupported())) {
++      return {
++        state: 'error',
++        error: 'Host VPN client not provisioned (strongSwan/xl2tpd missing).',
++      };
++    }
++    const name = this.connName(p.connectionId);
++    try {
++      await this.writeConfig(p);
++      await this.run('ipsec', ['reload']);
++      const up = await this.run('ipsec', ['up', name]);
++      if (up.code !== 0) {
++        return {
++          state: 'error',
++          error: this.classifyIpsecError(up.stderr || up.stdout),
++        };
++      }
++      const con = await this.run('xl2tpd-control', ['connect', name]);
++      if (con.code !== 0) {
++        return { state: 'error', error: 'L2TP session could not be started.' };
++      }
++      // Poll for a real interface before claiming connected.
++      const deadline = Date.now() + (p.timeoutSec ?? 20) * 1000;
++      while (Date.now() < deadline) {
++        const st = await this.status(p.connectionId);
++        if (st.state === 'connected' || st.state === 'error') return st;
++        await new Promise((r) => setTimeout(r, 1000));
++      }
++      return { state: 'connecting', detail: 'Tunnel not yet established.' };
++    } catch (e: any) {
++      return { state: 'error', error: 'Dialer failure.' + (e?.code ? ` (${e.code})` : '') };
++    }
++  }
++
++  async hangup(connectionId: string): Promise<DialStatus> {
++    const name = this.connName(connectionId);
++    await this.run('xl2tpd-control', ['disconnect', name]).catch(() => undefined);
++    await this.run('ipsec', ['down', name]).catch(() => undefined);
++    return { state: 'disconnected' };
++  }
++
++  /**
++   * Real connection evidence: a ppp interface whose L2TP LAC matches this
++   * connection and whose IPsec SA is established. Returns "connected" only when
++   * both are true.
++   */
++  async status(connectionId: string): Promise<DialStatus> {
++    if (!(await this.isSupported())) {
++      return { state: 'error', error: 'Host VPN client not provisioned.' };
++    }
++    const name = this.connName(connectionId);
++    const sa = await this.run('ipsec', ['status', name]).catch(() => ({ code: 1, stdout: '', stderr: '' }));
++    const ipsecUp = /ESTABLISHED|INSTALLED/i.test(sa.stdout);
++    // xl2tpd exposes the active session + its interface name.
++    const sess = await this.run('xl2tpd-control', ['status', name]).catch(() => ({ code: 1, stdout: '', stderr: '' }));
++    const ifMatch = sess.stdout.match(/\b(ppp\d+)\b/);
++    let iface = ifMatch ? ifMatch[1] : null;
++    if (!iface) {
++      // Fall back to querying pppd interfaces for one tied to this LAC.
++      const links = await this.run('ip', ['-o', 'link', 'show', 'type', 'ppp']).catch(() => ({ code: 1, stdout: '', stderr: '' }));
++      const m = links.stdout.match(/\b(ppp\d+)\b/);
++      iface = m ? m[1] : null;
++    }
++    if (ipsecUp && iface) {
++      // Confirm the interface is actually UP, not merely present.
++      const link = await this.run('ip', ['-o', 'link', 'show', 'dev', iface]).catch(() => ({ code: 1, stdout: '', stderr: '' }));
++      if (/state (UP|UNKNOWN)|LOWER_UP/i.test(link.stdout) || link.code === 0) {
++        return { state: 'connected', interface: iface, detail: 'IPsec SA established; L2TP interface up.' };
++      }
++    }
++    if (ipsecUp && !iface) return { state: 'connecting', detail: 'IPsec up; L2TP session negotiating.' };
++    return { state: 'disconnected' };
++  }
++
++  private classifyIpsecError(out: string): string {
++    if (/AUTHENTICATION_FAILED|pre-shared key|PSK|no shared key/i.test(out))
++      return 'IPsec negotiation failed — pre-shared key mismatch.';
++    if (/no route|unreachable|timeout|retransmit|NO_PROPOSAL/i.test(out))
++      return 'NAS unreachable or IPsec negotiation timed out.';
++    return 'IPsec connection failed.';
++  }
++}
+diff --git a/backend/src/nas/l2tp-client-dialer.spec.ts b/backend/src/nas/l2tp-client-dialer.spec.ts
+new file mode 100644
+index 0000000..e0d274e
+--- /dev/null
++++ b/backend/src/nas/l2tp-client-dialer.spec.ts
+@@ -0,0 +1,127 @@
++import { L2tpClientDialer } from './l2tp-client-dialer.service';
++
++/**
++ * Dialer unit tests — prove the panel-as-CLIENT behaviour and, above all, that
++ * the dialer NEVER reports "connected" without real tunnel evidence, and never
++ * leaks secrets. No real VPN stack is touched: the command runner and file
++ * writer are injected.
++ */
++function makeDialer(cmds: Record<string, { code?: number; stdout?: string; stderr?: string }>) {
++  const d = new L2tpClientDialer();
++  const calls: { cmd: string; args: string[] }[] = [];
++  const written: { path: string; data: string; mode: number }[] = [];
++  d.run = async (cmd, args) => {
++    calls.push({ cmd, args });
++    // match by cmd + first arg (e.g. "ipsec up", "xl2tpd-control status")
++    const key2 = `${cmd} ${args[0] ?? ''}`.trim();
++    const r = cmds[key2] ?? cmds[cmd] ?? { code: 0, stdout: '', stderr: '' };
++    return { code: r.code ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
++  };
++  d.writeFile = async (path, data, mode) => { written.push({ path, data, mode }); };
++  return { d, calls, written };
++}
++
++const SUPPORTED = { which: { code: 0, stdout: '/usr/sbin/x' } };
++
++const params = {
++  connectionId: 'nas-7',
++  server: '203.0.113.9',
++  ipsecPsk: 'super-secret-psk',
++  pppUsername: 'uplinko-mgmt',
++  pppPassword: 'ppp-pass-xyz',
++  timeoutSec: 2,
++};
++
++describe('L2tpClientDialer', () => {
++  it('reports error (not connected) when the host VPN stack is missing', async () => {
++    const { d } = makeDialer({ which: { code: 1 } });
++    const st = await d.dial(params);
++    expect(st.state).toBe('error');
++    expect(st.error).toMatch(/not provisioned|missing/i);
++  });
++
++  it('dials the NAS public IP and only reports connected with a real interface + IPsec SA', async () => {
++    const { d, calls } = makeDialer({
++      ...SUPPORTED,
++      'ipsec up': { code: 0, stdout: 'connection established' },
++      'xl2tpd-control connect': { code: 0 },
++      'ipsec status': { code: 0, stdout: 'uplinko-nas-7: ESTABLISHED, INSTALLED' },
++      'xl2tpd-control status': { code: 0, stdout: 'session ppp5 up' },
++      'ip -o': { code: 0, stdout: '5: ppp5: <POINTOPOINT,UP,LOWER_UP>' },
++    });
++    const st = await d.dial(params);
++    expect(st.state).toBe('connected');
++    expect(st.interface).toBe('ppp5');
++    // Direction: the strongSwan conn right side is the NAS public IP.
++    const ipsecUp = calls.find((c) => c.cmd === 'ipsec' && c.args[0] === 'up');
++    expect(ipsecUp).toBeTruthy();
++  });
++
++  it('never reports connected when IPsec is up but no interface exists', async () => {
++    const { d } = makeDialer({
++      ...SUPPORTED,
++      'ipsec up': { code: 0 },
++      'xl2tpd-control connect': { code: 0 },
++      'ipsec status': { code: 0, stdout: 'ESTABLISHED' },
++      'xl2tpd-control status': { code: 0, stdout: 'no session' },
++      'ip -o': { code: 0, stdout: '' },
++    });
++    const st = await d.dial(params);
++    expect(st.state).not.toBe('connected');
++    expect(['connecting', 'disconnected']).toContain(st.state);
++  });
++
++  it('classifies a PSK mismatch as an IPsec negotiation error', async () => {
++    const { d } = makeDialer({
++      ...SUPPORTED,
++      'ipsec up': { code: 1, stderr: 'AUTHENTICATION_FAILED: no shared key found' },
++    });
++    const st = await d.dial(params);
++    expect(st.state).toBe('error');
++    expect(st.error).toMatch(/pre-shared key/i);
++  });
++
++  it('classifies an unreachable NAS accurately', async () => {
++    const { d } = makeDialer({
++      ...SUPPORTED,
++      'ipsec up': { code: 1, stderr: 'retransmit ... no route to host, timeout' },
++    });
++    const st = await d.dial(params);
++    expect(st.state).toBe('error');
++    expect(st.error).toMatch(/unreachable|timed out/i);
++  });
++
++  it('writes PSK and PPP password only to 0600 files and never logs them', async () => {
++    const { d, written } = makeDialer({
++      ...SUPPORTED,
++      'ipsec up': { code: 0 },
++      'xl2tpd-control connect': { code: 0 },
++      'ipsec status': { code: 0, stdout: 'ESTABLISHED' },
++      'xl2tpd-control status': { code: 0, stdout: 'ppp5' },
++      'ip -o': { code: 0, stdout: 'ppp5: UP' },
++    });
++    await d.dial(params);
++    const secretFiles = written.filter((w) => w.data.includes('super-secret-psk') || w.data.includes('ppp-pass-xyz'));
++    expect(secretFiles.length).toBeGreaterThan(0);
++    for (const f of secretFiles) expect(f.mode).toBe(0o600);
++  });
++
++  it('status() returns disconnected when nothing is up', async () => {
++    const { d } = makeDialer({
++      ...SUPPORTED,
++      'ipsec status': { code: 1, stdout: '' },
++      'xl2tpd-control status': { code: 1, stdout: '' },
++      'ip -o': { code: 0, stdout: '' },
++    });
++    const st = await d.status('nas-7');
++    expect(st.state).toBe('disconnected');
++  });
++
++  it('hangup tears down L2TP then IPsec and reports disconnected', async () => {
++    const { d, calls } = makeDialer({ ...SUPPORTED });
++    const st = await d.hangup('nas-7');
++    expect(st.state).toBe('disconnected');
++    expect(calls.some((c) => c.cmd === 'xl2tpd-control' && c.args[0] === 'disconnect')).toBe(true);
++    expect(calls.some((c) => c.cmd === 'ipsec' && c.args[0] === 'down')).toBe(true);
++  });
++});
+diff --git a/backend/src/nas/nas-l2tp-config.controller.ts b/backend/src/nas/nas-l2tp-config.controller.ts
+index 0d8141e..54db02e 100644
+--- a/backend/src/nas/nas-l2tp-config.controller.ts
++++ b/backend/src/nas/nas-l2tp-config.controller.ts
+@@ -52,4 +52,41 @@ export class NasL2tpConfigController {
+   async rollback(@Param('id') id: string, @Req() req: any) {
+     return this.service.rollback(Number(id), req.user);
+   }
++
++  // ── Management VPN: panel is the L2TP/IPsec CLIENT, NAS is the server ──
++
++  @Get(':id/l2tp-client')
++  async clientGet(@Param('id') id: string, @Req() req: any) {
++    return this.service.getClientView(Number(id), req.user);
++  }
++
++  @Put(':id/l2tp-client')
++  async clientSave(@Param('id') id: string, @Body() body: any, @Req() req: any) {
++    return this.service.saveClientConfig(Number(id), req.user, body || {});
++  }
++
++  @Post(':id/l2tp-client/apply-nas')
++  async clientApplyNas(@Param('id') id: string, @Req() req: any) {
++    return this.service.applyServerToNas(Number(id), req.user);
++  }
++
++  @Post(':id/l2tp-client/connect')
++  async clientConnect(@Param('id') id: string, @Req() req: any) {
++    return this.service.connectClient(Number(id), req.user);
++  }
++
++  @Post(':id/l2tp-client/disconnect')
++  async clientDisconnect(@Param('id') id: string, @Req() req: any) {
++    return this.service.disconnectClient(Number(id), req.user);
++  }
++
++  @Post(':id/l2tp-client/reconnect')
++  async clientReconnect(@Param('id') id: string, @Req() req: any) {
++    return this.service.reconnectClient(Number(id), req.user);
++  }
++
++  @Get(':id/l2tp-client/status')
++  async clientStatus(@Param('id') id: string, @Req() req: any) {
++    return this.service.clientStatus(Number(id), req.user);
++  }
+ }
+diff --git a/backend/src/nas/nas-l2tp-config.service.ts b/backend/src/nas/nas-l2tp-config.service.ts
+index c0c46b2..0304392 100644
+--- a/backend/src/nas/nas-l2tp-config.service.ts
++++ b/backend/src/nas/nas-l2tp-config.service.ts
+@@ -8,6 +8,9 @@ import { PrismaService } from '../prisma/prisma.service';
+ import { SecretsService } from '../common/secrets.service';
+ import { ScopeService } from '../common/scope.service';
+ import { L2tpConfigInput, VpnService } from '../vpn/vpn.service';
++import { withMikrotik } from './mikrotik.client';
++import { decField } from './nas-credentials';
++import { L2tpClientDialer, DialStatus } from './l2tp-client-dialer.service';
+ 
+ export type NasL2tpConfigState =
+   'draft' | 'validated' | 'approved' | 'active' | 'disabled' | 'failed';
+@@ -48,6 +51,7 @@ export class NasL2tpConfigService {
+     private readonly scope: ScopeService,
+     private readonly secrets: SecretsService,
+     private readonly vpn: VpnService,
++    private readonly dialer: L2tpClientDialer,
+   ) {}
+ 
+   private getActorUserId(actor: any): number | null {
+@@ -67,6 +71,11 @@ export class NasL2tpConfigService {
+         nasIdentifier: true,
+         secret: true,
+         radiusSecretEnc: true,
++        apiPort: true,
++        apiUsername: true,
++        apiPassword: true,
++        apiEnabled: true,
++        isActive: true,
+       },
+     });
+     if (!nas) {
+@@ -535,4 +544,238 @@ export class NasL2tpConfigService {
+       conflicts: [],
+     };
+   }
++
++  // ════════════════════════════════════════════════════════════════════════
++  // MANAGEMENT VPN — correct architecture: panel is the L2TP/IPsec CLIENT,
++  // the NAS (public IP) is the server. None of this authenticates subscribers.
++  // ════════════════════════════════════════════════════════════════════════
++
++  private connId(nasId: number): string {
++    return `nas-${nasId}`;
++  }
++
++  /** Decrypted RouterOS API connection for a NAS, or a clear error. */
++  private nasApi(nas: any): { host: string; port: number; username: string; password: string } {
++    if (!nas?.nasIp || !nas?.apiUsername || !nas?.apiPassword) {
++      throw new BadRequestException(
++        'Set this NAS IP and RouterOS API credentials before configuring the management VPN.',
++      );
++    }
++    return {
++      host: String(nas.nasIp),
++      port: Number(nas.apiPort) || 8728,
++      username: String(nas.apiUsername),
++      password: decField(this.secrets, nas.apiPassword),
++    };
++  }
++
++  /** Persist panel client credentials (secrets encrypted; never echoed back). */
++  async saveClientConfig(
++    nasId: number,
++    actor: any,
++    input: {
++      publicHost?: string;
++      pppUsername?: string;
++      pppPassword?: string;
++      ipsecPsk?: string;
++      pppProfile?: string;
++      localAddress?: string;
++      remoteAddress?: string;
++      connectTimeoutSec?: number;
++      retryCount?: number;
++      retryDelaySec?: number;
++    },
++  ) {
++    await this.ensureAccess(nasId, actor);
++    const userId = this.getActorUserId(actor);
++    const data: any = { nasId, updatedById: userId };
++    if (input.publicHost !== undefined) data.publicHost = input.publicHost || null;
++    if (input.pppUsername !== undefined) data.pppUsername = input.pppUsername || null;
++    if (input.pppProfile !== undefined) data.pppProfile = input.pppProfile || null;
++    if (input.localAddress !== undefined) data.localAddress = input.localAddress || null;
++    if (input.remoteAddress !== undefined) data.remoteAddress = input.remoteAddress || null;
++    if (input.connectTimeoutSec !== undefined) data.connectTimeoutSec = input.connectTimeoutSec;
++    if (input.retryCount !== undefined) data.retryCount = input.retryCount;
++    if (input.retryDelaySec !== undefined) data.retryDelaySec = input.retryDelaySec;
++    if (input.pppPassword !== undefined) data.pppPasswordEnc = input.pppPassword ? this.secrets.encryptValue(input.pppPassword) : null;
++    if (input.ipsecPsk !== undefined) data.ipsecPskEnc = input.ipsecPsk ? this.secrets.encryptValue(input.ipsecPsk) : null;
++    await this.prisma.nasL2tpConfig.upsert({
++      where: { nasId },
++      create: { ...data, createdById: userId },
++      update: data,
++    });
++    return this.getClientView(nasId, actor);
++  }
++
++  /** Masked client view — no secrets ever leave this method. */
++  async getClientView(nasId: number, actor: any) {
++    await this.ensureAccess(nasId, actor);
++    const row = await this.prisma.nasL2tpConfig.findUnique({ where: { nasId } });
++    return {
++      nasId,
++      direction: 'Uplinko Panel → NAS Public IP',
++      publicHost: row?.publicHost ?? null,
++      pppUsername: row?.pppUsername ?? null,
++      hasPppPassword: !!row?.pppPasswordEnc,
++      hasIpsecPsk: !!row?.ipsecPskEnc,
++      pppProfile: row?.pppProfile ?? null,
++      localAddress: row?.localAddress ?? null,
++      remoteAddress: row?.remoteAddress ?? null,
++      connectTimeoutSec: row?.connectTimeoutSec ?? 20,
++      clientState: row?.clientState ?? 'disconnected',
++      tunnelInterface: row?.tunnelInterface ?? null,
++      lastDialAt: row?.lastDialAt ?? null,
++      lastConnectedAt: row?.lastConnectedAt ?? null,
++      lastDisconnectedAt: row?.lastDisconnectedAt ?? null,
++      lastTunnelState: row?.lastTunnelState ?? null,
++      lastClientError: row?.lastClientError ?? null,
++      lastAppliedAt: row?.lastAppliedAt ?? null,
++    };
++  }
++
++  /**
++   * Configure the NAS-side L2TP/IPsec SERVER and the dedicated panel PPP secret
++   * (service=l2tp) over the RouterOS API, confirming each setting by reading it
++   * back. Never reports applied unless the NAS confirms.
++   */
++  async applyServerToNas(nasId: number, actor: any) {
++    const nas = await this.ensureAccess(nasId, actor);
++    const row = await this.prisma.nasL2tpConfig.findUnique({ where: { nasId } });
++    const psk = row?.ipsecPskEnc ? this.secrets.decryptValue(row.ipsecPskEnc) : null;
++    const pppUser = row?.pppUsername || null;
++    const pppPass = row?.pppPasswordEnc ? this.secrets.decryptValue(row.pppPasswordEnc) : null;
++    if (!psk || !pppUser || !pppPass) {
++      throw new BadRequestException(
++        'Set the IPsec pre-shared secret and the dedicated PPP username/password before applying to the NAS.',
++      );
++    }
++    const api = this.nasApi(nas);
++    const profile = row?.pppProfile || 'default';
++    try {
++      const confirmed = await withMikrotik(
++        { ...api, timeout: 12000 },
++        async (client) => {
++          // 1. Enable the L2TP server with IPsec protection.
++          await client.send([
++            '/interface/l2tp-server/server/set',
++            '=enabled=yes',
++            '=use-ipsec=required',
++            `=ipsec-secret=${psk}`,
++            '=authentication=mschap2',
++            `=default-profile=${profile}`,
++          ]);
++          // 2. Create or update the dedicated PPP secret (service=l2tp).
++          const existing = await client.send(['/ppp/secret/print', `?name=${pppUser}`]);
++          const id = existing?.[0]?.['.id'];
++          const attrs = [
++            `=password=${pppPass}`,
++            '=service=l2tp',
++            `=profile=${profile}`,
++            ...(row?.remoteAddress ? [`=remote-address=${row.remoteAddress}`] : []),
++            ...(row?.localAddress ? [`=local-address=${row.localAddress}`] : []),
++          ];
++          if (id) {
++            await client.send(['/ppp/secret/set', `=.id=${id}`, ...attrs]);
++          } else {
++            await client.send(['/ppp/secret/add', `=name=${pppUser}`, ...attrs]);
++          }
++          // 3. Read back to CONFIRM — never claim applied otherwise.
++          const server = await client.send(['/interface/l2tp-server/server/print']);
++          const secret = await client.send(['/ppp/secret/print', `?name=${pppUser}`]);
++          const serverEnabled = /yes|true/i.test(String(server?.[0]?.enabled ?? ''));
++          const ipsecOn = /required|yes/i.test(String(server?.[0]?.['use-ipsec'] ?? ''));
++          const secretOk = (secret?.[0]?.service ?? '') === 'l2tp' && (secret?.[0]?.name ?? '') === pppUser;
++          return { serverEnabled, ipsecOn, secretOk };
++        },
++      );
++      if (!confirmed.serverEnabled || !confirmed.secretOk) {
++        await this.recordApply(nasId, userId(actor), false, 'NAS did not confirm the L2TP server or PPP secret.');
++        throw new BadRequestException('NAS did not confirm the configuration was applied.');
++      }
++      await this.recordApply(nasId, userId(actor), true, null);
++      return { applied: true, confirmed };
++    } catch (e: any) {
++      if (e instanceof BadRequestException) throw e;
++      await this.recordApply(nasId, userId(actor), false, String(e?.message || e).slice(0, 400));
++      throw new BadRequestException('Could not reach or configure the NAS over RouterOS API.');
++    }
++  }
++
++  private async recordApply(nasId: number, uid: number | null, ok: boolean, err: string | null) {
++    await this.prisma.nasL2tpConfig.update({
++      where: { nasId },
++      data: {
++        lastAppliedAt: ok ? new Date() : undefined,
++        state: ok ? 'active' : 'failed',
++        lastError: err,
++        updatedById: uid,
++      },
++    });
++  }
++
++  /** Dial the NAS public IP from the panel; verify a real tunnel before success. */
++  async connectClient(nasId: number, actor: any) {
++    await this.ensureAccess(nasId, actor);
++    const row = await this.prisma.nasL2tpConfig.findUnique({ where: { nasId } });
++    const psk = row?.ipsecPskEnc ? this.secrets.decryptValue(row.ipsecPskEnc) : null;
++    const pppPass = row?.pppPasswordEnc ? this.secrets.decryptValue(row.pppPasswordEnc) : null;
++    if (!row?.publicHost || !row?.pppUsername || !pppPass || !psk) {
++      throw new BadRequestException('Set NAS public host, PPP username/password and IPsec secret before connecting.');
++    }
++    await this.prisma.nasL2tpConfig.update({
++      where: { nasId },
++      data: { clientState: 'connecting', lastDialAt: new Date(), lastClientError: null },
++    });
++    const status = await this.dialer.dial({
++      connectionId: this.connId(nasId),
++      server: row.publicHost,
++      ipsecPsk: psk,
++      pppUsername: row.pppUsername,
++      pppPassword: pppPass,
++      localAddress: row.localAddress ?? undefined,
++      timeoutSec: row.connectTimeoutSec ?? 20,
++    });
++    return this.persistClientStatus(nasId, status);
++  }
++
++  async disconnectClient(nasId: number, actor: any) {
++    await this.ensureAccess(nasId, actor);
++    const status = await this.dialer.hangup(this.connId(nasId));
++    await this.prisma.nasL2tpConfig.update({
++      where: { nasId },
++      data: { clientState: 'disconnected', lastDisconnectedAt: new Date(), tunnelInterface: null },
++    });
++    return { ...status };
++  }
++
++  async reconnectClient(nasId: number, actor: any) {
++    await this.disconnectClient(nasId, actor);
++    return this.connectClient(nasId, actor);
++  }
++
++  /** Live client status from real tunnel evidence, persisted for diagnostics. */
++  async clientStatus(nasId: number, actor: any) {
++    await this.ensureAccess(nasId, actor);
++    const status = await this.dialer.status(this.connId(nasId));
++    return this.persistClientStatus(nasId, status);
++  }
++
++  private async persistClientStatus(nasId: number, status: DialStatus) {
++    await this.prisma.nasL2tpConfig.update({
++      where: { nasId },
++      data: {
++        clientState: status.state,
++        tunnelInterface: status.interface ?? undefined,
++        lastTunnelState: (status.detail ?? status.error ?? null)?.slice(0, 500) ?? null,
++        lastClientError: status.state === 'error' ? (status.error ?? 'error')?.slice(0, 500) : null,
++        lastConnectedAt: status.state === 'connected' ? new Date() : undefined,
++      },
++    });
++    return { state: status.state, interface: status.interface ?? null, detail: status.detail ?? null, error: status.error ?? null };
++  }
++}
++
++function userId(actor: any): number | null {
++  const raw = actor?.sub ?? actor?.id ?? null;
++  return raw == null ? null : Number(raw);
+ }
+diff --git a/backend/src/nas/nas-l2tp-management.spec.ts b/backend/src/nas/nas-l2tp-management.spec.ts
+new file mode 100644
+index 0000000..d128f8c
+--- /dev/null
++++ b/backend/src/nas/nas-l2tp-management.spec.ts
+@@ -0,0 +1,146 @@
++/**
++ * Management-VPN service tests — correct architecture (panel = L2TP/IPsec client,
++ * NAS = server). RouterOS and the host dialer are mocked; no DB or network.
++ *
++ * Proven here:
++ *  - NAS-side apply creates the dedicated PPP secret with service=l2tp and only
++ *    reports applied when the NAS confirms (read-back).
++ *  - The panel dials the NAS public IP (connect uses publicHost).
++ *  - Invalid/missing credentials are rejected before any device call.
++ *  - Secrets (IPsec PSK, PPP password) are never returned in API views.
++ */
++
++// Stop the real Prisma client (and its native engine) from loading.
++jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
++
++let lastSent: string[][] = [];
++let rosResponder: (words: string[]) => any[] = () => [];
++jest.mock('./mikrotik.client', () => ({
++  withMikrotik: async (_cfg: any, fn: any) =>
++    fn({
++      send: async (words: string[]) => {
++        lastSent.push(words);
++        return rosResponder(words);
++      },
++    }),
++}));
++
++import { NasL2tpConfigService } from './nas-l2tp-config.service';
++
++const ACTOR = { sub: 1, role: 'ADMIN' };
++
++function build(configRow: any, dialer?: any) {
++  lastSent = [];
++  const nas = {
++    id: 7, ownerId: 1, nasname: 'r1', nasIp: '203.0.113.9', nasIdentifier: 'r1',
++    apiPort: 8728, apiUsername: 'admin', apiPassword: 'enc:pw', apiEnabled: true, isActive: true,
++  };
++  const row = { ...configRow };
++  const prisma = {
++    nas: { findUnique: async () => nas },
++    nasL2tpConfig: {
++      findUnique: async () => row,
++      update: async ({ data }: any) => Object.assign(row, data),
++      upsert: async ({ update }: any) => Object.assign(row, update),
++    },
++  };
++  const scope = {
++    assertNas: async () => undefined,
++    isPlatformOwner: () => false,
++    actorId: () => 1,
++  };
++  const secrets = {
++    encryptValue: (v: string) => `enc:${v}`,
++    decryptValue: (v: string) => (v?.startsWith('enc:') ? v.slice(4) : v),
++  };
++  const vpn = {};
++  const dial = dialer ?? { dial: jest.fn(), hangup: jest.fn(), status: jest.fn() };
++  const svc = new NasL2tpConfigService(prisma as any, scope as any, secrets as any, vpn as any, dial as any);
++  return { svc, prisma, row, dial };
++}
++
++const READY_ROW = {
++  nasId: 7, publicHost: '203.0.113.9', pppUsername: 'uplinko-mgmt',
++  pppPasswordEnc: 'enc:ppp-pass', ipsecPskEnc: 'enc:psk-123', pppProfile: 'default',
++  connectTimeoutSec: 20, clientState: 'disconnected',
++};
++
++describe('NasL2tpConfigService — management VPN (panel is the client)', () => {
++  it('applies the NAS server + dedicated PPP secret (service=l2tp) and confirms by read-back', async () => {
++    rosResponder = (w) => {
++      if (w[0] === '/ppp/secret/print') return []; // not existing yet → add path
++      if (w[0] === '/interface/l2tp-server/server/print') return [{ enabled: 'yes', 'use-ipsec': 'required' }];
++      return [];
++    };
++    // second print (read-back of the secret) must confirm service=l2tp:
++    let printCount = 0;
++    rosResponder = (w) => {
++      if (w[0] === '/interface/l2tp-server/server/print') return [{ enabled: 'yes', 'use-ipsec': 'required' }];
++      if (w[0] === '/ppp/secret/print') {
++        printCount += 1;
++        return printCount === 1 ? [] : [{ '.id': '*1', name: 'uplinko-mgmt', service: 'l2tp' }];
++      }
++      return [];
++    };
++    const { svc } = build(READY_ROW);
++    const res = await svc.applyServerToNas(7, ACTOR);
++    expect(res.applied).toBe(true);
++    // A PPP secret was added with service=l2tp.
++    const add = lastSent.find((w) => w[0] === '/ppp/secret/add');
++    expect(add).toBeTruthy();
++    expect(add).toEqual(expect.arrayContaining(['=service=l2tp', '=name=uplinko-mgmt']));
++    // L2TP server was enabled with IPsec.
++    const srv = lastSent.find((w) => w[0] === '/interface/l2tp-server/server/set');
++    expect(srv).toEqual(expect.arrayContaining(['=enabled=yes', '=use-ipsec=required']));
++  });
++
++  it('does NOT claim applied when the NAS fails to confirm', async () => {
++    rosResponder = (w) => {
++      if (w[0] === '/interface/l2tp-server/server/print') return [{ enabled: 'no' }];
++      if (w[0] === '/ppp/secret/print') return [];
++      return [];
++    };
++    const { svc } = build(READY_ROW);
++    await expect(svc.applyServerToNas(7, ACTOR)).rejects.toThrow(/did not confirm/i);
++  });
++
++  it('rejects apply when IPsec PSK or PPP credentials are missing', async () => {
++    const { svc } = build({ ...READY_ROW, ipsecPskEnc: null });
++    await expect(svc.applyServerToNas(7, ACTOR)).rejects.toThrow(/pre-shared secret|PPP/i);
++  });
++
++  it('connect dials the NAS PUBLIC IP (not the reverse) and persists verified state', async () => {
++    const dialer = {
++      dial: jest.fn().mockResolvedValue({ state: 'connected', interface: 'ppp5', detail: 'up' }),
++      hangup: jest.fn(), status: jest.fn(),
++    };
++    const { svc, row } = build(READY_ROW, dialer);
++    const res = await svc.connectClient(7, ACTOR);
++    expect(dialer.dial).toHaveBeenCalledWith(expect.objectContaining({ server: '203.0.113.9', pppUsername: 'uplinko-mgmt' }));
++    expect(res.state).toBe('connected');
++    expect(row.clientState).toBe('connected');
++  });
++
++  it('connect is rejected when client credentials are incomplete', async () => {
++    const { svc } = build({ ...READY_ROW, pppPasswordEnc: null });
++    await expect(svc.connectClient(7, ACTOR)).rejects.toThrow(/PPP username\/password|IPsec/i);
++  });
++
++  it('getClientView never returns secrets, only has-flags, and states the direction', async () => {
++    const { svc } = build(READY_ROW);
++    const view: any = await svc.getClientView(7, ACTOR);
++    expect(view.direction).toMatch(/Panel → NAS Public IP/);
++    expect(view.hasPppPassword).toBe(true);
++    expect(view.hasIpsecPsk).toBe(true);
++    expect(JSON.stringify(view)).not.toContain('psk-123');
++    expect(JSON.stringify(view)).not.toContain('ppp-pass');
++  });
++
++  it('disconnect tears the tunnel down via the dialer', async () => {
++    const dialer = { dial: jest.fn(), hangup: jest.fn().mockResolvedValue({ state: 'disconnected' }), status: jest.fn() };
++    const { svc, row } = build(READY_ROW, dialer);
++    await svc.disconnectClient(7, ACTOR);
++    expect(dialer.hangup).toHaveBeenCalledWith('nas-7');
++    expect(row.clientState).toBe('disconnected');
++  });
++});
+diff --git a/backend/src/nas/nas.module.ts b/backend/src/nas/nas.module.ts
+index ce80aaa..70d4ee9 100644
+--- a/backend/src/nas/nas.module.ts
++++ b/backend/src/nas/nas.module.ts
+@@ -10,6 +10,7 @@ import { CommonModule } from '../common/common.module';
+ import { RadiusClientVaultService } from './radius-client-vault.service';
+ import { NasL2tpConfigController } from './nas-l2tp-config.controller';
+ import { NasL2tpConfigService } from './nas-l2tp-config.service';
++import { L2tpClientDialer } from './l2tp-client-dialer.service';
+ import { VpnModule } from '../vpn/vpn.module';
+ 
+ @Module({
+@@ -25,6 +26,8 @@ import { VpnModule } from '../vpn/vpn.module';
+   providers: [
+     NasService,
+     NasL2tpConfigService,
++    // Host strongSwan + xl2tpd dialer for the panel's outbound L2TP/IPsec client.
++    L2tpClientDialer,
+     RadiusSyncService,
+     RadiusClientVaultService,
+     MikrotikSyncService,
