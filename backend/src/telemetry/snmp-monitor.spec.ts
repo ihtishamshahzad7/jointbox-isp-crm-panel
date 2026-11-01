@@ -137,6 +137,24 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
     expect(h.calls.length).toBe(0); // skipped while in flight
   });
 
+  it('skips polling and releases inFlight when reserving the poll slot fails', async () => {
+    const { prisma } = makePrisma();
+    const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
+    const svc: any = svcWith(prisma, h);
+    const warn = jest.spyOn(svc.log, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(prisma.nasSnmpState, 'upsert')
+      .mockRejectedValueOnce(new Error('database connection details'));
+
+    await expect(svc.pollNas(nas(1))).resolves.toBeUndefined();
+    expect(h.calls).toHaveLength(0);
+    expect(svc.inFlight.has(1)).toBe(false);
+    expect(warn).toHaveBeenCalledWith('SNMP polling slot reservation failed for NAS 1; poll skipped.');
+
+    await svc.pollNas(nas(1));
+    expect(h.calls).toHaveLength(1);
+    expect(svc.inFlight.has(1)).toBe(false);
+  });
+
   it('dispatch: one failing NAS does not block the others (bounded fan-out)', async () => {
     const prev = process.env.SNMP_MONITOR;
     process.env.SNMP_MONITOR = 'on';

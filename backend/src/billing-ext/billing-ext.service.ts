@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
@@ -280,14 +281,20 @@ export class BillingExtService {
   }) {
     // Preserve the existing 2-decimal rounding (D1 Decimal migration is separate).
     const amount = Math.round(entry.amount * 100) / 100;
+    const idempotencyKey = entry.idempotencyKey
+      ? createHash('sha256').update(JSON.stringify([subId, entry.type, entry.idempotencyKey])).digest('hex')
+      : null;
     return this.prisma.$transaction(async (db) => {
       // Idempotency fast-path: if this exact operation already landed, return the
       // current balance without re-applying (handles payment-callback retries).
-      if (entry.idempotencyKey) {
+      if (idempotencyKey) {
         const seen = await db.subscriberBalanceLedger.findUnique({
-          where: { idempotencyKey: entry.idempotencyKey },
+          where: { idempotencyKey },
         });
         if (seen) {
+          if (seen.subscriberId !== subId || seen.type !== entry.type) {
+            throw new ConflictException('This financial idempotency key is already associated with a different operation.');
+          }
           return (
             (await db.subscriberBalance.findUnique({ where: { subscriberId: subId } })) ??
             { subscriberId: subId, balance: 0, reservedBalance: 0, currency: 'PKR' }
@@ -315,7 +322,7 @@ export class BillingExtService {
             amount,
             balanceAfter: updated.balance,
             reference: entry.reference ?? null,
-            idempotencyKey: entry.idempotencyKey ?? null,
+            idempotencyKey,
             description: entry.description,
             actorType: entry.actorType,
             actorId: entry.actorId ?? null,

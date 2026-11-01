@@ -105,30 +105,37 @@ export class SnmpMonitorService {
   private async pollNas(nas: any): Promise<void> {
     if (this.inFlight.has(nas.id)) return;
     this.inFlight.add(nas.id);
-    const intervalSec = Math.max(10, Number(nas.snmpPollSec) || 30);
-    // Claim the next slot BEFORE polling so an overlapping tick won't re-pick it
-    // even if this poll runs long. Backoff may push it further out on failure.
-    await this.claimNextPoll(nas.id, intervalSec);
-
-    const prev = await this.prisma.nasSnmpState.findUnique({ where: { nasId: nas.id } }).catch(() => null);
-    const prevStatus: string = prev?.status ?? 'unknown';
-
-    let result: SnmpPollResult;
     try {
-      // Hard ceiling over the whole poll: covers the full interface walk, not
-      // just one request's timeout, so a half-answering device still releases
-      // the worker slot.
-      const budgetMs = ((nas.snmpTimeoutMs || 4000) * ((nas.snmpRetries ?? 1) + 1)) + 25_000;
-      result = await withTimeout(this.health.collectOne(nas), budgetMs, `snmp ${nas.nasname}`);
-    } catch (e: any) {
-      result = { ok: false, kind: 'timeout', message: 'SNMP poll exceeded its time budget.' };
+      const intervalSec = Math.max(10, Number(nas.snmpPollSec) || 30);
+      // Claim the next slot BEFORE polling so an overlapping tick won't re-pick it
+      // even if this poll runs long. Backoff may push it further out on failure.
+      try {
+        await this.claimNextPoll(nas.id, intervalSec);
+      } catch {
+        this.log.warn(`SNMP polling slot reservation failed for NAS ${nas.id}; poll skipped.`);
+        return;
+      }
+
+      const prev = await this.prisma.nasSnmpState.findUnique({ where: { nasId: nas.id } }).catch(() => null);
+      const prevStatus: string = prev?.status ?? 'unknown';
+
+      let result: SnmpPollResult;
+      try {
+        // Hard ceiling over the whole poll: covers the full interface walk, not
+        // just one request's timeout, so a half-answering device still releases
+        // the worker slot.
+        const budgetMs = ((nas.snmpTimeoutMs || 4000) * ((nas.snmpRetries ?? 1) + 1)) + 25_000;
+        result = await withTimeout(this.health.collectOne(nas), budgetMs, `snmp ${nas.nasname}`);
+      } catch (e: any) {
+        result = { ok: false, kind: 'timeout', message: 'SNMP poll exceeded its time budget.' };
+      }
+
+      const newStatus = result.ok ? 'ok' : result.kind;
+      await this.writeState(nas, result, newStatus, intervalSec);
+      await this.raiseEvents(nas, prevStatus, newStatus, result);
     } finally {
       this.inFlight.delete(nas.id);
     }
-
-    const newStatus = result.ok ? 'ok' : result.kind;
-    await this.writeState(nas, result, newStatus, intervalSec);
-    await this.raiseEvents(nas, prevStatus, newStatus, result);
   }
 
   /** Optimistically push nextPollAt out by one interval (single-flight claim). */
@@ -138,7 +145,7 @@ export class SnmpMonitorService {
       where: { nasId },
       create: { nasId, nextPollAt: next },
       update: { nextPollAt: next },
-    }).catch(() => undefined);
+    });
   }
 
   private async writeState(nas: any, r: SnmpPollResult, status: string, intervalSec: number): Promise<void> {

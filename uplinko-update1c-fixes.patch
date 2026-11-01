@@ -1,0 +1,1020 @@
+diff --git a/backend/.env.example b/backend/.env.example
+index 17223d2..052b2d9 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -70,6 +70,9 @@ NODE_ENV=development
+ # Stage 2 per-NAS SNMP monitoring. Leave disabled until a non-production pilot
+ # is explicitly approved. Each NAS is also opt-in (snmpEnabled defaults false).
+ SNMP_MONITOR=off
++# Required before any SNMP test or poll can send traffic. Use only CIDRs that
++# contain approved non-production NAS devices; unset means all SNMP targets are denied.
++# SNMP_ALLOWED_CIDRS=192.0.2.0/24,2001:db8::/32
+ # SNMP_MONITOR_CONCURRENCY=10
+ # SNMP_MONITOR_MAX_BACKOFF_SEC=900
+ # SNMP_CPU_HIGH_PCT=90
+diff --git a/backend/src/common/bootstrap-credentials.spec.ts b/backend/src/common/bootstrap-credentials.spec.ts
+index f832f70..f38771d 100644
+--- a/backend/src/common/bootstrap-credentials.spec.ts
++++ b/backend/src/common/bootstrap-credentials.spec.ts
+@@ -10,6 +10,7 @@
+ import * as fs from 'fs';
+ import * as os from 'os';
+ import * as path from 'path';
++import { execFileSync } from 'child_process';
+ import {
+   resolveBootstrapPassword,
+   clearBootstrapPassword,
+@@ -54,15 +55,31 @@ describe('bootstrap credentials (S3)', () => {
+     const first = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
+     expect(first.source).toBe('generated');
+     expect(first.persisted).toBe(true);
+-    // File is 0600.
+-    const mode = fs.statSync(bootstrapCredFile()).mode & 0o777;
+-    expect(mode).toBe(0o600);
++    if (process.platform === 'win32') {
++      const acl = execFileSync(
++        path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe'),
++        [bootstrapCredFile()],
++        { encoding: 'utf8', windowsHide: true },
++      );
++      expect(acl).toContain(process.env.USERNAME);
++      expect(acl).not.toMatch(/BUILTIN\\Users|Everyone/);
++    } else {
++      const mode = fs.statSync(bootstrapCredFile()).mode & 0o777;
++      expect(mode).toBe(0o600);
++    }
+     // A second resolve (next boot) REUSES the same value — no new secret, no reset.
+     const second = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
+     expect(second.source).toBe('file');
+     expect(second.password).toBe(first.password);
+   });
+ 
++  it('fails before account creation can proceed if the generated secret cannot be persisted', () => {
++    process.env.BOOTSTRAP_CRED_FILE = tmpDir;
++    expect(() => resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD'))
++      .toThrow(/Could not persist the generated platform bootstrap credential/);
++    expect(fs.readdirSync(tmpDir)).toEqual([]);
++  });
++
+   it('keeps separate secrets per scope', () => {
+     const p = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
+     const c = resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
+diff --git a/backend/src/common/bootstrap-credentials.ts b/backend/src/common/bootstrap-credentials.ts
+index 6fbf9b2..14b2281 100644
+--- a/backend/src/common/bootstrap-credentials.ts
++++ b/backend/src/common/bootstrap-credentials.ts
+@@ -23,6 +23,7 @@
+  * in logs, never in an API response.
+  */
+ import * as crypto from 'crypto';
++import { execFileSync } from 'child_process';
+ import * as fs from 'fs';
+ import * as path from 'path';
+ 
+@@ -51,15 +52,25 @@ function readStore(): Store {
+ /** Write the store with locked-down permissions. Returns false if it could not. */
+ function writeStore(store: Store): boolean {
+   const file = bootstrapCredFile();
++  const dir = path.dirname(file);
+   try {
+-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
++    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+     fs.writeFileSync(file, JSON.stringify(store, null, 2), { mode: 0o600 });
+     // Re-assert on overwrite — writeFileSync does not re-chmod an existing file.
+     fs.chmodSync(file, 0o600);
+-    try {
+-      fs.chmodSync(path.dirname(file), 0o700);
+-    } catch {
+-      /* dir may be shared (e.g. /var/lib/jointbox) — file perms are what matter */
++    if (process.platform === 'win32') {
++      const username = process.env.USERNAME;
++      if (!username) return false;
++      const principal = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${username}` : username;
++      const icacls = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe');
++      execFileSync(icacls, [dir, '/inheritance:r', '/grant:r', `${principal}:(OI)(CI)F`], { stdio: 'ignore', windowsHide: true });
++      execFileSync(icacls, [file, '/inheritance:r', '/grant:r', `${principal}:(F)`], { stdio: 'ignore', windowsHide: true });
++    } else {
++      try {
++        fs.chmodSync(dir, 0o700);
++      } catch {
++        /* file permissions still protect the bootstrap secret */
++      }
+     }
+     return true;
+   } catch {
+@@ -99,6 +110,11 @@ export function resolveBootstrapPassword(scope: string, envVar: string): Bootstr
+   const password = generatePassword();
+   store[scope] = password;
+   const persisted = writeStore(store);
++  if (!persisted) {
++    throw new Error(
++      `Could not persist the generated ${scope} bootstrap credential to ${bootstrapCredFile()}. Set ${envVar} or fix the state-directory permissions.`,
++    );
++  }
+   return { password, source: 'generated', persisted, file: bootstrapCredFile() };
+ }
+ 
+diff --git a/backend/src/common/db-push-safety.spec.ts b/backend/src/common/db-push-safety.spec.ts
+index f2074b7..f5086da 100644
+--- a/backend/src/common/db-push-safety.spec.ts
++++ b/backend/src/common/db-push-safety.spec.ts
+@@ -48,13 +48,14 @@ describe('db push safety ratchet', () => {
+ 
+   it('update-jointbox.sh never falls back to the Prisma push tool', () => {
+     const src = read(updateScript);
+-    expect(src).not.toMatch(/prisma db push|db:push/);
+-    expect(src).not.toMatch(/accept-data-loss/);
++    const executable = src.split(/\r?\n/).filter((line) => !/^\s*#/.test(line)).join('\n');
++    expect(executable).not.toMatch(/prisma db push|db:push|--accept-data-loss/);
++    expect(executable).toMatch(/npm run db:deploy/);
+   });
+ 
+   it('update-jointbox.sh still applies migrations via migrate deploy', () => {
+-    const src = read(updateScript);
+-    expect(src).toMatch(/prisma migrate deploy/);
++    expect(read(updateScript)).toMatch(/npm run db:deploy/);
++    expect(read(path.join(backend, 'scripts', 'db-deploy.sh'))).toMatch(/npx prisma migrate deploy/);
+   });
+ 
+   it('update-jointbox.sh stops the deployment when migrate deploy fails', () => {
+@@ -63,7 +64,7 @@ describe('db push safety ratchet', () => {
+     // swallows the failure — a plain command failing under `set -e` trips the
+     // ERR trap (fail()) and exits 1, stopping the update safely.
+     const window = src.slice(src.indexOf('Applying database migrations'), src.indexOf('Building backend'));
+-    expect(window).toMatch(/^\(cd backend && npx prisma migrate deploy\)$/m);
++    expect(window).toMatch(/^\(cd backend && npm run db:deploy\)$/m);
+     expect(window).not.toMatch(/^if !/m);
+   });
+ 
+diff --git a/backend/src/common/platform-account.spec.ts b/backend/src/common/platform-account.spec.ts
+index 3f1b5d0..6cf4bf8 100644
+--- a/backend/src/common/platform-account.spec.ts
++++ b/backend/src/common/platform-account.spec.ts
+@@ -57,9 +57,10 @@ const quiet = { warn: () => undefined };
+ 
+ describe('platform account at boot', () => {
+   it('a SUPER_ADMIN that runs a business becomes that company; a platform login appears above it', async () => {
++    const companyPasswordHash = await bcrypt.hash('company-owner-password', 4);
+     const p = db(
+       [
+-        { id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN' },
++        { id: 1, email: 'owner@isp.pk', role: 'SUPER_ADMIN', password: companyPasswordHash },
+         { id: 2, email: 'dealer@isp.pk', role: 'RESELLER', parentId: 1 },
+         { id: 3, email: 'other@co.pk', role: 'ADMIN', parentId: 1 },
+       ],
+@@ -74,8 +75,11 @@ describe('platform account at boot', () => {
+ 
+     const platform = p.user.rows.find((u: any) => u.email === 'superadmin@jointbox.com');
+     expect(platform).toMatchObject({ role: 'SUPER_ADMIN', mustChangePassword: true });
+-    // The installation default, never the company's own password.
+-    expect(await bcrypt.compare('admin123', platform.password)).toBe(true);
++    // The split reuses the known operator password hash; it never creates a
++    // platform login with a shared default credential.
++    expect(platform.password).toBe(companyPasswordHash);
++    expect(await bcrypt.compare('company-owner-password', platform.password)).toBe(true);
++    expect(await bcrypt.compare('admin123', platform.password)).toBe(false);
+     // Same login, same data — now the company's ADMIN, under the platform.
+     expect(p.user.rows.find((u: any) => u.id === 1)).toMatchObject({ role: 'ADMIN', parentId: platform.id });
+     // Its dealer stays inside the company; the OTHER company moves up.
+@@ -160,14 +164,16 @@ describe('platform account at boot', () => {
+ });
+ 
+ describe('platform login defaults', () => {
+-  it('a platform login still waiting for its first password change becomes superadmin@jointbox.com / admin123', async () => {
+-    const p = db([{ id: 9, email: 'superadmin@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: true, password: await bcrypt.hash('company-pass1', 4), tokenVersion: 0 }]);
++  it('moves a first-login platform account without resetting its password', async () => {
++    const passwordHash = await bcrypt.hash('company-pass1', 4);
++    const p = db([{ id: 9, email: 'superadmin@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: true, password: passwordHash, tokenVersion: 0 }]);
+     const r = await ensurePlatformLogin(p, quiet);
+     expect(r).toEqual({ email: 'superadmin@jointbox.com', changed: true });
+     const sa = p.user.rows[0];
+     expect(sa.email).toBe('superadmin@jointbox.com');
+-    expect(await bcrypt.compare('admin123', sa.password)).toBe(true);
+-    expect(sa.tokenVersion).toEqual({ increment: 1 });
++    expect(sa.password).toBe(passwordHash);
++    expect(await bcrypt.compare('company-pass1', sa.password)).toBe(true);
++    expect(sa.tokenVersion).toBe(0);
+   });
+ 
+   it('moves a chosen login to superadmin@jointbox.com but never touches its password', async () => {
+@@ -179,18 +185,21 @@ describe('platform login defaults', () => {
+     expect(await ensurePlatformLogin(p, quiet)).toEqual({ email: 'superadmin@jointbox.com', changed: false });
+   });
+ 
+-  it('keeps its address when superadmin@jointbox.com belongs to someone else, and still resets the password', async () => {
++  it('keeps its address when superadmin@jointbox.com belongs to someone else and preserves its password', async () => {
++    const passwordHash = await bcrypt.hash('existing-platform-password', 4);
+     const p = db([
+-      { id: 9, email: 'superadmin@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: true },
++      { id: 9, email: 'superadmin@isp.pk', role: 'SUPER_ADMIN', mustChangePassword: true, password: passwordHash },
+       { id: 10, email: 'superadmin@jointbox.com', role: 'ADMIN', parentId: 9 },
+     ]);
+     const r = await ensurePlatformLogin(p, quiet);
+     expect(r?.email).toBe('superadmin@isp.pk');
+-    expect(await bcrypt.compare('admin123', p.user.rows[0].password)).toBe(true);
++    expect(p.user.rows[0].password).toBe(passwordHash);
+   });
+ 
+   it('is a no-op once it is on the defaults', async () => {
+-    const p = db([{ id: 9, email: 'superadmin@jointbox.com', role: 'SUPER_ADMIN', mustChangePassword: true, password: await bcrypt.hash('admin123', 4) }]);
++    const passwordHash = await bcrypt.hash('chosen-platform-password', 4);
++    const p = db([{ id: 9, email: 'superadmin@jointbox.com', role: 'SUPER_ADMIN', mustChangePassword: true, password: passwordHash }]);
+     expect(await ensurePlatformLogin(p, quiet)).toEqual({ email: 'superadmin@jointbox.com', changed: false });
++    expect(p.user.rows[0].password).toBe(passwordHash);
+   });
+ });
+diff --git a/backend/src/logs/network-log-tenancy.spec.ts b/backend/src/logs/network-log-tenancy.spec.ts
+index e04ec04..190eb51 100644
+--- a/backend/src/logs/network-log-tenancy.spec.ts
++++ b/backend/src/logs/network-log-tenancy.spec.ts
+@@ -40,10 +40,10 @@ describe("network logs — another company's subscriber on our router", () => {
+     await svc.getNetworkLogs({ sub: 11, role: 'ADMIN' });
+     const where = whereOf(prisma.networkLog.findMany);
+     expect(where.nas).toEqual({ ownerId: { in: [10, 11] } });
+-    expect(where.OR).toEqual([
++    expect(where.AND).toContainEqual({ OR: [
+       { subscriberId: null },
+       { subscriber: { userId: { in: [10, 11] } } },
+-    ]);
++    ] });
+     expect(whereOf(prisma.networkLog.count)).toBe(where);
+   });
+ 
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index bf87874..0608e76 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -34,8 +34,8 @@ import { SecurityService } from './security/security.service';
+ /**
+  * Tell the operator HOW to retrieve the first-boot password, never WHAT it is.
+  * An operator-set password is not mentioned; a generated one is pointed to in
+- * the 0600 file and printed to the log only as a last resort if it could not be
+- * written there. Runs once, at account creation — never on later restarts.
++ * the 0600 file. If it cannot be persisted, account creation fails rather than
++ * printing the password. Runs once, at account creation.
+  */
+ function announceFirstBootPassword(label: string, email: string, boot: BootstrapResolution) {
+   if (boot.source === 'env') {
+@@ -46,9 +46,8 @@ function announceFirstBootPassword(label: string, email: string, boot: Bootstrap
+     console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email}. Generated password written to ${boot.file} — read it there, then change it at first login.`);
+     return;
+   }
+-  console.warn(
+-    `🔐 First-boot: ${label} ${email}: could not write ${boot.file}. One-time password: ${boot.password}\n` +
+-      `   Set PLATFORM_ADMIN_PASSWORD / ADMIN_PASSWORD or make the state dir writable so this is never printed again.`,
++  throw new Error(
++    `Could not persist the generated ${label.toLowerCase()} bootstrap credential to ${boot.file}. Set its environment password or fix the state-directory permissions.`,
+   );
+ }
+ 
+@@ -66,14 +65,18 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
+        *   superadmin@jointbox.com — the platform (companies, licence, server)
+        *   ADMIN_EMAIL (admin@jointbox.com) — the first ISP company, which runs
+        *     subscribers, routers, franchises, packages and accounting as before.
+-       * Both passwords are installer defaults, so both must be changed at the
+-       * first sign-in: every route except change-password answers 403 until
+-       * then. Neither password is printed — the operator set them in .env.
++       * Both passwords must be changed at the first sign-in: every route except
++       * change-password answers 403 until then. Generated credentials are
++       * persisted to the restricted bootstrap file, never printed.
+        */
+       // No hardcoded default: operator-set, or a generated one-time secret
+       // written to the 0600 bootstrap credentials file. Both accounts must
+       // change their password at the first sign-in (mustChangePassword).
++      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+       const platformBoot = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
++      const companyBoot = email !== PLATFORM_DEFAULT_EMAIL
++        ? resolveBootstrapPassword('company', 'ADMIN_PASSWORD')
++        : null;
+       const platform = await prisma.user.create({
+         data: {
+           name: 'Platform Owner',
+@@ -87,9 +90,7 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
+       });
+       announceFirstBootPassword('Super admin', PLATFORM_DEFAULT_EMAIL, platformBoot);
+ 
+-      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+-      if (email !== PLATFORM_DEFAULT_EMAIL) {
+-        const companyBoot = resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
++      if (companyBoot) {
+         await prisma.user.create({
+           data: {
+             name: 'My ISP',
+@@ -424,4 +425,3 @@ async function bootstrap() {
+   } catch { /* @bull-board not installed — dashboard disabled */ }
+ }
+ bootstrap();
+-
+diff --git a/backend/src/nas/nas-snmp-config.spec.ts b/backend/src/nas/nas-snmp-config.spec.ts
+index 6b69cc9..66c175b 100644
+--- a/backend/src/nas/nas-snmp-config.spec.ts
++++ b/backend/src/nas/nas-snmp-config.spec.ts
+@@ -2,7 +2,14 @@
+  * Stage 2 — SNMP config validation, normalisation, and secret redaction.
+  */
+ import { BadRequestException } from '@nestjs/common';
+-import { clampInt, normalizeMonitoredPorts, assertSnmpConfigValid, normalizeSnmpVersion } from './nas-snmp-config';
++import {
++  assertSnmpTargetAllowed,
++  assertValidSnmpPort,
++  clampInt,
++  normalizeMonitoredPorts,
++  assertSnmpConfigValid,
++  normalizeSnmpVersion,
++} from './nas-snmp-config';
+ import { sanitizeNas } from './nas-credentials';
+ 
+ describe('SNMP config helpers (Stage 2)', () => {
+@@ -81,6 +88,25 @@ describe('SNMP config helpers (Stage 2)', () => {
+     });
+   });
+ 
++  describe('SNMP target restrictions', () => {
++    it('requires an operator allowlist and rejects out-of-range destinations', () => {
++      expect(() => assertSnmpTargetAllowed('10.20.30.40', 161, '')).toThrow(/SNMP_ALLOWED_CIDRS/);
++      expect(() => assertSnmpTargetAllowed('10.20.30.40', 161, '10.20.0.0/16')).not.toThrow();
++      expect(() => assertSnmpTargetAllowed('10.20.30.40', 161, '10.21.0.0/16')).toThrow(/outside/);
++    });
++
++    it('validates target addresses, CIDR syntax, and SNMP ports', () => {
++      expect(() => assertSnmpTargetAllowed('router.example', 161, '10.0.0.0/8')).toThrow(/valid IP address/);
++      expect(() => assertSnmpTargetAllowed('10.1.2.3', 161, '10.0.0.0/99')).toThrow(/CIDR prefix/);
++      expect(() => assertSnmpTargetAllowed('10.1.2.3', 65536, '10.0.0.0/8')).toThrow(/SNMP port/);
++      expect(() => assertValidSnmpPort(0)).toThrow(/SNMP port/);
++    });
++
++    it('supports IPv6 allowlisted targets', () => {
++      expect(() => assertSnmpTargetAllowed('2001:db8::5', 161, '2001:db8::/32')).not.toThrow();
++    });
++  });
++
+   describe('secret redaction', () => {
+     it('masks SNMP community and v3 passphrases, exposes has-flags only', () => {
+       const out: any = sanitizeNas({
+diff --git a/backend/src/nas/nas-snmp-config.ts b/backend/src/nas/nas-snmp-config.ts
+index 11746e1..03bf3ae 100644
+--- a/backend/src/nas/nas-snmp-config.ts
++++ b/backend/src/nas/nas-snmp-config.ts
+@@ -1,4 +1,5 @@
+-import { BadRequestException } from '@nestjs/common';
++import { BadRequestException, ForbiddenException } from '@nestjs/common';
++import { BlockList, isIP } from 'node:net';
+ 
+ /**
+  * Per-NAS SNMP configuration helpers (Stage 2).
+@@ -21,6 +22,54 @@ export function normalizeSnmpVersion(v: any): 'V1' | 'V2C' | 'V3' {
+   throw new BadRequestException('Unsupported SNMP version.');
+ }
+ 
++export function assertValidSnmpPort(port: unknown): asserts port is number {
++  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
++    throw new BadRequestException('SNMP port must be an integer between 1 and 65535.');
++  }
++}
++
++/**
++ * SNMP is an outbound network capability. Permit requests only to literal NAS
++ * IPs explicitly covered by an operator-controlled CIDR allowlist.
++ */
++export function assertSnmpTargetAllowed(
++  host: string,
++  port: unknown,
++  allowedCidrs = process.env.SNMP_ALLOWED_CIDRS,
++): void {
++  assertValidSnmpPort(port);
++  const address = host.trim();
++  const family = isIP(address);
++  if (!family) throw new BadRequestException('SNMP target must be a valid IP address.');
++
++  const cidrs = (allowedCidrs ?? '').split(',').map((cidr) => cidr.trim()).filter(Boolean);
++  if (!cidrs.length) {
++    throw new ForbiddenException('SNMP polling requires an operator-configured SNMP_ALLOWED_CIDRS allowlist.');
++  }
++
++  const targets = new BlockList();
++  for (const cidr of cidrs) {
++    const [network, prefixText, ...extra] = cidr.split('/');
++    const networkFamily = isIP(network);
++    if (!networkFamily || extra.length || (prefixText !== undefined && !/^\d+$/.test(prefixText))) {
++      throw new BadRequestException('SNMP_ALLOWED_CIDRS contains an invalid CIDR entry.');
++    }
++
++    const prefix = prefixText === undefined ? (networkFamily === 4 ? 32 : 128) : Number(prefixText);
++    const maxPrefix = networkFamily === 4 ? 32 : 128;
++    if (!Number.isInteger(prefix) || prefix < 0 || prefix > maxPrefix) {
++      throw new BadRequestException('SNMP_ALLOWED_CIDRS contains an invalid CIDR prefix.');
++    }
++    if (networkFamily === family) {
++      targets.addSubnet(network, prefix, family === 4 ? 'ipv4' : 'ipv6');
++    }
++  }
++
++  if (!targets.check(address, family === 4 ? 'ipv4' : 'ipv6')) {
++    throw new ForbiddenException('SNMP target is outside the configured SNMP_ALLOWED_CIDRS ranges.');
++  }
++}
++
+ /** Clamp a numeric config value into a safe range, falling back to a default. */
+ export function clampInt(v: any, min: number, max: number, dflt: number): number {
+   const n = Math.round(Number(v));
+diff --git a/backend/src/nas/nas.service.ts b/backend/src/nas/nas.service.ts
+index 5093957..57187ef 100644
+--- a/backend/src/nas/nas.service.ts
++++ b/backend/src/nas/nas.service.ts
+@@ -11,7 +11,7 @@ import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credential
+ import { nasIpProblem, secretProblem } from './radius-clients-render';
+ import { RadiusClientVaultService } from './radius-client-vault.service';
+ import { assertCompanyCanAdd } from '../common/company-plan';
+-import { clampInt, normalizeMonitoredPorts, assertSnmpConfigValid, normalizeSnmpVersion } from './nas-snmp-config';
++import { assertValidSnmpPort, clampInt, normalizeMonitoredPorts, assertSnmpConfigValid, normalizeSnmpVersion } from './nas-snmp-config';
+ 
+ @Injectable()
+ export class NasService implements OnModuleInit {
+@@ -507,6 +507,7 @@ export class NasService implements OnModuleInit {
+ 
+     // Validate before writing: a bad IP here silently breaks RADIUS auth.
+     this.assertValidNasIp(data.nasIp);
++    if (data.snmpPort !== undefined) assertValidSnmpPort(data.snmpPort);
+     data.nasIp  = data.nasIp.trim();
+     // Trailing whitespace in a secret produces "invalid Message-Authenticator"
+     // and is almost impossible to spot in a GUI field.
+@@ -608,6 +609,7 @@ export class NasService implements OnModuleInit {
+     await this.assertNasOwner(id, actor);
+     const existingNas = await this.prisma.nas.findUnique({ where: { id } });
+     if (!existingNas) throw new NotFoundException(`NAS with ID ${id} not found`);
++    if (data.snmpPort !== undefined) assertValidSnmpPort(data.snmpPort);
+ 
+     const updateData: any = {};
+     // `nasname` is the FreeRADIUS client key and must always equal the IP.
+diff --git a/backend/src/nas/radius-tenancy-boundary.spec.ts b/backend/src/nas/radius-tenancy-boundary.spec.ts
+index 5c55847..103f9d3 100644
+--- a/backend/src/nas/radius-tenancy-boundary.spec.ts
++++ b/backend/src/nas/radius-tenancy-boundary.spec.ts
+@@ -87,6 +87,11 @@ describe('RADIUS tenancy ratchets', () => {
+       within: /\brouterPresence\(/,
+       why: 'platform-wide online set, used only for rows the caller can already see',
+     },
++    {
++      file: 'subscribers/subscribers.service.ts',
++      within: /\bcomputeRouterPresence\(/,
++      why: 'bounded platform-wide poll; only a username-presence set is joined to already-scoped subscriber rows',
++    },
+     {
+       file: 'logs/network-logs.service.ts',
+       within: /\breconcileOneRouter\(/,
+diff --git a/backend/src/network/network.service.spec.ts b/backend/src/network/network.service.spec.ts
+index 4c66643..d3a8427 100644
+--- a/backend/src/network/network.service.spec.ts
++++ b/backend/src/network/network.service.spec.ts
+@@ -268,9 +268,9 @@ describe('NetworkService.liveSessions', () => {
+     // The page request carries the search + sort + offset — the browser never
+     // receives more than one page's rows.
+     expect(radiusSync.getActiveSessions).toHaveBeenCalledWith('10.0.0.1', {
+-      limit: 50, offset: 50, q: 'alice', sortBy: 'downloadBytes', sortOrder: 'desc',
++      limit: 50, offset: 50, q: 'alice', sortBy: 'downloadBytes', sortOrder: 'desc', usernames: null,
+     });
+-    expect(radiusSync.countActiveSessions).toHaveBeenCalledWith('10.0.0.1', 'alice');
++    expect(radiusSync.countActiveSessions).toHaveBeenCalledWith('10.0.0.1', 'alice', null);
+   });
+ 
+   it('clamps limit to 1..200 and page to ≥ 1 (offset = (page-1)*take)', async () => {
+@@ -281,12 +281,12 @@ describe('NetworkService.liveSessions', () => {
+ 
+     await service.liveSessions(undefined, { role: 'admin' }, { page: 0, limit: 999 });
+     expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, {
+-      limit: 200, offset: 0, q: undefined, sortBy: undefined, sortOrder: undefined,
++      limit: 200, offset: 0, q: undefined, sortBy: undefined, sortOrder: undefined, usernames: null,
+     });
+ 
+     await service.liveSessions(undefined, { role: 'admin' }, { page: 3, limit: 25 });
+     expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, {
+-      limit: 25, offset: 50, q: undefined, sortBy: undefined, sortOrder: undefined,
++      limit: 25, offset: 50, q: undefined, sortBy: undefined, sortOrder: undefined, usernames: null,
+     });
+   });
+ 
+@@ -304,7 +304,7 @@ describe('NetworkService.liveSessions', () => {
+     expect(res[0]).toMatchObject({ username: 'a', fullName: 'Alice' });
+     // Legacy path never asks for a COUNT.
+     expect(radiusSync.countActiveSessions).not.toHaveBeenCalled();
+-    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined);
++    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, { usernames: null });
+   });
+ 
+   it('non-admin sees ONLY sessions in their own subtree (scope filter drops the rest)', async () => {
+diff --git a/backend/src/telemetry/device-health.service.ts b/backend/src/telemetry/device-health.service.ts
+index 44ebfce..208d8e5 100644
+--- a/backend/src/telemetry/device-health.service.ts
++++ b/backend/src/telemetry/device-health.service.ts
+@@ -1,4 +1,5 @@
+ import { Injectable, Logger } from '@nestjs/common';
++import { assertSnmpTargetAllowed, normalizeSnmpVersion } from '../nas/nas-snmp-config';
+ import { Cron } from '@nestjs/schedule';
+ import { PrismaService } from '../prisma/prisma.service';
+ import { isPrimaryInstance } from '../common/cluster-util';
+@@ -87,17 +88,21 @@ export class DeviceHealthService {
+   private host(nas: any) { return String(nas.nasIp || '').trim(); }
+ 
+   private session(nas: any) {
++    const host = this.host(nas);
++    const port = nas.snmpPort ?? 161;
++    assertSnmpTargetAllowed(host, port);
+     const opts = {
+-      port: nas.snmpPort || 161,
++      port,
+       timeout: nas.snmpTimeoutMs || 4000,
+       retries: nas.snmpRetries ?? 1,
+     };
++    const version = normalizeSnmpVersion(nas.snmpVersion);
+     // ── SNMPv3 (USM) ──────────────────────────────────────────────────────
+     // Preferred for real deployments: per-user auth + privacy, no shared
+     // community on the wire. We NEVER silently downgrade — the security level
+     // is exactly what the operator configured, and authPriv requires both
+     // passphrases to be present (validated at save time).
+-    if (nas.snmpVersion === 'V3') {
++    if (version === 'V3') {
+       const level = this.v3Level(nas.snmpV3SecLevel);
+       const user: any = { name: nas.snmpV3User || '', level };
+       if (level !== this.snmp.SecurityLevel.noAuthNoPriv) {
+@@ -115,9 +120,13 @@ export class DeviceHealthService {
+     // ── SNMPv1 / v2c ──────────────────────────────────────────────────────
+     // The community is encrypted at rest; decField() also passes legacy
+     // plaintext values through unchanged.
+-    const version = nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;
+-    const community = decField(this.secrets, nas.snmpCommunity) || 'public';
+-    return this.snmp.createSession(this.host(nas), community, { ...opts, version });
++    const community = decField(this.secrets, nas.snmpCommunity);
++    if (!community) throw new Error('SNMP community is not configured.');
++    return this.snmp.createSession(
++      host,
++      community,
++      { ...opts, version: version === 'V1' ? this.snmp.Version1 : this.snmp.Version2c },
++    );
+   }
+ 
+   /** Map our stored security-level string to net-snmp's enum. */
+@@ -461,9 +470,10 @@ export class DeviceHealthService {
+   async collectOne(nas: any): Promise<SnmpPollResult> {
+     if (!this.snmp) return { ok: false, kind: 'error', message: 'net-snmp is not installed on the server.' };
+     if (!this.host(nas)) return { ok: false, kind: 'config_error', message: 'This NAS has no IP address configured.' };
+-    const session = this.session(nas);
++    let session: any;
+     const startedAt = Date.now();
+     try {
++      session = this.session(nas);
+       // Reachability + auth probe FIRST. Classifies timeout vs auth vs config
+       // before we attempt the full walk, and confirms the device actually
+       // answered — so we never fabricate metrics for an unreachable NAS.
+@@ -583,7 +593,7 @@ export class DeviceHealthService {
+     } catch (e: any) {
+       return { ok: false, ...this.classifyError(e) };
+     } finally {
+-      try { session.close(); } catch { /* already closed */ }
++      try { session?.close(); } catch { /* already closed */ }
+     }
+   }
+ 
+@@ -621,6 +631,9 @@ export class DeviceHealthService {
+    */
+   private classifyError(err: any): { kind: SnmpErrorKind; message: string } {
+     const sig = `${err?.name || ''} ${String(err?.message || err || '')}`;
++    if (/SNMP_ALLOWED_CIDRS|SNMP target|SNMP port|Unsupported SNMP version|SNMP community is not configured/i.test(sig)) {
++      return { kind: 'config_error', message: 'SNMP target or configuration is not authorized or incomplete.' };
++    }
+     if (/TimedOut|timed out|timeout/i.test(sig)) {
+       return { kind: 'timeout', message: 'No SNMP reply (timeout). Check the device is reachable, SNMP is enabled, and UDP is open to this server.' };
+     }
+diff --git a/backend/src/telemetry/snmp-collector.spec.ts b/backend/src/telemetry/snmp-collector.spec.ts
+index ef4382f..a2edf35 100644
+--- a/backend/src/telemetry/snmp-collector.spec.ts
++++ b/backend/src/telemetry/snmp-collector.spec.ts
+@@ -11,6 +11,15 @@ jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
+ import { DeviceHealthService } from './device-health.service';
+ import { IF, IF_HC } from './oids';
+ 
++const originalSnmpAllowedCidrs = process.env.SNMP_ALLOWED_CIDRS;
++beforeAll(() => {
++  process.env.SNMP_ALLOWED_CIDRS = '10.0.0.0/8';
++});
++afterAll(() => {
++  if (originalSnmpAllowedCidrs === undefined) delete process.env.SNMP_ALLOWED_CIDRS;
++  else process.env.SNMP_ALLOWED_CIDRS = originalSnmpAllowedCidrs;
++});
++
+ function makePrisma() {
+   const writes = { device: 0, iface: 0, interfaces: [] as any[] };
+   const prisma: any = {
+@@ -80,6 +89,22 @@ describe('DeviceHealthService.collectOne (Stage 2 collector)', () => {
+     expect(snmp._created.v3.user).toMatchObject({ name: 'netops', level: 3, authProtocol: 'sha', privProtocol: 'aes' });
+   });
+ 
++  it('rejects unknown SNMP versions and missing v2c communities without a fallback session', async () => {
++    const { prisma } = makePrisma();
++    const snmp = fakeSnmp({});
++    const service = svc(prisma, snmp);
++    const unknownVersion = await service.collectOne({
++      id: 1, nasname: 'n1', nasIp: '10.0.0.1', snmpVersion: 'V9', snmpCommunity: 'secret',
++    });
++    const missingCommunity = await service.collectOne({
++      id: 2, nasname: 'n2', nasIp: '10.0.0.2', snmpVersion: 'V2C',
++    });
++    expect(unknownVersion).toMatchObject({ ok: false, kind: 'config_error' });
++    expect(missingCommunity).toMatchObject({ ok: false, kind: 'config_error' });
++    expect(snmp._created.v2).toBeNull();
++    expect(snmp._created.v3).toBeNull();
++  });
++
+   it('redacts SNMP session-construction errors from the test API', async () => {
+     const { prisma } = makePrisma();
+     prisma.nas = {
+diff --git a/backend/src/telemetry/snmp-monitor.service.ts b/backend/src/telemetry/snmp-monitor.service.ts
+index 004565b..d472c75 100644
+--- a/backend/src/telemetry/snmp-monitor.service.ts
++++ b/backend/src/telemetry/snmp-monitor.service.ts
+@@ -45,7 +45,7 @@ export class SnmpMonitorService {
+   ) {}
+ 
+   private enabled(): boolean {
+-    return process.env.SNMP_MONITOR !== 'off';
++    return String(process.env.SNMP_MONITOR ?? '').toLowerCase() === 'on';
+   }
+   private concurrency(): number {
+     return Math.max(1, Number(process.env.SNMP_MONITOR_CONCURRENCY) || 10);
+diff --git a/backend/src/telemetry/snmp-monitor.spec.ts b/backend/src/telemetry/snmp-monitor.spec.ts
+index 221f10f..197f082 100644
+--- a/backend/src/telemetry/snmp-monitor.spec.ts
++++ b/backend/src/telemetry/snmp-monitor.spec.ts
+@@ -70,6 +70,10 @@ function makeHealth(results: Record<number, any> | ((nas: any) => any)) {
+ const events = () => ({ broadcast: jest.fn() });
+ const svcWith = (prisma: any, health: any) => new SnmpMonitorService(prisma, health as any, events() as any);
+ const nas = (id: number, extra: any = {}) => ({ id, nasname: `nas${id}`, nasIp: `10.0.0.${id}`, snmpPollSec: 30, snmpTimeoutMs: 4000, snmpRetries: 1, ownerId: 1, ...extra });
++const restoreMonitorFlag = (value: string | undefined) => {
++  if (value === undefined) delete process.env.SNMP_MONITOR;
++  else process.env.SNMP_MONITOR = value;
++};
+ 
+ describe('SnmpMonitorService (Stage 2 worker)', () => {
+   it('first successful poll records ok state and stays quiet (no spurious event)', async () => {
+@@ -134,17 +138,23 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
+   });
+ 
+   it('dispatch: one failing NAS does not block the others (bounded fan-out)', async () => {
+-    const { prisma, states } = makePrisma({ nas: [nas(1), nas(2), nas(3)] });
+-    const h = makeHealth((n: any) => n.id === 2
+-      ? Promise.reject(new Error('boom')) // simulate collectOne throwing
+-      : { ok: true, kind: 'ok', downInterfaces: [] });
+-    // collectOne that throws for nas 2 — the monitor must still poll 1 and 3.
+-    const svc: any = svcWith(prisma, h);
+-    await svc.dispatch();
+-    expect(states.get(1)?.status).toBe('ok');
+-    expect(states.get(3)?.status).toBe('ok');
+-    // nas 2 got a state too (timeout from the thrown error budget path)
+-    expect(states.get(2)).toBeTruthy();
++    const prev = process.env.SNMP_MONITOR;
++    process.env.SNMP_MONITOR = 'on';
++    try {
++      const { prisma, states } = makePrisma({ nas: [nas(1), nas(2), nas(3)] });
++      const h = makeHealth((n: any) => n.id === 2
++        ? Promise.reject(new Error('boom')) // simulate collectOne throwing
++        : { ok: true, kind: 'ok', downInterfaces: [] });
++      // collectOne that throws for nas 2 — the monitor must still poll 1 and 3.
++      const svc: any = svcWith(prisma, h);
++      await svc.dispatch();
++      expect(states.get(1)?.status).toBe('ok');
++      expect(states.get(3)?.status).toBe('ok');
++      // nas 2 got a state too (timeout from the thrown error budget path)
++      expect(states.get(2)).toBeTruthy();
++    } finally {
++      restoreMonitorFlag(prev);
++    }
+   });
+ 
+   it('cpu_high alert fires once then is suppressed within the cooldown', async () => {
+@@ -171,12 +181,43 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
+   it('disabled: dispatch does nothing when SNMP_MONITOR=off', async () => {
+     const prev = process.env.SNMP_MONITOR;
+     process.env.SNMP_MONITOR = 'off';
+-    const { prisma, states } = makePrisma({ nas: [nas(1)] });
+-    const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
+-    await (svcWith(prisma, h) as any).dispatch();
+-    expect(states.size).toBe(0);
+-    expect(h.calls.length).toBe(0);
+-    process.env.SNMP_MONITOR = prev;
++    try {
++      const { prisma, states } = makePrisma({ nas: [nas(1)] });
++      const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
++      await (svcWith(prisma, h) as any).dispatch();
++      expect(states.size).toBe(0);
++      expect(h.calls.length).toBe(0);
++    } finally {
++      restoreMonitorFlag(prev);
++    }
++  });
++
++  it('disabled by default when SNMP_MONITOR is unset', async () => {
++    const prev = process.env.SNMP_MONITOR;
++    delete process.env.SNMP_MONITOR;
++    try {
++      const { prisma, states } = makePrisma({ nas: [nas(1)] });
++      const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
++      await (svcWith(prisma, h) as any).dispatch();
++      expect(states.size).toBe(0);
++      expect(h.calls.length).toBe(0);
++    } finally {
++      restoreMonitorFlag(prev);
++    }
++  });
++
++  it('enabled only by explicit SNMP_MONITOR=on', async () => {
++    const prev = process.env.SNMP_MONITOR;
++    process.env.SNMP_MONITOR = 'on';
++    try {
++      const { prisma, states } = makePrisma({ nas: [nas(1)] });
++      const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
++      await (svcWith(prisma, h) as any).dispatch();
++      expect(states.get(1)?.status).toBe('ok');
++      expect(h.calls).toHaveLength(1);
++    } finally {
++      restoreMonitorFlag(prev);
++    }
+   });
+ 
+   describe('read API', () => {
+diff --git a/frontend/app/nas/[id]/monitoring-status.tsx b/frontend/app/nas/[id]/monitoring-status.tsx
+index a96b512..95a0d3b 100644
+--- a/frontend/app/nas/[id]/monitoring-status.tsx
++++ b/frontend/app/nas/[id]/monitoring-status.tsx
+@@ -60,6 +60,7 @@ export function MonitoringStatus({ nasId, snmpEnabled, snmpVersion }: { nasId: n
+   const [events, setEvents] = React.useState<NasEvent[] | null>(null);
+   const [loading, setLoading] = React.useState(true);
+   const [error, setError] = React.useState<string | null>(null);
++  const [acknowledging, setAcknowledging] = React.useState<number | null>(null);
+ 
+   const load = React.useCallback(async () => {
+     try {
+@@ -80,14 +81,33 @@ export function MonitoringStatus({ nasId, snmpEnabled, snmpVersion }: { nasId: n
+   }, [nasId]);
+ 
+   React.useEffect(() => {
+-    load();
++    const initial = window.setTimeout(() => { void load(); }, 0);
+     const t = setInterval(load, 15000);
+-    return () => clearInterval(t);
++    return () => {
++      window.clearTimeout(initial);
++      clearInterval(t);
++    };
+   }, [load]);
+ 
+   const ack = async (eventId: number) => {
+-    await fetch(`${API}/telemetry/nas/${nasId}/snmp-events/${eventId}/ack`, { method: "POST", headers: H() }).catch(() => {});
+-    load();
++    setError(null);
++    setAcknowledging(eventId);
++    try {
++      const response = await fetch(`${API}/telemetry/nas/${nasId}/snmp-events/${eventId}/ack`, { method: "POST", headers: H() });
++      if (response.status === 403) {
++        setError("You don't have permission to acknowledge events for this device.");
++        return;
++      }
++      if (!response.ok) {
++        setError("Could not acknowledge this monitoring event.");
++        return;
++      }
++      await load();
++    } catch {
++      setError("Could not reach the server to acknowledge this event.");
++    } finally {
++      setAcknowledging(null);
++    }
+   };
+ 
+   if (snmpEnabled === false) {
+@@ -146,7 +166,7 @@ export function MonitoringStatus({ nasId, snmpEnabled, snmpVersion }: { nasId: n
+                   <span style={{ flex: "0 0 auto", color: sev.color, background: sev.bg, borderRadius: 6, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>{sev.label}</span>
+                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ev.message}>{ev.message}</span>
+                   <span style={{ flex: "0 0 auto", color: "var(--muted, #94A3B8)" }}>{ago(ev.ts)}</span>
+-                  {!ev.acknowledged && <Btn size="sm" variant="default" onClick={() => ack(ev.id)}>Ack</Btn>}
++                  {!ev.acknowledged && <Btn size="sm" variant="default" disabled={acknowledging === ev.id} onClick={() => ack(ev.id)}>{acknowledging === ev.id ? "…" : "Ack"}</Btn>}
+                 </div>
+               );
+             })}
+diff --git a/frontend/app/nas/[id]/snmp-version.ts b/frontend/app/nas/[id]/snmp-version.ts
+new file mode 100644
+index 0000000..99cac62
+--- /dev/null
++++ b/frontend/app/nas/[id]/snmp-version.ts
+@@ -0,0 +1,22 @@
++export type SnmpVersionFormValue = "1" | "2c" | "3";
++
++export function isSnmpVersionFormValue(value: string): value is SnmpVersionFormValue {
++  return value === "1" || value === "2c" || value === "3";
++}
++
++export function snmpVersionFormValue(version?: string | null): SnmpVersionFormValue {
++  switch (String(version ?? "V2C").trim().toUpperCase()) {
++    case "1":
++    case "V1":
++      return "1";
++    case "2":
++    case "2C":
++    case "V2C":
++      return "2c";
++    case "3":
++    case "V3":
++      return "3";
++    default:
++      throw new Error("Unsupported SNMP version returned by the server.");
++  }
++}
+diff --git a/frontend/app/nas/[id]/tabs-config.tsx b/frontend/app/nas/[id]/tabs-config.tsx
+index 81ed656..ee34b52 100644
+--- a/frontend/app/nas/[id]/tabs-config.tsx
++++ b/frontend/app/nas/[id]/tabs-config.tsx
+@@ -11,11 +11,40 @@
+  */
+ import React, { useState } from "react";
+ import { useNasDetail } from "./context";
+-import { apiSend } from "./lib";
++import { apiSend, type NasRecord } from "./lib";
++import { isSnmpVersionFormValue, snmpVersionFormValue, type SnmpVersionFormValue } from "./snmp-version";
+ import { Btn, DefList, Field, Modal, Panel, StatusChip } from "./ui";
+ 
+ const MASK = "••••••••";
+ 
++type ConfigForm = {
++  shortname: string;
++  nasIp: string;
++  description: string;
++  isActive: boolean;
++  apiEnabled: boolean;
++  apiPort: number | string;
++  apiUsername: string;
++  apiPassword: string;
++  apiPollSec: number | string;
++  incomingPort: number | string;
++  secret: string;
++  snmpEnabled: boolean;
++  snmpPort: number | string;
++  snmpCommunity: string;
++  snmpVersion: SnmpVersionFormValue;
++  snmpPollSec: number | string;
++  snmpTimeoutMs: number | string;
++  snmpRetries: number | string;
++  monitoredPorts: string;
++  snmpV3User: string;
++  snmpV3SecLevel: string;
++  snmpV3AuthProto: string;
++  snmpV3AuthPass: string;
++  snmpV3PrivProto: string;
++  snmpV3PrivPass: string;
++};
++
+ export function ConfigTab() {
+   const { nas, loadNas, refreshReach } = useNasDetail();
+   const [editing, setEditing] = useState(false);
+@@ -24,14 +53,14 @@ export function ConfigTab() {
+   const [saved, setSaved] = useState(false);
+ 
+   // Form initialized per record; password/secret fields masked when set.
+-  const [form, setForm] = useState<any>(null);
++  const [form, setForm] = useState<ConfigForm | null>(null);
+   const openEdit = () => {
+     setSaveErr(null); setSaved(false);
+     setForm({
+       shortname: nas?.shortname ?? "",
+       nasIp: nas?.nasIp ?? "",
+       description: nas?.description ?? "",
+-      isActive: nas?.isActive,
++      isActive: nas?.isActive ?? false,
+       apiEnabled: nas?.apiEnabled ?? true,
+       apiPort: nas?.apiPort ?? 8728,
+       apiUsername: nas?.apiUsername ?? "",
+@@ -42,7 +71,7 @@ export function ConfigTab() {
+       snmpEnabled: nas?.snmpEnabled ?? false,
+       snmpPort: nas?.snmpPort ?? 161,
+       snmpCommunity: nas?.snmpCommunity ? MASK : "",
+-      snmpVersion: nas?.snmpVersion ?? "2c",
++      snmpVersion: snmpVersionFormValue(nas?.snmpVersion),
+       snmpPollSec: nas?.snmpPollSec ?? 30,
+       snmpTimeoutMs: nas?.snmpTimeoutMs ?? 1000,
+       snmpRetries: nas?.snmpRetries ?? 3,
+@@ -59,52 +88,56 @@ export function ConfigTab() {
+   };
+ 
+   const save = async () => {
++    const formData = form;
++    if (!formData) return;
+     setSaving(true); setSaveErr(null);
+     try {
+-      const body: any = {
+-        shortname: form.shortname,
+-        nasIp: form.nasIp,
+-        description: form.description,
+-        isActive: form.isActive,
+-        apiEnabled: form.apiEnabled,
+-        apiPort: Number(form.apiPort) || 8728,
+-        apiUsername: form.apiUsername,
+-        apiPollSec: Number(form.apiPollSec) || 60,
+-        incomingPort: Number(form.incomingPort) || 3799,
+-        snmpEnabled: form.snmpEnabled,
+-        snmpPort: Number(form.snmpPort) || 161,
+-        snmpVersion: form.snmpVersion,
+-        snmpPollSec: Number(form.snmpPollSec) || 30,
+-        snmpTimeoutMs: Number(form.snmpTimeoutMs) || 1000,
+-        snmpRetries: Number(form.snmpRetries) || 3,
+-        monitoredPorts: form.monitoredPorts ?? "",
++      const body: Record<string, string | number | boolean> = {
++        shortname: formData.shortname,
++        nasIp: formData.nasIp,
++        description: formData.description,
++        isActive: formData.isActive,
++        apiEnabled: formData.apiEnabled,
++        apiPort: Number(formData.apiPort) || 8728,
++        apiUsername: formData.apiUsername,
++        apiPollSec: Number(formData.apiPollSec) || 60,
++        incomingPort: Number(formData.incomingPort) || 3799,
++        snmpEnabled: formData.snmpEnabled,
++        snmpPort: Number(formData.snmpPort) || 161,
++        snmpVersion: formData.snmpVersion,
++        snmpPollSec: Number(formData.snmpPollSec) || 30,
++        snmpTimeoutMs: Number(formData.snmpTimeoutMs) || 1000,
++        snmpRetries: Number(formData.snmpRetries) || 3,
++        monitoredPorts: formData.monitoredPorts ?? "",
+       };
+       // SNMPv3 identity + protocols are only meaningful on v3.
+-      if (form.snmpVersion === "3") {
+-        body.snmpV3User = form.snmpV3User;
+-        body.snmpV3SecLevel = form.snmpV3SecLevel;
+-        body.snmpV3AuthProto = form.snmpV3AuthProto;
+-        body.snmpV3PrivProto = form.snmpV3PrivProto;
++      if (formData.snmpVersion === "3") {
++        body.snmpV3User = formData.snmpV3User;
++        body.snmpV3SecLevel = formData.snmpV3SecLevel;
++        body.snmpV3AuthProto = formData.snmpV3AuthProto;
++        body.snmpV3PrivProto = formData.snmpV3PrivProto;
+       }
+       // Masked values are sent but the backend treats them as "unchanged".
+-      if (form.apiPassword) body.apiPassword = form.apiPassword;
+-      if (form.secret) body.secret = form.secret;
+-      if (form.snmpCommunity) body.snmpCommunity = form.snmpCommunity;
+-      if (form.snmpV3AuthPass) body.snmpV3AuthPass = form.snmpV3AuthPass;
+-      if (form.snmpV3PrivPass) body.snmpV3PrivPass = form.snmpV3PrivPass;
++      if (formData.apiPassword) body.apiPassword = formData.apiPassword;
++      if (formData.secret) body.secret = formData.secret;
++      if (formData.snmpCommunity) body.snmpCommunity = formData.snmpCommunity;
++      if (formData.snmpV3AuthPass) body.snmpV3AuthPass = formData.snmpV3AuthPass;
++      if (formData.snmpV3PrivPass) body.snmpV3PrivPass = formData.snmpV3PrivPass;
+ 
+-      const r = await apiSend<any>(`/nas/${nas?.id}`, "PUT", body);
++      const r = await apiSend<NasRecord>(`/nas/${nas?.id}`, "PUT", body);
+       if (!r) throw new Error("Save failed — no response from server");
+       setSaved(true);
+       await Promise.allSettled([loadNas(), refreshReach({ silent: true })]);
+-    } catch (e: any) {
+-      setSaveErr(e?.message ?? "Save failed");
++    } catch (e: unknown) {
++      setSaveErr(e instanceof Error ? e.message : "Save failed");
+     } finally {
+       setSaving(false);
+     }
+   };
+ 
+-  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
++  const set = <K extends keyof ConfigForm,>(key: K, value: ConfigForm[K]) => {
++    setForm((current) => current ? { ...current, [key]: value } : current);
++  };
+ 
+   return (
+     <div className="nd-root">
+@@ -176,7 +209,7 @@ export function ConfigTab() {
+             <Field label="CoA / incoming port"><input type="number" className="nd-mono" value={form.incomingPort} onChange={(e) => set("incomingPort", e.target.value)} /></Field>
+ 
+             <Field label="SNMP enabled"><select value={form.snmpEnabled ? "1" : "0"} onChange={(e) => set("snmpEnabled", e.target.value === "1")}><option value="1">Yes</option><option value="0">No</option></select></Field>
+-            <Field label="SNMP version"><select value={form.snmpVersion} onChange={(e) => set("snmpVersion", e.target.value)}><option>1</option><option>2c</option><option>3</option></select></Field>
++            <Field label="SNMP version"><select value={form.snmpVersion} onChange={(e) => { if (isSnmpVersionFormValue(e.target.value)) set("snmpVersion", e.target.value); }}><option>1</option><option>2c</option><option>3</option></select></Field>
+             <Field label="SNMP port"><input type="number" className="nd-mono" value={form.snmpPort} onChange={(e) => set("snmpPort", e.target.value)} /></Field>
+             <Field label="SNMP community"><input type="password" className="nd-mono" value={form.snmpCommunity} onChange={(e) => set("snmpCommunity", e.target.value)} placeholder={MASK} /></Field>
+             <Field label="Poll interval (s)"><input type="number" value={form.snmpPollSec} onChange={(e) => set("snmpPollSec", e.target.value)} /></Field>
+diff --git a/frontend/tests/snmp-version.test.ts b/frontend/tests/snmp-version.test.ts
+new file mode 100644
+index 0000000..6f7f431
+--- /dev/null
++++ b/frontend/tests/snmp-version.test.ts
+@@ -0,0 +1,16 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { isSnmpVersionFormValue, snmpVersionFormValue } from "../app/nas/[id]/snmp-version.ts";
++
++test("SNMP enum values select the matching configuration form version", () => {
++  assert.equal(snmpVersionFormValue("V1"), "1");
++  assert.equal(snmpVersionFormValue("V2C"), "2c");
++  assert.equal(snmpVersionFormValue("V3"), "3");
++  assert.equal(snmpVersionFormValue("3"), "3");
++  assert.equal(snmpVersionFormValue(null), "2c");
++});
++
++test("unknown SNMP versions are not silently mapped to a weaker protocol", () => {
++  assert.throws(() => snmpVersionFormValue("unknown"), /Unsupported SNMP version/);
++  assert.equal(isSnmpVersionFormValue("unknown"), false);
++});

@@ -12,18 +12,29 @@ jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
 import { BillingExtService } from './billing-ext.service';
 
 function makePrisma() {
-  const state = { balance: null as null | number, ledger: [] as any[] };
+  const state = { balance: null as null | number, balances: new Map<number, number>(), ledger: [] as any[] };
   const db = {
     subscriberBalance: {
-      findUnique: async () => (state.balance == null ? null : { subscriberId: 1, balance: state.balance, reservedBalance: 0, currency: 'PKR' }),
-      upsert: async ({ create, update }: any) => {
-        if (state.balance == null) state.balance = create.balance;
-        else state.balance = Math.round((state.balance + update.balance.increment) * 100) / 100;
-        return { subscriberId: 1, balance: state.balance, reservedBalance: 0, currency: 'PKR' };
+      findUnique: async ({ where }: any) => {
+        const balance = state.balances.get(where.subscriberId);
+        return balance == null ? null : { subscriberId: where.subscriberId, balance, reservedBalance: 0, currency: 'PKR' };
       },
-      update: async ({ data }: any) => {
-        state.balance = Math.round(((state.balance ?? 0) + data.balance.increment) * 100) / 100;
-        return { subscriberId: 1, balance: state.balance, reservedBalance: 0, currency: 'PKR' };
+      upsert: async ({ where, create, update }: any) => {
+        const subscriberId = where.subscriberId;
+        const current = state.balances.get(subscriberId);
+        const balance = current == null
+          ? create.balance
+          : Math.round((current + update.balance.increment) * 100) / 100;
+        state.balances.set(subscriberId, balance);
+        if (subscriberId === 1) state.balance = balance;
+        return { subscriberId, balance, reservedBalance: 0, currency: 'PKR' };
+      },
+      update: async ({ where, data }: any) => {
+        const subscriberId = where.subscriberId;
+        const balance = Math.round(((state.balances.get(subscriberId) ?? 0) + data.balance.increment) * 100) / 100;
+        state.balances.set(subscriberId, balance);
+        if (subscriberId === 1) state.balance = balance;
+        return { subscriberId, balance, reservedBalance: 0, currency: 'PKR' };
       },
     },
     subscriberBalanceLedger: {
@@ -41,9 +52,14 @@ function makePrisma() {
     subscriberBalanceLedger: db.subscriberBalanceLedger,
     // snapshot/restore models a real transaction's atomic rollback.
     $transaction: async (fn: any) => {
-      const snap = { balance: state.balance, ledger: [...state.ledger] };
+      const snap = { balance: state.balance, balances: new Map(state.balances), ledger: [...state.ledger] };
       try { return await fn(db); }
-      catch (e) { state.balance = snap.balance; state.ledger = snap.ledger; throw e; }
+      catch (e) {
+        state.balance = snap.balance;
+        state.balances = snap.balances;
+        state.ledger = snap.ledger;
+        throw e;
+      }
     },
   };
   return { prisma, state };
@@ -82,6 +98,27 @@ describe('BillingExtService wallet (D2)', () => {
     await svc.topUp(1, { amount: 200, reference: 'PAY-9' }, ACTOR); // retry/callback dup
     expect(state.balance).toBe(200);
     expect(state.ledger).toHaveLength(1);
+  });
+
+  it('allows the same payment reference for different subscribers', async () => {
+    const { prisma, state } = makePrisma();
+    const svc = svcWith(prisma);
+    await svc.topUp(1, { amount: 200, reference: 'PAY-SHARED' }, ACTOR);
+    await svc.topUp(2, { amount: 200, reference: 'PAY-SHARED' }, ACTOR);
+    expect(state.balances.get(1)).toBe(200);
+    expect(state.balances.get(2)).toBe(200);
+    expect(state.ledger).toHaveLength(2);
+  });
+
+  it('does not treat a key from another subscriber or operation as a duplicate', async () => {
+    const { prisma, state } = makePrisma();
+    const svc = svcWith(prisma);
+    await svc.topUp(1, { amount: 100, idempotencyKey: 'SHARED-KEY' }, ACTOR);
+    await svc.topUp(2, { amount: 100, idempotencyKey: 'SHARED-KEY' }, ACTOR);
+    await svc.adjust(1, { amount: 50, idempotencyKey: 'SHARED-KEY' }, ACTOR);
+    expect(state.balances.get(1)).toBe(150);
+    expect(state.balances.get(2)).toBe(100);
+    expect(state.ledger.map((entry) => entry.type)).toEqual(['TOPUP', 'TOPUP', 'ADJUSTMENT']);
   });
 
   it('rolls back the balance when the ledger write fails (same transaction)', async () => {
