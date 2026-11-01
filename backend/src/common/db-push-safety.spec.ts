@@ -48,13 +48,14 @@ describe('db push safety ratchet', () => {
 
   it('update-jointbox.sh never falls back to the Prisma push tool', () => {
     const src = read(updateScript);
-    expect(src).not.toMatch(/prisma db push|db:push/);
-    expect(src).not.toMatch(/accept-data-loss/);
+    const executable = src.split(/\r?\n/).filter((line) => !/^\s*#/.test(line)).join('\n');
+    expect(executable).not.toMatch(/prisma db push|db:push|--accept-data-loss/);
+    expect(executable).toMatch(/npm run db:deploy/);
   });
 
   it('update-jointbox.sh still applies migrations via migrate deploy', () => {
-    const src = read(updateScript);
-    expect(src).toMatch(/prisma migrate deploy/);
+    expect(read(updateScript)).toMatch(/npm run db:deploy/);
+    expect(read(path.join(backend, 'scripts', 'db-deploy.sh'))).toMatch(/npx prisma migrate deploy/);
   });
 
   it('update-jointbox.sh stops the deployment when migrate deploy fails', () => {
@@ -63,7 +64,7 @@ describe('db push safety ratchet', () => {
     // swallows the failure — a plain command failing under `set -e` trips the
     // ERR trap (fail()) and exits 1, stopping the update safely.
     const window = src.slice(src.indexOf('Applying database migrations'), src.indexOf('Building backend'));
-    expect(window).toMatch(/^\(cd backend && npx prisma migrate deploy\)$/m);
+    expect(window).toMatch(/^\(cd backend && npm run db:deploy\)$/m);
     expect(window).not.toMatch(/^if !/m);
   });
 

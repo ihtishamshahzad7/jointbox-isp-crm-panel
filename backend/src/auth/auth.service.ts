@@ -21,6 +21,9 @@ import { randomUUID } from 'crypto';
 import { LogsService } from '../logs/logs.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { EventsService } from '../common/events.service';
+import { CacheService, redisIsRequired } from '../common/cache.service';
+import { ServiceUnavailableException } from '@nestjs/common';
+import { clearBootstrapPassword } from '../common/bootstrap-credentials';
 import * as bcrypt from 'bcrypt';
 import { verifyTotp } from '../security/totp';
 
@@ -43,44 +46,143 @@ export class AuthService {
     private logsService: LogsService,
     private scope: ScopeService,
     private events: EventsService,
+    private cache: CacheService,
   ) {}
 
-  // Brute-force protection: per email+IP failed-attempt counter. After 8 fails
-  // within the window the account/IP pair is locked out for 15 minutes. In
-  // memory (per process) — good enough to defeat online guessing; pair with
-  // fail2ban / a WAF for network-level protection.
+  // ─────────────────────────────────────────────────────────────
+  // Brute-force protection — SHARED across instances (S1).
+  //
+  // The source of truth is a set of Redis atomic counters, so every app
+  // instance sees the same tally. An attacker can no longer get a fresh
+  // allowance by hitting a different worker, rotating the source IP, or
+  // spraying one IP across many invented emails:
+  //   • email+IP  — the common case, 8 tries / 15 min
+  //   • email+*   — the SAME account from ANY address, 25 tries / 15 min
+  //   • ip+*      — ANY email from ONE address (spraying), 50 tries / 15 min
+  // Counters are fixed-window: TTL is set on the first failure and the whole
+  // window expires on its own (bounded), so a lock always lifts by itself.
+  //
+  // When Redis is the configured source of truth (`redisIsRequired()`) but is
+  // unreachable, login FAILS CLOSED — we never silently fall back to a
+  // per-process map that each worker could be bypassed on. On a single-instance
+  // install that has not opted into Redis, the in-memory map below is the
+  // intended, correct backend.
+  // ─────────────────────────────────────────────────────────────
   private loginAttempts = new Map<string, { count: number; until: number }>();
   private static readonly MAX_FAILS = 8;
-  private static readonly LOCK_MS = 15 * 60_000;
-
-  private failKey(email: string, ip?: string) {
-    return `${(email || '').toLowerCase()}|${ip || ''}`;
-  }
-  /**
-   * Per email+IP, and per email from ANY address: rotating the source address
-   * (or a forged X-Forwarded-For) used to give unlimited guesses at one
-   * account. The per-account ceiling is higher so one noisy office does not
-   * lock a colleague out.
-   */
   private static readonly MAX_FAILS_ACCOUNT = 25;
-  private assertNotLocked(email: string, ip?: string) {
+  private static readonly MAX_FAILS_IP = 50;
+  private static readonly LOCK_MS = 15 * 60_000;
+  private static readonly LOCK_SECONDS = 15 * 60;
+  /** Hard cap on the in-memory map so the fallback path cannot grow unbounded. */
+  private static readonly MEM_MAX_ENTRIES = 50_000;
+
+  private normEmail(email: string) {
+    return (email || '').toLowerCase();
+  }
+  private counterKeys(email: string, ip?: string): Array<{ key: string; max: number }> {
+    const e = this.normEmail(email);
+    const addr = ip && ip !== 'Unknown' ? ip : '';
+    return [
+      { key: `authfail:eip:${e}|${addr}`, max: AuthService.MAX_FAILS },
+      { key: `authfail:email:${e}`, max: AuthService.MAX_FAILS_ACCOUNT },
+      // Only meaningful when we actually have a source address.
+      ...(addr ? [{ key: `authfail:ip:${addr}`, max: AuthService.MAX_FAILS_IP }] : []),
+    ];
+  }
+
+  /** True while Redis is the authority for lockout counters. */
+  private lockoutUsesRedis(): boolean {
+    return this.cache.isRedisReady();
+  }
+
+  /**
+   * Throw if this email/IP is currently locked out. Reads the shared counters
+   * without mutating them. Fails closed when Redis is required but down.
+   */
+  private async assertNotLocked(email: string, ip?: string): Promise<void> {
+    if (this.lockoutUsesRedis()) {
+      for (const { key, max } of this.counterKeys(email, ip)) {
+        const count = await this.cache.getCount(key);
+        if (count == null) {
+          // The shared counter went unreachable mid-check.
+          if (redisIsRequired()) throw this.lockoutUnavailable();
+          break; // tolerated single-instance: fall through to the memory map
+        }
+        if (count >= max) {
+          const ttl = await this.cache.ttlSeconds(key);
+          const secs = ttl && ttl > 0 ? ttl : AuthService.LOCK_SECONDS;
+          throw this.tooManyAttempts(secs);
+        }
+      }
+      if (this.lockoutUsesRedis()) return; // confirmed via Redis
+    }
+    // Redis not the authority here.
+    if (redisIsRequired()) throw this.lockoutUnavailable();
+    // Single-instance in-memory fallback.
     const now = Date.now();
-    const rec = this.loginAttempts.get(this.failKey(email, ip));
-    const acct = this.loginAttempts.get(this.failKey(email, '*'));
-    const locked = (rec && rec.count >= AuthService.MAX_FAILS && rec.until > now ? rec : null)
-      || (acct && acct.count >= AuthService.MAX_FAILS_ACCOUNT && acct.until > now ? acct : null);
-    if (locked) {
-      const mins = Math.ceil((locked.until - now) / 60000);
-      throw new UnauthorizedException(`Too many failed attempts. Try again in ${mins} minute(s).`);
+    for (const { key, max } of this.counterKeys(email, ip)) {
+      const rec = this.loginAttempts.get(key);
+      if (rec && rec.count >= max && rec.until > now) {
+        throw this.tooManyAttempts(Math.ceil((rec.until - now) / 1000));
+      }
     }
   }
-  private registerFail(email: string, ip?: string) {
-    for (const key of [this.failKey(email, ip), this.failKey(email, '*')]) {
-      const rec = this.loginAttempts.get(key);
-      const count = (rec && rec.until > Date.now() ? rec.count : 0) + 1;
-      this.loginAttempts.set(key, { count, until: Date.now() + AuthService.LOCK_MS });
+
+  /** Record one failed attempt against every counter. */
+  private async registerFail(email: string, ip?: string): Promise<void> {
+    if (this.lockoutUsesRedis()) {
+      let anyRedis = false;
+      for (const { key } of this.counterKeys(email, ip)) {
+        const n = await this.cache.incr(key, AuthService.LOCK_SECONDS);
+        if (n != null) anyRedis = true;
+      }
+      if (anyRedis) return;
+      // Redis dropped out between the ready-check and the write.
+      if (redisIsRequired()) return; // do not mirror into a map we won't trust
+    } else if (redisIsRequired()) {
+      return; // Redis is the authority; assertNotLocked already failed closed
     }
-    if (this.loginAttempts.size > 50_000) this.loginAttempts.clear();
+    // Single-instance in-memory fallback.
+    const now = Date.now();
+    for (const { key } of this.counterKeys(email, ip)) {
+      const rec = this.loginAttempts.get(key);
+      const count = (rec && rec.until > now ? rec.count : 0) + 1;
+      this.loginAttempts.set(key, { count, until: now + AuthService.LOCK_MS });
+    }
+    this.pruneMemory(now);
+  }
+
+  /** Clear every counter for this email/IP after a fully successful login. */
+  private async clearFails(email: string, ip?: string): Promise<void> {
+    const keys = this.counterKeys(email, ip).map((k) => k.key);
+    if (this.lockoutUsesRedis()) {
+      await this.cache.del(...keys); // del() also clears the memory mirror
+    }
+    for (const key of keys) this.loginAttempts.delete(key);
+  }
+
+  /**
+   * Evict only EXPIRED in-memory entries, and if still over the cap, the ones
+   * closest to expiry. Never a blanket clear — a global reset triggered by
+   * attacker traffic would wipe everyone's active locks at once.
+   */
+  private pruneMemory(now: number): void {
+    for (const [k, v] of this.loginAttempts) if (v.until <= now) this.loginAttempts.delete(k);
+    if (this.loginAttempts.size <= AuthService.MEM_MAX_ENTRIES) return;
+    const sorted = [...this.loginAttempts.entries()].sort((a, b) => a[1].until - b[1].until);
+    for (const [k] of sorted.slice(0, this.loginAttempts.size - AuthService.MEM_MAX_ENTRIES)) {
+      this.loginAttempts.delete(k);
+    }
+  }
+
+  private tooManyAttempts(seconds: number): UnauthorizedException {
+    const mins = Math.max(1, Math.ceil(seconds / 60));
+    return new UnauthorizedException(`Too many failed attempts. Try again in ${mins} minute(s).`);
+  }
+  private lockoutUnavailable(): ServiceUnavailableException {
+    // Deliberately generic: do not disclose the backing store to clients.
+    return new ServiceUnavailableException('Sign-in is temporarily unavailable. Please try again shortly.');
   }
 
   async login(
@@ -91,7 +193,7 @@ export class AuthService {
     code?: string,
   ) {
     // Reject early if this email+IP is currently locked out.
-    this.assertNotLocked(email, ip);
+    await this.assertNotLocked(email, ip);
 
     console.log('🔍 Looking for user:', email);
 
@@ -112,7 +214,7 @@ export class AuthService {
         failReason: 'User not found',
       });
 
-      this.registerFail(email, ip);
+      await this.registerFail(email, ip);
       throw new UnauthorizedException(
         'Invalid email or password',
       );
@@ -139,7 +241,7 @@ export class AuthService {
         failReason: 'Invalid credentials',
       });
 
-      this.registerFail(email, ip);
+      await this.registerFail(email, ip);
       throw new UnauthorizedException(
         'Invalid email or password',
       );
@@ -195,12 +297,11 @@ export class AuthService {
           status: 'FAILED',
           failReason: 'Invalid 2FA code',
         });
-        this.registerFail(email, ip);
+        await this.registerFail(email, ip);
         throw new UnauthorizedException('Invalid two-factor code');
       }
     }
-    this.loginAttempts.delete(this.failKey(email, ip));
-    this.loginAttempts.delete(this.failKey(email, '*'));
+    await this.clearFails(email, ip);
 
     // Phase 4A: login anomaly flag — first login from a new IP is recorded 🔍
     if (ip && ip !== 'Unknown') {
@@ -590,6 +691,11 @@ export class AuthService {
       select: { tokenVersion: true },
     });
     invalidateAccountStatus(userId);
+
+    // One-time use: once an owner picks their own password, drop the generated
+    // first-boot secret from the credentials file so it cannot be reused.
+    if (user.role === 'SUPER_ADMIN') clearBootstrapPassword('platform');
+    else if (user.role === 'ADMIN') clearBootstrapPassword('company');
 
     const token = this.jwtService.sign(
       {

@@ -21,14 +21,17 @@
  */
 
 import * as bcrypt from 'bcrypt';
+import { resolveBootstrapPassword } from './bootstrap-credentials';
 
 /**
- * The platform login every installation ships with. Known, like any
- * installer default — which is why the panel refuses to be used on it: the
- * first sign-in must choose a new password (mustChangePassword).
+ * The platform login every installation ships with. The address is known; the
+ * password is NOT (no hardcoded default) — it is operator-set or a generated
+ * one-time secret, and the panel refuses to be used until the first sign-in
+ * chooses a new password (mustChangePassword). See bootstrap-credentials.ts.
  */
 export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@jointbox.com').trim().toLowerCase();
-const PLATFORM_DEFAULT_PASSWORD = () => process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
+/** Resolve the platform bootstrap password (env, reused, or newly generated). */
+const platformBootstrap = () => resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
 
 const DOWNLINE_ROLES = [
   'RESELLER',
@@ -111,21 +114,57 @@ async function nameCompany(prisma: any, company: Acct): Promise<void> {
   await prisma.user.update({ where: { id: company.id }, data: { name } });
 }
 
-async function createPlatformAccount(prisma: any, from: Acct) {
+async function createPlatformAccount(prisma: any, from: Acct, log: { warn: (m: string) => void } = console) {
   const email = await platformEmailFor(prisma, from);
-  return prisma.user.create({
+  // UPGRADE PATH: the platform is split off an account that already runs the
+  // business, so reuse THAT account's existing password hash — the operator
+  // already knows it, no new secret is minted, and no hardcoded default is
+  // involved. Only if that hash is somehow missing do we fall back to a
+  // generated one-time secret.
+  let passwordHash = from.password && from.password.length > 0 ? from.password : null;
+  let boot: ReturnType<typeof platformBootstrap> | null = null;
+  if (!passwordHash) {
+    boot = platformBootstrap();
+    passwordHash = await bcrypt.hash(boot.password, 10);
+  }
+  const created = await prisma.user.create({
     data: {
       name: 'Platform Owner',
       email,
-      // The installation default (admin123 unless PLATFORM_ADMIN_PASSWORD is
-      // set). The first sign-in must choose a new one.
-      password: await bcrypt.hash(PLATFORM_DEFAULT_PASSWORD(), 10),
+      password: passwordHash,
       role: 'SUPER_ADMIN',
       isActive: true,
       mustChangePassword: true,
     },
     select: { id: true, email: true },
   });
+  if (boot) announceBootstrap(log, 'Platform', email, boot);
+  return created;
+}
+
+/**
+ * Tell the operator HOW to obtain the first-boot password, never WHAT it is.
+ * A generated secret is written to the 0600 credentials file and only the file
+ * path is logged; an operator-set one is not mentioned at all.
+ */
+function announceBootstrap(
+  log: { warn: (m: string) => void },
+  label: string,
+  email: string,
+  boot: { source: string; persisted?: boolean; file?: string; password: string },
+): void {
+  if (boot.source === 'env') return; // operator already knows it
+  if (boot.source === 'file') return; // already announced on the boot that created it
+  if (boot.persisted) {
+    log.warn(`🔐 ${label} account ${email}: first-boot password written to ${boot.file} (read it there, then change it at first sign-in).`);
+  } else {
+    // Could not persist — the operator has no other way to learn it, so print
+    // it this once with a loud instruction to set the env var instead.
+    log.warn(
+      `🔐 ${label} account ${email}: could not write ${boot.file}. One-time password: ${boot.password}\n` +
+        `   Set PLATFORM_ADMIN_PASSWORD / ADMIN_PASSWORD or make the state dir writable so this is never printed.`,
+    );
+  }
 }
 
 /** Give owner-less business rows to the company that has been running them. */
@@ -234,7 +273,7 @@ async function splitInside(
       );
       return { action: 'promoted', platformEmail: root.email };
     }
-    const p = await createPlatformAccount(prisma, root);
+    const p = await createPlatformAccount(prisma, root, log);
     await prisma.user.updateMany({
       where: { role: 'ADMIN', parentId: null, isDemo: false },
       data: { parentId: p.id },
@@ -255,7 +294,7 @@ async function splitInside(
   let result: PlatformSplitResult = { action: 'none' };
   for (const sa of owners) {
     if (!(await runsBusiness(prisma, sa.id))) continue;
-    const p = await createPlatformAccount(prisma, sa);
+    const p = await createPlatformAccount(prisma, sa, log);
     // Other companies hosted under this account move up to the platform —
     // left under it, they would become part of its company.
     await prisma.user.updateMany({
@@ -282,16 +321,17 @@ async function splitInside(
 }
 
 /**
- * THE PLATFORM LOGIN IS superadmin@jointbox.com — AND admin123 UNTIL ITS OWNER
- * CHOOSES THEIR OWN PASSWORD.
+ * THE PLATFORM LOGIN IS superadmin@jointbox.com. ITS PASSWORD IS NEVER TOUCHED
+ * HERE (S3).
  *
  *  • Email: the platform account always signs in as superadmin@jointbox.com
  *    (PLATFORM_ADMIN_EMAIL), whenever that address is free. Changing it does
  *    not sign anyone out — the session belongs to the account, not the email.
- *  • Password: only a platform account still waiting for its first password
- *    change (mustChangePassword) is put on the default. Once the owner signs
- *    in and picks a password the flag clears, and a password somebody chose is
- *    never overwritten. Every open session is signed out when it is reset.
+ *  • Password: left exactly as createPlatformAccount (or the operator) set it.
+ *    It is NOT re-hashed to a default on every boot — doing so reset a
+ *    never-logged-in account to a known value on each restart, which is the
+ *    bug S3 fixes. The account is created with mustChangePassword, so the
+ *    first sign-in forces a new password regardless.
  */
 export async function ensurePlatformLogin(
   prisma: any,
@@ -300,32 +340,20 @@ export async function ensurePlatformLogin(
   const sa = await prisma.user.findFirst({
     where: { role: 'SUPER_ADMIN', isDemo: false, isActive: true },
     orderBy: { id: 'asc' },
-    select: { id: true, email: true, password: true, mustChangePassword: true },
+    select: { id: true, email: true },
   });
   if (!sa) return null;
 
-  const data: any = {};
-  if (String(sa.email).toLowerCase() !== PLATFORM_DEFAULT_EMAIL) {
-    const taken = await prisma.user.findUnique({ where: { email: PLATFORM_DEFAULT_EMAIL }, select: { id: true } });
-    if (!taken) data.email = PLATFORM_DEFAULT_EMAIL;
+  // Email normalization only — never the password.
+  if (String(sa.email).toLowerCase() === PLATFORM_DEFAULT_EMAIL) {
+    return { email: sa.email, changed: false };
   }
-  if (sa.mustChangePassword) {
-    const onDefault = !!sa.password && (await bcrypt.compare(PLATFORM_DEFAULT_PASSWORD(), sa.password).catch(() => false));
-    if (!onDefault) {
-      data.password = await bcrypt.hash(PLATFORM_DEFAULT_PASSWORD(), 10);
-      data.tokenVersion = { increment: 1 };
-    }
-  }
-  if (!Object.keys(data).length) return { email: sa.email, changed: false };
+  const taken = await prisma.user.findUnique({ where: { email: PLATFORM_DEFAULT_EMAIL }, select: { id: true } });
+  if (taken) return { email: sa.email, changed: false };
 
-  await prisma.user.update({ where: { id: sa.id }, data });
-  const email = data.email || sa.email;
-  log.warn(
-    data.password
-      ? `👑 Super admin login: ${email} — default password (PLATFORM_ADMIN_PASSWORD or admin123); it must be changed at first sign-in.`
-      : `👑 Super admin login is now ${email} (was ${sa.email}); its password is unchanged.`,
-  );
-  return { email, changed: true };
+  await prisma.user.update({ where: { id: sa.id }, data: { email: PLATFORM_DEFAULT_EMAIL } });
+  log.warn(`👑 Super admin login is now ${PLATFORM_DEFAULT_EMAIL} (was ${sa.email}); its password is unchanged.`);
+  return { email: PLATFORM_DEFAULT_EMAIL, changed: true };
 }
 
 /**

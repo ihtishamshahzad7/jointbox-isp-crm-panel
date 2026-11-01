@@ -268,9 +268,9 @@ describe('NetworkService.liveSessions', () => {
     // The page request carries the search + sort + offset — the browser never
     // receives more than one page's rows.
     expect(radiusSync.getActiveSessions).toHaveBeenCalledWith('10.0.0.1', {
-      limit: 50, offset: 50, q: 'alice', sortBy: 'downloadBytes', sortOrder: 'desc',
+      limit: 50, offset: 50, q: 'alice', sortBy: 'downloadBytes', sortOrder: 'desc', usernames: null,
     });
-    expect(radiusSync.countActiveSessions).toHaveBeenCalledWith('10.0.0.1', 'alice');
+    expect(radiusSync.countActiveSessions).toHaveBeenCalledWith('10.0.0.1', 'alice', null);
   });
 
   it('clamps limit to 1..200 and page to ≥ 1 (offset = (page-1)*take)', async () => {
@@ -281,12 +281,12 @@ describe('NetworkService.liveSessions', () => {
 
     await service.liveSessions(undefined, { role: 'admin' }, { page: 0, limit: 999 });
     expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, {
-      limit: 200, offset: 0, q: undefined, sortBy: undefined, sortOrder: undefined,
+      limit: 200, offset: 0, q: undefined, sortBy: undefined, sortOrder: undefined, usernames: null,
     });
 
     await service.liveSessions(undefined, { role: 'admin' }, { page: 3, limit: 25 });
     expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, {
-      limit: 25, offset: 50, q: undefined, sortBy: undefined, sortOrder: undefined,
+      limit: 25, offset: 50, q: undefined, sortBy: undefined, sortOrder: undefined, usernames: null,
     });
   });
 
@@ -304,7 +304,7 @@ describe('NetworkService.liveSessions', () => {
     expect(res[0]).toMatchObject({ username: 'a', fullName: 'Alice' });
     // Legacy path never asks for a COUNT.
     expect(radiusSync.countActiveSessions).not.toHaveBeenCalled();
-    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined);
+    expect(radiusSync.getActiveSessions).toHaveBeenCalledWith(undefined, { usernames: null });
   });
 
   it('non-admin sees ONLY sessions in their own subtree (scope filter drops the rest)', async () => {

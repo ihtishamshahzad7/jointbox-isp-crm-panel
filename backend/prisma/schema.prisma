@@ -500,8 +500,83 @@ model Nas {
   /// L2TP/IPsec configuration and lifecycle for this NAS.
   l2tpConfig NasL2tpConfig? @relation("NasL2tpConfig")
 
+  /// Per-NAS SNMP monitoring operational state (Stage 2). 1:1, created lazily
+  /// by the monitor on the first poll — a NAS with monitoring off has none.
+  snmpState NasSnmpState? @relation("NasSnmpState")
+  /// Monitoring lifecycle events (reachable/unreachable/auth-fail/…), Stage 2.
+  snmpEvents NasEvent[]   @relation("NasSnmpEvents")
+
   @@index([nasname])
   @@map("nas")
+}
+/// ───────────────────────────────────────────────────────────────────────────
+/// STAGE 2 — PER-NAS SNMP MONITORING STATE & EVENTS
+/// ───────────────────────────────────────────────────────────────────────────
+
+/// Operational state of SNMP monitoring for ONE NAS. Kept in its own row rather
+/// than on `nas` so a poll every few seconds does not churn the hot NAS record
+/// (and its FreeRADIUS-client columns). Written only by the monitor worker.
+model NasSnmpState {
+  nasId Int @id
+  /// unknown | ok | unreachable | auth_error | timeout | config_error | disabled
+  status             String    @default("unknown") @db.VarChar(20)
+  /// When monitoring last ATTEMPTED a poll (success or failure).
+  lastPollAt         DateTime?
+  /// When monitoring last SUCCEEDED.
+  lastSuccessAt      DateTime?
+  /// When the last failure occurred.
+  lastErrorAt        DateTime?
+  /// Short, operator-friendly, REDACTED reason for the last failure. Never a
+  /// credential or raw secret — see the monitor's redaction.
+  lastError          String?   @db.VarChar(300)
+  /// Consecutive failures, drives exponential backoff. Reset to 0 on success.
+  consecutiveFailures Int      @default(0)
+  /// Earliest time the scheduler may poll this NAS again (backoff + interval).
+  nextPollAt         DateTime?
+  /// Last sysDescr / uptime seen on a successful poll, for the status panel.
+  sysDescr           String?   @db.VarChar(300)
+  uptimeSec          Int?
+  updatedAt          DateTime  @updatedAt
+
+  nas Nas @relation("NasSnmpState", fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([nextPollAt])
+  @@map("nas_snmp_state")
+}
+
+/// A monitoring lifecycle event for a NAS. Created on STATE TRANSITIONS only
+/// (not on every failed poll), so storage stays bounded and alerts do not storm.
+model NasEvent {
+  id        Int      @id @default(autoincrement())
+  nasId     Int
+  /// reachable | unreachable | auth_error | timeout | config_error |
+  /// poll_failed | poll_recovered | interface_down | interface_up |
+  /// cpu_high | memory_low | monitoring_enabled | monitoring_disabled |
+  /// metric_unavailable
+  type      String   @db.VarChar(32)
+  /// info | warning | critical
+  severity  String   @default("info") @db.VarChar(12)
+  /// Short operator-friendly description. REDACTED — never a secret.
+  message   String   @db.VarChar(400)
+  /// Structured, non-sensitive detail (ifIndex, value, threshold, …).
+  details   Json?
+  ts        DateTime @default(now())
+  /// Who owns the NAS at event time — denormalised so event queries can be
+  /// tenant-scoped without a join back through nas → owner on every read.
+  ownerId   Int?
+
+  acknowledged   Boolean   @default(false)
+  acknowledgedAt DateTime?
+  acknowledgedBy Int?
+
+  nas Nas @relation("NasSnmpEvents", fields: [nasId], references: [id], onDelete: Cascade)
+
+  @@index([nasId, ts])
+  @@index([nasId, type, ts])
+  @@index([acknowledged, ts])
+  @@index([ownerId, ts])
+  @@map("nas_event")
 }
 
 /// A WireGuard management tunnel to one router.
@@ -3095,6 +3170,11 @@ model SubscriberBalanceLedger {
   amount       Float // positive = credit, negative = debit
   balanceAfter Float
   reference    String?                    @db.VarChar(64) // invoice, payment, manual note
+  /// Optional idempotency key for exactly-once financial operations (top-ups,
+  /// callbacks, reversals). A unique index (where not null) makes a retried or
+  /// duplicated operation fail at the database rather than double-apply. New
+  /// column — all existing rows are NULL, and Postgres permits many NULLs.
+  idempotencyKey String?                  @unique @db.VarChar(120)
   description  String?                    @db.VarChar(500)
   /// Actor who triggered the change. SYSTEM for scheduled jobs, PORTAL for
   /// self-service, or a staff user id.

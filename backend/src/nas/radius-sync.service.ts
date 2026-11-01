@@ -27,6 +27,14 @@ export interface ActiveSessionsOpts {
   q?: string;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  /**
+   * Tenant scope pushed into SQL. When provided (non-null), only sessions whose
+   * username is in this list are returned/counted — so a reseller's page and
+   * total are computed in the database, never by fetching the whole server and
+   * filtering in Node. An EMPTY array means "owns nothing" → zero results.
+   * `null`/undefined = no scope restriction (platform admin).
+   */
+  usernames?: string[] | null;
 }
 
 /** Whitelisted ORDER BY targets for live sessions — column names and the two
@@ -916,6 +924,11 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       if (nasIp) {
         query += ' AND nasipaddress = $' + params.push(nasIp);
       }
+      // Tenant scope, enforced in SQL. An empty list = owns nothing → no rows.
+      if (opts.usernames != null) {
+        if (opts.usernames.length === 0) return [];
+        query += ` AND username = ANY($${params.push(opts.usernames)}::text[])`;
+      }
       // Server-mode search (Network page): username / IP / MAC / NAS.
       const q = (opts.q ?? '').trim();
       if (q) {
@@ -945,7 +958,7 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
 
   /** COUNT of the same live-session window getActiveSessions() selects, for
    *  the DataTable's "X–Y of Z" pager. Must mirror the WHERE exactly. */
-  async countActiveSessions(nasIp?: string, q?: string): Promise<number> {
+  async countActiveSessions(nasIp?: string, q?: string, usernames?: string[] | null): Promise<number> {
     try {
       this.ensureConnected();
       const params: any[] = [];
@@ -958,6 +971,11 @@ export class RadiusSyncService implements OnModuleInit, OnModuleDestroy {
       `;
       if (nasIp) {
         query += ' AND nasipaddress = $' + params.push(nasIp);
+      }
+      // Tenant scope, mirrored from getActiveSessions so the total matches.
+      if (usernames != null) {
+        if (usernames.length === 0) return 0;
+        query += ` AND username = ANY($${params.push(usernames)}::text[])`;
       }
       const likeQ = (q ?? '').trim();
       if (likeQ) {

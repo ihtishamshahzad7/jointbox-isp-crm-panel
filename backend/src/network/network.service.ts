@@ -65,29 +65,47 @@ export class NetworkService {
    */
   async liveSessions(nasIp?: string, actor?: any, opts: ActiveSessionsOpts & { page?: number; limit?: number } = {}): Promise<LiveSession[] | LiveSessionPage> {
     const paged = opts?.page !== undefined || opts?.limit !== undefined;
+    /**
+     * Below the platform, EVERY shape is scoped to the caller's own subscribers
+     * in the SQL itself: we resolve the subtree's usernames once and pass them
+     * to the radacct query as a filter. Previously a dealer's page was a slice
+     * of the whole server's sessions fetched into Node and filtered afterwards —
+     * which showed near-empty pages, the installation-wide online count, and
+     * pulled every live session on the box into memory on each request.
+     * Platform admins pass `null` → no restriction, exactly as before.
+     */
+    const scopedUsernames = actor && !this.scope.isAdmin(actor.role)
+      ? await this.scopedUsernames(actor)
+      : null;
+
     if (!paged) {
-      const rows = await this.radiusSync.getActiveSessions(nasIp).catch(() => []);
+      const rows = await this.radiusSync
+        .getActiveSessions(nasIp, { usernames: scopedUsernames })
+        .catch(() => []);
       return this.enrichSessions(rows, actor);
     }
     const page = Math.max(1, Number(opts.page) || 1);
     const take = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
     const offset = (page - 1) * take;
     const q = `${opts.q ?? ''}`.trim() || undefined;
-    /**
-     * Below the platform, the page and the total must be of the caller's OWN
-     * sessions: paging the whole server and filtering afterwards showed a
-     * dealer near-empty pages and the installation-wide online count.
-     */
-    if (actor && !this.scope.isAdmin(actor.role)) {
-      const all = await this.radiusSync.getActiveSessions(nasIp, { q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []);
-      const mine = await this.enrichSessions(all, actor);
-      return { items: mine.slice(offset, offset + take), total: mine.length, page, pageSize: take };
-    }
     const [total, rawRows] = await Promise.all([
-      this.radiusSync.countActiveSessions(nasIp, q),
-      this.radiusSync.getActiveSessions(nasIp, { limit: take, offset, q, sortBy: opts.sortBy, sortOrder: opts.sortOrder }).catch(() => []),
+      this.radiusSync.countActiveSessions(nasIp, q, scopedUsernames),
+      this.radiusSync
+        .getActiveSessions(nasIp, { limit: take, offset, q, sortBy: opts.sortBy, sortOrder: opts.sortOrder, usernames: scopedUsernames })
+        .catch(() => []),
     ]);
     return { items: await this.enrichSessions(rawRows, actor), total, page, pageSize: take };
+  }
+
+  /**
+   * The usernames of every subscriber in the caller's subtree — the tenant
+   * scope, resolved once and pushed into the radacct SQL. Bounded to the
+   * caller's own subscribers, not the whole installation.
+   */
+  private async scopedUsernames(actor: any): Promise<string[]> {
+    const where = await this.scope.subscriberWhere(actor);
+    const subs = await this.prisma.subscriber.findMany({ where, select: { username: true } });
+    return subs.map((s) => s.username).filter(Boolean) as string[];
   }
 
   /** Join live radacct rows to subscriber identity — scoped, enriched, and

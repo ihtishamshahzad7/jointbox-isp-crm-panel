@@ -198,6 +198,37 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Read a counter written by `incr()` without touching it. Returns null when
+   * the key is absent or Redis is not available, so a caller can tell "no
+   * attempts recorded" apart from "the shared counter is unreachable".
+   */
+  async getCount(key: string): Promise<number | null> {
+    if (this.redis?.status !== 'ready') return null;
+    try {
+      const raw = await this.redis.get(key);
+      if (raw == null) return 0;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : 0;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Seconds remaining before a key expires. -2 = no such key, -1 = no TTL set,
+   * null = Redis unavailable. Used to tell a locked-out caller how long is left
+   * without resetting their window.
+   */
+  async ttlSeconds(key: string): Promise<number | null> {
+    if (this.redis?.status !== 'ready') return null;
+    try {
+      return await this.redis.ttl(key);
+    } catch {
+      return null;
+    }
+  }
+
   /** True when reads and writes are actually hitting Redis, not the local map. */
   isRedisReady(): boolean {
     return this.redis?.status === 'ready';

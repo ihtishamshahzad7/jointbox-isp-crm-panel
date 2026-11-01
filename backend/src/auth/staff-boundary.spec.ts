@@ -38,7 +38,7 @@ describe('staff never manage the account they work for', () => {
   it('staff cannot switch into any account; nobody switches into a company or upward', async () => {
     const { prisma, scope } = scopeWith();
     prisma.activityLog = { create: jest.fn(() => ({ catch: () => undefined })) };
-    const auth = new AuthService(prisma, { sign: () => 'T' } as any, {} as any, scope, {} as any);
+    const auth = new AuthService(prisma, { sign: () => 'T' } as any, {} as any, scope, {} as any, {} as any);
     await expect(auth.impersonate({ sub: 11, role: 'SALES' }, 10)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(auth.impersonate({ sub: 11, role: 'SALES' }, 12)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(auth.impersonate({ sub: 13, role: 'SUB_RESELLER' }, 12)).rejects.toBeInstanceOf(ForbiddenException);

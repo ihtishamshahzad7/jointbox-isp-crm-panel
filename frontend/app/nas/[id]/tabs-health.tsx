@@ -9,11 +9,14 @@ import React from "react";
 import { useNasDetail } from "./context";
 import { Panel, EmptyState } from "./ui";
 import { DeviceHealth } from "../device-health";
+import { MonitoringStatus } from "./monitoring-status";
 
 export function HealthTab() {
   const { nasId, nas } = useNasDetail();
   return (
     <div className="nd-root">
+      {/* Stage 2: per-device SNMP monitoring status, events and ack. */}
+      <MonitoringStatus nasId={nasId} snmpEnabled={nas?.snmpEnabled} snmpVersion={nas?.snmpVersion} />
       <Panel title="Device health" sub="Stored SNMP poller data — every point is a real measurement" actions={
         <span className="nd-updated">sampled every {nas?.snmpPollSec ?? 30}s when enabled</span>
       }>

@@ -20,6 +20,7 @@ import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { PrismaExceptionFilter } from './common/prisma-exception.filter';
 import { ensureInstallationCurrency, ensurePlatformAccount, ensurePlatformLogin, PLATFORM_DEFAULT_EMAIL } from './common/platform-account';
+import { resolveBootstrapPassword, type BootstrapResolution } from './common/bootstrap-credentials';
 import { SecurityService } from './security/security.service';
 
 // SNMP 64-bit counters (HC-in/out-octets, ticks) come back from net-snmp as
@@ -29,6 +30,26 @@ import { SecurityService } from './security/security.service';
 // would lose precision past 2^53), and the frontend types already declare
 // these fields as `string | null`. Must run before any response is written.
 (BigInt.prototype as any).toJSON = function () { return String(this); };
+
+/**
+ * Tell the operator HOW to retrieve the first-boot password, never WHAT it is.
+ * An operator-set password is not mentioned; a generated one is pointed to in
+ * the 0600 file. If it cannot be persisted, account creation fails rather than
+ * printing the password. Runs once, at account creation.
+ */
+function announceFirstBootPassword(label: string, email: string, boot: BootstrapResolution) {
+  if (boot.source === 'env') {
+    console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email} (password from its environment variable; must be changed at first login).`);
+    return;
+  }
+  if (boot.persisted) {
+    console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email}. Generated password written to ${boot.file} — read it there, then change it at first login.`);
+    return;
+  }
+  throw new Error(
+    `Could not persist the generated ${label.toLowerCase()} bootstrap credential to ${boot.file}. Set its environment password or fix the state-directory permissions.`,
+  );
+}
 
 // First-boot bootstrap: create the default super-admin if the DB has no users.
 // Runs on every startup but is idempotent — only fires on a brand-new database
@@ -44,39 +65,44 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
        *   superadmin@jointbox.com — the platform (companies, licence, server)
        *   ADMIN_EMAIL (admin@jointbox.com) — the first ISP company, which runs
        *     subscribers, routers, franchises, packages and accounting as before.
-       * Both passwords are installer defaults, so both must be changed at the
-       * first sign-in: every route except change-password answers 403 until
-       * then. Neither password is printed — the operator set them in .env.
+       * Both passwords must be changed at the first sign-in: every route except
+       * change-password answers 403 until then. Generated credentials are
+       * persisted to the restricted bootstrap file, never printed.
        */
-      const platformPassword = process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
+      // No hardcoded default: operator-set, or a generated one-time secret
+      // written to the 0600 bootstrap credentials file. Both accounts must
+      // change their password at the first sign-in (mustChangePassword).
+      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+      const platformBoot = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
+      const companyBoot = email !== PLATFORM_DEFAULT_EMAIL
+        ? resolveBootstrapPassword('company', 'ADMIN_PASSWORD')
+        : null;
       const platform = await prisma.user.create({
         data: {
           name: 'Platform Owner',
           email: PLATFORM_DEFAULT_EMAIL,
-          password: await bcrypt.hash(platformPassword, 10),
+          password: await bcrypt.hash(platformBoot.password, 10),
           role: 'SUPER_ADMIN',
           isActive: true,
           mustChangePassword: true,
         },
         select: { id: true },
       });
-      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
-      if (email !== PLATFORM_DEFAULT_EMAIL) {
+      announceFirstBootPassword('Super admin', PLATFORM_DEFAULT_EMAIL, platformBoot);
+
+      if (companyBoot) {
         await prisma.user.create({
           data: {
             name: 'My ISP',
             email,
-            password: await bcrypt.hash(process.env.ADMIN_PASSWORD || 'admin123', 10),
+            password: await bcrypt.hash(companyBoot.password, 10),
             role: 'ADMIN',
             parentId: platform.id,
             isActive: true,
             mustChangePassword: true,
           },
         });
-      }
-      console.log(`👑 First-boot: super admin login → ${PLATFORM_DEFAULT_EMAIL} (password: PLATFORM_ADMIN_PASSWORD, default admin123; must be changed at first login)`);
-      if (email !== PLATFORM_DEFAULT_EMAIL) {
-        console.log(`👤 First-boot: company login → ${email} (password: ADMIN_PASSWORD from .env; must be changed at first login)`);
+        announceFirstBootPassword('Company', email, companyBoot);
       }
       return;
     }
@@ -399,4 +425,3 @@ async function bootstrap() {
   } catch { /* @bull-board not installed — dashboard disabled */ }
 }
 bootstrap();
-

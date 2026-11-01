@@ -10,7 +10,8 @@ import { CacheService } from '../common/cache.service';
 import { QueueService } from '../common/queue.service';
 import { AccountingService } from '../accounting/accounting.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ScopeService, Actor } from '../common/scope.service';
+import { ScopeService, Actor, DEMO_NAS_SERVER } from '../common/scope.service';
+import { mapLimit, withTimeout } from '../common/concurrency';
 import { LicenceCapacityService } from '../licence/licence-capacity.service';
 import { ResellerPricingService } from '../organization/reseller-pricing.service';
 import { InvoicesService } from '../invoices/invoices.service';
@@ -987,31 +988,60 @@ export class SubscribersService implements OnModuleInit {
    * Returned lower-cased because RADIUS usernames are case-insensitive in
    * practice and MikroTik may report a different case than we stored.
    */
+  /** De-dupes concurrent cache-miss recomputations so one slow sweep is not
+   *  started N times at once (single-flight). */
+  private routerPresenceInFlight: Promise<Set<string>> | null = null;
+
   private async routerPresence(): Promise<Set<string>> {
     try {
-      const arr = await this.cache.wrap<string[]>('subs:router-presence', 20, async () => {
-        const nases = await this.prisma.nas.findMany({
-          where: { apiUsername: { not: null } },
-          select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
-        });
-        const online = new Set<string>();
-        await Promise.all(
-          nases.map(async (n) => {
-            if (!n.nasIp || !n.apiUsername) return;
-            try {
-              const users = await this.mikrotik.getActivePppoeUsers(
-                n.nasIp, n.apiPort || 8728, n.apiUsername, n.apiPassword || '',
-              );
-              for (const u of users) if (u?.username) online.add(String(u.username).toLowerCase());
-            } catch { /* unreachable router → contributes nothing */ }
-          }),
-        );
-        return [...online];
-      });
-      return new Set(arr || []);
+      const cached = await this.cache.get<string[]>('subs:router-presence');
+      if (cached) return new Set(cached);
+      // Single-flight: the first caller on a cache miss runs the sweep; every
+      // other caller that arrives before it finishes awaits the same promise.
+      if (this.routerPresenceInFlight) return await this.routerPresenceInFlight;
+      this.routerPresenceInFlight = this.computeRouterPresence();
+      try {
+        return await this.routerPresenceInFlight;
+      } finally {
+        this.routerPresenceInFlight = null;
+      }
     } catch {
       return new Set();
     }
+  }
+
+  /**
+   * Poll every API-capable NAS for its /ppp/active list with BOUNDED
+   * concurrency and a per-NAS timeout — never an unbounded Promise.all that
+   * opens a socket to all routers at once and stalls behind the slowest one.
+   * Demo NAS are excluded (no real device to reach). Result cached 20s.
+   */
+  private async computeRouterPresence(): Promise<Set<string>> {
+    const nases = await this.prisma.nas.findMany({
+      where: {
+        apiUsername: { not: null },
+        // Invented demo NAS have no real router — never open an API socket.
+        OR: [{ server: null }, { server: { not: DEMO_NAS_SERVER } }],
+      },
+      select: { nasIp: true, apiPort: true, apiUsername: true, apiPassword: true },
+    });
+    const online = new Set<string>();
+    const limit = Math.max(1, Number(process.env.NAS_POLL_CONCURRENCY) || 20);
+    const perNasTimeoutMs = Math.max(1000, Number(process.env.NAS_API_TIMEOUT_MS) || 8000);
+    // mapLimit catches each worker's error, so an unreachable or timed-out
+    // router contributes nothing and never aborts the sweep.
+    await mapLimit(nases, limit, async (n) => {
+      if (!n.nasIp || !n.apiUsername) return;
+      const users = await withTimeout(
+        this.mikrotik.getActivePppoeUsers(n.nasIp, n.apiPort || 8728, n.apiUsername, n.apiPassword || ''),
+        perNasTimeoutMs,
+        `router-presence ${n.nasIp}`,
+      );
+      for (const u of users) if (u?.username) online.add(String(u.username).toLowerCase());
+    });
+    const arr = [...online];
+    await this.cache.set('subs:router-presence', arr, 20);
+    return new Set(arr);
   }
 
   async attachLiveStatus(rows: any[]): Promise<any[]> {

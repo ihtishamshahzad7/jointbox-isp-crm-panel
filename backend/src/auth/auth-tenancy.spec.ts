@@ -87,7 +87,7 @@ describe('auth: refreshing an "act as" session keeps it one', () => {
       verify: jest.fn((t: string) => JSON.parse(t)),
       sign: jest.fn((p: any, o: any) => { signed.push({ p, o }); return 'tok'; }),
     };
-    return { s: new AuthService(prisma, jwtService, {} as any, {} as any, {} as any), signed };
+    return { s: new AuthService(prisma, jwtService, {} as any, {} as any, {} as any, {} as any), signed };
   }
 
   it('keeps the imp claim, counting down from when the session was opened', async () => {

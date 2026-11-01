@@ -88,6 +88,11 @@ describe('RADIUS tenancy ratchets', () => {
       why: 'platform-wide online set, used only for rows the caller can already see',
     },
     {
+      file: 'subscribers/subscribers.service.ts',
+      within: /\bcomputeRouterPresence\(/,
+      why: 'bounded platform-wide poll; only a username-presence set is joined to already-scoped subscriber rows',
+    },
+    {
       file: 'logs/network-logs.service.ts',
       within: /\breconcileOneRouter\(/,
       why: "platform sweep writing the router's own counters",

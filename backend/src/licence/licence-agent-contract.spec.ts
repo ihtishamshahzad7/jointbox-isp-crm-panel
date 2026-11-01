@@ -150,7 +150,13 @@ describe('counts handed to the agent', () => {
   });
 });
 
-describe('the request the panel sends', () => {
+// The licence agent listens on a Unix-domain socket (/run/jointbox/licensed.sock
+// in production). Node's net server cannot listen on a filesystem socket PATH on
+// Windows (it uses named pipes), so this test throws `listen EACCES` there. The
+// agent is a Linux-only production component, so skip the socket test on win32 and
+// keep full coverage on Linux/macOS and CI.
+const describeSocket = process.platform === 'win32' ? describe.skip : describe;
+describeSocket('the request the panel sends', () => {
   it('asks for payload v2 with a fresh nonce', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jbx-sock-'));
     const sockPath = path.join(dir, 'licensed.sock');

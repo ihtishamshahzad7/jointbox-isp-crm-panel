@@ -290,17 +290,27 @@ cd "$APP_DIR/backend"
 # SECRETS_KEY was never set), and a new key makes every one unreadable — every
 # router would stop authenticating. Keep what is there; generate only on a
 # first install.
-KEEP_JWT=""; KEEP_SK=""
+KEEP_JWT=""; KEEP_SK=""; KEEP_PLATFORM_PW=""; KEEP_ADMIN_PW=""
 if [ -f .env ]; then
   cp -a .env ".env.bak-$(date +%Y%m%d-%H%M%S)" && chmod 600 .env.bak-* 2>/dev/null || true
   KEEP_JWT="$(sed -n -E 's/^JWT_SECRET="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
   KEEP_SK="$(sed -n -E 's/^SECRETS_KEY="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
+  KEEP_PLATFORM_PW="$(sed -n -E 's/^PLATFORM_ADMIN_PASSWORD="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
+  KEEP_ADMIN_PW="$(sed -n -E 's/^ADMIN_PASSWORD="?([^"]*)"?[[:space:]]*$/\1/p' .env | head -1)"
   # Never had SECRETS_KEY: existing secrets were encrypted with JWT_SECRET.
   [ -z "$KEEP_SK" ] && KEEP_SK="$KEEP_JWT"
   [ -n "$KEEP_JWT" ] && ok "Existing JWT_SECRET / SECRETS_KEY kept (encrypted secrets stay readable)"
 fi
+# A legacy .env may carry the old published default — never keep that; mint a
+# fresh random one instead, so an upgrade stops shipping admin123.
+[ "$KEEP_PLATFORM_PW" = "admin123" ] && KEEP_PLATFORM_PW=""
+[ "$KEEP_ADMIN_PW" = "admin123" ] && KEEP_ADMIN_PW=""
 JWT_SECRET_VAL="${KEEP_JWT:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
 SECRETS_KEY_VAL="${KEEP_SK:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
+# First-boot login passwords: random per install, never a hardcoded default.
+# Both must still be changed at the first sign-in (mustChangePassword).
+PLATFORM_ADMIN_PW_VAL="${KEEP_PLATFORM_PW:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
+ADMIN_PW_VAL="${KEEP_ADMIN_PW:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
 cat > .env <<EOF
 # connection_limit is PER PROCESS. With pm2 cluster + a worker you may have many
 # processes; keep each modest so the total stays under Postgres max_connections
@@ -317,10 +327,10 @@ SECRETS_KEY="$SECRETS_KEY_VAL"
 # the first sign-in. (The backend refuses to start without ADMIN_PASSWORD set.)
 #   super admin (platform: companies, licence, server)
 PLATFORM_ADMIN_EMAIL=superadmin@jointbox.com
-PLATFORM_ADMIN_PASSWORD=admin123
+PLATFORM_ADMIN_PASSWORD=$PLATFORM_ADMIN_PW_VAL
 #   the first ISP company (subscribers, routers, franchises, billing)
 ADMIN_EMAIL=admin@jointbox.com
-ADMIN_PASSWORD=admin123
+ADMIN_PASSWORD=$ADMIN_PW_VAL
 # Sessions re-authenticate against the panel on this interval (see docs).
 RADIUS_SESSION_TIMEOUT=86400
 # Scale tuning — see scripts/SCALING.md
@@ -642,9 +652,11 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
 
   Panel      http://$SERVER_IP:$WEB_PORT
   API        http://$SERVER_IP:$API_PORT
-  Super admin  superadmin@jointbox.com / admin123   ${Y}← companies, licence, server${N}
-  Company      admin@jointbox.com / admin123        ${Y}← subscribers, routers, billing${N}
-               ${Y}Both ask for a new password at the first sign-in.${N}
+  Super admin  superadmin@jointbox.com   ${Y}← companies, licence, server${N}
+  Company      admin@jointbox.com        ${Y}← subscribers, routers, billing${N}
+               ${Y}Passwords are random per install — see PLATFORM_ADMIN_PASSWORD${N}
+               ${Y}and ADMIN_PASSWORD in $APP_DIR/backend/.env. Both ask for a${N}
+               ${Y}new password at the first sign-in.${N}
 
   Database   $DB_NAME
   DB user    $DB_USER

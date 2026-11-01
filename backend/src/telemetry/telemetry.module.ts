@@ -7,15 +7,15 @@ import { TelemetryService } from './telemetry.service';
 import { LinkAggregatorService } from './link-aggregator.service';
 import { NasMonitorService } from './nas-monitor.service';
 import { DeviceHealthService } from './device-health.service';
+import { SnmpMonitorService } from './snmp-monitor.service';
 import { LiveTrafficService } from './live-traffic.service';
 
 /**
  * Real-time traffic and NAS health.
  *
- * The SNMP poller and the syslog receiver were removed with the rest of the
- * SNMP/syslog feature set. Two of the aggregator's three feeds went with them,
- * so the live feed is now driven by the MikroTik API collector alone and will
- * be quieter than it was — it is not broken, it simply has fewer sources.
+ * SnmpMonitorService owns opt-in, per-NAS SNMP scheduling; DeviceHealthService
+ * collects one NAS for that worker and also serves the manual health probe.
+ * The syslog receiver remains removed, so the live feed has fewer sources.
  *
  * `DeviceHealthService` is deliberately KEPT: it does its own SNMP walk for
  * router CPU, memory, uptime and interface status on the NAS detail page, and
@@ -30,6 +30,7 @@ import { LiveTrafficService } from './live-traffic.service';
     LinkAggregatorService,
     NasMonitorService,
     DeviceHealthService,
+    SnmpMonitorService,
     LiveTrafficService,
   ],
   exports: [
@@ -37,6 +38,7 @@ import { LiveTrafficService } from './live-traffic.service';
     LinkAggregatorService,
     NasMonitorService,
     DeviceHealthService,
+    SnmpMonitorService,
     LiveTrafficService,
   ],
 })

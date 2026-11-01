@@ -2,6 +2,7 @@ import { Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards } fro
 import { TelemetryService } from './telemetry.service';
 import { NasMonitorService } from './nas-monitor.service';
 import { DeviceHealthService } from './device-health.service';
+import { SnmpMonitorService } from './snmp-monitor.service';
 import { LiveTrafficService } from './live-traffic.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
@@ -16,6 +17,7 @@ export class TelemetryController {
     private readonly health: DeviceHealthService,
     private readonly scope: ScopeService,
     private readonly live: LiveTrafficService,
+    private readonly snmp: SnmpMonitorService,
   ) {}
 
   // REMOVED: GET nas/:id/discover-interfaces — port registration was part of
@@ -31,6 +33,46 @@ export class TelemetryController {
   async snmpTest(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     await this.scope.assertNas(req.user, id);
     return this.health.testSnmp(id);
+  }
+
+  /**
+   * Stage 2 — current SNMP monitoring status for one NAS: state, last poll,
+   * latest metrics and interface up/down counts. No credentials are returned.
+   */
+  @Get('nas/:id/snmp-status')
+  async snmpStatus(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    await this.scope.assertNas(req.user, id);
+    return this.snmp.getStatus(id);
+  }
+
+  /** Stage 2 — paginated monitoring events for one NAS (cursor by id, bounded). */
+  @Get('nas/:id/snmp-events')
+  async snmpEvents(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+    @Query('type') type?: string,
+    @Query('acknowledged') acknowledged?: string,
+  ) {
+    await this.scope.assertNas(req.user, id);
+    return this.snmp.listEvents(id, {
+      limit: limit ? Number(limit) : undefined,
+      cursor: cursor ? Number(cursor) : undefined,
+      type: type?.trim() || undefined,
+      acknowledged: acknowledged === undefined ? undefined : acknowledged === 'true',
+    });
+  }
+
+  /** Stage 2 — acknowledge one monitoring event. */
+  @Post('nas/:id/snmp-events/:eventId/ack')
+  async ackEvent(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('eventId', ParseIntPipe) eventId: number,
+    @Req() req: any,
+  ) {
+    await this.scope.assertNas(req.user, id);
+    return this.snmp.ackEvent(id, eventId, req.user?.sub);
   }
 
   /** Device health history (CPU/memory/temperature/SNMP response) for the graphs. */

@@ -40,10 +40,10 @@ describe("network logs — another company's subscriber on our router", () => {
     await svc.getNetworkLogs({ sub: 11, role: 'ADMIN' });
     const where = whereOf(prisma.networkLog.findMany);
     expect(where.nas).toEqual({ ownerId: { in: [10, 11] } });
-    expect(where.OR).toEqual([
+    expect(where.AND).toContainEqual({ OR: [
       { subscriberId: null },
       { subscriber: { userId: { in: [10, 11] } } },
-    ]);
+    ] });
     expect(whereOf(prisma.networkLog.count)).toBe(where);
   });
 

@@ -11,10 +11,39 @@
  */
 import React, { useState } from "react";
 import { useNasDetail } from "./context";
-import { apiSend } from "./lib";
+import { apiSend, type NasRecord } from "./lib";
+import { isSnmpVersionFormValue, snmpVersionFormValue, type SnmpVersionFormValue } from "./snmp-version";
 import { Btn, DefList, Field, Modal, Panel, StatusChip } from "./ui";
 
 const MASK = "••••••••";
+
+type ConfigForm = {
+  shortname: string;
+  nasIp: string;
+  description: string;
+  isActive: boolean;
+  apiEnabled: boolean;
+  apiPort: number | string;
+  apiUsername: string;
+  apiPassword: string;
+  apiPollSec: number | string;
+  incomingPort: number | string;
+  secret: string;
+  snmpEnabled: boolean;
+  snmpPort: number | string;
+  snmpCommunity: string;
+  snmpVersion: SnmpVersionFormValue;
+  snmpPollSec: number | string;
+  snmpTimeoutMs: number | string;
+  snmpRetries: number | string;
+  monitoredPorts: string;
+  snmpV3User: string;
+  snmpV3SecLevel: string;
+  snmpV3AuthProto: string;
+  snmpV3AuthPass: string;
+  snmpV3PrivProto: string;
+  snmpV3PrivPass: string;
+};
 
 export function ConfigTab() {
   const { nas, loadNas, refreshReach } = useNasDetail();
@@ -24,14 +53,14 @@ export function ConfigTab() {
   const [saved, setSaved] = useState(false);
 
   // Form initialized per record; password/secret fields masked when set.
-  const [form, setForm] = useState<any>(null);
+  const [form, setForm] = useState<ConfigForm | null>(null);
   const openEdit = () => {
     setSaveErr(null); setSaved(false);
     setForm({
       shortname: nas?.shortname ?? "",
       nasIp: nas?.nasIp ?? "",
       description: nas?.description ?? "",
-      isActive: nas?.isActive,
+      isActive: nas?.isActive ?? false,
       apiEnabled: nas?.apiEnabled ?? true,
       apiPort: nas?.apiPort ?? 8728,
       apiUsername: nas?.apiUsername ?? "",
@@ -42,51 +71,73 @@ export function ConfigTab() {
       snmpEnabled: nas?.snmpEnabled ?? false,
       snmpPort: nas?.snmpPort ?? 161,
       snmpCommunity: nas?.snmpCommunity ? MASK : "",
-      snmpVersion: nas?.snmpVersion ?? "2c",
+      snmpVersion: snmpVersionFormValue(nas?.snmpVersion),
       snmpPollSec: nas?.snmpPollSec ?? 30,
       snmpTimeoutMs: nas?.snmpTimeoutMs ?? 1000,
       snmpRetries: nas?.snmpRetries ?? 3,
+      monitoredPorts: nas?.monitoredPorts ? (() => { try { return JSON.parse(nas.monitoredPorts).join(", "); } catch { return nas.monitoredPorts; } })() : "",
+      // SNMPv3 (USM). Passphrases are masked — a masked value is left unchanged.
+      snmpV3User: nas?.snmpV3User ?? "",
+      snmpV3SecLevel: nas?.snmpV3SecLevel ?? "authPriv",
+      snmpV3AuthProto: nas?.snmpV3AuthProto ?? "SHA",
+      snmpV3AuthPass: nas?.hasSnmpV3AuthPass ? MASK : "",
+      snmpV3PrivProto: nas?.snmpV3PrivProto ?? "AES",
+      snmpV3PrivPass: nas?.hasSnmpV3PrivPass ? MASK : "",
     });
     setEditing(true);
   };
 
   const save = async () => {
+    const formData = form;
+    if (!formData) return;
     setSaving(true); setSaveErr(null);
     try {
-      const body: any = {
-        shortname: form.shortname,
-        nasIp: form.nasIp,
-        description: form.description,
-        isActive: form.isActive,
-        apiEnabled: form.apiEnabled,
-        apiPort: Number(form.apiPort) || 8728,
-        apiUsername: form.apiUsername,
-        apiPollSec: Number(form.apiPollSec) || 60,
-        incomingPort: Number(form.incomingPort) || 3799,
-        snmpEnabled: form.snmpEnabled,
-        snmpPort: Number(form.snmpPort) || 161,
-        snmpVersion: form.snmpVersion,
-        snmpPollSec: Number(form.snmpPollSec) || 30,
-        snmpTimeoutMs: Number(form.snmpTimeoutMs) || 1000,
-        snmpRetries: Number(form.snmpRetries) || 3,
+      const body: Record<string, string | number | boolean> = {
+        shortname: formData.shortname,
+        nasIp: formData.nasIp,
+        description: formData.description,
+        isActive: formData.isActive,
+        apiEnabled: formData.apiEnabled,
+        apiPort: Number(formData.apiPort) || 8728,
+        apiUsername: formData.apiUsername,
+        apiPollSec: Number(formData.apiPollSec) || 60,
+        incomingPort: Number(formData.incomingPort) || 3799,
+        snmpEnabled: formData.snmpEnabled,
+        snmpPort: Number(formData.snmpPort) || 161,
+        snmpVersion: formData.snmpVersion,
+        snmpPollSec: Number(formData.snmpPollSec) || 30,
+        snmpTimeoutMs: Number(formData.snmpTimeoutMs) || 1000,
+        snmpRetries: Number(formData.snmpRetries) || 3,
+        monitoredPorts: formData.monitoredPorts ?? "",
       };
+      // SNMPv3 identity + protocols are only meaningful on v3.
+      if (formData.snmpVersion === "3") {
+        body.snmpV3User = formData.snmpV3User;
+        body.snmpV3SecLevel = formData.snmpV3SecLevel;
+        body.snmpV3AuthProto = formData.snmpV3AuthProto;
+        body.snmpV3PrivProto = formData.snmpV3PrivProto;
+      }
       // Masked values are sent but the backend treats them as "unchanged".
-      if (form.apiPassword) body.apiPassword = form.apiPassword;
-      if (form.secret) body.secret = form.secret;
-      if (form.snmpCommunity) body.snmpCommunity = form.snmpCommunity;
+      if (formData.apiPassword) body.apiPassword = formData.apiPassword;
+      if (formData.secret) body.secret = formData.secret;
+      if (formData.snmpCommunity) body.snmpCommunity = formData.snmpCommunity;
+      if (formData.snmpV3AuthPass) body.snmpV3AuthPass = formData.snmpV3AuthPass;
+      if (formData.snmpV3PrivPass) body.snmpV3PrivPass = formData.snmpV3PrivPass;
 
-      const r = await apiSend<any>(`/nas/${nas?.id}`, "PUT", body);
+      const r = await apiSend<NasRecord>(`/nas/${nas?.id}`, "PUT", body);
       if (!r) throw new Error("Save failed — no response from server");
       setSaved(true);
       await Promise.allSettled([loadNas(), refreshReach({ silent: true })]);
-    } catch (e: any) {
-      setSaveErr(e?.message ?? "Save failed");
+    } catch (e: unknown) {
+      setSaveErr(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
   };
 
-  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  const set = <K extends keyof ConfigForm,>(key: K, value: ConfigForm[K]) => {
+    setForm((current) => current ? { ...current, [key]: value } : current);
+  };
 
   return (
     <div className="nd-root">
@@ -158,7 +209,7 @@ export function ConfigTab() {
             <Field label="CoA / incoming port"><input type="number" className="nd-mono" value={form.incomingPort} onChange={(e) => set("incomingPort", e.target.value)} /></Field>
 
             <Field label="SNMP enabled"><select value={form.snmpEnabled ? "1" : "0"} onChange={(e) => set("snmpEnabled", e.target.value === "1")}><option value="1">Yes</option><option value="0">No</option></select></Field>
-            <Field label="SNMP version"><select value={form.snmpVersion} onChange={(e) => set("snmpVersion", e.target.value)}><option>1</option><option>2c</option><option>3</option></select></Field>
+            <Field label="SNMP version"><select value={form.snmpVersion} onChange={(e) => { if (isSnmpVersionFormValue(e.target.value)) set("snmpVersion", e.target.value); }}><option>1</option><option>2c</option><option>3</option></select></Field>
             <Field label="SNMP port"><input type="number" className="nd-mono" value={form.snmpPort} onChange={(e) => set("snmpPort", e.target.value)} /></Field>
             <Field label="SNMP community"><input type="password" className="nd-mono" value={form.snmpCommunity} onChange={(e) => set("snmpCommunity", e.target.value)} placeholder={MASK} /></Field>
             <Field label="Poll interval (s)"><input type="number" value={form.snmpPollSec} onChange={(e) => set("snmpPollSec", e.target.value)} /></Field>
@@ -166,6 +217,24 @@ export function ConfigTab() {
               <input type="number" value={form.snmpTimeoutMs} onChange={(e) => set("snmpTimeoutMs", e.target.value)} />
               <input type="number" value={form.snmpRetries} onChange={(e) => set("snmpRetries", e.target.value)} />
             </div></Field>
+            <Field label="Monitored interfaces" hint="Comma-separated names/indexes, e.g. ether1, vlan100. Blank = all."><input className="nd-mono" value={form.monitoredPorts} onChange={(e) => set("monitoredPorts", e.target.value)} placeholder="all interfaces" /></Field>
+
+            {form.snmpVersion === "3" && (
+              <>
+                <div className="nd-group-label" style={{ gridColumn: "1 / -1" }}>SNMPv3 (USM) — authPriv recommended</div>
+                <Field label="v3 username"><input className="nd-mono" value={form.snmpV3User} onChange={(e) => set("snmpV3User", e.target.value)} /></Field>
+                <Field label="Security level"><select value={form.snmpV3SecLevel} onChange={(e) => set("snmpV3SecLevel", e.target.value)}><option value="authPriv">authPriv (recommended)</option><option value="authNoPriv">authNoPriv</option><option value="noAuthNoPriv">noAuthNoPriv</option></select></Field>
+                <Field label="Auth protocol"><select value={form.snmpV3AuthProto} onChange={(e) => set("snmpV3AuthProto", e.target.value)}><option value="SHA">SHA</option><option value="MD5">MD5</option></select></Field>
+                <Field label="Auth passphrase" hint="Masked = keep current."><input type="password" className="nd-mono" value={form.snmpV3AuthPass} onChange={(e) => set("snmpV3AuthPass", e.target.value)} placeholder={MASK} /></Field>
+                <Field label="Privacy protocol"><select value={form.snmpV3PrivProto} onChange={(e) => set("snmpV3PrivProto", e.target.value)}><option value="AES">AES</option><option value="DES">DES</option></select></Field>
+                <Field label="Privacy passphrase" hint="Masked = keep current."><input type="password" className="nd-mono" value={form.snmpV3PrivPass} onChange={(e) => set("snmpV3PrivPass", e.target.value)} placeholder={MASK} /></Field>
+              </>
+            )}
+            {form.snmpVersion === "2c" && form.snmpEnabled && (
+              <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "#B45309" }}>
+                SNMPv2c sends the community in clear text. Prefer SNMPv3 (authPriv) on untrusted networks.
+              </div>
+            )}
           </div>
 
           {saveErr && <div className="nd-config-err">{saveErr}</div>}

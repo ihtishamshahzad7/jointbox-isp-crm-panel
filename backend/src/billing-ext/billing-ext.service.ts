@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
@@ -242,6 +242,8 @@ export class BillingExtService {
       actorId: actor?.id ?? actor?.sub,
       actorName: actor?.name ?? actor?.email ?? null,
       reference: body.reference ?? null,
+      // Exactly-once when the caller supplies a payment/callback reference.
+      idempotencyKey: body.idempotencyKey ?? (body.reference ? `topup:${body.reference}` : null),
     });
   }
 
@@ -256,6 +258,10 @@ export class BillingExtService {
       actorId: actor?.id ?? actor?.sub,
       actorName: actor?.name ?? actor?.email ?? null,
       reference: body.reference ?? null,
+      idempotencyKey: body.idempotencyKey ?? null,
+      // A debit may opt into the non-negative rule without changing existing
+      // credit/adjustment semantics (default off preserves current behavior).
+      disallowNegative: body.enforceBalance === true && +body.amount < 0,
     });
   }
 
@@ -267,32 +273,63 @@ export class BillingExtService {
     type: 'TOPUP' | 'RENEWAL' | 'PACKAGE_PURCHASE' | 'REFUND' | 'ADJUSTMENT' | 'TRANSFER' | 'REVERSAL' | 'FEE' | 'REWARD';
     amount: number; description: string; reference?: string | null;
     actorType: string; actorId?: number; actorName?: string | null;
+    /** When set, a retried/duplicated operation with the same key never applies twice. */
+    idempotencyKey?: string | null;
+    /** When true, the operation is rejected if it would drive the balance below zero. */
+    disallowNegative?: boolean;
   }) {
+    // Preserve the existing 2-decimal rounding (D1 Decimal migration is separate).
+    const amount = Math.round(entry.amount * 100) / 100;
     return this.prisma.$transaction(async (db) => {
-      let bal = await db.subscriberBalance.findUnique({ where: { subscriberId: subId } });
-      if (!bal) {
-        bal = await db.subscriberBalance.create({
-          data: { subscriberId: subId, balance: 0, reservedBalance: 0, currency: 'PKR' },
+      // Idempotency fast-path: if this exact operation already landed, return the
+      // current balance without re-applying (handles payment-callback retries).
+      if (entry.idempotencyKey) {
+        const seen = await db.subscriberBalanceLedger.findUnique({
+          where: { idempotencyKey: entry.idempotencyKey },
         });
+        if (seen) {
+          return (
+            (await db.subscriberBalance.findUnique({ where: { subscriberId: subId } })) ??
+            { subscriberId: subId, balance: 0, reservedBalance: 0, currency: 'PKR' }
+          );
+        }
       }
-      const newBalance = Math.round((bal.balance + entry.amount) * 100) / 100;
-      const updated = await db.subscriberBalance.update({
+      // Atomic increment — the database adds to the current value, so concurrent
+      // top-ups/deductions can never overwrite each other (no lost update). The
+      // upsert also covers the first-ever mutation without a create/update race.
+      const updated = await db.subscriberBalance.upsert({
         where: { subscriberId: subId },
-        data: { balance: newBalance },
+        create: { subscriberId: subId, balance: amount, reservedBalance: 0, currency: 'PKR' },
+        update: { balance: { increment: amount } },
       });
-      await db.subscriberBalanceLedger.create({
-        data: {
-          subscriberId: subId,
-          type: entry.type,
-          amount: entry.amount,
-          balanceAfter: newBalance,
-          reference: entry.reference ?? null,
-          description: entry.description,
-          actorType: entry.actorType,
-          actorId: entry.actorId ?? null,
-          actorName: entry.actorName ?? null,
-        },
-      });
+      // Enforce the non-negative rule atomically where the caller requires it;
+      // throwing rolls back the increment (correct under concurrent deductions).
+      if (entry.disallowNegative && updated.balance < 0) {
+        throw new BadRequestException('Insufficient balance for this operation.');
+      }
+      try {
+        await db.subscriberBalanceLedger.create({
+          data: {
+            subscriberId: subId,
+            type: entry.type,
+            amount,
+            balanceAfter: updated.balance,
+            reference: entry.reference ?? null,
+            idempotencyKey: entry.idempotencyKey ?? null,
+            description: entry.description,
+            actorType: entry.actorType,
+            actorId: entry.actorId ?? null,
+            actorName: entry.actorName ?? null,
+          },
+        });
+      } catch (e: any) {
+        // A concurrent duplicate won the unique-key race: roll back our increment
+        // by failing the transaction — the operation is applied exactly once.
+        if (e?.code === 'P2002') {
+          throw new ConflictException('This financial operation was already processed.');
+        }
+        throw e;
+      }
       return updated;
     });
   }
@@ -428,24 +465,31 @@ export class BillingExtService {
       if (original.subscriberId && refundAmount > 0) {
         const bal = await db.subscriberBalance.findUnique({ where: { subscriberId: original.subscriberId } });
         if (bal) {
-          const newBalance = Math.round((bal.balance + refundAmount) * 100) / 100;
-          await db.subscriberBalance.update({
-            where: { subscriberId: original.subscriberId },
-            data: { balance: newBalance },
-          });
-          await db.subscriberBalanceLedger.create({
-            data: {
-              subscriberId: original.subscriberId,
-              type: 'REFUND',
-              amount: refundAmount,
-              balanceAfter: newBalance,
-              reference: `INV-${invoiceId}-REVERSAL`,
-              description: `Refund from invoice reversal (${mode})`,
-              actorType: 'STAFF',
-              actorId: actor?.id ?? actor?.sub,
-              actorName: actor?.name ?? actor?.email ?? null,
-            },
-          });
+          const refund = Math.round(refundAmount * 100) / 100;
+          const idempotencyKey = `reversal-refund:INV-${invoiceId}`;
+          // Idempotent: re-running a reversal never refunds the wallet twice.
+          const seen = await db.subscriberBalanceLedger.findUnique({ where: { idempotencyKey } });
+          if (!seen) {
+            // Atomic increment — no lost update against concurrent wallet activity.
+            const updated = await db.subscriberBalance.update({
+              where: { subscriberId: original.subscriberId },
+              data: { balance: { increment: refund } },
+            });
+            await db.subscriberBalanceLedger.create({
+              data: {
+                subscriberId: original.subscriberId,
+                type: 'REFUND',
+                amount: refund,
+                balanceAfter: updated.balance,
+                reference: `INV-${invoiceId}-REVERSAL`,
+                idempotencyKey,
+                description: `Refund from invoice reversal (${mode})`,
+                actorType: 'STAFF',
+                actorId: actor?.id ?? actor?.sub,
+                actorName: actor?.name ?? actor?.email ?? null,
+              },
+            });
+          }
         }
       }
 

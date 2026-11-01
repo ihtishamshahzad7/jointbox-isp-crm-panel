@@ -38,6 +38,15 @@ export interface NasRecord {
   snmpPollSec?: number;
   snmpTimeoutMs?: number;
   snmpRetries?: number;
+  // SNMPv3 (USM) — passphrases are never sent to the browser; only has-flags are.
+  snmpV3User?: string | null;
+  snmpV3SecLevel?: string | null;
+  snmpV3AuthProto?: string | null;
+  snmpV3PrivProto?: string | null;
+  snmpV3AuthPass?: string;
+  hasSnmpV3AuthPass?: boolean;
+  snmpV3PrivPass?: string;
+  hasSnmpV3PrivPass?: boolean;
   nasIdentifier?: string | null;
   monitoredPorts?: string | null;
   _count?: { subscribers: number };

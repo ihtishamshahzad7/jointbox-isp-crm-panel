@@ -1,12 +1,32 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { assertSnmpTargetAllowed, normalizeSnmpVersion } from '../nas/nas-snmp-config';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { IF, IF_HC, IF_EXTRA, IF_OPER_UP, healthProfileFor, HealthOid } from './oids';
 import { SecretsService } from '../common/secrets.service';
 import { decField } from '../nas/nas-credentials';
-import { NON_DEMO_OWNED } from '../common/scope.service';
-import { snmpEnabled } from '../common/snmp-enabled';
+
+/** How a failed poll is classified. Drives NasSnmpState.status + event type. */
+export type SnmpErrorKind = 'timeout' | 'auth_error' | 'config_error' | 'unreachable' | 'error';
+
+/** The outcome of one poll, consumed by SnmpMonitorService. `message` is always
+ *  redacted and operator-friendly — it never contains a credential. */
+export type SnmpPollResult = {
+  ok: boolean;
+  kind: 'ok' | SnmpErrorKind;
+  message?: string;
+  sysDescr?: string | null;
+  uptimeSec?: number | null;
+  responseMs?: number;
+  cpu?: number | null;
+  memory?: number | null;
+  interfaces?: number;
+  interfacesUp?: number;
+  interfacesDown?: number;
+  downInterfaces?: string[];
+  rebooted?: boolean;
+};
 
 /**
  * DEVICE HEALTH + INTERFACE RATE COLLECTOR.
@@ -31,9 +51,8 @@ import { snmpEnabled } from '../common/snmp-enabled';
 export class DeviceHealthService {
   private readonly log = new Logger('DeviceHealth');
   private snmp: any = null;
-  private busy = false;
   /** Previous counter reading per NAS+ifIndex, for the delta. */
-  private prev = new Map<string, { rx: bigint; tx: bigint; inErr: number; outErr: number; inDis: number; outDis: number; at: number }>();
+  private prev = new Map<string, { name: string; rx: bigint; tx: bigint; inErr: number; outErr: number; inDis: number; outDis: number; at: number }>();
   /** Previous uptime per NAS, to detect a reboot (counters reset). */
   private prevUptime = new Map<number, number>();
 
@@ -46,43 +65,80 @@ export class DeviceHealthService {
     }
   }
 
-  @Cron(CronExpression.EVERY_30_SECONDS)
-  async tick() {
-    if (!snmpEnabled()) return;
-    if (!this.snmp || this.busy || !isPrimaryInstance()) return;
-    this.busy = true;
-    try {
-      const list = await this.prisma.nas.findMany({
-        // See NON_DEMO_OWNED: demo routers do not exist, so polling them can
-        // only ever produce failures and false alerts.
-        where: { AND: [{ snmpEnabled: true, isActive: true }, NON_DEMO_OWNED] },
-        select: {
-          id: true, nasname: true, nasIp: true, deviceType: true,
-          snmpCommunity: true, snmpPort: true, snmpVersion: true, monitoredPorts: true,
-          snmpTimeoutMs: true, snmpRetries: true,
-        },
-      });
-      for (const nas of list) {
-        await this.collect(nas).catch((e) =>
-          this.log.warn(`Health poll failed for ${nas.nasname}: ${e?.message || e}`));
-      }
-    } finally {
-      this.busy = false;
-    }
-  }
+  /**
+   * STAGE 2: scheduling moved to SnmpMonitorService, which owns per-NAS
+   * intervals, bounded concurrency, backoff and single-flight. This service is
+   * now the stateless COLLECTOR — it polls one device and returns a classified
+   * result. It no longer runs its own 30-second global sweep (which polled every
+   * enabled NAS on a fixed interval with no backoff). `snmpAvailable()` lets the
+   * monitor skip entirely when net-snmp is missing.
+   */
+  snmpAvailable(): boolean { return !!this.snmp; }
+
+  /** The NAS columns a poll needs. Shared so the monitor selects the same set. */
+  static readonly POLL_SELECT = {
+    id: true, nasname: true, nasIp: true, deviceType: true,
+    snmpCommunity: true, snmpPort: true, snmpVersion: true, monitoredPorts: true,
+    snmpTimeoutMs: true, snmpRetries: true,
+    snmpV3User: true, snmpV3SecLevel: true, snmpV3AuthProto: true,
+    snmpV3AuthPass: true, snmpV3PrivProto: true, snmpV3PrivPass: true,
+  } as const;
 
   // ── SNMP plumbing ────────────────────────────────────────────
   private host(nas: any) { return String(nas.nasIp || '').trim(); }
 
   private session(nas: any) {
-    const version = nas.snmpVersion === 'V1' ? this.snmp.Version1 : this.snmp.Version2c;
+    const host = this.host(nas);
+    const port = nas.snmpPort ?? 161;
+    assertSnmpTargetAllowed(host, port);
+    const opts = {
+      port,
+      timeout: nas.snmpTimeoutMs || 4000,
+      retries: nas.snmpRetries ?? 1,
+    };
+    const version = normalizeSnmpVersion(nas.snmpVersion);
+    // ── SNMPv3 (USM) ──────────────────────────────────────────────────────
+    // Preferred for real deployments: per-user auth + privacy, no shared
+    // community on the wire. We NEVER silently downgrade — the security level
+    // is exactly what the operator configured, and authPriv requires both
+    // passphrases to be present (validated at save time).
+    if (version === 'V3') {
+      const level = this.v3Level(nas.snmpV3SecLevel);
+      const user: any = { name: nas.snmpV3User || '', level };
+      if (level !== this.snmp.SecurityLevel.noAuthNoPriv) {
+        user.authProtocol = (nas.snmpV3AuthProto || 'SHA').toUpperCase() === 'MD5'
+          ? this.snmp.AuthProtocols.md5 : this.snmp.AuthProtocols.sha;
+        user.authKey = decField(this.secrets, nas.snmpV3AuthPass);
+      }
+      if (level === this.snmp.SecurityLevel.authPriv) {
+        user.privProtocol = (nas.snmpV3PrivProto || 'AES').toUpperCase() === 'DES'
+          ? this.snmp.PrivProtocols.des : this.snmp.PrivProtocols.aes;
+        user.privKey = decField(this.secrets, nas.snmpV3PrivPass);
+      }
+      return this.snmp.createV3Session(this.host(nas), user, { ...opts, version: this.snmp.Version3 });
+    }
+    // ── SNMPv1 / v2c ──────────────────────────────────────────────────────
     // The community is encrypted at rest; decField() also passes legacy
     // plaintext values through unchanged.
-    const community = decField(this.secrets, nas.snmpCommunity) || 'public';
-    return this.snmp.createSession(this.host(nas), community, {
-      port: nas.snmpPort || 161, version,
-      timeout: nas.snmpTimeoutMs || 4000, retries: nas.snmpRetries ?? 1,
-    });
+    const community = decField(this.secrets, nas.snmpCommunity);
+    if (!community) throw new Error('SNMP community is not configured.');
+    return this.snmp.createSession(
+      host,
+      community,
+      { ...opts, version: version === 'V1' ? this.snmp.Version1 : this.snmp.Version2c },
+    );
+  }
+
+  /** Map our stored security-level string to net-snmp's enum. */
+  private v3Level(level?: string | null) {
+    switch (String(level || '').trim()) {
+      case 'authPriv': return this.snmp.SecurityLevel.authPriv;
+      case 'authNoPriv': return this.snmp.SecurityLevel.authNoPriv;
+      case 'noAuthNoPriv': return this.snmp.SecurityLevel.noAuthNoPriv;
+      // No configured level → the safest that still works with just a username
+      // is noAuthNoPriv; config validation steers operators to authPriv.
+      default: return this.snmp.SecurityLevel.noAuthNoPriv;
+    }
   }
 
   /** Walk one OID base → Map(trailing index → value). */
@@ -321,6 +377,13 @@ export class DeviceHealthService {
     if (dm.count || im.count) {
       this.log.log(`Retention: pruned ${dm.count} device and ${im.count} interface samples older than ${days}d.`);
     }
+
+    // Monitoring EVENTS are kept on their OWN, longer window — they are
+    // low-volume (state transitions only) and useful for incident review well
+    // after the high-frequency metrics have aged out. Separate knob.
+    const eventDays = Number(process.env.EVENT_RETENTION_DAYS || 90);
+    const ev = await this.prisma.nasEvent.deleteMany({ where: { ts: { lt: new Date(Date.now() - eventDays * 86400_000) } } }).catch(() => ({ count: 0 }));
+    if (ev.count) this.log.log(`Retention: pruned ${ev.count} NAS events older than ${eventDays}d.`);
   }
 
   /**
@@ -335,6 +398,8 @@ export class DeviceHealthService {
         id: true, nasname: true, nasIp: true, deviceType: true, snmpEnabled: true,
         snmpCommunity: true, snmpPort: true, snmpVersion: true,
         snmpTimeoutMs: true, snmpRetries: true,
+        snmpV3User: true, snmpV3SecLevel: true, snmpV3AuthProto: true,
+        snmpV3AuthPass: true, snmpV3PrivProto: true, snmpV3PrivPass: true,
       },
     });
     if (!nas) return { ok: false, error: 'NAS not found.' };
@@ -342,8 +407,9 @@ export class DeviceHealthService {
     if (!this.host(nas)) return { ok: false, error: 'This NAS has no IP address configured.' };
 
     const started = Date.now();
-    const session = this.session(nas);
+    let session: any;
     try {
+      session = this.session(nas);
       const scalars = await this.get(session, [IF.sysUpTime, IF.sysDescr]);
       const responseMs = Date.now() - started;
       const ticks = this.num(scalars.get(IF.sysUpTime));
@@ -384,18 +450,40 @@ export class DeviceHealthService {
         note: nas.snmpEnabled ? undefined : 'SNMP answered, but polling is disabled for this NAS — enable it to collect history.',
       };
     } catch (e: any) {
-      return { ok: false, target: `${this.host(nas)}:${nas.snmpPort || 161}`, error: e?.message || 'SNMP test failed.' };
+      return {
+        ok: false,
+        target: `${this.host(nas)}:${nas.snmpPort || 161}`,
+        error: this.classifyError(e).message,
+      };
     } finally {
-      try { session.close(); } catch { /* already closed */ }
+      try { session?.close(); } catch { /* already closed */ }
     }
   }
 
   // ── One device ───────────────────────────────────────────────
-  private async collect(nas: any) {
-    if (!this.host(nas)) return;
-    const session = this.session(nas);
+  /**
+   * Poll ONE device and persist its metrics. Returns a classified result so the
+   * monitor can record state and raise events without re-probing. A failed
+   * probe writes NO metrics (so missing data is never recorded as zero) and
+   * returns a redacted, operator-friendly reason — never the credential.
+   */
+  async collectOne(nas: any): Promise<SnmpPollResult> {
+    if (!this.snmp) return { ok: false, kind: 'error', message: 'net-snmp is not installed on the server.' };
+    if (!this.host(nas)) return { ok: false, kind: 'config_error', message: 'This NAS has no IP address configured.' };
+    let session: any;
     const startedAt = Date.now();
     try {
+      session = this.session(nas);
+      // Reachability + auth probe FIRST. Classifies timeout vs auth vs config
+      // before we attempt the full walk, and confirms the device actually
+      // answered — so we never fabricate metrics for an unreachable NAS.
+      const probe = await this.probe(session, [IF.sysUpTime, IF.sysDescr]);
+      if (!probe.ok) return { ok: false, ...this.classifyError(probe.err) };
+
+      const sysDescr = String(probe.values.get(IF.sysDescr) ?? '').slice(0, 300) || null;
+      const probeTicks = this.num(probe.values.get(IF.sysUpTime));
+      const sysUptimeSec = probeTicks == null ? null : Math.round(probeTicks / 100);
+
       const health = await this.readHealth(session, nas.deviceType);
       const snmpMs = Date.now() - startedAt;
 
@@ -429,10 +517,13 @@ export class DeviceHealthService {
 
       const now = Date.now();
       const rows: any[] = [];
+      let ifUp = 0, ifDown = 0;
+      const downInterfaces: string[] = [];
 
       for (const [ifIndex, status] of oper) {
         const name = String(names.get(ifIndex) ?? descr.get(ifIndex) ?? `if${ifIndex}`);
         if (allowed && !allowed.has(String(ifIndex).toLowerCase()) && !allowed.has(name.toLowerCase())) continue;
+        if (Number(status) === IF_OPER_UP) ifUp++; else { ifDown++; downInterfaces.push(name.slice(0, 96)); }
 
         const use64 = hcIn.has(ifIndex) || hcOut.has(ifIndex);
         const rx = this.big(use64 ? hcIn.get(ifIndex) : in32.get(ifIndex));
@@ -442,35 +533,34 @@ export class DeviceHealthService {
         const spd = this.num(speed.get(ifIndex));
 
         let rxBps = 0, txBps = 0, inErrRate = 0, outErrRate = 0, inDisRate = 0, outDisRate = 0;
-        if (rx != null && tx != null) {
-          if (before && !rebooted) {
-            const secs = Math.max((now - before.at) / 1000, 1);
-            rxBps = this.rate(before.rx, rx, use64, secs);
-            txBps = this.rate(before.tx, tx, use64, secs);
-            const d = (cur: number | null, prv: number) => (cur == null || cur < prv ? 0 : (cur - prv) / secs);
-            inErrRate = d(this.num(inErr.get(ifIndex)), before.inErr);
-            outErrRate = d(this.num(outErr.get(ifIndex)), before.outErr);
-            inDisRate = d(this.num(inDis.get(ifIndex)), before.inDis);
-            outDisRate = d(this.num(outDis.get(ifIndex)), before.outDis);
+        if (rx == null || tx == null) continue;
+        if (before && before.name === name && !rebooted) {
+          const secs = Math.max((now - before.at) / 1000, 1);
+          rxBps = this.rate(before.rx, rx, use64, secs);
+          txBps = this.rate(before.tx, tx, use64, secs);
+          const d = (cur: number | null, prv: number) => (cur == null || cur < prv ? 0 : (cur - prv) / secs);
+          inErrRate = d(this.num(inErr.get(ifIndex)), before.inErr);
+          outErrRate = d(this.num(outErr.get(ifIndex)), before.outErr);
+          inDisRate = d(this.num(inDis.get(ifIndex)), before.inDis);
+          outDisRate = d(this.num(outDis.get(ifIndex)), before.outDis);
 
-            // Sanity: a rate above the port's line speed is a bad read, not traffic.
-            if (spd && spd > 0) {
-              const capBps = spd * 1_000_000 * 1.2;
-              if (rxBps > capBps) rxBps = 0;
-              if (txBps > capBps) txBps = 0;
-            }
+          // Sanity: a rate above the port's line speed is a bad read, not traffic.
+          if (spd && spd > 0) {
+            const capBps = spd * 1_000_000 * 1.2;
+            if (rxBps > capBps) rxBps = 0;
+            if (txBps > capBps) txBps = 0;
           }
-          this.prev.set(key, {
-            rx, tx, at: now,
-            inErr: this.num(inErr.get(ifIndex)) ?? 0,
-            outErr: this.num(outErr.get(ifIndex)) ?? 0,
-            inDis: this.num(inDis.get(ifIndex)) ?? 0,
-            outDis: this.num(outDis.get(ifIndex)) ?? 0,
-          });
         }
+        this.prev.set(key, {
+          name, rx, tx, at: now,
+          inErr: this.num(inErr.get(ifIndex)) ?? 0,
+          outErr: this.num(outErr.get(ifIndex)) ?? 0,
+          inDis: this.num(inDis.get(ifIndex)) ?? 0,
+          outDis: this.num(outDis.get(ifIndex)) ?? 0,
+        });
 
-        // First poll after a restart has no baseline — record status only.
-        if (!before || rebooted) continue;
+        // First poll, reboot, or changed interface identity has no valid baseline.
+        if (!before || before.name !== name || rebooted) continue;
 
         rows.push({
           nasId: nas.id, ifIndex, name: name.slice(0, 96),
@@ -491,9 +581,69 @@ export class DeviceHealthService {
       if (rows.length) await this.prisma.interfaceMetric.createMany({ data: rows });
 
       if (rebooted) this.log.warn(`${nas.nasname}: uptime went backwards — device rebooted, counter baseline reset.`);
+      return {
+        ok: true, kind: 'ok',
+        sysDescr, uptimeSec: health.uptime ?? sysUptimeSec,
+        responseMs: snmpMs,
+        cpu: health.cpu ?? null, memory: health.memory ?? null,
+        interfacesUp: ifUp, interfacesDown: ifDown, interfaces: ifUp + ifDown,
+        downInterfaces,
+        rebooted,
+      };
+    } catch (e: any) {
+      return { ok: false, ...this.classifyError(e) };
     } finally {
-      try { session.close(); } catch { /* already closed */ }
+      try { session?.close(); } catch { /* already closed */ }
     }
+  }
+
+  /**
+   * A reachability probe that SURFACES the error (unlike get(), which swallows
+   * it), so the monitor can tell timeout from auth from config failure.
+   */
+  private probe(session: any, oids: string[]): Promise<{ ok: boolean; err?: any; values: Map<string, any> }> {
+    return new Promise((resolve) => {
+      const values = new Map<string, any>();
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      const done = (ok: boolean, err?: any) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve({ ok, err, values });
+      };
+      try {
+        session.get(oids, (err: any, vbs: any[]) => {
+          if (err) return done(false, err);
+          if (Array.isArray(vbs)) for (const vb of vbs) { if (!this.snmp.isVarbindError(vb)) values.set(String(vb.oid), vb.value); }
+          done(values.size > 0, values.size ? undefined : new Error('empty SNMP response'));
+        });
+      } catch (e) { done(false, e); }
+      timer = setTimeout(() => done(false, new Error('probe timed out')), 15_000);
+      timer.unref?.();
+    });
+  }
+
+  /**
+   * Map a net-snmp error to a stable kind + a FIXED, operator-friendly message.
+   * The message is never built from the raw error text or the credential, so a
+   * reason stored on NasSnmpState or shown in the UI can never leak a secret.
+   */
+  private classifyError(err: any): { kind: SnmpErrorKind; message: string } {
+    const sig = `${err?.name || ''} ${String(err?.message || err || '')}`;
+    if (/SNMP_ALLOWED_CIDRS|SNMP target|SNMP port|Unsupported SNMP version|SNMP community is not configured/i.test(sig)) {
+      return { kind: 'config_error', message: 'SNMP target or configuration is not authorized or incomplete.' };
+    }
+    if (/TimedOut|timed out|timeout/i.test(sig)) {
+      return { kind: 'timeout', message: 'No SNMP reply (timeout). Check the device is reachable, SNMP is enabled, and UDP is open to this server.' };
+    }
+    if (/Authentication|security|engine|usmStats|RequestFailed|AuthError|not in time window|wrong digest/i.test(sig)) {
+      return { kind: 'auth_error', message: 'SNMP authentication failed. Check the community or SNMPv3 username, passphrases and security level.' };
+    }
+    if (/empty SNMP response/i.test(sig)) {
+      return { kind: 'unreachable', message: 'The device did not return the expected SNMP data. Check the SNMP service and view/ACL configuration.' };
+    }
+    return { kind: 'error', message: 'SNMP poll failed.' };
   }
 
   /**

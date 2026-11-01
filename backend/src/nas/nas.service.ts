@@ -11,6 +11,7 @@ import { sanitizeNas, sanitizeNasList, encField, isMask } from './nas-credential
 import { nasIpProblem, secretProblem } from './radius-clients-render';
 import { RadiusClientVaultService } from './radius-client-vault.service';
 import { assertCompanyCanAdd } from '../common/company-plan';
+import { assertValidSnmpPort, clampInt, normalizeMonitoredPorts, assertSnmpConfigValid, normalizeSnmpVersion } from './nas-snmp-config';
 
 @Injectable()
 export class NasService implements OnModuleInit {
@@ -506,6 +507,7 @@ export class NasService implements OnModuleInit {
 
     // Validate before writing: a bad IP here silently breaks RADIUS auth.
     this.assertValidNasIp(data.nasIp);
+    if (data.snmpPort !== undefined) assertValidSnmpPort(data.snmpPort);
     data.nasIp  = data.nasIp.trim();
     // Trailing whitespace in a secret produces "invalid Message-Authenticator"
     // and is almost impossible to spot in a GUI field.
@@ -599,11 +601,15 @@ export class NasService implements OnModuleInit {
     deviceType?: string;
     apiEnabled?: boolean; apiPollSec?: number;
     snmpEnabled?: boolean; snmpPort?: number; snmpCommunity?: string; snmpVersion?: string; snmpPollSec?: number;
+    snmpTimeoutMs?: number; snmpRetries?: number; monitoredPorts?: string | string[] | null;
+    snmpV3User?: string; snmpV3SecLevel?: string; snmpV3AuthProto?: string; snmpV3AuthPass?: string;
+    snmpV3PrivProto?: string; snmpV3PrivPass?: string;
     syslogEnabled?: boolean; syslogPort?: number;
   }, actor?: any) {
     await this.assertNasOwner(id, actor);
     const existingNas = await this.prisma.nas.findUnique({ where: { id } });
     if (!existingNas) throw new NotFoundException(`NAS with ID ${id} not found`);
+    if (data.snmpPort !== undefined) assertValidSnmpPort(data.snmpPort);
 
     const updateData: any = {};
     // `nasname` is the FreeRADIUS client key and must always equal the IP.
@@ -662,12 +668,50 @@ export class NasService implements OnModuleInit {
     if (data.snmpCommunity !== undefined && !isMask(data.snmpCommunity)) {
       updateData.snmpCommunity = encField(this.secrets, data.snmpCommunity);
     }
-    if (data.snmpVersion !== undefined)   updateData.snmpVersion   = data.snmpVersion as any;
-    if (data.snmpPollSec !== undefined)   updateData.snmpPollSec   = data.snmpPollSec;
+    if (data.snmpVersion !== undefined)   updateData.snmpVersion   = normalizeSnmpVersion(data.snmpVersion);
+    if (data.snmpPollSec !== undefined)   updateData.snmpPollSec   = clampInt(data.snmpPollSec, 10, 86400, 30);
+    if (data.snmpTimeoutMs !== undefined) updateData.snmpTimeoutMs = clampInt(data.snmpTimeoutMs, 500, 30000, 4000);
+    if (data.snmpRetries !== undefined)   updateData.snmpRetries   = clampInt(data.snmpRetries, 0, 5, 1);
+    if (data.monitoredPorts !== undefined) updateData.monitoredPorts = normalizeMonitoredPorts(data.monitoredPorts);
+    // SNMPv3 username + protocols (non-secret). Passphrases are masked like the
+    // community: a masked value means "unchanged", never overwrite with bullets.
+    if (data.snmpV3User !== undefined)      updateData.snmpV3User      = (data.snmpV3User || '').trim() || null;
+    if (data.snmpV3SecLevel !== undefined)  updateData.snmpV3SecLevel  = data.snmpV3SecLevel || null;
+    if (data.snmpV3AuthProto !== undefined) updateData.snmpV3AuthProto = (data.snmpV3AuthProto || '').toUpperCase() || null;
+    if (data.snmpV3PrivProto !== undefined) updateData.snmpV3PrivProto = (data.snmpV3PrivProto || '').toUpperCase() || null;
+    if (data.snmpV3AuthPass !== undefined && !isMask(data.snmpV3AuthPass)) {
+      updateData.snmpV3AuthPass = encField(this.secrets, data.snmpV3AuthPass);
+    }
+    if (data.snmpV3PrivPass !== undefined && !isMask(data.snmpV3PrivPass)) {
+      updateData.snmpV3PrivPass = encField(this.secrets, data.snmpV3PrivPass);
+    }
     if (data.syslogEnabled !== undefined) updateData.syslogEnabled = data.syslogEnabled;
     if (data.syslogPort !== undefined)    updateData.syslogPort    = data.syslogPort;
 
+    // Validate the RESULTING SNMP config (existing values + this change) so a
+    // partial update cannot leave an SNMPv3 device without the credentials its
+    // security level requires. Never silently downgrade.
+    assertSnmpConfigValid(existingNas, updateData);
+
     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
+
+    // Stage 2: record a monitoring enabled/disabled event on the toggle, so the
+    // NAS event timeline shows who turned it on/off and when.
+    if (data.snmpEnabled !== undefined && data.snmpEnabled !== existingNas.snmpEnabled) {
+      await this.prisma.nasEvent.create({
+        data: {
+          nasId: id,
+          type: data.snmpEnabled ? 'monitoring_enabled' : 'monitoring_disabled',
+          severity: 'info',
+          message: data.snmpEnabled ? 'SNMP monitoring enabled.' : 'SNMP monitoring disabled.',
+          ownerId: existingNas.ownerId ?? null,
+        },
+      }).catch(() => undefined);
+      // When monitoring is turned off, reflect it in the operational state.
+      if (!data.snmpEnabled) {
+        await this.prisma.nasSnmpState.updateMany({ where: { nasId: id }, data: { status: 'disabled', nextPollAt: null } }).catch(() => undefined);
+      }
+    }
 
     const ipChanged     = data.nasIp   && data.nasIp.trim() !== existingNas.nasIp;
     const secretChanged = data.secret !== undefined && !isMask(data.secret);

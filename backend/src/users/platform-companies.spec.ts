@@ -127,7 +127,7 @@ describe('platform account signing in as a company', () => {
     };
     const jwt: any = { sign: jest.fn(() => 'TOKEN') };
     const scope: any = { assertUser: jest.fn(async () => undefined) };
-    const svc = new AuthService(prisma, jwt, {} as any, scope, {} as any);
+    const svc = new AuthService(prisma, jwt, {} as any, scope, {} as any, {} as any);
     return svc;
   }
 
