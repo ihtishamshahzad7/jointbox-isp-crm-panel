@@ -8,10 +8,25 @@
  */
 jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }));
 import { SnmpMonitorService } from './snmp-monitor.service';
+import { SnmpPollResult } from './device-health.service';
 
 /** Stateful in-memory prisma double for nas / nasSnmpState / nasEvent. */
 function makePrisma(seed: { nas?: any[] } = {}) {
-  const states = new Map<number, any>();
+  type MockSnmpState = {
+    nasId: number;
+    status?: string;
+    consecutiveFailures?: number;
+    lastPollAt?: Date;
+    lastSuccessAt?: Date;
+    lastErrorAt?: Date;
+    lastError?: string | null;
+    nextPollAt?: Date | null;
+    sysDescr?: string | null;
+    uptimeSec?: number | null;
+    pollLeaseToken?: string | null;
+    pollLeaseExpiresAt?: Date | null;
+  };
+  const states = new Map<number, MockSnmpState>();
   const events: any[] = [];
   let eventId = 1;
   const prisma: any = {
@@ -25,8 +40,12 @@ function makePrisma(seed: { nas?: any[] } = {}) {
         return next;
       },
       updateMany: async ({ where, data }: any) => {
-        const cur = states.get(where.nasId); if (cur) states.set(where.nasId, { ...cur, ...data });
-        return { count: cur ? 1 : 0 };
+        const cur = states.get(where.nasId);
+        if (!cur || (where.pollLeaseToken && cur.pollLeaseToken !== where.pollLeaseToken)) {
+          return { count: 0 };
+        }
+        states.set(where.nasId, { ...cur, ...data });
+        return { count: 1 };
       },
     },
     nasEvent: {
@@ -49,6 +68,28 @@ function makePrisma(seed: { nas?: any[] } = {}) {
         return rows;
       },
       update: async ({ where, data }: any) => { const e = events.find((x) => x.id === where.id); Object.assign(e, data); return e; },
+    },
+    $queryRaw: <T>(
+      _query: TemplateStringsArray,
+      ...values: [number, number, string, number]
+    ): Promise<T> => {
+      const [nasId, intervalSec, pollLeaseToken, leaseMs] = values;
+      const current = states.get(nasId);
+      const now = Date.now();
+      if (current && (
+        (current.nextPollAt && new Date(current.nextPollAt).getTime() > now)
+        || (current.pollLeaseExpiresAt && new Date(current.pollLeaseExpiresAt).getTime() > now)
+      )) return [];
+      states.set(nasId, {
+        nasId,
+        status: current?.status ?? 'unknown',
+        consecutiveFailures: current?.consecutiveFailures ?? 0,
+        ...current,
+        nextPollAt: new Date(now + intervalSec * 1000),
+        pollLeaseToken,
+        pollLeaseExpiresAt: new Date(now + leaseMs),
+      });
+      return Promise.resolve([{ nasId }] as T);
     },
     $queryRawUnsafe: async () => [],
   };
@@ -74,6 +115,12 @@ const restoreMonitorFlag = (value: string | undefined) => {
   if (value === undefined) delete process.env.SNMP_MONITOR;
   else process.env.SNMP_MONITOR = value;
 };
+const makeDue = (states: Map<number, any>, nasId: number) => {
+  const state = states.get(nasId);
+  if (state) state.nextPollAt = new Date(Date.now() - 1000);
+};
+const runPoll = (worker: SnmpMonitorService, device: ReturnType<typeof nas>) =>
+  (worker as unknown as { pollNas: (nas: ReturnType<typeof nas>) => Promise<void> }).pollNas(device);
 
 describe('SnmpMonitorService (Stage 2 worker)', () => {
   it('first successful poll records ok state and stays quiet (no spurious event)', async () => {
@@ -93,12 +140,15 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
     const svc: any = svcWith(prisma, h);
     await svc.pollNas(nas(1));
     expect(states.get(1).status).toBe('timeout');
+    expect(states.get(1).pollLeaseToken).toBeNull();
     expect(ev.filter((e) => e.type === 'timeout').length).toBe(1);
     // Second failure of the SAME kind → deduped (no new event).
+    makeDue(states, 1);
     await svc.pollNas(nas(1));
     expect(ev.filter((e) => e.type === 'timeout').length).toBe(1);
     // Recovery.
     mode = { ok: true, kind: 'ok', sysDescr: 'RouterOS', uptimeSec: 100, downInterfaces: [] };
+    makeDue(states, 1);
     await svc.pollNas(nas(1));
     expect(states.get(1).status).toBe('ok');
     expect(ev.filter((e) => e.type === 'poll_recovered').length).toBe(1);
@@ -108,7 +158,11 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
     const { prisma, states } = makePrisma();
     const h = makeHealth(() => ({ ok: false, kind: 'unreachable', message: 'unreachable' }));
     const svc: any = svcWith(prisma, h);
-    const nextAfter = async () => { await svc.pollNas(nas(1)); return new Date(states.get(1).nextPollAt).getTime() - Date.now(); };
+    const nextAfter = async () => {
+      makeDue(states, 1);
+      await svc.pollNas(nas(1));
+      return new Date(states.get(1).nextPollAt).getTime() - Date.now();
+    };
     const b1 = await nextAfter();
     const b2 = await nextAfter();
     const b3 = await nextAfter();
@@ -137,12 +191,102 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
     expect(h.calls.length).toBe(0); // skipped while in flight
   });
 
+  it('uses the database lease to keep independent worker instances from polling the same NAS', async () => {
+    const { prisma, states } = makePrisma();
+    let pollStarted!: () => void;
+    let completePoll!: (result: SnmpPollResult) => void;
+    const started = new Promise<void>((resolve) => {
+      pollStarted = resolve;
+    });
+    const firstHealth = {
+      snmpAvailable: () => true,
+      collectOne: () => {
+        pollStarted();
+        return new Promise<SnmpPollResult>((resolve) => {
+          completePoll = resolve;
+        });
+      },
+    };
+    const secondHealth = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
+    const firstWorker = svcWith(prisma, firstHealth);
+    const secondWorker = svcWith(prisma, secondHealth);
+
+    const firstPoll = runPoll(firstWorker, nas(1));
+    await started;
+    const ownerToken = states.get(1).pollLeaseToken;
+    await runPoll(secondWorker, nas(1));
+    expect(states.get(1).pollLeaseToken).toBe(ownerToken);
+    expect(secondHealth.calls).toHaveLength(0);
+
+    completePoll({ ok: true, kind: 'ok', downInterfaces: [] });
+    await firstPoll;
+    expect(states.get(1).status).toBe('ok');
+    expect(states.get(1).pollLeaseToken).toBeNull();
+    expect(states.get(1).pollLeaseExpiresAt).toBeNull();
+  });
+
+  it('keeps a timed-out poll lease until expiry because the underlying request may continue', async () => {
+    const { prisma, states } = makePrisma();
+    const firstHealth = {
+      snmpAvailable: () => true,
+      collectOne: () => new Promise<SnmpPollResult>(() => {}),
+    };
+    const firstWorker = svcWith(prisma, firstHealth);
+    Object.defineProperty(firstWorker, 'pollBudgetMs', { value: () => 1 });
+    await runPoll(firstWorker, nas(1));
+
+    const leaseToken = states.get(1).pollLeaseToken;
+    expect(states.get(1).status).toBe('timeout');
+    expect(leaseToken).toBeTruthy();
+
+    makeDue(states, 1);
+    const secondHealth = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
+    await runPoll(svcWith(prisma, secondHealth), nas(1));
+
+    expect(secondHealth.calls).toHaveLength(0);
+    expect(states.get(1).pollLeaseToken).toBe(leaseToken);
+  });
+
+  it('releases the poll lease when collection fails before the deadline', async () => {
+    const { prisma, states } = makePrisma();
+    const health = {
+      snmpAvailable: () => true,
+      collectOne: async () => {
+        throw new Error('collection failed');
+      },
+    };
+
+    await runPoll(svcWith(prisma, health), nas(1));
+
+    expect(states.get(1).status).toBe('timeout');
+    expect(states.get(1).pollLeaseToken).toBeNull();
+    expect(states.get(1).pollLeaseExpiresAt).toBeNull();
+  });
+
+  it('recovers a claim after its lease expires', async () => {
+    const { prisma, states } = makePrisma();
+    states.set(1, {
+      nasId: 1,
+      status: 'timeout',
+      consecutiveFailures: 1,
+      nextPollAt: new Date(Date.now() - 1000),
+      pollLeaseToken: '00000000-0000-4000-8000-000000000001',
+      pollLeaseExpiresAt: new Date(Date.now() - 1000),
+    });
+    const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
+
+    await runPoll(svcWith(prisma, h), nas(1));
+
+    expect(h.calls).toHaveLength(1);
+    expect(states.get(1).status).toBe('ok');
+  });
+
   it('skips polling and releases inFlight when reserving the poll slot fails', async () => {
     const { prisma } = makePrisma();
     const h = makeHealth(() => ({ ok: true, kind: 'ok', downInterfaces: [] }));
     const svc: any = svcWith(prisma, h);
     const warn = jest.spyOn(svc.log, 'warn').mockImplementation(() => undefined);
-    jest.spyOn(prisma.nasSnmpState, 'upsert')
+    jest.spyOn(prisma, '$queryRaw')
       .mockRejectedValueOnce(new Error('database connection details'));
 
     await expect(svc.pollNas(nas(1))).resolves.toBeUndefined();
@@ -176,22 +320,24 @@ describe('SnmpMonitorService (Stage 2 worker)', () => {
   });
 
   it('cpu_high alert fires once then is suppressed within the cooldown', async () => {
-    const { prisma, events: ev } = makePrisma();
+    const { prisma, states, events: ev } = makePrisma();
     const h = makeHealth(() => ({ ok: true, kind: 'ok', cpu: 97, memory: 10, downInterfaces: [] }));
     const svc: any = svcWith(prisma, h);
     await svc.pollNas(nas(1));
+    makeDue(states, 1);
     await svc.pollNas(nas(1));
     expect(ev.filter((e) => e.type === 'cpu_high').length).toBe(1); // cooldown-deduped
   });
 
   it('interface_down then interface_up on set change', async () => {
-    const { prisma, events: ev } = makePrisma();
+    const { prisma, states, events: ev } = makePrisma();
     let down: string[] = ['ether5'];
     const h = makeHealth(() => ({ ok: true, kind: 'ok', cpu: 5, memory: 5, downInterfaces: down }));
     const svc: any = svcWith(prisma, h);
     await svc.pollNas(nas(1));
     expect(ev.filter((e) => e.type === 'interface_down').length).toBe(1);
     down = []; // recovered
+    makeDue(states, 1);
     await svc.pollNas(nas(1));
     expect(ev.filter((e) => e.type === 'interface_up').length).toBe(1);
   });

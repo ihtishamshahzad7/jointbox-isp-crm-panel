@@ -1,10 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsService } from '../common/events.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { NON_DEMO_OWNED } from '../common/scope.service';
-import { mapLimit, withTimeout } from '../common/concurrency';
+import { mapLimit, OperationTimeoutError, withTimeout } from '../common/concurrency';
 import { DeviceHealthService, SnmpPollResult } from './device-health.service';
 
 /**
@@ -19,20 +20,20 @@ import { DeviceHealthService, SnmpPollResult } from './device-health.service';
  *   • each NAS has its OWN interval (snmpPollSec), tracked by nextPollAt;
  *   • bounded worker concurrency + a hard per-NAS timeout, so one slow or
  *     unreachable device never stalls the others;
- *   • single-flight: a NAS already being polled is skipped, and nextPollAt is
- *     claimed optimistically so overlapping ticks can't double-poll it;
+ *   • single-flight: a database lease atomically claims each due NAS across
+ *     worker processes, and expires so abandoned claims can be recovered;
  *   • exponential backoff on repeated failure, so a dead NAS is tried less and
  *     less often instead of every cycle;
  *   • events are written on STATE TRANSITIONS only (reachable↔unreachable, …)
  *     and resource thresholds have a cooldown, so there is no alert storm.
  *
- * Runs on the primary instance only (isPrimaryInstance), so the cluster polls
- * each device once. Disable entirely with SNMP_MONITOR=off.
+ * Runs on the primary instance only (isPrimaryInstance), and the lease also
+ * coordinates dedicated worker replicas. Disable entirely with SNMP_MONITOR=off.
  */
 @Injectable()
 export class SnmpMonitorService {
   private readonly log = new Logger('SnmpMonitor');
-  /** NAS ids currently being polled in THIS process (single-flight guard). */
+  /** Avoid duplicate work within this process; the database lease spans workers. */
   private readonly inFlight = new Set<number>();
   /** Last operationally-down interface set per NAS, for interface_down/up. */
   private readonly prevDown = new Map<number, Set<string>>();
@@ -105,55 +106,106 @@ export class SnmpMonitorService {
   private async pollNas(nas: any): Promise<void> {
     if (this.inFlight.has(nas.id)) return;
     this.inFlight.add(nas.id);
+    const intervalSec = Math.max(10, Number(nas.snmpPollSec) || 30);
+    const budgetMs = this.pollBudgetMs(nas);
+    const leaseToken = randomUUID();
+    let claimed = false;
+    let leaveLeaseToExpire = false;
     try {
-      const intervalSec = Math.max(10, Number(nas.snmpPollSec) || 30);
-      // Claim the next slot BEFORE polling so an overlapping tick won't re-pick it
-      // even if this poll runs long. Backoff may push it further out on failure.
       try {
-        await this.claimNextPoll(nas.id, intervalSec);
+        claimed = await this.claimNextPoll(
+          nas.id,
+          intervalSec,
+          leaseToken,
+          Math.max(intervalSec * 1000, budgetMs) + 30_000,
+        );
       } catch {
         this.log.warn(`SNMP polling slot reservation failed for NAS ${nas.id}; poll skipped.`);
         return;
       }
+      if (!claimed) return;
 
       const prev = await this.prisma.nasSnmpState.findUnique({ where: { nasId: nas.id } }).catch(() => null);
       const prevStatus: string = prev?.status ?? 'unknown';
 
       let result: SnmpPollResult;
       try {
-        // Hard ceiling over the whole poll: covers the full interface walk, not
-        // just one request's timeout, so a half-answering device still releases
-        // the worker slot.
-        const budgetMs = ((nas.snmpTimeoutMs || 4000) * ((nas.snmpRetries ?? 1) + 1)) + 25_000;
         result = await withTimeout(this.health.collectOne(nas), budgetMs, `snmp ${nas.nasname}`);
-      } catch (e: any) {
+      } catch (e) {
+        // withTimeout cannot cancel the underlying SNMP work.
+        leaveLeaseToExpire = e instanceof OperationTimeoutError;
         result = { ok: false, kind: 'timeout', message: 'SNMP poll exceeded its time budget.' };
       }
 
       const newStatus = result.ok ? 'ok' : result.kind;
-      await this.writeState(nas, result, newStatus, intervalSec);
-      await this.raiseEvents(nas, prevStatus, newStatus, result);
+      if (await this.writeState(nas, result, newStatus, intervalSec, leaseToken)) {
+        await this.raiseEvents(nas, prevStatus, newStatus, result);
+      }
     } finally {
-      this.inFlight.delete(nas.id);
+      try {
+        if (claimed && !leaveLeaseToExpire) await this.releasePollClaim(nas.id, leaseToken);
+      } finally {
+        this.inFlight.delete(nas.id);
+      }
     }
   }
 
-  /** Optimistically push nextPollAt out by one interval (single-flight claim). */
-  private async claimNextPoll(nasId: number, intervalSec: number): Promise<void> {
-    const next = new Date(Date.now() + intervalSec * 1000);
-    await this.prisma.nasSnmpState.upsert({
-      where: { nasId },
-      create: { nasId, nextPollAt: next },
-      update: { nextPollAt: next },
-    });
+  private pollBudgetMs(nas: any): number {
+    // Covers the full interface walk, not just one request's timeout.
+    return ((nas.snmpTimeoutMs || 4000) * ((nas.snmpRetries ?? 1) + 1)) + 25_000;
   }
 
-  private async writeState(nas: any, r: SnmpPollResult, status: string, intervalSec: number): Promise<void> {
+  /**
+   * Atomically create or claim a due NAS. The conditional conflict update is
+   * serialized by PostgreSQL, so only one worker gets a returned row.
+   */
+  private async claimNextPoll(
+    nasId: number,
+    intervalSec: number,
+    leaseToken: string,
+    leaseMs: number,
+  ): Promise<boolean> {
+    const claimed = await this.prisma.$queryRaw<Array<{ nasId: number }>>`
+      INSERT INTO "nas_snmp_state"
+        ("nasId", "nextPollAt", "pollLeaseToken", "pollLeaseExpiresAt", "updatedAt")
+      VALUES (
+        ${nasId},
+        NOW() + (${intervalSec} * INTERVAL '1 second'),
+        ${leaseToken}::uuid,
+        NOW() + (${leaseMs} * INTERVAL '1 millisecond'),
+        NOW()
+      )
+      ON CONFLICT ("nasId") DO UPDATE SET
+        "nextPollAt" = EXCLUDED."nextPollAt",
+        "pollLeaseToken" = EXCLUDED."pollLeaseToken",
+        "pollLeaseExpiresAt" = EXCLUDED."pollLeaseExpiresAt",
+        "updatedAt" = NOW()
+      WHERE
+        ("nas_snmp_state"."nextPollAt" IS NULL OR "nas_snmp_state"."nextPollAt" <= NOW())
+        AND ("nas_snmp_state"."pollLeaseExpiresAt" IS NULL OR "nas_snmp_state"."pollLeaseExpiresAt" <= NOW())
+      RETURNING "nasId"
+    `;
+    return claimed.length > 0;
+  }
+
+  /** Release only the lease represented by this poll's fencing token. */
+  private async releasePollClaim(nasId: number, leaseToken: string): Promise<void> {
+    await this.prisma.nasSnmpState.updateMany({
+      where: { nasId, pollLeaseToken: leaseToken },
+      data: { pollLeaseToken: null, pollLeaseExpiresAt: null },
+    }).catch((e) => this.log.warn(`SNMP polling claim release failed for NAS ${nasId}: ${e?.message || e}`));
+  }
+
+  private async writeState(
+    nas: any,
+    r: SnmpPollResult,
+    status: string,
+    intervalSec: number,
+    leaseToken: string,
+  ): Promise<boolean> {
     const now = new Date();
     const failures = r.ok ? 0 : ((await this.prisma.nasSnmpState.findUnique({ where: { nasId: nas.id }, select: { consecutiveFailures: true } }).catch(() => null))?.consecutiveFailures ?? 0) + 1;
-    // Backoff: on failure, wait interval·2^(failures-1), capped. On success, the
-    // normal interval. (claimNextPoll already set the normal interval; we only
-    // need to push it further on failure.)
+    // Backoff: on failure, wait interval·2^(failures-1), capped.
     let nextPollAt: Date;
     if (r.ok) {
       nextPollAt = new Date(now.getTime() + intervalSec * 1000);
@@ -170,11 +222,16 @@ export class SnmpMonitorService {
         ? { lastSuccessAt: now, lastError: null, sysDescr: r.sysDescr ?? null, uptimeSec: r.uptimeSec ?? null }
         : { lastErrorAt: now, lastError: (r.message ?? 'SNMP poll failed.').slice(0, 300) }),
     };
-    await this.prisma.nasSnmpState.upsert({
-      where: { nasId: nas.id },
-      create: { nasId: nas.id, ...common },
-      update: common,
-    }).catch((e) => this.log.warn(`State write failed for ${nas.nasname}: ${e?.message || e}`));
+    try {
+      const updated = await this.prisma.nasSnmpState.updateMany({
+        where: { nasId: nas.id, pollLeaseToken: leaseToken },
+        data: common,
+      });
+      return updated.count === 1;
+    } catch (e: any) {
+      this.log.warn(`State write failed for ${nas.nasname}: ${e?.message || e}`);
+      return false;
+    }
   }
 
   /** Create events for state transitions + resource thresholds (deduped). */

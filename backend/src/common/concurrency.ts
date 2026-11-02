@@ -39,12 +39,31 @@ export async function mapLimit<T, R>(
  * A hung MikroTik API socket would otherwise occupy a worker slot for the full
  * TCP timeout and stall the cycle behind it.
  */
-export function withTimeout<T>(p: Promise<T>, ms: number, label = 'operation'): Promise<T> {
+export class OperationTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} timed out after ${ms}ms`);
+  }
+}
+
+export function withTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  label = 'operation',
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    const timer = setTimeout(
+      () => reject(new OperationTimeoutError(label, ms)),
+      ms,
+    );
     p.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
     );
   });
 }

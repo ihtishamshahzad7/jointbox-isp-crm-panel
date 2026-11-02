@@ -533,6 +533,9 @@ model NasSnmpState {
   consecutiveFailures Int      @default(0)
   /// Earliest time the scheduler may poll this NAS again (backoff + interval).
   nextPollAt         DateTime?
+  /// Fencing token and expiry for the worker currently polling this NAS.
+  pollLeaseToken     String?   @db.Uuid
+  pollLeaseExpiresAt DateTime?
   /// Last sysDescr / uptime seen on a successful poll, for the status panel.
   sysDescr           String?   @db.VarChar(300)
   uptimeSec          Int?
