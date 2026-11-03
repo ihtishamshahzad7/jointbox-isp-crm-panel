@@ -18,6 +18,64 @@ enum Status {
   SUSPENDED
 }
 
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  APPROVED_LEAVE
+  CANCELLED_LEAVE
+}
+
+enum EmployeeLeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum EmployeeLeaveHistoryAction {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum EmployeeLeaveBalanceEntryType {
+  ALLOCATION
+  ADJUSTMENT
+  LEAVE_APPROVAL
+  LEAVE_REVERSAL
+}
+
+enum CrmLeadStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  FOLLOW_UP
+  INTERESTED
+  WON
+  LOST
+}
+
+enum CrmLeadPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum CrmLeadActivityType {
+  NOTE
+  CALL
+  EMAIL
+  MEETING
+  FOLLOW_UP
+  STATUS_CHANGE
+  ASSIGNMENT
+  CONVERSION
+}
+
 enum NasType {
   MIKROTIK
   CISCO
@@ -159,9 +217,32 @@ enum FieldJobStatus {
   PENDING // created, nobody assigned
   ASSIGNED // technician allocated
   IN_PROGRESS // technician on site
+  PENDING_REVIEW
   COMPLETED
   FAILED // attended but couldn't complete
   CANCELLED
+}
+
+enum TaskStatus {
+  PLANNED
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TaskActivityType {
+  CREATED
+  UPDATED
+  ASSIGNED
+  STATUS_CHANGED
+  COMMENT
 }
 
 /// Lifecycle of a piece of hardware — ONU, router, cable drum, splitter.
@@ -788,6 +869,8 @@ model User {
   payments          Payment[]              @relation("PaymentReceiver")
   assignedTickets   Ticket[]               @relation("AssignedTickets")
   activityLogs      ActivityLog[]          @relation("ActivityLogUser")
+  aiAgentUsages         AiAgentUsage[]                 @relation("AiAgentUsageUser")
+  aiAgentCompanyUsages  AiAgentUsage[]                 @relation("AiAgentUsageCompany")
   loginLogs         LoginLog[]             @relation("LoginLogUser")
   sessionLogs       SessionLog[]           @relation("SessionLogUser")
   packagePrices     ResellerPackagePrice[] @relation("UserPackagePrices")
@@ -799,10 +882,29 @@ model User {
   ipPoolAssignments IpPoolAssignment[]     @relation("UserIpPoolAssignments")
   ownedPackages     Package[]              @relation("PackageOwner")
   inventoryItems    InventoryItem[]        @relation("InventoryOwner")
+  companyInventoryItems InventoryItem[]    @relation("InventoryCompany")
   fieldJobs         FieldJob[]             @relation("TechnicianJobs")
+  fieldJobSchedules FieldJobSchedule[]     @relation("FieldJobScheduleCompany")
+  createdFieldJobSchedules FieldJobSchedule[] @relation("FieldJobScheduleCreator")
+  tasksForCompany   Task[]                 @relation("TaskCompany")
+  tasksCreated      Task[]                 @relation("TaskCreator")
+  taskActivities     TaskActivity[]         @relation("TaskActivityActor")
+  fieldJobActivities FieldJobActivity[]     @relation("FieldJobActivityActor")
+  fieldJobVisits    FieldJobVisit[]        @relation("FieldJobVisitTechnician")
+  fieldJobAttachments FieldJobAttachment[] @relation("FieldJobAttachmentUploader")
   groupMemberships  AccessGroupMember[]
   /// Prepaid cards this account is currently HOLDING as sellable stock.
   voucherStock      Voucher[]              @relation("UserVoucherStock")
+  hrEmployeeProfile     EmployeeProfile?               @relation("EmployeeProfileUser")
+  companyEmployees      EmployeeProfile[]              @relation("EmployeeProfileCompany")
+  attendanceCorrections EmployeeAttendanceCorrection[] @relation("AttendanceCorrectionActor")
+  leaveTypesManaged     EmployeeLeaveType[]            @relation("EmployeeLeaveTypeCompany")
+  leaveApprovals        EmployeeLeaveRequest[]         @relation("EmployeeLeaveDecisionActor")
+  leaveHistoryActions   EmployeeLeaveHistory[]         @relation("EmployeeLeaveHistoryActor")
+  leaveBalanceEntries   EmployeeLeaveBalanceEntry[]    @relation("EmployeeLeaveBalanceEntryActor")
+  companyCrmLeads       CrmLead[]                      @relation("CrmLeadCompany")
+  createdCrmLeads       CrmLead[]                      @relation("CrmLeadCreator")
+  crmLeadActivities     CrmLeadActivity[]              @relation("CrmLeadActivityActor")
 
   @@index([parentId])
   @@index([role, isActive])
@@ -1104,6 +1206,8 @@ model FieldJob {
   subscriber   Subscriber? @relation("SubscriberFieldJobs", fields: [subscriberId], references: [id], onDelete: SetNull)
   ticketId     Int?
   ticket       Ticket?     @relation("TicketFieldJobs", fields: [ticketId], references: [id])
+  leadId       Int?
+  lead         CrmLead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   // Who is doing it.
   assignedTo   Int?
@@ -1112,9 +1216,13 @@ model FieldJob {
   assignedAt   DateTime?
 
   // When.
-  scheduledAt DateTime?
-  startedAt   DateTime?
-  completedAt DateTime?
+  scheduledAt       DateTime?
+  appointmentEndsAt DateTime?
+  arrivedAt         DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  customerConfirmedAt DateTime?
 
   // Where — coordinates let you dispatch by proximity and prove attendance.
   address   String?
@@ -1122,9 +1230,25 @@ model FieldJob {
   longitude Float?
 
   description     String
+  workInstructions String?  @db.Text
+  requiredSkills  String[]   @default([])
+  checklist       Json?
+  technicianNotes String?    @db.Text
   completionNotes String?
   failureReason   String?
+  cancellationReason String? @db.VarChar(500)
+  resolution      String?    @db.Text
+  nextAction      String?    @db.Text
   photoUrls       String? // comma-separated /uploads paths (proof of work)
+  visitOrder      Int?
+  attachments     FieldJobAttachment[]
+  activities      FieldJobActivity[]
+  visits          FieldJobVisit[]
+  recurringOccurrences FieldJobOccurrence[]
+  inventoryMovements InventoryMovement[]
+  issuedInventoryItems InventoryItem[] @relation("FieldJobIssuedInventory")
+  reservedInventoryItems InventoryItem[] @relation("FieldJobReservedInventory")
+  tasks           Task[]    @relation("TaskFieldJob")
 
   createdById Int?
   createdAt   DateTime @default(now())
@@ -1135,6 +1259,123 @@ model FieldJob {
   @@index([subscriberId])
   @@index([scheduledAt])
   @@index([type, status])
+  @@index([leadId])
+  @@index([assignedTo, scheduledAt, appointmentEndsAt])
+  @@index([assignedTo, scheduledAt, visitOrder])
+}
+
+model FieldJobAttachment {
+  id            Int      @id @default(autoincrement())
+  fieldJobId    Int
+  filename      String   @unique @db.VarChar(200)
+  evidenceType  String   @db.VarChar(32)
+  note          String?  @db.VarChar(500)
+  uploadedById  Int
+  createdAt     DateTime @default(now())
+
+  fieldJob FieldJob   @relation(fields: [fieldJobId], references: [id], onDelete: Restrict)
+  file     UploadedFile @relation(fields: [filename], references: [filename], onDelete: Restrict)
+  uploader User      @relation("FieldJobAttachmentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([fieldJobId, createdAt])
+  @@index([uploadedById, createdAt])
+}
+
+model FieldJobActivity {
+  id          Int      @id @default(autoincrement())
+  fieldJobId  Int
+  actorUserId Int?
+  action      String   @db.VarChar(40)
+  detail      String   @db.Text
+  createdAt   DateTime @default(now())
+
+  fieldJob FieldJob @relation(fields: [fieldJobId], references: [id], onDelete: Cascade)
+  actor    User?    @relation("FieldJobActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([fieldJobId, createdAt])
+  @@index([actorUserId])
+}
+
+model FieldJobVisit {
+  id            Int       @id @default(autoincrement())
+  fieldJobId    Int
+  technicianId  Int?
+  visitNumber   Int
+  arrivedAt     DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  outcome       String?   @db.VarChar(40)
+  notes         String?   @db.Text
+  nextAction    String?   @db.Text
+  checkInLocationStatus String? @db.VarChar(20)
+  checkInLatitude Float?
+  checkInLongitude Float?
+  checkInAccuracy Float?
+  checkInCapturedAt DateTime?
+  checkOutLocationStatus String? @db.VarChar(20)
+  checkOutLatitude Float?
+  checkOutLongitude Float?
+  checkOutAccuracy Float?
+  checkOutCapturedAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  fieldJob   FieldJob @relation(fields: [fieldJobId], references: [id], onDelete: Cascade)
+  technician User?   @relation("FieldJobVisitTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
+
+  @@unique([fieldJobId, visitNumber])
+  @@index([technicianId, createdAt])
+}
+
+model FieldJobSchedule {
+  id                Int          @id @default(autoincrement())
+  companyId         Int
+  createdById       Int?
+  subscriberId      Int?
+  ticketId          Int?
+  leadId            Int?
+  type              FieldJobType
+  priority          TicketPriority @default(MEDIUM)
+  description       String       @db.Text
+  workInstructions  String?      @db.Text
+  address           String?      @db.VarChar(500)
+  frequency         String       @db.VarChar(12)
+  interval          Int          @default(1)
+  timeZone          String       @db.VarChar(100)
+  startAt           DateTime
+  endAt             DateTime?
+  nextRunAt         DateTime?
+  lockedUntil       DateTime?
+  lockToken         String?      @db.VarChar(36)
+  status            String       @default("ACTIVE") @db.VarChar(12)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  company   User                  @relation("FieldJobScheduleCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  creator   User?                 @relation("FieldJobScheduleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  subscriber Subscriber?          @relation("SubscriberFieldJobSchedules", fields: [subscriberId], references: [id], onDelete: SetNull)
+  ticket     Ticket?              @relation("TicketFieldJobSchedules", fields: [ticketId], references: [id], onDelete: SetNull)
+  lead       CrmLead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  occurrences FieldJobOccurrence[]
+
+  @@index([companyId, status, nextRunAt])
+  @@index([status, lockedUntil])
+  @@index([subscriberId])
+  @@index([ticketId])
+  @@index([leadId])
+}
+
+model FieldJobOccurrence {
+  id            Int      @id @default(autoincrement())
+  scheduleId    Int
+  fieldJobId    Int?     @unique
+  occurrenceAt  DateTime
+  createdAt     DateTime @default(now())
+
+  schedule FieldJobSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  fieldJob FieldJob?        @relation(fields: [fieldJobId], references: [id], onDelete: SetNull)
+
+  @@unique([scheduleId, occurrenceAt])
+  @@index([occurrenceAt])
 }
 
 /// Hardware stock — ONUs, routers, cable, splitters.
@@ -1159,6 +1400,8 @@ model InventoryItem {
   supplier      String?
 
   // Who currently holds it, and where it ended up.
+  companyId    Int?
+  company      User?       @relation("InventoryCompany", fields: [companyId], references: [id], onDelete: SetNull)
   ownerId      Int? // reseller holding the stock
   owner        User?       @relation("InventoryOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   subscriberId Int? // set once installed at a customer
@@ -1168,8 +1411,12 @@ model InventoryItem {
 
   installedAt DateTime?
   notes       String?
+  fieldJobId Int?
+  reservedForFieldJobId Int?
 
   movements InventoryMovement[] @relation("ItemMovements")
+  fieldJob FieldJob? @relation("FieldJobIssuedInventory", fields: [fieldJobId], references: [id], onDelete: SetNull)
+  reservedForFieldJob FieldJob? @relation("FieldJobReservedInventory", fields: [reservedForFieldJobId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1178,6 +1425,8 @@ model InventoryItem {
   @@index([ownerId])
   @@index([subscriberId])
   @@index([type])
+  @@index([fieldJobId])
+  @@index([reservedForFieldJobId])
 }
 
 /// Immutable audit of every hand-off: warehouse → dealer → customer → back.
@@ -1193,13 +1442,21 @@ model InventoryMovement {
   fromStatus   InventoryStatus?
   toStatus     InventoryStatus
   byUserId     Int?
+  fieldJobId   Int?
+  employeeId   Int?
+  movementType String        @default("STATUS_CHANGE") @db.VarChar(24)
+  idempotencyKey String?     @unique @db.VarChar(120)
   notes        String?
+  fieldJob     FieldJob?     @relation(fields: [fieldJobId], references: [id], onDelete: SetNull)
+  employee     EmployeeProfile? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
   @@index([itemId])
   @@index([toUserId])
   @@index([createdAt])
+  @@index([fieldJobId, createdAt])
+  @@index([employeeId, createdAt])
 }
 
 /// Every time a subscriber changes hands (dealer 1 → dealer 2, franchise
@@ -1411,6 +1668,7 @@ model Package {
   owner   User? @relation("PackageOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
   subscribers      Subscriber[]            @relation("PackageSubscribers")
+  crmLeads         CrmLead[]               @relation("CrmLeadPackage")
   resellerPrices   ResellerPackagePrice[]  @relation("PackageResellerPrices")
   accessGroups     AccessGroupPackage[]    @relation("AccessGroupPackageRel")
   proRatedBilling  ProRatedBilling?
@@ -1543,6 +1801,8 @@ model Subscriber {
   transfers        SubscriberTransfer[]      @relation("SubscriberTransfers")
   inventory        InventoryItem[]           @relation("SubscriberInventory")
   fieldJobs        FieldJob[]                @relation("SubscriberFieldJobs")
+  fieldJobSchedules FieldJobSchedule[]       @relation("SubscriberFieldJobSchedules")
+  operationalTasks Task[]                    @relation("TaskSubscriber")
   staticIps        StaticIp[]                @relation("SubscriberStaticIps")
   credits          CreditExtension[]         @relation("SubscriberCredits")
   onu              Onu?                      @relation("SubscriberOnu")
@@ -1566,6 +1826,7 @@ model Subscriber {
   billing          SubscriberBilling?
   wallet           SubscriberBalance?
   throttlePolicies SubscriberThrottle[]
+  crmLeadConversions CrmLead[] @relation("CrmLeadConvertedSubscriber")
 
   @@index([status])
   @@index([packageId])
@@ -1982,6 +2243,8 @@ model Ticket {
 
   messages  TicketMessage[] @relation("TicketMessages")
   fieldJobs FieldJob[]      @relation("TicketFieldJobs")
+  fieldJobSchedules FieldJobSchedule[] @relation("TicketFieldJobSchedules")
+  tasks     Task[]          @relation("TaskTicket")
 
   @@index([subscriberId])
   @@index([status, priority])
@@ -2014,7 +2277,7 @@ model LoginLog {
   userAgent  String?
   status     String
   failReason String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
   user User? @relation("LoginLogUser", fields: [userId], references: [id], onDelete: SetNull)
 
@@ -2041,6 +2304,352 @@ model ActivityLog {
   @@index([traceId])
   @@index([createdAt])
   @@index([entity, entityId])
+}
+
+model CrmLead {
+  id                     Int           @id @default(autoincrement())
+  companyId              Int
+  createdById            Int?
+  assignedEmployeeId     Int?
+  packageId              Int?
+  convertedSubscriberId  Int?
+  name                   String        @db.VarChar(120)
+  phone                  String        @db.VarChar(40)
+  phoneNormalized        String        @db.VarChar(20)
+  email                  String?       @db.VarChar(254)
+  emailNormalized        String?       @db.VarChar(254)
+  address                String?       @db.VarChar(500)
+  serviceArea            String?       @db.VarChar(120)
+  source                 String?       @db.VarChar(80)
+  channel                String?       @db.VarChar(80)
+  estimatedMonthlyValue  Decimal?      @db.Decimal(12, 2)
+  stage                  CrmLeadStage  @default(NEW)
+  priority               CrmLeadPriority @default(NORMAL)
+  notes                  String?       @db.Text
+  followUpAt             DateTime?
+  followUpRemindedAt     DateTime?
+  lostReason             String?       @db.VarChar(500)
+  conversionType         String?       @db.VarChar(32)
+  convertedAt            DateTime?
+  archivedAt             DateTime?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  company             User            @relation("CrmLeadCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy           User?           @relation("CrmLeadCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedEmployee   EmployeeProfile? @relation("CrmLeadAssignment", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  package             Package?        @relation("CrmLeadPackage", fields: [packageId], references: [id], onDelete: SetNull)
+  convertedSubscriber Subscriber?     @relation("CrmLeadConvertedSubscriber", fields: [convertedSubscriberId], references: [id], onDelete: SetNull)
+  activities          CrmLeadActivity[]
+  conversionKey       CrmLeadConversionKey?
+  operationalTasks    Task[]          @relation("TaskLead")
+  fieldJobs           FieldJob[]
+  fieldJobSchedules   FieldJobSchedule[]
+
+  @@unique([id, companyId])
+  @@index([companyId, stage, archivedAt, createdAt])
+  @@index([companyId, assignedEmployeeId, stage])
+  @@index([companyId, phoneNormalized])
+  @@index([companyId, emailNormalized])
+  @@index([companyId, followUpAt, followUpRemindedAt])
+  @@index([convertedSubscriberId])
+}
+
+model Task {
+  id                 Int        @id @default(autoincrement())
+  companyId          Int
+  createdById        Int?
+  assignedEmployeeId Int?
+  subscriberId       Int?
+  leadId             Int?
+  ticketId           Int?
+  fieldJobId         Int?
+  title              String     @db.VarChar(160)
+  description        String?    @db.Text
+  category           String?    @db.VarChar(80)
+  priority           TaskPriority @default(NORMAL)
+  status             TaskStatus @default(PLANNED)
+  dueAt              DateTime?
+  reminderAt         DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  company   User             @relation("TaskCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  creator   User?            @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  assignee  EmployeeProfile? @relation("TaskAssignment", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  subscriber Subscriber?     @relation("TaskSubscriber", fields: [subscriberId], references: [id], onDelete: SetNull)
+  lead      CrmLead?         @relation("TaskLead", fields: [leadId], references: [id], onDelete: SetNull)
+  ticket    Ticket?          @relation("TaskTicket", fields: [ticketId], references: [id], onDelete: SetNull)
+  fieldJob  FieldJob?        @relation("TaskFieldJob", fields: [fieldJobId], references: [id], onDelete: SetNull)
+  activities TaskActivity[]
+  reminders TaskReminder[]
+
+  @@unique([id, companyId])
+  @@index([companyId, status, dueAt])
+  @@index([companyId, assignedEmployeeId, status])
+  @@index([companyId, createdAt])
+  @@index([subscriberId])
+  @@index([leadId])
+  @@index([ticketId])
+  @@index([fieldJobId])
+}
+
+model TaskReminder {
+  id                 Int       @id @default(autoincrement())
+  companyId          Int
+  taskId             Int
+  assignedEmployeeId Int?
+  scheduledAt        DateTime
+  status             String    @default("PENDING") @db.VarChar(16)
+  attempts           Int       @default(0)
+  lockedUntil        DateTime?
+  messageId          Int?
+  idempotencyKey     String    @unique @db.VarChar(120)
+  deliveredAt        DateTime?
+  lastError          String?   @db.VarChar(500)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  task     Task             @relation(fields: [taskId, companyId], references: [id, companyId], onDelete: Cascade)
+  assignee EmployeeProfile? @relation("TaskReminderAssignment", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, scheduledAt])
+  @@index([companyId, status, scheduledAt])
+  @@index([assignedEmployeeId, scheduledAt])
+}
+
+model TaskActivity {
+  id          Int              @id @default(autoincrement())
+  companyId   Int
+  taskId      Int
+  actorUserId Int?
+  type        TaskActivityType
+  detail      String           @db.Text
+  createdAt   DateTime         @default(now())
+
+  task  Task  @relation(fields: [taskId, companyId], references: [id, companyId], onDelete: Cascade)
+  actor User? @relation("TaskActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, taskId, createdAt])
+  @@index([actorUserId])
+}
+
+model CrmLeadActivity {
+  id          Int                 @id @default(autoincrement())
+  companyId   Int
+  leadId      Int
+  actorUserId Int?
+  type        CrmLeadActivityType
+  detail      String              @db.Text
+  fromStage   CrmLeadStage?
+  toStage     CrmLeadStage?
+  createdAt   DateTime            @default(now())
+
+  lead  CrmLead @relation(fields: [leadId, companyId], references: [id, companyId], onDelete: Cascade)
+  actor User?   @relation("CrmLeadActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, leadId, createdAt])
+  @@index([actorUserId])
+}
+
+model CrmLeadConversionKey {
+  id             Int    @id @default(autoincrement())
+  companyId      Int
+  leadId         Int
+  idempotencyKey String @unique @db.VarChar(100)
+
+  lead CrmLead @relation(fields: [leadId, companyId], references: [id, companyId], onDelete: Cascade)
+
+  @@unique([leadId, companyId])
+}
+
+model EmployeeProfile {
+  id             Int       @id @default(autoincrement())
+  companyId      Int
+  userId         Int?      @unique
+  employeeNumber String
+  name           String
+  department     String?
+  designation    String?
+  hiredAt        DateTime?
+  status         String    @default("ACTIVE")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company           User                   @relation("EmployeeProfileCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  user              User?                  @relation("EmployeeProfileUser", fields: [userId], references: [id], onDelete: SetNull)
+  attendanceRecords EmployeeAttendance[]
+  leaveBalances     EmployeeLeaveBalance[]
+  leaveRequests     EmployeeLeaveRequest[]
+  assignedCrmLeads  CrmLead[]              @relation("CrmLeadAssignment")
+  assignedTasks     Task[]                 @relation("TaskAssignment")
+  taskReminders     TaskReminder[]         @relation("TaskReminderAssignment")
+  inventoryMovements InventoryMovement[]
+
+  @@unique([companyId, employeeNumber])
+  @@unique([id, companyId])
+  @@index([companyId, status])
+  @@index([companyId, name])
+}
+
+model EmployeeAttendance {
+  id              Int              @id @default(autoincrement())
+  companyId       Int
+  employeeId      Int
+  attendanceDate  DateTime         @db.Date
+  status          AttendanceStatus @default(PRESENT)
+  checkInAt       DateTime?
+  checkOutAt      DateTime?
+  durationMinutes Int?
+  leaveRequestId  Int?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  employee     EmployeeProfile                @relation(fields: [employeeId, companyId], references: [id, companyId], onDelete: Cascade)
+  corrections  EmployeeAttendanceCorrection[]
+  leaveRequest EmployeeLeaveRequest?          @relation(fields: [leaveRequestId, companyId], references: [id, companyId], onDelete: Restrict)
+
+  @@unique([id, companyId])
+  @@unique([companyId, employeeId, attendanceDate])
+  @@index([companyId, attendanceDate])
+  @@index([companyId, employeeId, attendanceDate])
+  @@index([companyId, status, attendanceDate])
+  @@index([companyId, leaveRequestId])
+}
+
+model EmployeeAttendanceCorrection {
+  id                 Int              @id @default(autoincrement())
+  companyId          Int
+  attendanceId       Int
+  actorUserId        Int?
+  reason             String
+  previousStatus     AttendanceStatus
+  newStatus          AttendanceStatus
+  previousCheckInAt  DateTime?
+  newCheckInAt       DateTime?
+  previousCheckOutAt DateTime?
+  newCheckOutAt      DateTime?
+  createdAt          DateTime         @default(now())
+
+  attendance EmployeeAttendance @relation(fields: [attendanceId, companyId], references: [id, companyId], onDelete: Cascade)
+  actor      User?              @relation("AttendanceCorrectionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, attendanceId, createdAt])
+  @@index([actorUserId])
+}
+
+model EmployeeLeaveType {
+  id                   Int      @id @default(autoincrement())
+  companyId            Int
+  name                 String
+  description          String?
+  isPaid               Boolean  @default(false)
+  annualAllocationDays Decimal? @db.Decimal(7, 2)
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  company  User                   @relation("EmployeeLeaveTypeCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  requests EmployeeLeaveRequest[]
+  balances EmployeeLeaveBalance[]
+
+  @@unique([id, companyId])
+  @@unique([companyId, name])
+  @@index([companyId, isActive, name])
+}
+
+model EmployeeLeaveRequest {
+  id              Int                 @id @default(autoincrement())
+  companyId       Int
+  employeeId      Int
+  leaveTypeId     Int
+  startDate       DateTime            @db.Date
+  endDate         DateTime            @db.Date
+  leaveDates      DateTime[]          @db.Date
+  requestedDays   Int
+  reason          String
+  status          EmployeeLeaveStatus @default(PENDING)
+  submittedAt     DateTime            @default(now())
+  decidedAt       DateTime?
+  decidedByUserId Int?
+  decisionComment String?
+  cancelledAt     DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  employee       EmployeeProfile             @relation(fields: [employeeId, companyId], references: [id, companyId], onDelete: Restrict)
+  leaveType      EmployeeLeaveType           @relation(fields: [leaveTypeId, companyId], references: [id, companyId], onDelete: Restrict)
+  decidedBy      User?                       @relation("EmployeeLeaveDecisionActor", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  history        EmployeeLeaveHistory[]
+  balanceEntries EmployeeLeaveBalanceEntry[]
+  attendanceDays EmployeeAttendance[]
+
+  @@unique([id, companyId])
+  @@index([companyId, status, submittedAt])
+  @@index([companyId, employeeId, startDate, endDate])
+  @@index([companyId, leaveTypeId, status])
+  @@index([decidedByUserId])
+}
+
+model EmployeeLeaveHistory {
+  id             Int                        @id @default(autoincrement())
+  companyId      Int
+  requestId      Int
+  actorUserId    Int?
+  action         EmployeeLeaveHistoryAction
+  previousStatus EmployeeLeaveStatus?
+  newStatus      EmployeeLeaveStatus
+  comment        String?
+  createdAt      DateTime                   @default(now())
+
+  request EmployeeLeaveRequest @relation(fields: [requestId, companyId], references: [id, companyId], onDelete: Restrict)
+  actor   User?                @relation("EmployeeLeaveHistoryActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, requestId, createdAt])
+  @@index([actorUserId])
+}
+
+model EmployeeLeaveBalance {
+  id             Int      @id @default(autoincrement())
+  companyId      Int
+  employeeId     Int
+  leaveTypeId    Int
+  periodYear     Int
+  allocatedDays  Decimal  @db.Decimal(7, 2)
+  adjustmentDays Decimal  @default(0) @db.Decimal(7, 2)
+  usedDays       Decimal  @default(0) @db.Decimal(7, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  employee  EmployeeProfile             @relation(fields: [employeeId, companyId], references: [id, companyId], onDelete: Restrict)
+  leaveType EmployeeLeaveType           @relation(fields: [leaveTypeId, companyId], references: [id, companyId], onDelete: Restrict)
+  entries   EmployeeLeaveBalanceEntry[]
+
+  @@unique([id, companyId])
+  @@unique([companyId, employeeId, leaveTypeId, periodYear])
+  @@index([companyId, periodYear, leaveTypeId])
+  @@index([companyId, employeeId, periodYear])
+}
+
+model EmployeeLeaveBalanceEntry {
+  id             Int                           @id @default(autoincrement())
+  companyId      Int
+  balanceId      Int
+  leaveRequestId Int?
+  actorUserId    Int?
+  entryType      EmployeeLeaveBalanceEntryType
+  deltaDays      Decimal                       @db.Decimal(7, 2)
+  reason         String
+  createdAt      DateTime                      @default(now())
+
+  balance      EmployeeLeaveBalance  @relation(fields: [balanceId, companyId], references: [id, companyId], onDelete: Restrict)
+  leaveRequest EmployeeLeaveRequest? @relation(fields: [leaveRequestId, companyId], references: [id, companyId], onDelete: Restrict)
+  actor        User?                 @relation("EmployeeLeaveBalanceEntryActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, balanceId, createdAt])
+  @@index([companyId, leaveRequestId])
+  @@index([actorUserId])
 }
 
 model SessionLog {
@@ -2094,12 +2703,6 @@ model NetworkLog {
   /// still reads sensibly once the subscriber is gone.
   subscriber Subscriber? @relation("SubscriberNetworkLogs", fields: [subscriberId], references: [id], onDelete: SetNull)
 
-  @@index([nasId])
-  @@index([subscriberId])
-  @@index([loggedAt])
-  @@index([eventType])
-  @@index([username])
-
   /// A2 · SAFEGUARD 1 — WHAT MAKES REPLAY SAFE.
   ///
   /// The radacct poller advances its cursor only after writing here. If it
@@ -2117,16 +2720,20 @@ model NetworkLog {
   /// Prisma cannot express a WHERE clause on an index, so this is created by
   /// DatabaseSetupService.ensureEventIdempotency() instead of here; the note
   /// lives with the model so it is found by whoever reads it next.
+
+  @@index([nasId])
+  @@index([subscriberId])
+  @@index([loggedAt])
+  @@index([eventType])
+  @@index([username])
 }
 
 /**
  * WHERE A POLLER LEFT OFF.
- *
  * Before this table, `NetworkLogsService` kept its radacct position in a
  * process variable seeded to MAX(radacctid) on every boot — so every deploy,
  * crash and restart silently discarded the session events for however long the
  * process was down.
- *
  * A cursor is (timestamp, id) rather than an id alone because radacct rows are
  * UPDATED in place: the id of a row whose session later stops has usually
  * already been passed. The timestamp carries the ordering and the id breaks
@@ -2493,15 +3100,20 @@ model Message {
   subject      String?
   body         String
   event        String?
-  status       String    @default("QUEUED") // QUEUED | SENT | SIMULATED | FAILED
+  status       String    @default("QUEUED") // QUEUED | SENDING | SENT | SIMULATED | FAILED | FAILED_FINAL | UNKNOWN | CANCELLED
   error        String?
   attempts     Int       @default(0)
+  queuedAt     DateTime  @default(now())
+  sendingAt    DateTime?
   sentAt       DateTime?
   createdBy    Int?
+  idempotencyKey String? @unique @db.VarChar(120)
   createdAt    DateTime  @default(now())
 
   @@index([subscriberId])
   @@index([status])
+  @@index([status, queuedAt])
+  @@index([status, sendingAt])
   @@index([createdAt])
   @@index([event])
 }
@@ -2679,6 +3291,10 @@ model CompanyPlan {
   /// The price-list plan this company is on (Plans & Pricing). The caps above
   /// are copied from it when it is assigned and may then be overridden.
   planId         Int?
+  /// Product entitlements copied from the assigned platform plan.
+  features                       String[]  @default([])
+  aiAssistantMonthlyRequestLimit Int?
+  aiAssistantMonthlyTokenLimit   Int?
   updatedById    Int?
   updatedAt      DateTime  @updatedAt
 
@@ -2698,6 +3314,8 @@ model PlatformPlan {
   maxSubscribers Int?
   maxNas         Int?
   maxAccounts    Int?
+  aiAssistantMonthlyRequestLimit Int?
+  aiAssistantMonthlyTokenLimit   Int?
   /// Module names shown on the plan (e.g. "accounting", "monitoring").
   features       String[] @default([])
   description    String?  @db.VarChar(300)
@@ -2707,6 +3325,44 @@ model PlatformPlan {
   updatedAt      DateTime @updatedAt
 
   @@map("platform_plan")
+}
+
+/// Independent platform-wide switches for separately sellable products.
+model ProductFeature {
+  key         String   @id @db.VarChar(40)
+  enabled     Boolean  @default(false)
+  updatedById Int?
+  updatedAt   DateTime @updatedAt
+
+  @@map("product_feature")
+}
+
+/// Minimal, immutable-by-application usage/audit ledger. Prompts and answers
+/// are deliberately not persisted. Failed provider calls retain their token
+/// reservation for quota accounting until the monthly window ends.
+model AiAgentUsage {
+  id              BigInt   @id @default(autoincrement())
+  companyId       Int
+  userId          Int?
+  category        String   @db.VarChar(40)
+  provider        String?  @db.VarChar(40)
+  model           String?  @db.VarChar(120)
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  reservedTokens  Int      @default(0)
+  tokensEstimated Boolean  @default(false)
+  providerCost    Decimal? @db.Decimal(14, 8)
+  status          String   @default("PENDING") @db.VarChar(16)
+  errorCode       String?  @db.VarChar(40)
+  createdAt       DateTime @default(now())
+
+  company User  @relation("AiAgentUsageCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  user    User? @relation("AiAgentUsageUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("ai_agent_usage")
 }
 
 /// A company's contact and address details (one row per company account).
@@ -4206,6 +4862,7 @@ model UploadedFile {
   mimeType   String?  @db.VarChar(100)
   size       Int?
   createdAt  DateTime @default(now())
+  fieldJobAttachments FieldJobAttachment[]
 
   @@index([ownerId])
   @@map("uploaded_file")
