@@ -1,0 +1,43 @@
+/* Paper size for bills and receipts. html[data-paper] (set by paper-size.js) picks a named page for the printer
+   and a layout that fits it. A4 is the page default in receipt.css / invoice.css. */
+.paper-size{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#5d7891}
+.paper-size select{font:inherit;padding:9px 10px;border:1px solid #d7e5f2;border-radius:7px;color:#244363;background:white}
+.print-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+@page a5{size:A5;margin:10mm}
+/* Receipt printers: the roll width comes from the printer driver; only the margins are set here. */
+@page roll80{size:auto;margin:2mm}
+@page roll58{size:auto;margin:1.5mm}
+html[data-paper=A5] body{page:a5}
+html[data-paper="80mm"] body{page:roll80}
+html[data-paper="58mm"] body{page:roll58}
+
+/* A5: same layout, a little tighter. */
+html[data-paper=A5] #invoice,html[data-paper=A5] #receipt{font-size:11px}
+@media print{html[data-paper=A5] .summary{margin-bottom:30px}}
+
+/* Receipt printer rolls: one narrow column, compact type, dark ink. */
+html[data-paper="80mm"],html[data-paper="58mm"]{--roll:72mm;--ink:#111}
+html[data-paper="58mm"]{--roll:48mm}
+html[data-paper="80mm"] :is(#receipt,#invoice),html[data-paper="58mm"] :is(#receipt,#invoice){width:var(--roll);max-width:var(--roll);margin:0 auto;padding:4mm 3mm;border-radius:4px;color:var(--ink);font-size:11px}
+html[data-paper="58mm"] :is(#receipt,#invoice){font-size:9.5px;padding:3mm 2mm}
+html[data-paper$="mm"] :is(#receipt,#invoice) :is(p,dt,dd,td,th,small,span,h2,h3,strong){color:var(--ink)}
+html[data-paper$="mm"] header{flex-direction:column;align-items:stretch;gap:4px;padding-bottom:6px;border-bottom:1px dashed var(--ink)}
+html[data-paper$="mm"] header>div:last-child,html[data-paper$="mm"] .invoice-heading{text-align:left}
+html[data-paper$="mm"] :is(.brand){font-size:16px;color:var(--ink)}
+html[data-paper$="mm"] h1{font-size:14px;letter-spacing:1px;margin:2px 0}
+html[data-paper$="mm"] h2{font-size:12px;margin:6px 0 2px}
+html[data-paper$="mm"] :is(p,footer small,td small){font-size:inherit;line-height:1.4;margin:2px 0}
+html[data-paper$="mm"] dl{display:grid;grid-template-columns:auto 1fr;gap:2px 6px;padding:6px 0;margin:0;min-width:0;width:100%;font-size:inherit}
+html[data-paper$="mm"] dd{text-align:right}
+html[data-paper$="mm"] .amount{padding:6px;border:1px solid var(--ink);background:none;border-radius:2px}
+html[data-paper$="mm"] .amount strong{font-size:16px;color:var(--ink)}
+html[data-paper$="mm"] :is(.customer,.account){padding:4px 0;margin:4px 0}
+html[data-paper$="mm"] :is(.parties,.summary){flex-direction:column;gap:6px;margin:6px 0}
+html[data-paper$="mm"] :is(.parties>div,.summary>div){max-width:100%}
+html[data-paper$="mm"] .summary dl{min-width:0;row-gap:3px}
+html[data-paper$="mm"] .balance{padding-top:4px;font-size:12px;color:var(--ink)}
+html[data-paper$="mm"] table{font-size:inherit}
+html[data-paper$="mm"] :is(th,td){padding:4px 2px;background:none}
+html[data-paper$="mm"] footer{padding-top:6px;margin-top:6px;border-top:1px dashed var(--ink)}
+@media print{html[data-paper$="mm"] :is(#receipt,#invoice){margin:0;padding:0;border:0}html[data-paper$="mm"] header{flex-direction:column}html[data-paper$="mm"] :is(.parties,.summary){flex-direction:column}html[data-paper$="mm"] dl{grid-template-columns:auto 1fr}}

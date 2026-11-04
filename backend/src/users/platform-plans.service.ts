@@ -8,6 +8,11 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { assertIsCompany, capOrNull } from '../common/company-plan';
 import type { Actor } from '../common/scope.service';
+import {
+  isProductFeatureKey,
+  PRODUCT_FEATURES,
+  ProductEntitlementService,
+} from '../common/product-entitlement.service';
 
 /**
  * PLANS & PRICING, AND COMPANY DETAILS — the platform account's own screens.
@@ -30,6 +35,7 @@ export const PLAN_FEATURES = [
   'hotspot',
   'api',
   'white-label',
+  ...PRODUCT_FEATURES,
 ] as const;
 
 const PERIODS = ['MONTHLY', 'YEARLY'] as const;
@@ -57,7 +63,10 @@ type ProfileKey = keyof typeof PROFILE_FIELDS;
 
 @Injectable()
 export class PlatformPlansService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly productEntitlements: ProductEntitlementService,
+  ) {}
 
   private platformOnly(actor: Actor) {
     if (actor?.role !== 'SUPER_ADMIN') {
@@ -123,6 +132,8 @@ export class PlatformPlansService {
       ['maxSubscribers', 'Subscribers'],
       ['maxNas', 'Routers'],
       ['maxAccounts', 'Sub-accounts'],
+      ['aiAssistantMonthlyRequestLimit', 'AI Agent monthly requests'],
+      ['aiAssistantMonthlyTokenLimit', 'AI Agent monthly tokens'],
     ] as const) {
       if (body[key] !== undefined) out[key] = capOrNull(body[key], label);
     }
@@ -221,9 +232,28 @@ export class PlatformPlansService {
         maxSubscribers: plan.maxSubscribers,
         maxNas: plan.maxNas,
         maxAccounts: plan.maxAccounts,
+        features: plan.features.filter((feature) =>
+          (PRODUCT_FEATURES as readonly string[]).includes(feature),
+        ),
+        aiAssistantMonthlyRequestLimit: plan.aiAssistantMonthlyRequestLimit,
+        aiAssistantMonthlyTokenLimit: plan.aiAssistantMonthlyTokenLimit,
       },
     });
     return { updated: r.count };
+  }
+
+  async productFeatures(actor: Actor) {
+    return this.productEntitlements.listGlobal(actor);
+  }
+
+  async setProductFeature(actor: Actor, key: string, enabled: unknown) {
+    if (!isProductFeatureKey(key)) {
+      throw new BadRequestException('Unknown product feature.');
+    }
+    if (typeof enabled !== 'boolean') {
+      throw new BadRequestException('Feature enabled must be true or false.');
+    }
+    return this.productEntitlements.setGlobal(actor, key, enabled);
   }
 
   async getProfile(actor: Actor, companyId: number) {

@@ -67,6 +67,7 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['*', 'jobs'],
   ['*', 'jobs/*'],
   ['*', 'security/*'],
+  ['*', 'ai-agent/*'],
   ['*', 'features/reseller-capability-checklist'],
   // gateway credentials, not the payments taken through them
   ['*', 'payment-gateways/admin'],

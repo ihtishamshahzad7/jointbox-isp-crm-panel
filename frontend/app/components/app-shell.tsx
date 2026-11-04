@@ -68,8 +68,11 @@ const menuGroups = [
     { id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: navIcons.Dashboard },
     // My Business + Quick Connect + Renewals — the daily loop, one page, tabs.
     { id: 'my-work', label: 'My Work', href: '/my-work', Icon: navIcons.Reports },
+    { id: 'tasks', label: 'Tasks', href: '/tasks', Icon: navIcons.Reports },
     { id: 'subscribers', label: 'Subscribers', href: '/subscribers', Icon: navIcons.Subscribers },
+    { id: 'crm-leads', label: 'Leads & Pipeline', href: '/crm/leads', Icon: navIcons.Users },
     { id: 'support', label: 'Support', href: '/support-center', Icon: navIcons.Support },
+    { id: 'sla', label: 'SLA & Service Quality', href: '/sla', Icon: navIcons.Reports },
     { id: 'trace', label: 'Trace Search', href: '/trace', Icon: navIcons.Search },
   ]},
   { label: 'Operations', items: [
@@ -85,6 +88,10 @@ const menuGroups = [
     { id: 'billing', label: 'Billing & Accounting', href: '/billing-center', Icon: navIcons.Payments },
     { id: 'insights', label: 'Insights', href: '/insights', Icon: navIcons.Reports },
     { id: 'compliance', label: 'KYC & Data Usage', href: '/compliance', Icon: navIcons.Users },
+    { id: 'hr-employees', label: 'Employees', href: '/hr/employees', Icon: navIcons.Users },
+    { id: 'hr-attendance', label: 'Attendance', href: '/hr/attendance', Icon: navIcons.Users },
+    { id: 'hr-leave', label: 'Leave Management', href: '/hr/leave', Icon: navIcons.Users },
+    { id: 'ai-agent', label: 'AI Assistant', href: '/ai-agent', Icon: navIcons.Support },
   ]},
   { label: 'System', items: [
     { id: 'admin', label: 'Administration', href: '/admin-center', Icon: navIcons.Settings },
@@ -163,6 +170,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   ['/service-catalog', 'catalog'],
   ['/jobs', 'jobs'],
   ['/support-center', 'support'],
+  ['/sla', 'support'],
   ['/admin-center', 'admin'],
   ['/insights', 'insights'],
   ['/logs', 'logs'],
@@ -208,6 +216,7 @@ const ROUTE_TO_MENU: Array<[string, string]> = [
   // Support
   ['/complaints', 'support'],
   ['/field-jobs', 'support'],
+  ['/tasks', 'my-work'],
   ['/communication', 'support'],
 
   // Insights

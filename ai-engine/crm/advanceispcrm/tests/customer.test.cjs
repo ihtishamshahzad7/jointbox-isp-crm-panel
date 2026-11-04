@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm');
+const {customerExpiry}=require('../web/customer.js');
+assert.equal(customerExpiry('2026-01-31'),'2026-03-02');
+assert.equal(customerExpiry('2024-02-29'),'2024-03-30');
+assert.equal(customerExpiry('2026-12-20'),'2027-01-19');
+assert.equal(customerExpiry(''),'');
+assert.equal(customerExpiry('2026-02-30'),'');
+const joined={value:'2026-01-31'},expiry={value:'2026-01-31'};
+const context={$:id=>id==='form'?{elements:{namedItem:name=>name==='joined'?joined:name==='expiry_date'?expiry:null}}:{append:()=>{}},el:()=>({})};
+vm.createContext(context);vm.runInContext(fs.readFileSync(require.resolve('../web/customer.js'),'utf8'),context);
+context.setupCustomerEditor(null);assert.equal(expiry.value,'2026-03-02');
+joined.value='2026-02-01';joined.onchange();assert.equal(expiry.value,'2026-03-03');
+expiry.value='2026-04-15';joined.value='2026-02-10';joined.onchange();assert.equal(expiry.value,'2026-04-15');
+context.setupCustomerEditor({id:1});assert.equal(expiry.value,'2026-04-15');
+console.log('PASS: 30-day expiry, month/year/leap boundaries, creation-date changes, and manual expiry preservation.');

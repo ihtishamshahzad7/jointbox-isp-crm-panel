@@ -905,6 +905,8 @@ model User {
   companyCrmLeads       CrmLead[]                      @relation("CrmLeadCompany")
   createdCrmLeads       CrmLead[]                      @relation("CrmLeadCreator")
   crmLeadActivities     CrmLeadActivity[]              @relation("CrmLeadActivityActor")
+  companySlaPolicies   SlaPolicyVersion[]              @relation("SlaPolicyCompany")
+  createdSlaPolicies   SlaPolicyVersion[]              @relation("SlaPolicyCreator")
 
   @@index([parentId])
   @@index([role, isActive])
@@ -1223,6 +1225,13 @@ model FieldJob {
   completedAt       DateTime?
   cancelledAt       DateTime?
   customerConfirmedAt DateTime?
+  slaPolicyVersionId Int?
+  slaPolicyVersion SlaPolicyVersion? @relation(fields: [slaPolicyVersionId], references: [id], onDelete: SetNull)
+  slaResolutionDueAt DateTime?
+  slaResolvedAt DateTime?
+  slaResolutionTargetMinutes Int?
+  slaResolutionWarningMinutes Int?
+  slaClockMode String? @db.VarChar(20)
 
   // Where — coordinates let you dispatch by proximity and prove attendance.
   address   String?
@@ -1262,6 +1271,7 @@ model FieldJob {
   @@index([leadId])
   @@index([assignedTo, scheduledAt, appointmentEndsAt])
   @@index([assignedTo, scheduledAt, visitOrder])
+  @@index([slaPolicyVersionId, createdAt])
 }
 
 model FieldJobAttachment {
@@ -2225,13 +2235,21 @@ model Ticket {
   assignedTo   Int?
   assignedUser User? @relation("AssignedTickets", fields: [assignedTo], references: [id], onDelete: SetNull)
 
-  // ── SLA tracking ──
-  // Targets are derived from priority when the ticket is created, so "was this
-  // handled on time?" is answerable without recomputing rules after the fact
-  // (business hours and policies change; a stored target does not).
+  // SLA targets and policy version are snapshotted when a matching company
+  // policy exists. Null means no applicable target was configured.
   responseDueAt   DateTime? // first human reply expected by
   resolutionDueAt DateTime? // resolution expected by
   firstResponseAt DateTime? // when staff actually first replied
+  firstResolvedAt DateTime? // first recorded transition to RESOLVED
+  reopenedCount   Int       @default(0)
+  lastReopenedAt  DateTime?
+  slaPolicyVersionId Int?
+  slaPolicyVersion SlaPolicyVersion? @relation(fields: [slaPolicyVersionId], references: [id], onDelete: SetNull)
+  slaResponseTargetMinutes Int?
+  slaResolutionTargetMinutes Int?
+  slaResponseWarningMinutes Int?
+  slaResolutionWarningMinutes Int?
+  slaClockMode String? @db.VarChar(20)
   slaBreached     Boolean   @default(false)
   breachedAt      DateTime?
   escalatedAt     DateTime?
@@ -2249,6 +2267,38 @@ model Ticket {
   @@index([subscriberId])
   @@index([status, priority])
   @@index([assignedTo])
+  @@index([createdAt])
+  @@index([slaPolicyVersionId, createdAt])
+}
+
+model SlaPolicyVersion {
+  id        Int    @id @default(autoincrement())
+  seriesId  String @db.VarChar(36)
+  version   Int
+  companyId Int
+  company   User   @relation("SlaPolicyCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  createdById Int?
+  createdBy User? @relation("SlaPolicyCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  name       String          @db.VarChar(120)
+  recordType String          @db.VarChar(20)
+  priority   TicketPriority
+  active     Boolean         @default(true)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  firstResponseTargetMinutes Int?
+  resolutionTargetMinutes Int
+  firstResponseWarningMinutes Int?
+  resolutionWarningMinutes Int?
+  clockMode String @default("ELAPSED_UTC") @db.VarChar(20)
+  notes     String? @db.VarChar(500)
+  createdAt DateTime @default(now())
+
+  tickets   Ticket[]
+  fieldJobs FieldJob[]
+
+  @@unique([seriesId, version])
+  @@index([companyId, recordType, priority, active, effectiveFrom])
   @@index([createdAt])
 }
 

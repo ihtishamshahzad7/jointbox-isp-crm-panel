@@ -24,6 +24,9 @@ function make() {
         maxSubscribers: 300,
         maxNas: 2,
         maxAccounts: 5,
+        aiAssistantMonthlyRequestLimit: 100,
+        aiAssistantMonthlyTokenLimit: 20000,
+        features: ['ai-assistant', 'billing'],
         isActive: true,
       },
     ],
@@ -36,6 +39,9 @@ function make() {
         maxSubscribers: 50,
         maxNas: 1,
         maxAccounts: 1,
+        aiAssistantMonthlyRequestLimit: null,
+        aiAssistantMonthlyTokenLimit: null,
+        features: [],
         isActive: false,
       },
     ],
@@ -104,7 +110,13 @@ function make() {
     },
   };
   return {
-    svc: new PlatformPlansService(prisma as never),
+    svc: new PlatformPlansService(
+      prisma as never,
+      {
+        listGlobal: jest.fn(() => Promise.resolve([])),
+        setGlobal: jest.fn(() => Promise.resolve({})),
+      } as never,
+    ),
     prisma,
     companyPlans,
   };
@@ -138,6 +150,8 @@ describe('Plans & Pricing', () => {
     const r = await svc.list(PLATFORM);
     expect(r.plans.find((p) => p.id === 1)?.companies).toBe(2);
     expect(r.features).toContain('accounting');
+    expect(r.features).toContain('ai-assistant');
+    expect(r.features).toContain('crm-advanced');
   });
 
   it('validates price, limits, period and features, and refuses duplicate names', async () => {
@@ -150,6 +164,12 @@ describe('Plans & Pricing', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
       svc.create(PLATFORM, { name: 'Gold', maxNas: 1.5 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      svc.create(PLATFORM, {
+        name: 'Gold',
+        aiAssistantMonthlyRequestLimit: -1,
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
       svc.create(PLATFORM, { name: 'Gold', billingPeriod: 'WEEKLY' }),
@@ -187,7 +207,14 @@ describe('Plans & Pricing', () => {
     });
     expect(prisma.companyPlan.updateMany).toHaveBeenCalledWith({
       where: { planId: 1 },
-      data: { maxSubscribers: 300, maxNas: 2, maxAccounts: 5 },
+      data: {
+        maxSubscribers: 300,
+        maxNas: 2,
+        maxAccounts: 5,
+        features: ['ai-assistant'],
+        aiAssistantMonthlyRequestLimit: 100,
+        aiAssistantMonthlyTokenLimit: 20000,
+      },
     });
   });
 

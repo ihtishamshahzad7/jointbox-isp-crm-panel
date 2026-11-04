@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment receipt | ISP CRM</title><link rel="stylesheet" href="/receipt.css"><link rel="stylesheet" href="/paper-size.css?v=20261029-1"><link rel="stylesheet" href="/print-design.css?v=20261029-1"><script src="/receipt.js" defer></script><script src="/paper-size.js?v=20261029-1" defer></script><script src="/print-design.js?v=20261029-1" defer></script></head><body data-document="receipt">
+<div class="receipt-toolbar"><a href="/">Back to CRM</a><div class="print-actions"><label class="paper-size">Paper size <select id="paper-size" data-document="receipt"><option value="A4">A4</option><option value="A5">A5</option><option value="80mm">80 mm receipt printer</option><option value="58mm">58 mm receipt printer</option></select></label><button id="print" type="button" disabled>Print / Save PDF</button></div></div>
+<p id="message" role="status">Loading saved receipt...</p>
+<article id="receipt" hidden>
+<header><div class="print-brand"><img id="print-logo" alt="Company logo" hidden><div><strong class="brand" id="print-company">ISP CRM</strong><p id="print-tagline">Internet services</p><p id="print-contact" class="print-contact" hidden></p></div></div><div><h1>PAYMENT RECEIPT</h1><strong id="receipt-number"></strong><p class="paid">PAYMENT RECEIVED</p></div></header>
+<section class="customer"><h2 id="customer-name"></h2><p id="address"></p><p id="phone"></p><p>Username: <strong id="username"></strong></p><p>Customer payment ID: <strong id="payment-id"></strong></p></section>
+<dl><dt>Payment record</dt><dd id="payment-record"></dd><dt>Payment date</dt><dd id="payment-date"></dd><dt>Billing month</dt><dd id="billing-month"></dd><dt>Revenue type</dt><dd id="revenue-type"></dd><dt>Payment method</dt><dd id="method"></dd><dt>Transaction / reference</dt><dd id="reference"></dd><dt>Received / recorded by</dt><dd id="recorded-by"></dd><dt>Package</dt><dd id="package"></dd></dl>
+<div class="amount"><span>Amount received (PKR)</span><strong id="amount"></strong></div>
+<section class="account"><h2>Account at the time of receipt</h2><p>Status: <strong id="customer-status"></strong></p><p>Expiry: <strong id="expiry"></strong></p><p id="activation" class="system-note"></p></section>
+<p id="print-note" class="print-note" hidden></p>
+<footer><p id="print-footer" class="print-footer" hidden></p><p id="saved-at" class="system-note"></p><p id="snapshot-note" class="system-note"></p><small class="system-note">This receipt confirms the payment shown above. Current balances and account status may differ from this saved record.</small></footer>
+</article></body></html>

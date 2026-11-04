@@ -10,6 +10,7 @@ import { Prisma, FieldJobStatus, FieldJobType, TicketPriority } from '@prisma/cl
 import { InventoryService } from '../inventory/inventory.service';
 import { Actor, ScopeService } from '../common/scope.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TicketSlaService } from '../tickets/ticket-sla.service';
 
 const JOB_TYPES: FieldJobType[] = [
   'INSTALLATION',
@@ -38,7 +39,7 @@ type VisibleJob = {
   assignedTo: number | null;
   createdById: number | null;
   subscriber: { userId: number | null } | null;
-  ticket: { subscriberId: number } | null;
+  ticket: { subscriberId: number; subscriber: { userId: number | null } } | null;
   lead: { companyId: number } | null;
 };
 
@@ -48,6 +49,7 @@ export class FieldJobsService {
     private readonly prisma: PrismaService,
     private readonly scope: ScopeService,
     private readonly inventory: InventoryService,
+    private readonly sla: TicketSlaService,
   ) {}
 
   private actorId(actor: Actor): number {
@@ -171,7 +173,16 @@ export class FieldJobsService {
         ...this.include(),
         subscriber: { select: { id: true, fullName: true, username: true, phone: true, address: true, userId: true } },
         lead: { select: { id: true, name: true, phone: true, stage: true, companyId: true } },
-        ticket: { select: { id: true, ticketNo: true, subject: true, status: true, subscriberId: true } },
+        ticket: {
+          select: {
+            id: true,
+            ticketNo: true,
+            subject: true,
+            status: true,
+            subscriberId: true,
+            subscriber: { select: { userId: true } },
+          },
+        },
       },
     });
     if (!job) throw new NotFoundException('Field job not found.');
@@ -278,6 +289,254 @@ export class FieldJobsService {
       select: { id: true, jobNo: true },
     });
     if (conflict) throw new ConflictException(`Technician already has an overlapping appointment (${conflict.jobNo}).`);
+  }
+
+  private dispatchDay(value: unknown, name: string, fallback: Date): Date {
+    if (value == null || value === '') return fallback;
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new BadRequestException(`${name} must use YYYY-MM-DD.`);
+    }
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new BadRequestException(`${name} must be a valid date.`);
+    }
+    return parsed;
+  }
+
+  private dispatchVisibility(companyId: number, userIds: number[]): Prisma.FieldJobWhereInput {
+    return {
+      AND: [
+        {
+          OR: [
+            { assignedTo: { in: userIds } },
+            { createdById: { in: userIds } },
+            { subscriber: { is: { userId: { in: userIds } } } },
+            { ticket: { is: { subscriber: { is: { userId: { in: userIds } } } } } },
+            { lead: { is: { companyId } } },
+          ],
+        },
+        { OR: [{ leadId: null }, { lead: { is: { companyId: { in: userIds } } } }] },
+        { OR: [{ assignedTo: null }, { assignedTo: { in: userIds } }] },
+        { OR: [{ createdById: null }, { createdById: { in: userIds } }] },
+        {
+          OR: [
+            { subscriberId: null },
+            { subscriber: { is: { userId: { in: userIds } } } },
+            { subscriber: { is: { userId: null } } },
+          ],
+        },
+        {
+          OR: [
+            { ticketId: null },
+            { ticket: { is: { subscriber: { is: { userId: { in: userIds } } } } } },
+            { ticket: { is: { subscriber: { is: { userId: null } } } } },
+          ],
+        },
+      ],
+    };
+  }
+
+  private dispatchOwnerIds(
+    job: Pick<VisibleJob, 'assignedTo' | 'createdById' | 'subscriber' | 'ticket' | 'lead'>,
+  ): number[] {
+    return [
+      job.lead?.companyId,
+      job.subscriber?.userId,
+      job.ticket?.subscriber?.userId,
+      job.assignedTo,
+      job.createdById,
+    ].filter((id): id is number => id != null);
+  }
+
+  private dispatchCompanyFromRoots(
+    job: Pick<VisibleJob, 'assignedTo' | 'createdById' | 'subscriber' | 'ticket' | 'lead'>,
+    rootsByOwnerId: Map<number, number | null>,
+  ): number | null {
+    const ownerIds = this.dispatchOwnerIds(job);
+    if (!ownerIds.length) return null;
+    const roots = [...new Set(ownerIds)].map((id) => rootsByOwnerId.get(id) ?? null);
+    if (roots.some((root) => root == null) || new Set(roots).size !== 1) return null;
+    return roots[0] ?? null;
+  }
+
+  private async dispatchCompanyId(
+    job: Pick<VisibleJob, 'assignedTo' | 'createdById' | 'subscriber' | 'ticket' | 'lead'>,
+  ): Promise<number | null> {
+    const ownerIds = [...new Set(this.dispatchOwnerIds(job))];
+    if (!ownerIds.length) return null;
+    const roots = await Promise.all(ownerIds.map((id) => this.scope.companyRootId(id)));
+    return this.dispatchCompanyFromRoots(job, new Map(ownerIds.map((id, index) => [id, roots[index]] as const)));
+  }
+
+  private async dispatchCompanyIds(
+    jobs: Array<Pick<VisibleJob, 'assignedTo' | 'createdById' | 'subscriber' | 'ticket' | 'lead'>>,
+  ): Promise<Array<number | null>> {
+    const ownerIds = [...new Set(jobs.flatMap((job) => this.dispatchOwnerIds(job)))];
+    const roots = await Promise.all(ownerIds.map((id) => this.scope.companyRootId(id)));
+    const rootsByOwnerId = new Map(ownerIds.map((id, index) => [id, roots[index]] as const));
+    return jobs.map((job) => this.dispatchCompanyFromRoots(job, rootsByOwnerId));
+  }
+
+  private async dispatchEligibleProfiles(companyId: number, userIds: number[], candidateIds: number[]) {
+    const scopedIds = [...new Set(candidateIds.filter((id) => userIds.includes(id)))];
+    if (!scopedIds.length) return [];
+    return this.prisma.employeeProfile.findMany({
+      where: {
+        companyId,
+        userId: { in: scopedIds },
+        status: 'ACTIVE',
+        user: { is: { id: { in: userIds }, isActive: true } },
+      },
+      select: {
+        id: true,
+        name: true,
+        userId: true,
+        user: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  private dispatchActivityDetail(action: string, detail: string): string {
+    if (action === 'ASSIGNED') return 'Assignment recorded.';
+    if (action === 'REASSIGNED') {
+      const marker = detail.lastIndexOf('Reason:');
+      return marker < 0 ? 'Reassignment recorded.' : `Reassignment reason: ${detail.slice(marker + 'Reason:'.length).trim()}`;
+    }
+    if (action === 'UNASSIGNED') return 'Assignment removed.';
+    if (action === 'SCHEDULED') return 'Schedule updated.';
+    return `${action.replaceAll('_', ' ')} recorded.`;
+  }
+
+  private async dispatchHistoryPage(fieldJobId: number, companyId: number, userIds: number[], cursor?: number) {
+    const take = 100;
+    const rows = await this.prisma.fieldJobActivity.findMany({
+      where: {
+        fieldJobId,
+        action: { in: ['ASSIGNED', 'REASSIGNED', 'UNASSIGNED', 'SCHEDULED'] },
+        ...(cursor == null ? {} : { id: { lt: cursor } }),
+      },
+      orderBy: { id: 'desc' },
+      take: take + 1,
+      select: {
+        id: true,
+        action: true,
+        detail: true,
+        createdAt: true,
+        actor: { select: { id: true, name: true } },
+      },
+    });
+    const hasMore = rows.length > take;
+    const page = hasMore ? rows.slice(0, take) : rows;
+    const actorIds = [...new Set(page.flatMap((row) => row.actor == null ? [] : [row.actor.id]))];
+    const eligibleActors = await this.dispatchEligibleProfiles(companyId, userIds, actorIds);
+    const eligibleActorIds = new Set(eligibleActors.flatMap((employee) => employee.userId == null ? [] : [employee.userId]));
+    const activities = page.map((row) => ({
+      ...row,
+      detail: this.dispatchActivityDetail(row.action, row.detail),
+      actor: row.actor && eligibleActorIds.has(row.actor.id) ? row.actor : null,
+    }));
+    return {
+      activities,
+      history: {
+        hasMore,
+        nextCursor: hasMore ? activities[activities.length - 1].id : null,
+        returned: activities.length,
+      },
+    };
+  }
+
+  private async dispatchJobResponse(id: number, actor: Actor) {
+    const job = await this.findOne(id, actor);
+    const { companyId, userIds } = await this.companyUsers(actor);
+    const jobCompanyId = await this.dispatchCompanyId(job);
+    if (jobCompanyId == null || jobCompanyId !== companyId) {
+      throw new NotFoundException('Field job not found.');
+    }
+    const employeeIds = [
+      ...(job.assignedTo == null ? [] : [job.assignedTo]),
+      ...(job.assignedById == null ? [] : [job.assignedById]),
+      ...(job.createdById == null ? [] : [job.createdById]),
+      ...job.activities.flatMap((activity) => activity.actor == null ? [] : [activity.actor.id]),
+      ...job.visits.flatMap((visit) => visit.technicianId == null ? [] : [visit.technicianId]),
+      ...job.attachments.map((attachment) => attachment.uploadedById),
+    ];
+    const eligibleProfiles = await this.dispatchEligibleProfiles(jobCompanyId, userIds, employeeIds);
+    const eligibleProfileByUser = new Map(eligibleProfiles.flatMap((profile) =>
+      profile.userId == null || profile.user == null ? [] : [[profile.userId, profile.user] as const],
+    ));
+    const activities = job.activities.map((activity) => ({
+      ...activity,
+      detail: this.dispatchActivityDetail(activity.action, activity.detail),
+      actorUserId: activity.actorUserId != null && eligibleProfileByUser.has(activity.actorUserId) ? activity.actorUserId : null,
+      actor: activity.actor && eligibleProfileByUser.has(activity.actor.id)
+        ? { id: activity.actor.id, name: eligibleProfileByUser.get(activity.actor.id)?.name || activity.actor.name }
+        : null,
+    }));
+    const movementEmployeeIds = [...new Set(job.inventoryMovements.flatMap((movement) =>
+      movement.employee == null ? [] : [movement.employee.id],
+    ))];
+    const eligibleMovementProfiles = movementEmployeeIds.length
+      ? await this.prisma.employeeProfile.findMany({
+          where: {
+            id: { in: movementEmployeeIds },
+            companyId: jobCompanyId,
+            userId: { in: userIds },
+            status: 'ACTIVE',
+            user: { is: { isActive: true } },
+          },
+          select: { id: true, name: true, user: { select: { id: true, name: true } } },
+        })
+      : [];
+    const movementProfilesById = new Map(eligibleMovementProfiles.map((profile) => [
+      profile.id,
+      profile.user ? { id: profile.user.id, name: profile.user.name || profile.name } : null,
+    ] as const));
+    const canReadSubscriber = await this.hasAction(actor, 'subscribers.read');
+    const {
+      address: _siteAddress,
+      createdById: _createdById,
+      subscriber,
+      technician: _technician,
+      activities: _activities,
+      visits: _visits,
+      attachments: _attachments,
+      inventoryMovements: _inventoryMovements,
+      ...safeJob
+    } = job;
+    const safeSubscriber = canReadSubscriber ? subscriber : null;
+    return {
+      ...safeJob,
+      createdById: job.createdById != null && eligibleProfileByUser.has(job.createdById) ? job.createdById : null,
+      assignedById: job.assignedById != null && eligibleProfileByUser.has(job.assignedById) ? job.assignedById : null,
+      subscriber: safeSubscriber,
+      technician: job.assignedTo == null ? null : eligibleProfileByUser.get(job.assignedTo) ?? null,
+      activities,
+      visits: job.visits.map((visit) => ({
+        ...visit,
+        technicianId: visit.technicianId != null && eligibleProfileByUser.has(visit.technicianId) ? visit.technicianId : null,
+        technician: visit.technicianId != null && eligibleProfileByUser.has(visit.technicianId)
+          ? {
+              id: visit.technicianId,
+              name: eligibleProfileByUser.get(visit.technicianId)?.name || visit.technician?.name,
+            }
+          : null,
+      })),
+      attachments: job.attachments.map((attachment) => ({
+        ...attachment,
+        uploadedById: eligibleProfileByUser.has(attachment.uploadedById) ? attachment.uploadedById : null,
+        uploader: eligibleProfileByUser.has(attachment.uploadedById)
+          ? {
+              id: attachment.uploadedById,
+              name: eligibleProfileByUser.get(attachment.uploadedById)?.name || attachment.uploader.name,
+            }
+          : null,
+      })),
+      inventoryMovements: job.inventoryMovements.map((movement) => ({
+        ...movement,
+        employeeId: movement.employeeId != null && movementProfilesById.has(movement.employeeId) ? movement.employeeId : null,
+        employee: movement.employee == null ? null : movementProfilesById.get(movement.employee.id) ?? null,
+      })),
+    };
   }
 
   private async record(
@@ -553,6 +812,533 @@ export class FieldJobsService {
     return { total, byStatus, unassigned, overdue, scheduledToday };
   }
 
+  async dispatchQueue(actor: Actor, query: Input) {
+    await this.requireAction(actor, 'field-jobs.dispatch');
+    const { companyId, userIds } = await this.companyUsers(actor);
+    const now = new Date();
+    const fallbackFrom = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 29));
+    const fallbackTo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const from = this.dispatchDay(query.from, 'Start date', fallbackFrom);
+    const to = this.dispatchDay(query.to, 'End date', fallbackTo);
+    if (from > to) throw new BadRequestException('Start date must not be after end date.');
+    if (to.getTime() - from.getTime() > 365 * 24 * 60 * 60 * 1000) {
+      throw new BadRequestException('The dispatch date range cannot exceed 366 days.');
+    }
+    const toExclusive = new Date(to.getTime() + 24 * 60 * 60 * 1000);
+    const page = Number(query.page ?? 1);
+    const pageSize = Number(query.pageSize ?? 25);
+    if (!Number.isSafeInteger(page) || page < 1) throw new BadRequestException('Page must be a positive integer.');
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1) throw new BadRequestException('Page size must be a positive integer.');
+    const take = Math.min(pageSize, 100);
+    const skip = (page - 1) * take;
+    if (!Number.isSafeInteger(skip) || skip > 1_000_000) throw new BadRequestException('The requested dispatch page is too far into the result set.');
+
+    const whereConditions: Prisma.FieldJobWhereInput[] = [
+      this.dispatchVisibility(companyId, userIds),
+      { createdAt: { gte: from, lt: toExclusive } },
+    ];
+    if (query.status && query.status !== 'ALL') {
+      const status = String(query.status) as FieldJobStatus;
+      if (!JOB_STATUSES.includes(status)) throw new BadRequestException('Unknown field-job status.');
+      whereConditions.push({ status });
+    }
+    if (query.type && query.type !== 'ALL') {
+      const type = String(query.type) as FieldJobType;
+      if (!JOB_TYPES.includes(type)) throw new BadRequestException('Unknown field-job type.');
+      whereConditions.push({ type });
+    }
+    if (query.priority && query.priority !== 'ALL') {
+      const priority = String(query.priority) as TicketPriority;
+      if (!JOB_PRIORITIES.includes(priority)) throw new BadRequestException('Unknown field-job priority.');
+      whereConditions.push({ priority });
+    }
+    const technicianId = this.positiveId(query.technicianId, 'Technician');
+    if (technicianId != null) {
+      const employee = await this.prisma.employeeProfile.findFirst({
+        where: { companyId, userId: technicianId, user: { is: { id: { in: userIds } } } },
+        select: { id: true },
+      });
+      if (!employee) throw new BadRequestException('Select a technician in this company.');
+      whereConditions.push({ assignedTo: technicianId });
+    }
+    const subscriberId = this.positiveId(query.subscriberId, 'Subscriber');
+    if (subscriberId != null) {
+      if (!(await this.hasAction(actor, 'subscribers.read'))) {
+        throw new ForbiddenException('Subscriber filtering requires subscriber-read permission.');
+      }
+      await this.scope.assertSubscriber(actor, subscriberId);
+      whereConditions.push({
+        OR: [
+          { subscriberId },
+          { ticket: { is: { subscriberId } } },
+        ],
+      });
+    }
+
+    const where: Prisma.FieldJobWhereInput = { AND: whereConditions };
+    const subscriberReadable = await this.hasAction(actor, 'subscribers.read');
+    const employeeWhere = {
+      companyId,
+      userId: { in: userIds },
+      status: 'ACTIVE' as const,
+      user: { is: { id: { in: userIds }, isActive: true } },
+    };
+    const [items, total, statusGroups, unassigned, overdue, dueSoon, employees, employeeCount] = await Promise.all([
+      this.prisma.fieldJob.findMany({
+        where,
+        select: {
+          id: true,
+          jobNo: true,
+          type: true,
+          status: true,
+          priority: true,
+          description: true,
+          ...(subscriberReadable ? { address: true } : {}),
+          assignedTo: true,
+          scheduledAt: true,
+          appointmentEndsAt: true,
+          assignedAt: true,
+          requiredSkills: true,
+          createdById: true,
+          lead: { select: { companyId: true } },
+          subscriber: { select: { userId: true, ...(subscriberReadable ? { id: true, fullName: true, username: true } : {}) } },
+          ticket: { select: { subscriberId: true, subscriber: { select: { userId: true } } } },
+        },
+        orderBy: [{ scheduledAt: 'asc' }, { priority: 'desc' }, { id: 'desc' }],
+        skip,
+        take,
+      }),
+      this.prisma.fieldJob.count({ where }),
+      this.prisma.fieldJob.groupBy({ by: ['status'], where, _count: { _all: true } }),
+      this.prisma.fieldJob.count({
+        where: { AND: [where, { status: { in: ['PENDING', 'FAILED'] } }, { assignedTo: null }] },
+      }),
+      this.prisma.fieldJob.count({
+        where: {
+          AND: [
+            where,
+            { status: { in: OPEN_STATUSES } },
+            { OR: [{ appointmentEndsAt: { lt: now } }, { appointmentEndsAt: null, scheduledAt: { lt: now } }] },
+          ],
+        },
+      }),
+      this.prisma.fieldJob.count({
+        where: {
+          AND: [
+            where,
+            { status: { in: OPEN_STATUSES } },
+            {
+              OR: [
+                { appointmentEndsAt: { gte: now, lt: new Date(now.getTime() + 24 * 60 * 60 * 1000) } },
+                { appointmentEndsAt: null, scheduledAt: { gte: now, lt: new Date(now.getTime() + 24 * 60 * 60 * 1000) } },
+              ],
+            },
+          ],
+        },
+      }),
+      this.prisma.employeeProfile.findMany({
+        where: employeeWhere,
+        select: {
+          id: true,
+          name: true,
+          designation: true,
+          status: true,
+          userId: true,
+          user: { select: { id: true, name: true, isActive: true } },
+        },
+        orderBy: { name: 'asc' },
+        take: 500,
+      }),
+      this.prisma.employeeProfile.count({ where: employeeWhere }),
+    ]);
+
+    const itemCompanies = await this.dispatchCompanyIds(items);
+    if (itemCompanies.some((ownerCompanyId) => ownerCompanyId !== companyId)) {
+      throw new NotFoundException('Field job not found.');
+    }
+    const assignedProfileIds = items.flatMap((item) => item.assignedTo == null ? [] : [item.assignedTo]);
+    const assignedProfiles = await this.dispatchEligibleProfiles(companyId, userIds, assignedProfileIds);
+    const assignedProfilesByUser = new Map(
+      assignedProfiles.flatMap((profile) => profile.userId == null || profile.user == null
+        ? []
+        : [[profile.userId, { id: profile.user.id, name: profile.user.name || profile.name }] as const]),
+    );
+    const queueItems = items.map((item) => {
+      const { createdById: _createdById, lead: _lead, subscriber, ticket: _ticket, ...safeItem } = item;
+      return {
+        ...safeItem,
+        ...(subscriberReadable && subscriber && 'id' in subscriber
+          && typeof subscriber.id === 'number'
+          && typeof subscriber.fullName === 'string'
+          && typeof subscriber.username === 'string'
+          ? { subscriber: { id: subscriber.id, fullName: subscriber.fullName, username: subscriber.username } }
+          : {}),
+        technician: item.assignedTo == null ? null : assignedProfilesByUser.get(item.assignedTo) ?? null,
+      };
+    });
+
+    const workloadWhere: Prisma.FieldJobWhereInput = {
+      AND: [
+        this.dispatchVisibility(companyId, userIds),
+        { assignedTo: { in: userIds }, status: { in: OPEN_STATUSES } },
+      ],
+    };
+    const upcomingFrom = from > now ? from : now;
+    const [openGroups, overdueGroups, upcomingGroups, completedGroups] = await Promise.all([
+      this.prisma.fieldJob.groupBy({ by: ['assignedTo', 'status'], where: workloadWhere, _count: { _all: true } }),
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: {
+          AND: [
+            workloadWhere,
+            { OR: [{ appointmentEndsAt: { lt: now } }, { appointmentEndsAt: null, scheduledAt: { lt: now } }] },
+          ],
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: {
+          AND: [
+            workloadWhere,
+            { scheduledAt: { gte: upcomingFrom, lt: toExclusive } },
+          ],
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: {
+          AND: [
+            this.dispatchVisibility(companyId, userIds),
+            {
+              assignedTo: { in: userIds },
+              status: 'COMPLETED',
+              completedAt: { gte: from, lt: toExclusive },
+            },
+          ],
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    const openByUser = new Map<number, number>();
+    const inProgressByUser = new Map<number, number>();
+    for (const row of openGroups) {
+      if (row.assignedTo == null) continue;
+      const count = row._count._all;
+      openByUser.set(row.assignedTo, (openByUser.get(row.assignedTo) ?? 0) + count);
+      if (row.status === 'IN_PROGRESS') inProgressByUser.set(row.assignedTo, count);
+    }
+    const overdueByUser = new Map(overdueGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const upcomingByUser = new Map(upcomingGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const completedByUser = new Map(completedGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const workloadEmployees = employees.filter((employee) => employee.userId != null &&
+      (technicianId == null || employee.userId === technicianId)).map((employee) => ({
+        id: employee.userId!,
+        employeeId: employee.id,
+        name: employee.user?.name || employee.name,
+        designation: employee.designation,
+        employeeStatus: employee.status,
+        active: employee.status === 'ACTIVE' && employee.user?.isActive === true,
+        open: openByUser.get(employee.userId!) ?? 0,
+        inProgress: inProgressByUser.get(employee.userId!) ?? 0,
+        overdue: overdueByUser.get(employee.userId!) ?? 0,
+        upcomingScheduled: upcomingByUser.get(employee.userId!) ?? 0,
+        completedInPeriod: completedByUser.get(employee.userId!) ?? 0,
+        availability: 'NOT_RECORDED',
+        skills: null,
+      }));
+    const byStatus: Record<string, number> = {};
+    for (const group of statusGroups) byStatus[group.status] = group._count._all;
+    return {
+      period: { from: from.toISOString(), to: to.toISOString() },
+      periodBasis: 'JOB_CREATED_AT',
+      items: queueItems,
+      total,
+      page,
+      pageSize: take,
+      metrics: {
+        total,
+        byStatus,
+        unassigned,
+        overdue,
+        dueSoon,
+      },
+      technicians: workloadEmployees,
+      technicianRosterLimited: employeeCount > employees.length,
+      canFilterSubscribers: subscriberReadable,
+      workloadPeriod: { from: from.toISOString(), to: to.toISOString() },
+      unavailableInputs: {
+        availability: 'No technician working-hours or availability schedule is recorded on EmployeeProfile.',
+        skills: 'EmployeeProfile has no skill records; job requiredSkills cannot be matched to technicians.',
+      },
+    };
+  }
+
+  async dispatchJob(actor: Actor, id: number) {
+    await this.requireAction(actor, 'field-jobs.dispatch');
+    if (!Number.isSafeInteger(id) || id < 1) throw new BadRequestException('Field job ID must be a positive integer.');
+    const { companyId, userIds } = await this.companyUsers(actor);
+    const subscriberReadable = await this.hasAction(actor, 'subscribers.read');
+    const visible = this.dispatchVisibility(companyId, userIds);
+    const job = await this.prisma.fieldJob.findFirst({
+      where: { AND: [{ id }, visible] },
+      select: {
+        id: true,
+        jobNo: true,
+        type: true,
+        status: true,
+        priority: true,
+        description: true,
+        assignedTo: true,
+        createdById: true,
+        assignedAt: true,
+        assignedById: true,
+        scheduledAt: true,
+        appointmentEndsAt: true,
+        arrivedAt: true,
+        requiredSkills: true,
+        lead: { select: { companyId: true } },
+        subscriber: { select: { userId: true, ...(subscriberReadable ? { id: true, fullName: true, username: true } : {}) } },
+        ticket: { select: { subscriberId: true, subscriber: { select: { userId: true } } } },
+      },
+    });
+    if (!job) throw new NotFoundException('Field job not found.');
+
+    const jobCompanyId = await this.dispatchCompanyId(job);
+    if (jobCompanyId == null || jobCompanyId !== companyId) {
+      throw new NotFoundException('Field job not found.');
+    }
+
+    const {
+      lead: _lead,
+      subscriber,
+      ticket: _ticket,
+      createdById: _createdById,
+      ...jobDetails
+    } = job;
+    const detailProfiles = await this.dispatchEligibleProfiles(
+      jobCompanyId,
+      userIds,
+      [job.assignedTo, job.assignedById].filter((id): id is number => id != null),
+    );
+    const detailProfilesByUser = new Map(detailProfiles.flatMap((profile) =>
+      profile.userId == null || profile.user == null ? [] : [[profile.userId, profile.user] as const],
+    ));
+    const employees = await this.prisma.employeeProfile.findMany({
+      where: { companyId: jobCompanyId, status: 'ACTIVE', userId: { in: userIds }, user: { is: { isActive: true } } },
+      select: {
+        id: true,
+        name: true,
+        designation: true,
+        userId: true,
+        user: { select: { id: true, name: true } },
+      },
+      orderBy: { name: 'asc' },
+      take: 500,
+    });
+    const candidates = employees.flatMap((employee) => employee.userId == null || employee.user == null
+      ? []
+      : [{
+          id: employee.userId,
+          employeeId: employee.id,
+          name: employee.user.name || employee.name,
+          designation: employee.designation,
+        }]);
+    const candidateIds = candidates.map((candidate) => candidate.id);
+    const recommendationWorkloadWhere: Prisma.FieldJobWhereInput = {
+      AND: [visible, { assignedTo: { in: candidateIds } }],
+    };
+    const [openGroups, overdueGroups, sameTypeGroups, scheduledGroups, overlappingJobs, leaveRows, inventoryCount] = await Promise.all([
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: { AND: [recommendationWorkloadWhere, { status: { in: OPEN_STATUSES } }] },
+        _count: { _all: true },
+      }),
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: {
+          AND: [
+            recommendationWorkloadWhere,
+            {
+              status: { in: OPEN_STATUSES },
+              OR: [{ appointmentEndsAt: { lt: new Date() } }, { appointmentEndsAt: null, scheduledAt: { lt: new Date() } }],
+            },
+          ],
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: { AND: [recommendationWorkloadWhere, { status: 'COMPLETED', type: job.type }] },
+        _count: { _all: true },
+      }),
+      this.prisma.fieldJob.groupBy({
+        by: ['assignedTo'],
+        where: {
+          AND: [
+            recommendationWorkloadWhere,
+            { status: { in: OPEN_STATUSES }, scheduledAt: { gte: new Date() } },
+          ],
+        },
+        _count: { _all: true },
+      }),
+      job.scheduledAt
+        ? this.prisma.fieldJob.findMany({
+            where: {
+              AND: [
+                recommendationWorkloadWhere,
+                {
+                  status: { in: OPEN_STATUSES },
+                  id: { not: job.id },
+                  scheduledAt: { lt: job.appointmentEndsAt ?? new Date(job.scheduledAt.getTime() + 60 * 60 * 1000) },
+                  OR: [{ appointmentEndsAt: { gt: job.scheduledAt } }, { appointmentEndsAt: null }],
+                },
+              ],
+            },
+            select: { id: true, jobNo: true, assignedTo: true, scheduledAt: true, appointmentEndsAt: true },
+            orderBy: { scheduledAt: 'asc' },
+            take: 1000,
+          })
+        : Promise.resolve([]),
+      job.scheduledAt
+        ? this.prisma.employeeLeaveRequest.findMany({
+            where: {
+              companyId: jobCompanyId,
+              employeeId: { in: employees.map((employee) => employee.id) },
+              status: 'APPROVED',
+              startDate: { lte: job.appointmentEndsAt ?? new Date(job.scheduledAt.getTime() + 60 * 60 * 1000) },
+              endDate: { gte: job.scheduledAt },
+            },
+            select: { employeeId: true, leaveDates: true },
+          })
+        : Promise.resolve([]),
+      this.prisma.inventoryItem.count({ where: { OR: [{ fieldJobId: job.id }, { reservedForFieldJobId: job.id }] } }),
+    ]);
+    const openByUser = new Map(openGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const overdueByUser = new Map(overdueGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const sameTypeByUser = new Map(sameTypeGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const scheduledByUser = new Map(scheduledGroups.flatMap((row) => row.assignedTo == null ? [] : [[row.assignedTo, row._count._all] as const]));
+    const conflictsByUser = new Map<number, typeof overlappingJobs>();
+    for (const conflict of overlappingJobs) {
+      if (conflict.assignedTo == null) continue;
+      conflictsByUser.set(conflict.assignedTo, [...(conflictsByUser.get(conflict.assignedTo) ?? []), conflict]);
+    }
+    const leaveDatesByEmployee = new Map<number, Set<number>>();
+    for (const leave of leaveRows) {
+      leaveDatesByEmployee.set(leave.employeeId, new Set(leave.leaveDates.map((date) =>
+        Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+      )));
+    }
+    const startDay = job.scheduledAt ? Date.UTC(job.scheduledAt.getUTCFullYear(), job.scheduledAt.getUTCMonth(), job.scheduledAt.getUTCDate()) : null;
+    const endDate = job.appointmentEndsAt ?? (job.scheduledAt ? new Date(job.scheduledAt.getTime() + 60 * 60 * 1000) : null);
+    const endDay = endDate ? Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate()) : null;
+    const assignableStatus = !['COMPLETED', 'CANCELLED', 'IN_PROGRESS', 'PENDING_REVIEW'].includes(job.status) && !job.arrivedAt;
+    const recommendations = candidates.map((candidate) => {
+      const conflicts = conflictsByUser.get(candidate.id) ?? [];
+      const leaveDays = leaveDatesByEmployee.get(candidate.employeeId) ?? new Set<number>();
+      const hasApprovedLeave = startDay != null && endDay != null &&
+        Array.from(leaveDays).some((day) => day >= startDay && day <= endDay);
+      const changesAssignee = job.assignedTo !== candidate.id;
+      const blockedByMaterials = changesAssignee && inventoryCount > 0;
+      const suitable = assignableStatus && conflicts.length === 0 && !hasApprovedLeave && !blockedByMaterials;
+      const open = openByUser.get(candidate.id) ?? 0;
+      const overdue = overdueByUser.get(candidate.id) ?? 0;
+      const sameTypeCompleted = sameTypeByUser.get(candidate.id) ?? 0;
+      const scheduledCommitments = scheduledByUser.get(candidate.id) ?? 0;
+      const reasons = [
+        `Job priority: ${job.priority}. No configured priority-weighting policy exists, so priority is surfaced for dispatcher judgment rather than assigned an invented score.`,
+        `Current open workload: ${open}.`,
+        `Current overdue workload: ${overdue}.`,
+        `Upcoming scheduled commitments: ${scheduledCommitments}.`,
+        `Recorded completed jobs of this type: ${sameTypeCompleted}. This is historical experience, not a skills certification.`,
+      ];
+      if (job.scheduledAt) {
+        reasons.push(conflicts.length ? `${conflicts.length} overlapping scheduled job(s) found.` : 'No overlapping scheduled job found.');
+        if (hasApprovedLeave) reasons.push('Approved leave overlaps this appointment.');
+      } else {
+        reasons.push('Schedule compatibility not evaluated because this job has no start time.');
+      }
+      if (job.requiredSkills.length) reasons.push('Required-skill match unavailable; technician skills are not recorded.');
+      else reasons.push('No required skills are recorded for this job.');
+      if (blockedByMaterials) reasons.push('Reassignment is blocked until reserved/issued materials are resolved.');
+      if (!assignableStatus) reasons.push('Current job status does not allow assignment or reassignment.');
+      reasons.push('Working-hour availability is not recorded; attendance is not inferred.');
+      return {
+        ...candidate,
+        suitable,
+        open,
+        overdue,
+        scheduledCommitments,
+        sameTypeCompleted,
+        conflicts,
+        availability: 'NOT_RECORDED',
+        skillsMatch: null,
+        reasons,
+      };
+    }).sort((left, right) =>
+      Number(right.suitable) - Number(left.suitable) ||
+      left.open - right.open ||
+      left.overdue - right.overdue ||
+      right.sameTypeCompleted - left.sameTypeCompleted ||
+      left.name.localeCompare(right.name),
+    );
+    const historyPage = await this.dispatchHistoryPage(job.id, jobCompanyId, userIds);
+    return {
+      job: {
+        ...jobDetails,
+        assignedById: job.assignedById != null && detailProfilesByUser.has(job.assignedById) ? job.assignedById : null,
+        technician: job.assignedTo == null ? null : detailProfilesByUser.get(job.assignedTo) ?? null,
+        ...(subscriberReadable && subscriber && 'id' in subscriber
+          && typeof subscriber.id === 'number'
+          && typeof subscriber.fullName === 'string'
+          && typeof subscriber.username === 'string'
+          ? {
+              subscriber: {
+                id: subscriber.id,
+                fullName: subscriber.fullName,
+                username: subscriber.username,
+              },
+            }
+          : {}),
+      },
+      ...historyPage,
+      assignable: assignableStatus,
+      inventoryBlocksReassignment: inventoryCount > 0,
+      recommendations,
+      conflictsTruncated: overlappingJobs.length === 1000,
+      unavailableInputs: {
+        availability: 'No technician working-hours or availability schedule is recorded on EmployeeProfile.',
+        skills: 'Technician skills are not recorded; same-type completed job counts are historical only.',
+        geographicProximity: 'Not calculated; no routing provider is configured and location is not used.',
+      },
+    };
+  }
+
+  async dispatchHistory(actor: Actor, id: number, cursorInput?: unknown) {
+    await this.requireAction(actor, 'field-jobs.dispatch');
+    if (!Number.isSafeInteger(id) || id < 1) throw new BadRequestException('Field job ID must be a positive integer.');
+    const cursor = this.positiveId(cursorInput, 'History cursor');
+    const { companyId, userIds } = await this.companyUsers(actor);
+    const job = await this.prisma.fieldJob.findFirst({
+      where: { AND: [{ id }, this.dispatchVisibility(companyId, userIds)] },
+      select: {
+        id: true,
+        assignedTo: true,
+        createdById: true,
+        subscriber: { select: { userId: true } },
+        ticket: { select: { subscriberId: true, subscriber: { select: { userId: true } } } },
+        lead: { select: { companyId: true } },
+      },
+    });
+    if (!job) throw new NotFoundException('Field job not found.');
+    const jobCompanyId = await this.dispatchCompanyId(job);
+    if (jobCompanyId == null || jobCompanyId !== companyId) {
+      throw new NotFoundException('Field job not found.');
+    }
+    return this.dispatchHistoryPage(id, jobCompanyId, userIds, cursor ?? undefined);
+  }
+
   async technicianPerformance(actor: Actor, days = 30) {
     await this.requireAction(actor, 'field-jobs.report');
     if (!Number.isSafeInteger(days) || days < 1 || days > 365) {
@@ -648,6 +1434,7 @@ export class FieldJobsService {
       throw new BadRequestException('Longitude must be between -180 and 180.');
     }
     const actorUserId = this.actorId(actor);
+    const createdAt = new Date();
 
     return this.prisma.$transaction(async (tx) => {
       if (technicianId && scheduledAt) {
@@ -658,6 +1445,10 @@ export class FieldJobsService {
         if (!employee) throw new BadRequestException('Select an active employee in this company.');
         await this.assertScheduleAvailable(tx, companyId, employee.id, technicianId, scheduledAt, appointmentEndsAt);
       }
+      const policy = await this.sla.snapshotPolicy(companyId, 'FIELD_JOB', priority, createdAt, tx);
+      const slaResolutionDueAt = policy
+        ? new Date(createdAt.getTime() + policy.resolutionTargetMinutes * 60_000)
+        : null;
       const placeholder = `FJ-TMP-${randomUUID()}`;
       const created = await tx.fieldJob.create({
         data: {
@@ -678,6 +1469,12 @@ export class FieldJobsService {
           workInstructions,
           requiredSkills: skills.map((skill) => (skill as string).trim()).filter(Boolean),
           createdById: actorUserId,
+          createdAt,
+          slaPolicyVersionId: policy?.id ?? null,
+          slaResolutionDueAt,
+          slaResolutionTargetMinutes: policy?.resolutionTargetMinutes ?? null,
+          slaResolutionWarningMinutes: policy?.resolutionWarningMinutes ?? null,
+          slaClockMode: policy?.clockMode ?? null,
         },
       });
       const jobNo = `FJ-${new Date().getFullYear()}-${String(created.id).padStart(6, '0')}`;
@@ -789,17 +1586,32 @@ export class FieldJobsService {
     scheduledAtInput?: string,
     appointmentEndsAtInput?: string,
     visitOrderInput?: number,
+    reasonInput?: string,
+    expectedAssignedToInput?: number | null,
   ) {
     await this.requireAction(actor, 'field-jobs.dispatch');
     const technicianId = this.positiveId(technicianIdValue, 'Technician');
     if (technicianId == null) throw new BadRequestException('A technician is required.');
     const job = await this.rawJob(id);
     await this.assertVisible(actor, job);
+    if (expectedAssignedToInput !== undefined) {
+      const expectedAssignedTo = this.positiveId(expectedAssignedToInput, 'Expected technician');
+      if (expectedAssignedTo !== job.assignedTo) {
+        throw new ConflictException('The technician assignment changed. Reload the job before assigning it.');
+      }
+    }
     if (job.status === 'COMPLETED' || job.status === 'CANCELLED') {
       throw new ConflictException('Closed field jobs cannot be reassigned.');
     }
-    const companyId = await this.companyId(actor);
-    const technician = await this.employeeForUser(companyId, technicianId);
+    const { companyId, userIds } = await this.companyUsers(actor);
+    const jobCompanyId = await this.dispatchCompanyId(job);
+    if (jobCompanyId == null || jobCompanyId !== companyId) {
+      throw new NotFoundException('Field job not found.');
+    }
+    if (!userIds.includes(technicianId)) {
+      throw new BadRequestException('Select a technician in this company.');
+    }
+    const technician = await this.employeeForUser(jobCompanyId, technicianId);
     const scheduledAt = scheduledAtInput === undefined ? job.scheduledAt : this.date(scheduledAtInput, 'Schedule');
     const appointmentEndsAt = appointmentEndsAtInput === undefined
       ? job.appointmentEndsAt
@@ -815,8 +1627,33 @@ export class FieldJobsService {
     if (job.status === 'IN_PROGRESS' || job.status === 'PENDING_REVIEW' || job.arrivedAt) {
       throw new ConflictException('An active visit cannot be reassigned or rescheduled.');
     }
+    const reassignmentReason = this.text(reasonInput, 'Reassignment reason', 500, job.assignedTo != null && job.assignedTo !== technicianId);
     const actorUserId = this.actorId(actor);
     await this.prisma.$transaction(async (tx) => {
+      const currentJob = await tx.fieldJob.findUnique({
+        where: { id },
+        select: {
+          assignedTo: true,
+          createdById: true,
+          lead: { select: { companyId: true } },
+          subscriber: { select: { userId: true } },
+          ticket: { select: { subscriberId: true, subscriber: { select: { userId: true } } } },
+        },
+      });
+      if (!currentJob || (await this.dispatchCompanyId(currentJob)) !== jobCompanyId) {
+        throw new ConflictException('Field job ownership changed during assignment. Reload and retry.');
+      }
+      const currentEmployee = await tx.employeeProfile.findFirst({
+        where: {
+          id: technician.id,
+          companyId: jobCompanyId,
+          userId: technicianId,
+          status: 'ACTIVE',
+          user: { is: { id: { in: userIds }, isActive: true } },
+        },
+        select: { id: true },
+      });
+      if (!currentEmployee) throw new ConflictException('Technician is no longer active in this company.');
       if (job.assignedTo !== technicianId && await tx.inventoryItem.count({
         where: { OR: [{ fieldJobId: id }, { reservedForFieldJobId: id }] },
       })) {
@@ -824,7 +1661,7 @@ export class FieldJobsService {
       }
       await this.assertScheduleAvailable(
         tx,
-        companyId,
+        jobCompanyId,
         technician.id,
         technicianId,
         scheduledAt,
@@ -847,7 +1684,7 @@ export class FieldJobsService {
         if (orderConflict) throw new ConflictException(`Visit order ${visitOrder} is already assigned that day (${orderConflict.jobNo}).`);
       }
       const changed = await tx.fieldJob.updateMany({
-        where: { id, updatedAt: job.updatedAt },
+        where: { id, updatedAt: job.updatedAt, status: job.status, assignedTo: job.assignedTo },
         data: {
           assignedTo: technicianId,
           assignedById: actorUserId,
@@ -869,7 +1706,11 @@ export class FieldJobsService {
         },
       });
       if (changed.count !== 1) throw new ConflictException('Field job changed during assignment. Reload and retry.');
-      await this.record(tx, id, actorUserId, 'ASSIGNED', `Assigned to technician ${technician.name}.`);
+      const reassigned = job.assignedTo != null && job.assignedTo !== technicianId;
+      const assignmentDetail = reassigned
+        ? `Reassigned from ${job.technician?.name ?? `technician #${job.assignedTo}`} to ${technician.name}. Reason: ${reassignmentReason}`
+        : `Assigned to technician ${technician.name}.`;
+      await this.record(tx, id, actorUserId, reassigned ? 'REASSIGNED' : 'ASSIGNED', assignmentDetail);
       if (scheduledAt?.getTime() !== job.scheduledAt?.getTime()) {
         await this.record(tx, id, actorUserId, 'SCHEDULED', `Appointment scheduled for ${scheduledAt?.toISOString() ?? 'unscheduled'}.`);
       }
@@ -877,31 +1718,49 @@ export class FieldJobsService {
         await this.record(tx, id, actorUserId, 'VISIT_ORDER_SET', `Planned technician visit order set to ${visitOrder ?? 'automatic'}.`);
       }
     }, { isolationLevel: 'Serializable' });
-    return this.findOne(id, actor);
+    return this.dispatchJobResponse(id, actor);
   }
 
   async unassign(id: number, actor: Actor) {
     await this.requireAction(actor, 'field-jobs.dispatch');
     const job = await this.rawJob(id);
     await this.assertVisible(actor, job);
+    const { companyId } = await this.companyUsers(actor);
+    const jobCompanyId = await this.dispatchCompanyId(job);
+    if (jobCompanyId == null || jobCompanyId !== companyId) {
+      throw new NotFoundException('Field job not found.');
+    }
     if (job.status !== 'ASSIGNED' && job.status !== 'PENDING') {
       throw new ConflictException('Only a pending or assigned field job can be unassigned.');
     }
     const actorUserId = this.actorId(actor);
     await this.prisma.$transaction(async (tx) => {
+      const currentJob = await tx.fieldJob.findUnique({
+        where: { id },
+        select: {
+          assignedTo: true,
+          createdById: true,
+          lead: { select: { companyId: true } },
+          subscriber: { select: { userId: true } },
+          ticket: { select: { subscriberId: true, subscriber: { select: { userId: true } } } },
+        },
+      });
+      if (!currentJob || (await this.dispatchCompanyId(currentJob)) !== jobCompanyId) {
+        throw new ConflictException('Field job ownership changed while being unassigned.');
+      }
       if (await tx.inventoryItem.count({
         where: { OR: [{ fieldJobId: id }, { reservedForFieldJobId: id }] },
       })) {
         throw new ConflictException('Release reserved or issued materials before unassigning this job.');
       }
       const changed = await tx.fieldJob.updateMany({
-        where: { id, updatedAt: job.updatedAt },
+        where: { id, updatedAt: job.updatedAt, status: job.status, assignedTo: job.assignedTo },
         data: { assignedTo: null, assignedById: actorUserId, assignedAt: null, scheduledAt: null, appointmentEndsAt: null, visitOrder: null, status: 'PENDING' },
       });
       if (changed.count !== 1) throw new ConflictException('Field job changed while being unassigned.');
       await this.record(tx, id, actorUserId, 'UNASSIGNED', 'Technician assignment and schedule cleared.');
     });
-    return this.findOne(id, actor);
+    return this.dispatchJobResponse(id, actor);
   }
 
   private async assertAssignedTechnician(actor: Actor, job: VisibleJob) {
@@ -1047,6 +1906,7 @@ export class FieldJobsService {
     if (job.status !== 'PENDING_REVIEW') throw new ConflictException('This field job is not awaiting review.');
     const reviewReason = this.text(reason, 'Review note', 1000, !approved);
     const actorUserId = this.actorId(actor);
+    const reviewedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
       if (approved) {
         await this.assertNoOutstandingMaterials(tx, id);
@@ -1057,16 +1917,22 @@ export class FieldJobsService {
           status: approved ? 'COMPLETED' : 'FAILED',
           resolution: approved ? (job.resolution ?? job.completionNotes) : job.resolution,
           failureReason: approved ? null : reviewReason,
+          slaResolvedAt: approved ? reviewedAt : undefined,
         },
       });
       if (changed.count !== 1) throw new ConflictException('Field job review was changed by another operator.');
       if (approved && job.ticketId) {
+        const linkedTicket = await tx.ticket.findUnique({
+          where: { id: job.ticketId },
+          select: { firstResolvedAt: true },
+        });
         await tx.ticket.updateMany({
           where: { id: job.ticketId, status: { in: ['OPEN', 'IN_PROGRESS', 'ESCALATED'] } },
           data: {
             status: 'RESOLVED',
             resolution: job.resolution ?? job.completionNotes ?? 'Resolved through field service.',
-            resolvedAt: new Date(),
+            resolvedAt: reviewedAt,
+            firstResolvedAt: linkedTicket?.firstResolvedAt ?? reviewedAt,
           },
         });
       }
@@ -1110,13 +1976,30 @@ export class FieldJobsService {
     await this.requireAction(actor, 'field-jobs.dispatch');
     const job = await this.rawJob(id);
     await this.assertVisible(actor, job);
+    const { companyId } = await this.companyUsers(actor);
+    const jobCompanyId = await this.dispatchCompanyId(job);
+    if (jobCompanyId == null || jobCompanyId !== companyId) {
+      throw new NotFoundException('Field job not found.');
+    }
     if (!['PENDING', 'ASSIGNED'].includes(job.status)) {
       throw new ConflictException('Only pending or assigned jobs can be cancelled.');
     }
     const cancellationReason = this.text(reason, 'Cancellation reason', 500, true)!;
     const actorUserId = this.actorId(actor);
-    const companyId = await this.companyId(actor);
     await this.prisma.$transaction(async (tx) => {
+      const currentJob = await tx.fieldJob.findUnique({
+        where: { id },
+        select: {
+          assignedTo: true,
+          createdById: true,
+          lead: { select: { companyId: true } },
+          subscriber: { select: { userId: true } },
+          ticket: { select: { subscriberId: true, subscriber: { select: { userId: true } } } },
+        },
+      });
+      if (!currentJob || (await this.dispatchCompanyId(currentJob)) !== jobCompanyId) {
+        throw new ConflictException('Field job ownership changed while it was being cancelled.');
+      }
       if (await tx.inventoryItem.count({ where: { fieldJobId: id } })) {
         throw new ConflictException('Return or report every issued material before cancelling this job.');
       }
@@ -1156,7 +2039,7 @@ export class FieldJobsService {
       if (changed.count !== 1) throw new ConflictException('Field job changed while it was being cancelled.');
       await this.record(tx, id, actorUserId, 'CANCELLED', cancellationReason);
     }, { isolationLevel: 'Serializable' });
-    return this.findOne(id, actor);
+    return this.dispatchJobResponse(id, actor);
   }
 
   async materials(id: number, actor: Actor) {

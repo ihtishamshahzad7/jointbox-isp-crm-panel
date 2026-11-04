@@ -847,7 +847,10 @@ export class UsersService {
       data: {
         userId: actorId, action: 'COMPANY_PLAN', entity: 'User', entityId: companyId,
         details: `Plan set: subscribers ${fmt(plan.maxSubscribers)}, routers ${fmt(plan.maxNas)}, ` +
-          `sub-accounts ${fmt(plan.maxAccounts)}, ends ${plan.expiresAt ? new Date(plan.expiresAt).toISOString().slice(0, 10) : 'never'}`,
+          `sub-accounts ${fmt(plan.maxAccounts)}, products ${(plan.features ?? []).join(', ') || 'none'}, ` +
+          `AI requests ${fmt(plan.aiAssistantMonthlyRequestLimit ?? null)}, ` +
+          `AI tokens ${fmt(plan.aiAssistantMonthlyTokenLimit ?? null)}, ` +
+          `ends ${plan.expiresAt ? new Date(plan.expiresAt).toISOString().slice(0, 10) : 'never'}`,
       },
     }).catch(() => null);
     return { plan, usage };

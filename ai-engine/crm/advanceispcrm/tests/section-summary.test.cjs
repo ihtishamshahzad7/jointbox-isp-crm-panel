@@ -1,0 +1,12 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {sectionSummary}=require('../web/section-summary.js');
+const values=(section,rows)=>Object.fromEntries(sectionSummary(section,rows,'2026-10-19').map(c=>[c.label,c.value]));
+const stock=values('Inventory',[{quantity:0,minimum_stock:2,unit_cost:20},{quantity:2,minimum_stock:2,unit_cost:10},{quantity:3,minimum_stock:2,unit_cost:5}]);
+assert.equal(stock['In stock'],2);assert.equal(stock['Low stock'],1);assert.equal(stock['Out of stock'],1);assert.equal(stock['Stock value'],35);
+const customers=values('Customers',[{status:'Active',expiry_date:'2026-10-18',monthly_fee:100},{status:'Suspended',expiry_date:'2026-10-19',monthly_fee:200},{status:'Active',expiry_date:'2026-10-26',monthly_fee:300},{status:'Active',expiry_date:'2026-10-27',monthly_fee:400}]);
+assert.equal(customers.Expired,1);assert.equal(customers['Expiring in 7 days'],2);assert.equal(customers['Active monthly fees'],800);
+const expenses=values('Expenses',[{status:'Paid',amount:'100.25'},{status:'Pending',amount:'20'},{status:'Cancelled',amount:'999'}]);assert.equal(expenses['Recorded amount'],120.25);assert.equal(expenses['Paid amount'],100.25);assert.equal(expenses['Pending amount'],20);
+const tickets=values('Tickets',[{status:'Open',assigned_to:null,priority:'High',due_date:'2026-10-18'},{status:'Closed',assigned_to:null,priority:'Urgent',due_date:'2026-10-18'},{status:'Open',assigned_to:1,priority:'Normal',due_date:'2026-10-19'}]);assert.equal(tickets.Overdue,1);assert.equal(tickets.Unassigned,1);assert.equal(tickets['High / urgent'],1);
+for(const section of ['Inventory','Customers','Staff','Jobs','Tickets','Payments','Expenses','Stock issues','Packages','Categories','Users'])for(const metric of sectionSummary(section,[],'2026-10-19'))assert.equal(metric.value,0,section+' '+metric.label);
+console.log('PASS: stock thresholds/value, expiry boundaries, cancelled expenses, active ticket alerts and empty sections.');

@@ -27,6 +27,7 @@ const DESTS: Dest[] = [
   { label: "Add subscriber", href: "/subscribers?add=1", group: "Create", keys: "new create customer onboard signup add" },
   { label: "Trace search", href: "/trace", group: "Daily", keys: "find lookup phone username ip cnic" },
   { label: "Support / complaints", href: "/support-center", group: "Daily", keys: "ticket helpdesk issue complaint" },
+  { label: "SLA & service quality", href: "/sla", group: "Daily", keys: "sla response deadline breach service quality" },
   { label: "Field jobs", href: "/field-jobs", group: "Daily", keys: "technician dispatch installation visit" },
   { label: "Communication", href: "/communication", group: "Daily", keys: "sms email notification template message" },
   // Network

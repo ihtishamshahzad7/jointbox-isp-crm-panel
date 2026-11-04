@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict');
+const {customerMatchesFilters:matches,profileFinance}=require('../web/customer-profile.js');
+const c={id:7,payment_id:'123456789',username:'home-7',name:'Example Customer',email:'HELLO@example.test',phone:'+92 300 1234567',cnic:'12345-1234567-1',status:'Active',customer_type:'Residential'};
+assert(matches(c,{email:'hello',phone:'0300'})===false);
+assert(matches(c,{customer_id:'123456',email:'hello',phone:'300123',cnic:'1234512345671',name:'customer',status:'Active'}));
+assert(matches(c,{customer_id:'home-7'}));
+assert(!matches(c,{status:'Suspended'}));assert(!matches(c,{customer_type:'Business'}));assert(!matches(c,{cnic:'abc'}));assert(matches(c,{}));
+assert.deepEqual(profileFinance([{amount:'1000',paid:'250'},{amount:2000,paid:2100}]),{invoiced:3000,received:2350,balance:650});
+assert.deepEqual(profileFinance([]),{invoiced:0,received:0,balance:0});
+console.log('Customer profile filters and invoice totals passed');

@@ -67,6 +67,7 @@ export class AuditInterceptor implements NestInterceptor {
     if (!isExportRead && this.skipPrefixes.some((p) => path.startsWith(p))) return next.handle();
 
     const segments = path.split('/').filter(Boolean);
+    const isAiAgentChat = method === 'POST' && path === 'ai-agent/chat';
     const entity = segments[0] || 'unknown';
     // The record: a route parameter named like an id (":id", ":subscriberId"…),
     // else the first numeric path segment.
@@ -101,6 +102,8 @@ export class AuditInterceptor implements NestInterceptor {
         // What was exported: the filters (never values that look like secrets).
         const q = redactForAudit({ ...(req.query || {}) });
         if (q && Object.keys(q).length) detail = JSON.stringify(q).slice(0, 300);
+      } else if (isAiAgentChat) {
+        detail = 'AI prompt and answer intentionally omitted';
       } else if (req.body && typeof req.body === 'object') {
         detail = JSON.stringify(redactForAudit(req.body)).slice(0, 300);
       }

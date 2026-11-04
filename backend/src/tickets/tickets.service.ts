@@ -1,12 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TicketSlaService } from './ticket-sla.service';
 import { ScopeService, Actor } from '../common/scope.service';
 
 @Injectable()
 export class TicketsService {
-  private readonly logger = new Logger(TicketsService.name);
-
   constructor(
     private prisma: PrismaService,
     private sla: TicketSlaService,
@@ -109,27 +107,46 @@ export class TicketsService {
       await this.assertAssignee(actor, data?.assignedTo);
     }
     const ticketNo = await this.generateTicketNo();
-
-    // SLA deadlines are stamped at creation from the priority, so the ticket
-    // carries its own clock and history stays honest if policy changes later.
     const priority = data.priority || 'MEDIUM';
-    const due = this.sla.computeDueDates(priority);
-
-    return this.prisma.ticket.create({
-      data: {
-        ticketNo,
-        subscriberId: Number(data.subscriberId),
-        category:     data.category,
-        priority,
-        subject:      data.subject,
-        description:  data.description,
-        assignedTo:   data.assignedTo ? Number(data.assignedTo) : null,
-        status:       'OPEN',
-        responseDueAt:   due.responseDueAt,
-        resolutionDueAt: due.resolutionDueAt,
-      },
-      include: { subscriber: true },
+    const createdAt = new Date();
+    const subscriber = await this.prisma.subscriber.findUnique({
+      where: { id: Number(data.subscriberId) },
+      select: { userId: true },
     });
+    const companyId = subscriber?.userId == null
+      ? null
+      : await this.scope.companyRootId(subscriber.userId);
+    return this.prisma.$transaction(async (tx) => {
+      const policy = await this.sla.snapshotPolicy(companyId, 'TICKET', priority, createdAt, tx);
+      const responseDueAt = policy?.firstResponseTargetMinutes == null
+        ? null
+        : new Date(createdAt.getTime() + policy.firstResponseTargetMinutes * 60_000);
+      const resolutionDueAt = policy
+        ? new Date(createdAt.getTime() + policy.resolutionTargetMinutes * 60_000)
+        : null;
+      return tx.ticket.create({
+        data: {
+          ticketNo,
+          subscriberId: Number(data.subscriberId),
+          category:     data.category,
+          priority,
+          subject:      data.subject,
+          description:  data.description,
+          assignedTo:   data.assignedTo ? Number(data.assignedTo) : null,
+          status:       'OPEN',
+          createdAt,
+          slaPolicyVersionId: policy?.id ?? null,
+          slaResponseTargetMinutes: policy?.firstResponseTargetMinutes ?? null,
+          slaResolutionTargetMinutes: policy?.resolutionTargetMinutes ?? null,
+          slaResponseWarningMinutes: policy?.firstResponseWarningMinutes ?? null,
+          slaResolutionWarningMinutes: policy?.resolutionWarningMinutes ?? null,
+          slaClockMode: policy?.clockMode ?? null,
+          responseDueAt,
+          resolutionDueAt,
+        },
+        include: { subscriber: true },
+      });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async update(id: number, data: any, actor?: Actor) {
@@ -137,41 +154,62 @@ export class TicketsService {
       await this.assertTicket(actor, id);
       await this.assertAssignee(actor, data?.assignedTo);
     }
-    return this.prisma.ticket.update({
-      where: { id },
-      data: {
-        category:   data.category,
-        priority:   data.priority,
-        status:     data.status,
-        // Absent means "leave it": the complaints board sends only {status},
-        // and every status change used to wipe the assignee.
-        assignedTo:
-          data.assignedTo === undefined ? undefined : data.assignedTo ? Number(data.assignedTo) : null,
-        resolution: data.resolution,
-        resolvedAt: data.status === 'RESOLVED' ? new Date() : undefined,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.ticket.findUnique({
+        where: { id },
+        select: { status: true, firstResolvedAt: true },
+      });
+      if (!current) throw new NotFoundException('Ticket not found.');
+      const reopening = ['RESOLVED', 'CLOSED'].includes(current.status)
+        && ['OPEN', 'IN_PROGRESS', 'ESCALATED'].includes(data.status);
+      const resolvedAt = data.status === 'RESOLVED' ? new Date() : undefined;
+      if (resolvedAt && !current.firstResolvedAt) {
+        await tx.ticket.updateMany({
+          where: { id, firstResolvedAt: null },
+          data: { firstResolvedAt: resolvedAt },
+        });
+      }
+      return tx.ticket.update({
+        where: { id },
+        data: {
+          category:   data.category,
+          priority:   data.priority,
+          status:     data.status,
+          // Absent means "leave it": the complaints board sends only {status},
+          // and every status change used to wipe the assignee.
+          assignedTo:
+            data.assignedTo === undefined ? undefined : data.assignedTo ? Number(data.assignedTo) : null,
+          resolution: data.resolution,
+          resolvedAt,
+          reopenedCount: reopening ? { increment: 1 } : undefined,
+          lastReopenedAt: reopening ? new Date() : undefined,
+          ...(reopening ? { resolvedAt: null } : {}),
+        },
+      });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async addMessage(ticketId: number, data: any, actor?: Actor) {
     if (actor) await this.assertTicket(actor, Number(ticketId));
-    const msg = await this.prisma.ticketMessage.create({
-      data: {
-        ticketId:      Number(ticketId),
-        message:       data.message,
-        attachmentUrl: data.attachmentUrl,
-        // From the operator API the sender IS the caller — the body used to
-        // name it, so a reply could be posted as any user or as the customer.
-        sentBy:        actor ? this.scope.actorId(actor) : Number(data.sentBy),
-        sentByType:    actor ? 'STAFF' : data.sentByType || 'STAFF',
-      },
+    const sentByType = actor ? 'STAFF' : data.sentByType || 'STAFF';
+    return this.prisma.$transaction(async (tx) => {
+      const msg = await tx.ticketMessage.create({
+        data: {
+          ticketId:      Number(ticketId),
+          message:       data.message,
+          attachmentUrl: data.attachmentUrl,
+          // From the operator API the sender IS the caller — the body used to
+          // name it, so a reply could be posted as any user or as the customer.
+          sentBy:        actor ? this.scope.actorId(actor) : Number(data.sentBy),
+          sentByType,
+        },
+      });
+      // Only a staff reply stops the first-response clock.
+      if (sentByType === 'STAFF') {
+        await this.sla.markFirstResponse(Number(ticketId), msg.createdAt, tx);
+      }
+      return msg;
     });
-    // A reply from staff stops the response clock. Customer replies don't —
-    // otherwise a customer chasing for an update would clear our own SLA.
-    if ((actor ? 'STAFF' : data.sentByType || 'STAFF') === 'STAFF') {
-      void this.sla.markFirstResponse(Number(ticketId)).catch((e) => { this.logger?.warn?.('markFirstResponse: ' + (e?.message || e)); });
-    }
-    return msg;
   }
 
   async delete(id: number, actor?: Actor) {

@@ -196,6 +196,11 @@ export default function ComplaintsPage() {
       setStats(statsData);
       setSubscribers(subscribersData);
       setUsers(usersData);
+      const ticketId = Number(new URLSearchParams(window.location.search).get("ticketId"));
+      if (Number.isSafeInteger(ticketId) && ticketId > 0 && ticketsData.some((ticket: Ticket) => ticket.id === ticketId)) {
+        window.history.replaceState(null, "", "/complaints");
+        void loadTicketDetails(ticketId);
+      }
     } catch (err) {
       console.error('Error loading tickets:', err);
       setError('Failed to load tickets. Please make sure the backend server is running.');

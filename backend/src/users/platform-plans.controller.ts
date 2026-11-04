@@ -51,6 +51,20 @@ export class PlatformPlansController {
     return this.plans.applyToCompanies(req.user, +id);
   }
 
+  @Get('features')
+  productFeatures(@Req() req: AuthedReq) {
+    return this.plans.productFeatures(req.user);
+  }
+
+  @Put('features/:key')
+  setProductFeature(
+    @Param('key') key: string,
+    @Body() body: { enabled?: unknown },
+    @Req() req: AuthedReq,
+  ) {
+    return this.plans.setProductFeature(req.user, key, body?.enabled);
+  }
+
   @Get('companies/:id/profile')
   getProfile(@Param('id') id: string, @Req() req: AuthedReq) {
     return this.plans.getProfile(req.user, +id);

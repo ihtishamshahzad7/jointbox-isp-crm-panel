@@ -1,0 +1,1 @@
+﻿{"id":"/customer/","name":"My ISP Customer App","short_name":"My ISP","start_url":"/customer/","scope":"/customer/","display":"standalone","background_color":"#f0f5fa","theme_color":"#0c2034","icons":[{"src":"/customer/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}

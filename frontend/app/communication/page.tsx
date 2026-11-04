@@ -145,6 +145,11 @@ export default function CommunicationPage() {
   }
 
   async function retry(id: number) {
+    const message = log.find((entry) => entry.id === id);
+    if (
+      message?.status === "UNKNOWN" &&
+      !window.confirm("The provider may already have delivered this message. Retrying can send a duplicate. Continue?")
+    ) return;
     await mustOk(await fetch(`${API}/communication/messages/${id}/retry`, { method: "POST", headers }));
     void loadLog(true);
   }
@@ -154,7 +159,10 @@ export default function CommunicationPage() {
   const td: React.CSSProperties = { padding: "8px 10px", fontSize: 13, color: T.text };
   const input: React.CSSProperties = { background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", color: T.text, fontSize: 13 };
   const btn = (bg: string): React.CSSProperties => ({ background: bg, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: busy ? 0.6 : 1 });
-  const statusColor = (s: string) => (s === "SENT" ? T.green : s === "SIMULATED" ? T.amber : s === "FAILED" ? T.red : T.sub);
+  const statusColor = (s: string) =>
+    s === "SENT" ? T.green :
+    s === "SIMULATED" || s === "UNKNOWN" ? T.amber :
+    s === "FAILED" || s === "FAILED_FINAL" ? T.red : T.sub;
 
   return (
     <div style={{ padding: 20, color: T.text }}>
@@ -465,7 +473,7 @@ export default function CommunicationPage() {
               <input style={input} value={testForm.message} onChange={(e) => setTestForm({ ...testForm, message: e.target.value })} />
               <button style={btn(T.green)} disabled={busy} onClick={doTest}>Send test</button>
               <div style={{ fontSize: 11, color: T.muted }}>
-                Gateways unset → messages are <b style={{ color: T.amber }}>SIMULATED</b> (logged but not delivered). Configure SMS_GATEWAY_URL / SMTP_* in backend .env to go live.
+                Gateways unset → messages are <b style={{ color: T.amber }}>SIMULATED</b> (logged but not delivered). Configure SMS_GATEWAY_URL / SMTP_* in backend .env to go live. An UNKNOWN result may have reached the provider; retrying it can send a duplicate.
               </div>
             </div>
           </div>
@@ -478,7 +486,7 @@ export default function CommunicationPage() {
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
             <select style={input} value={logStatus} onChange={(e) => setLogStatus(e.target.value)}>
               <option value="">All statuses</option>
-              {["QUEUED", "SENT", "SIMULATED", "FAILED"].map((s) => <option key={s} value={s}>{s}</option>)}
+              {["QUEUED", "SENDING", "SENT", "SIMULATED", "FAILED", "FAILED_FINAL", "UNKNOWN", "CANCELLED"].map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -498,8 +506,10 @@ export default function CommunicationPage() {
                   <td style={{ ...td, color: T.sub, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.error ? `${m.body}\n\nError: ${m.error}` : m.body}>{m.body}</td>
                   <td style={{ ...td, color: statusColor(m.status), fontWeight: 600, fontSize: 12 }}>{m.status}</td>
                   <td style={td}>
-                    {m.status === "FAILED" && (
-                      <button style={{ ...btn(T.amber), padding: "3px 8px", fontSize: 11 }} onClick={() => retry(m.id)}>Retry</button>
+                    {["FAILED", "UNKNOWN"].includes(m.status) && (
+                      <button style={{ ...btn(T.amber), padding: "3px 8px", fontSize: 11 }} onClick={() => retry(m.id)}>
+                        {m.status === "UNKNOWN" ? "Retry (may duplicate)" : "Retry"}
+                      </button>
                     )}
                   </td>
                 </tr>

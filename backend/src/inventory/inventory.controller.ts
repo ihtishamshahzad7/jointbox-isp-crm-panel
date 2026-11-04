@@ -22,6 +22,16 @@ export class InventoryController {
     return this.inventory.stats(req.user);
   }
 
+  @Get('legacy-unowned')
+  legacyUnowned(@Req() req: any) {
+    return this.inventory.legacyUnowned(req.user);
+  }
+
+  @Post('reconcile-ownership')
+  reconcileOwnership(@Body() body: { itemId?: number; reason?: string }, @Req() req: any) {
+    return this.inventory.reconcileLegacyOwnership(Number(body?.itemId), body?.reason || '', req.user);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.inventory.findOne(+id, req.user);

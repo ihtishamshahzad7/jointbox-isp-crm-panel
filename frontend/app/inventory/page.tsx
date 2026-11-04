@@ -27,6 +27,8 @@ const TYPES = ["ONU", "ROUTER", "SWITCH", "OLT", "CABLE", "SPLITTER", "ANTENNA",
 export default function InventoryPage() {
   const router = useRouter();
   const [items, setItems] = useState<any[]>([]);
+  const [legacyItems, setLegacyItems] = useState<any[]>([]);
+  const [canReconcileLegacy, setCanReconcileLegacy] = useState(false);
   const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [filter, setFilter] = useState({ status: "ALL", type: "ALL", q: "" });
@@ -55,7 +57,20 @@ export default function InventoryPage() {
       setItems(Array.isArray(i) ? i : []);
       setStats(s);
       setUsers(Array.isArray(u) ? u : []);
-    } catch { /* ignore */ }
+      const legacy = await fetch(`${API}/inventory/legacy-unowned`, { headers });
+      if (legacy.status === 403) {
+        setLegacyItems([]);
+        setCanReconcileLegacy(false);
+      } else if (!legacy.ok) {
+        throw new Error(`Could not load legacy stock (${legacy.status}).`);
+      } else {
+        const rows = await legacy.json();
+        setLegacyItems(Array.isArray(rows) ? rows : []);
+        setCanReconcileLegacy(true);
+      }
+    } catch (error) {
+      note(error instanceof Error ? error.message : "Could not load inventory.", false);
+    }
   }, [filter, token]);
 
   useEffect(() => {
@@ -154,6 +169,22 @@ export default function InventoryPage() {
           {showForm ? "Cancel" : "+ Add item"}
         </button>
       </div>
+
+      {canReconcileLegacy && <section style={{ ...card, marginBottom: 14 }}>
+        <h2 style={{ margin: "0 0 6px", fontSize: 14 }}>Legacy serialized stock ownership</h2>
+        <p style={{ margin: "0 0 10px", color: T.muted, fontSize: 12 }}>
+          Only unowned items with recorded custody by this company are eligible. Reconciliation records the administrator, reason, and movement.
+        </p>
+        {legacyItems.length ? <div style={{ display: "grid", gap: 7 }}>
+          {legacyItems.map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: `1px solid ${T.border}`, paddingTop: 7 }}>
+            <span style={{ fontSize: 12 }}>#{item.id} · {item.serialNumber} · {item.type} · {item.brand || ""} {item.model || ""}</span>
+            <button disabled={busy} style={btn(T.amber)} onClick={() => {
+              const reason = window.prompt(`Why should ${item.serialNumber} be assigned to this company?`);
+              if (reason?.trim()) void act("/inventory/reconcile-ownership", "POST", { itemId: item.id, reason: reason.trim() });
+            }}>Reconcile ownership</button>
+          </div>)}
+        </div> : <p style={{ margin: 0, color: T.muted, fontSize: 12 }}>No legacy items with matching company custody evidence.</p>}
+      </section>}
 
       {/* Add form */}
       {showForm && (

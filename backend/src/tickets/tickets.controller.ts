@@ -7,6 +7,10 @@ import { TicketSlaService } from './ticket-sla.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../security/permissions.guard';
 import { ScopeService } from '../common/scope.service';
+import {
+  ProductEntitlementGuard,
+  RequireProductFeature,
+} from '../common/product-entitlement.guard';
 
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('tickets')
@@ -26,15 +30,52 @@ export class TicketsController {
    * SLA dashboard: what's late, due soon, and compliance over the period.
    * Counted over the caller's own subscribers' tickets only.
    */
+  @UseGuards(ProductEntitlementGuard)
+  @RequireProductFeature('crm-advanced')
   @Get('sla/report')
-  slaReport(@Req() req: any, @Query('days') days?: string) {
-    return this.sla.slaReport(days ? +days : 30, req.user);
+  slaReport(
+    @Req() req: any,
+    @Query('days') days?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('priority') priority?: string,
+  ) {
+    return this.sla.slaReport(days ? +days : 30, req.user, from, to, priority);
   }
 
-  /**
-   * Stamp SLA targets on tickets created before SLA existed. Rewrites SLA
-   * fields across the whole installation - platform owner only.
-   */
+  @UseGuards(ProductEntitlementGuard)
+  @RequireProductFeature('crm-advanced')
+  @Get('sla/records')
+  slaRecords(@Query() query: Record<string, unknown>, @Req() req: any) {
+    return this.sla.slaRecords(req.user, query || {});
+  }
+
+  @UseGuards(ProductEntitlementGuard)
+  @RequireProductFeature('crm-advanced')
+  @Get('sla/policies')
+  slaPolicies(@Req() req: any) {
+    return this.sla.policies(req.user);
+  }
+
+  @UseGuards(ProductEntitlementGuard)
+  @RequireProductFeature('crm-advanced')
+  @Post('sla/policies')
+  createSlaPolicy(@Body() body: Record<string, unknown>, @Req() req: any) {
+    return this.sla.createPolicy(body || {}, req.user);
+  }
+
+  @UseGuards(ProductEntitlementGuard)
+  @RequireProductFeature('crm-advanced')
+  @Post('sla/policies/:seriesId/versions')
+  createSlaPolicyVersion(
+    @Param('seriesId') seriesId: string,
+    @Body() body: Record<string, unknown>,
+    @Req() req: any,
+  ) {
+    return this.sla.createPolicyVersion(seriesId, body || {}, req.user);
+  }
+
+  /** Kept as a compatibility route; historical records are no longer assigned invented targets. */
   @Post('sla/backfill')
   slaBackfill(@Req() req: any) {
     this.scope.assertPlatformOwner(req.user);

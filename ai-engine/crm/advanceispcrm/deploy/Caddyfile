@@ -1,0 +1,17 @@
+# HTTPS front end for the ISP CRM on a static public IP.
+# setup_remote.ps1 copies this to Caddyfile.local and replaces CRM_PUBLIC_IP.
+{
+	# Let's Encrypt issues certificates for IP addresses only on its short-lived profile;
+	# Caddy renews them automatically. Ports 80 and 443 must reach this PC.
+	cert_issuer acme {
+		profile shortlived
+	}
+}
+
+https://CRM_PUBLIC_IP {
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000"
+	# Caddy replaces any client-supplied X-Forwarded-For with the real address,
+	# which ispcrm.py trusts only on connections from this computer.
+	reverse_proxy 127.0.0.1:3000
+}

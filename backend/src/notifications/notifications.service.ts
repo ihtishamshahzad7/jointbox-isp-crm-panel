@@ -1,10 +1,14 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../common/queue.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { isPrimaryInstance } from '../common/cluster-util';
+
+const MAX_DELIVERY_ATTEMPTS = 3;
+const MESSAGE_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
+const QUEUED_MESSAGE_RECLAIM_MS = 2 * 60 * 1000;
 
 /**
  * Phase 2 communication engine.
@@ -13,7 +17,7 @@ import { isPrimaryInstance } from '../common/cluster-util';
  *     SMS_GATEWAY_METHOD  GET (default) | POST
  *     SMS_GATEWAY_BODY    JSON template for POST, e.g. {"to":"{phone}","text":"{message}"}
  *     SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_FROM
- * - Nothing configured → messages are marked SIMULATED (safe to test everything).
+ * - Nothing configured → messages are marked SIMULATED; no external delivery is implied.
  * - All sends run through the queue (⚡ never in the request path, retried on failure).
  * - Every message is stored in the Message table (🔍 per-subscriber communication log).
  */
@@ -102,7 +106,7 @@ export class NotificationsService implements OnModuleInit {
 
   // ── Core send API ─────────────────────────────────────────────
 
-  /** Queue a single message. Returns the Message row immediately (status QUEUED). */
+  /** Queue a message or return its existing idempotent record. */
   async send(opts: {
     channel: 'SMS' | 'EMAIL';
     recipient: string;
@@ -111,22 +115,59 @@ export class NotificationsService implements OnModuleInit {
     subscriberId?: number;
     event?: string;
     createdBy?: number;
+    idempotencyKey?: string;
   }) {
     if (!opts.recipient) throw new BadRequestException('Recipient is required');
     if (!opts.body?.trim()) throw new BadRequestException('Message body is required');
 
-    const message = await this.prisma.message.create({
-      data: {
-        channel: opts.channel,
-        recipient: opts.recipient,
-        subject: opts.subject || null,
-        body: opts.body,
-        subscriberId: opts.subscriberId,
-        event: opts.event || 'MANUAL',
-        createdBy: opts.createdBy,
-      },
-    });
-    await this.queue.add('send-message', { messageId: message.id });
+    const key = opts.idempotencyKey?.trim() || null;
+    let message = key
+      ? await this.prisma.message.findUnique({ where: { idempotencyKey: key } })
+      : null;
+    if (!message) {
+      try {
+        message = await this.prisma.message.create({
+          data: {
+            channel: opts.channel,
+            recipient: opts.recipient,
+            subject: opts.subject || null,
+            body: opts.body,
+            subscriberId: opts.subscriberId,
+            event: opts.event || 'MANUAL',
+            createdBy: opts.createdBy,
+            idempotencyKey: key,
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002' || !key) {
+          throw error;
+        }
+        message = await this.prisma.message.findUnique({ where: { idempotencyKey: key } });
+        if (!message) throw error;
+      }
+    }
+
+    if (message.status === 'FAILED' && message.attempts < MAX_DELIVERY_ATTEMPTS) {
+      const claimed = await this.prisma.message.updateMany({
+        where: { id: message.id, status: 'FAILED', attempts: { lt: MAX_DELIVERY_ATTEMPTS } },
+        data: { status: 'QUEUED', queuedAt: new Date() },
+      });
+      if (claimed.count !== 1) {
+        return this.prisma.message.findUniqueOrThrow({ where: { id: message.id } });
+      }
+      message = await this.prisma.message.findUniqueOrThrow({ where: { id: message.id } });
+    }
+    if (message.status === 'QUEUED') {
+      try {
+        await this.queue.add('send-message', { messageId: message.id });
+      } catch (error) {
+        await this.prisma.message.updateMany({
+          where: { id: message.id, status: 'QUEUED' },
+          data: { status: 'FAILED', error: error instanceof Error ? error.message.slice(0, 500) : 'Queue rejected notification.' },
+        });
+        throw error;
+      }
+    }
     return message;
   }
 
@@ -365,9 +406,38 @@ export class NotificationsService implements OnModuleInit {
 
   async retryMessage(id: number, actor?: Actor) {
     if (actor) await this.assertMessage(actor, id);
-    await this.prisma.message.update({ where: { id }, data: { status: 'QUEUED', error: null } });
-    await this.queue.add('send-message', { messageId: id });
-    return { queued: true };
+    const message = await this.prisma.message.findUnique({
+      where: { id },
+      select: { status: true, attempts: true },
+    });
+    if (!message) throw new NotFoundException('Message not found');
+    if (!['FAILED', 'UNKNOWN'].includes(message.status) || message.attempts >= MAX_DELIVERY_ATTEMPTS) {
+      throw new ConflictException('Only failed or outcome-unknown notifications below the retry limit can be retried.');
+    }
+    const queued = await this.prisma.message.updateMany({
+      where: {
+        id,
+        status: message.status,
+        attempts: { lt: MAX_DELIVERY_ATTEMPTS },
+      },
+      data: { status: 'QUEUED', queuedAt: new Date(), sendingAt: null },
+    });
+    if (queued.count !== 1) {
+      throw new ConflictException('The notification changed before it could be retried.');
+    }
+    try {
+      await this.queue.add('send-message', { messageId: id });
+    } catch (error) {
+      await this.prisma.message.updateMany({
+        where: { id, status: 'QUEUED' },
+        data: {
+          status: 'FAILED',
+          error: error instanceof Error ? error.message.slice(0, 500) : 'Queue rejected notification.',
+        },
+      });
+      throw error;
+    }
+    return { queued: true, deliveryMayHaveSucceeded: message.status === 'UNKNOWN' };
   }
 
   // ── Templates CRUD ────────────────────────────────────────────
@@ -455,23 +525,109 @@ export class NotificationsService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────
   // DELIVERY (runs inside the queue worker)
   // ─────────────────────────────────────────────────────────────
+  @Cron('* * * * *')
+  async recoverQueuedMessages(): Promise<void> {
+    if (!isPrimaryInstance() || this.queue.isBull()) return;
+    const now = new Date();
+    const queuedBefore = new Date(now.getTime() - QUEUED_MESSAGE_RECLAIM_MS);
+    const stale = await this.prisma.message.findMany({
+      where: { status: 'QUEUED', queuedAt: { lt: queuedBefore } },
+      select: { id: true },
+      orderBy: { queuedAt: 'asc' },
+      take: 100,
+    });
+    for (const message of stale) {
+      const reclaimed = await this.prisma.message.updateMany({
+        where: { id: message.id, status: 'QUEUED', queuedAt: { lt: queuedBefore } },
+        data: { queuedAt: now },
+      });
+      if (reclaimed.count !== 1) continue;
+      try {
+        await this.queue.add('send-message', { messageId: message.id });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'Queue rejected notification.';
+        this.logger.error(`Unable to requeue notification ${message.id}: ${detail}`);
+      }
+    }
+  }
+
+  @Cron('* * * * *')
+  async recoverStaleMessageClaims(): Promise<void> {
+    if (!isPrimaryInstance()) return;
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - MESSAGE_CLAIM_TIMEOUT_MS);
+    const stale = await this.prisma.message.findMany({
+      where: { status: 'SENDING', sendingAt: { lt: staleBefore } },
+      select: { id: true },
+      orderBy: { sendingAt: 'asc' },
+      take: 100,
+    });
+    for (const message of stale) {
+      const reclaimed = await this.prisma.message.updateMany({
+        where: { id: message.id, status: 'SENDING', sendingAt: { lt: staleBefore } },
+        data: {
+          status: 'UNKNOWN',
+          queuedAt: now,
+          sendingAt: null,
+          error: 'Sending claim expired; external delivery outcome is unknown. Automatic retry stopped to avoid duplicates.',
+        },
+      });
+      if (reclaimed.count === 1) {
+        this.logger.warn(`Notification ${message.id} has an unknown delivery outcome after its sending claim expired.`);
+      }
+    }
+  }
+
   private async processMessage(messageId: number) {
+    const claimAt = new Date();
+    const claimed = await this.prisma.message.updateMany({
+      where: {
+        id: messageId,
+        status: { in: ['QUEUED', 'FAILED'] },
+        attempts: { lt: MAX_DELIVERY_ATTEMPTS },
+      },
+      data: {
+        status: 'SENDING',
+        queuedAt: claimAt,
+        sendingAt: claimAt,
+        attempts: { increment: 1 },
+      },
+    });
+    if (claimed.count !== 1) return;
     const msg = await this.prisma.message.findUnique({ where: { id: messageId } });
-    if (!msg || msg.status === 'SENT') return;
+    if (!msg) return;
     try {
       let status = 'SENT';
       if (msg.channel === 'SMS') status = await this.deliverSms(msg.recipient, msg.body);
       else status = await this.deliverEmail(msg.recipient, msg.subject || 'Notification', msg.body);
-      await this.prisma.message.update({
-        where: { id: messageId },
-        data: { status, sentAt: new Date(), attempts: { increment: 1 }, error: null },
+      const saved = await this.prisma.message.updateMany({
+        where: { id: messageId, status: 'SENDING', sendingAt: claimAt },
+        data: {
+          status,
+          queuedAt: new Date(),
+          sentAt: status === 'SENT' ? new Date() : null,
+          sendingAt: null,
+          error: null,
+        },
       });
-    } catch (e: any) {
-      await this.prisma.message.update({
-        where: { id: messageId },
-        data: { status: 'FAILED', error: e.message?.slice(0, 500), attempts: { increment: 1 } },
+      if (saved.count !== 1) {
+        this.logger.warn(`Notification ${messageId} finished after its delivery claim was reclaimed.`);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.slice(0, 500) : 'Notification delivery failed.';
+      const saved = await this.prisma.message.updateMany({
+        where: { id: messageId, status: 'SENDING', sendingAt: claimAt },
+        data: {
+          status: msg.attempts >= MAX_DELIVERY_ATTEMPTS ? 'FAILED_FINAL' : 'FAILED',
+          queuedAt: new Date(),
+          sendingAt: null,
+          error: detail,
+        },
       });
-      throw e; // let BullMQ retry
+      if (saved.count !== 1) {
+        this.logger.warn(`Notification ${messageId} failed after its delivery claim was reclaimed.`);
+      }
+      throw error;
     }
   }
 
@@ -488,7 +644,8 @@ export class NotificationsService implements OnModuleInit {
     const finalUrl = url.replace('{phone}', encodeURIComponent(phone)).replace('{message}', encodeURIComponent(message));
     // A gateway that never answers must not pin a queue worker forever; the
     // timeout becomes a FAILED attempt that BullMQ retries.
-    const timeoutMs = Number(process.env.SMS_GATEWAY_TIMEOUT_MS) || 15000;
+    const configuredTimeout = Number(process.env.SMS_GATEWAY_TIMEOUT_MS);
+    const timeoutMs = Math.min(120_000, Math.max(1000, Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 15000));
     const init: any = { method, signal: AbortSignal.timeout(timeoutMs) };
     if (method === 'POST') {
       const bodyTpl = process.env.SMS_GATEWAY_BODY || '{"to":"{phone}","message":"{message}"}';
@@ -518,6 +675,9 @@ export class NotificationsService implements OnModuleInit {
         port: Number(process.env.SMTP_PORT) || 587,
         secure: Number(process.env.SMTP_PORT) === 465,
         auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+        connectionTimeout: 30_000,
+        greetingTimeout: 30_000,
+        socketTimeout: 120_000,
       });
     }
     await this.mailer.sendMail({

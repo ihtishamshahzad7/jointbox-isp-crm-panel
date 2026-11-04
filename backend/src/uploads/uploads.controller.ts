@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, UploadedFile, UseInterceptors, UseGuards, BadRequestException,
-  NotFoundException, UnauthorizedException, Param, Query, Req, Res, Logger,
+  NotFoundException, UnauthorizedException, InternalServerErrorException, Param, Query, Req, Res, Logger,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtService } from '@nestjs/jwt';
@@ -127,9 +127,9 @@ export class UploadsController {
         },
       });
     } catch (e: any) {
-      // The file is stored either way; an unrecorded file falls back to
-      // "any signed-in operator", never to public.
       this.logger.warn(`could not record upload ${file.filename}: ${e?.message || e}`);
+      try { unlinkSync(file.path || join(UPLOAD_DIR, file.filename)); } catch { /* preserve the original persistence error */ }
+      throw new InternalServerErrorException('The uploaded file could not be registered securely.');
     }
     return { url: `/uploads/${file.filename}`, filename: file.filename };
   }
@@ -186,6 +186,42 @@ export class UploadsController {
       if (!row || row.ownerId != null) throw new NotFoundException('File not found');
     } else if (row && (row.ownerId == null || row.ownerId !== me.company)) {
       throw new NotFoundException('File not found');
+    }
+
+    const evidence = await this.prisma.fieldJobAttachment.findUnique({
+      where: { filename: name },
+      include: {
+        fieldJob: {
+          select: {
+            assignedTo: true,
+            createdById: true,
+            subscriber: { select: { userId: true } },
+            ticket: { select: { subscriber: { select: { userId: true } } } },
+            lead: { select: { companyId: true } },
+          },
+        },
+      },
+    });
+    if (evidence) {
+      const ancestors = await this.scope.ancestorIds(sub);
+      const [denied, granted] = await Promise.all([
+        this.prisma.userPermission.findFirst({
+          where: { userId: { in: ancestors }, permission: { in: ['field-jobs.read', 'field-jobs.*', '*'] }, allowed: false },
+          select: { id: true },
+        }),
+        this.prisma.rolePermission.findFirst({
+          where: { role: me.role, permission: { in: ['field-jobs.read', 'field-jobs.*', '*'] } },
+          select: { id: true },
+        }),
+      ]);
+      const visibleUsers = await this.scope.descendantIds(sub);
+      const job = evidence.fieldJob;
+      const visible = visibleUsers.includes(job.assignedTo ?? -1) ||
+        visibleUsers.includes(job.createdById ?? -1) ||
+        visibleUsers.includes(job.subscriber?.userId ?? -1) ||
+        visibleUsers.includes(job.ticket?.subscriber.userId ?? -1) ||
+        job.lead?.companyId === me.company;
+      if (denied || !granted || !visible) throw new NotFoundException('File not found');
     }
 
     const path = join(UPLOAD_DIR, name);

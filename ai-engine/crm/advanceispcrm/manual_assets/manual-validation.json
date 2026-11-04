@@ -1,0 +1,164 @@
+{
+  "expected_pages": 31,
+  "pdf_pages": 31,
+  "rendered_flowcharts": 3,
+  "screenshot_pages": 22,
+  "pdf_bytes": 3536046,
+  "page_layout": [
+    {
+      "page": 1,
+      "height": 983,
+      "scale": 1
+    },
+    {
+      "page": 2,
+      "height": 1019,
+      "scale": 0.9813542688910697
+    },
+    {
+      "page": 3,
+      "height": 594,
+      "scale": 1
+    },
+    {
+      "page": 4,
+      "height": 880,
+      "scale": 1
+    },
+    {
+      "page": 5,
+      "height": 882,
+      "scale": 1
+    },
+    {
+      "page": 6,
+      "height": 914,
+      "scale": 1
+    },
+    {
+      "page": 7,
+      "height": 705,
+      "scale": 1
+    },
+    {
+      "page": 8,
+      "height": 884,
+      "scale": 1
+    },
+    {
+      "page": 9,
+      "height": 855,
+      "scale": 1
+    },
+    {
+      "page": 10,
+      "height": 914,
+      "scale": 1
+    },
+    {
+      "page": 11,
+      "height": 942,
+      "scale": 1
+    },
+    {
+      "page": 12,
+      "height": 912,
+      "scale": 1
+    },
+    {
+      "page": 13,
+      "height": 942,
+      "scale": 1
+    },
+    {
+      "page": 14,
+      "height": 998,
+      "scale": 1
+    },
+    {
+      "page": 15,
+      "height": 912,
+      "scale": 1
+    },
+    {
+      "page": 16,
+      "height": 855,
+      "scale": 1
+    },
+    {
+      "page": 17,
+      "height": 971,
+      "scale": 1
+    },
+    {
+      "page": 18,
+      "height": 912,
+      "scale": 1
+    },
+    {
+      "page": 19,
+      "height": 971,
+      "scale": 1
+    },
+    {
+      "page": 20,
+      "height": 942,
+      "scale": 1
+    },
+    {
+      "page": 21,
+      "height": 996,
+      "scale": 1
+    },
+    {
+      "page": 22,
+      "height": 855,
+      "scale": 1
+    },
+    {
+      "page": 23,
+      "height": 914,
+      "scale": 1
+    },
+    {
+      "page": 24,
+      "height": 971,
+      "scale": 1
+    },
+    {
+      "page": 25,
+      "height": 912,
+      "scale": 1
+    },
+    {
+      "page": 26,
+      "height": 912,
+      "scale": 1
+    },
+    {
+      "page": 27,
+      "height": 971,
+      "scale": 1
+    },
+    {
+      "page": 28,
+      "height": 971,
+      "scale": 1
+    },
+    {
+      "page": 29,
+      "height": 912,
+      "scale": 1
+    },
+    {
+      "page": 30,
+      "height": 772,
+      "scale": 1
+    },
+    {
+      "page": 31,
+      "height": 837,
+      "scale": 1
+    }
+  ]
+}

@@ -1,0 +1,288 @@
+{
+  "sections": 55,
+  "pdf_pages": 58,
+  "expected_pages": 58,
+  "flowcharts": 30,
+  "master_format": "A1 landscape",
+  "roles": [
+    "Administrator",
+    "Manager",
+    "Accountant",
+    "Support",
+    "Technician",
+    "Storekeeper",
+    "Viewer"
+  ],
+  "fitting": [
+    {
+      "title": "About this manual",
+      "height": 556,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 navigation and dashboard",
+      "height": 761,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 customer records and profiles",
+      "height": 832,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 private documents and deployment",
+      "height": 387,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 invoices and subscription debt",
+      "height": 720,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 payments and permanent receipts",
+      "height": 761,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 full and partial recharge",
+      "height": 700,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 services, installation and ledger",
+      "height": 741,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 inventory catalog and stock movements",
+      "height": 752,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 device QR, inspection and stocktake",
+      "height": 720,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 tickets, assignment and TAT",
+      "height": 761,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 termination and expiry recovery",
+      "height": 761,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 expenses and activation costs",
+      "height": 709,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 staff, settings and account administration",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 staff authentication and password recovery",
+      "height": 470,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 customer self-service portal",
+      "height": 720,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 reports and exports",
+      "height": 638,
+      "scale": 1
+    },
+    {
+      "title": "Feature reference \u2014 assistant, integrations and operations",
+      "height": 562,
+      "scale": 1
+    },
+    {
+      "title": "Staff role assignment \u2014 job-based guide",
+      "height": 573,
+      "scale": 1
+    },
+    {
+      "title": "Staff role matrix \u2014 server module grants",
+      "height": 709,
+      "scale": 1
+    },
+    {
+      "title": "Role exceptions and sensitive features",
+      "height": 826,
+      "scale": 1
+    },
+    {
+      "title": "Account provisioning and protected operations",
+      "height": 439,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Whole application",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 HTTP routing and access checks",
+      "height": 836,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Staff authentication and account administration",
+      "height": 887,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Loading the dashboard and customer profile",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Common create, update, delete and return logic",
+      "height": 887,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Customer creation and editing",
+      "height": 836,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Monthly invoices and account balances",
+      "height": 856,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Payments, receipts and recharge decisions",
+      "height": 887,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Signed incoming payment bridge",
+      "height": 836,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Inventory issue and return",
+      "height": 836,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 QR registration, condition and stocktake",
+      "height": 836,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Tickets and turnaround targets",
+      "height": 836,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Termination and automatic expiry recovery",
+      "height": 867,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Customer portal",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Documents, extra charges, expenses and administration",
+      "height": 887,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Assistant, reports and background processing",
+      "height": 887,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Password recovery: request and reset",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 User creation, changes and deactivation",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Package, category and designation maintenance",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Employee registration and reporting hierarchy",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Customer documents: upload, download and delete",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Extra services and installation collection",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Expense lifecycle and activation cost calculation",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Customer editing, termination and reactivation branches",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Reports, filters, CSV and print",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Dashboard preferences and interpretation",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Assistant: guide, lookups and optional AI",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Customer portal provisioning and notifications",
+      "height": 812,
+      "scale": 1
+    },
+    {
+      "title": "Process atlas \u2014 Transaction rejection and retry outcomes",
+      "height": 781,
+      "scale": 1
+    },
+    {
+      "title": "Scenario coverage and process cross-reference",
+      "height": 687,
+      "scale": 1
+    },
+    {
+      "title": "Limitations and operating boundaries",
+      "height": 593,
+      "scale": 1
+    },
+    {
+      "title": "Implementation sources and document maintenance",
+      "height": 604,
+      "scale": 1
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "enabled": false,
+  "model": "YOUR_OPENAI_MODEL_ID",
+  "api_key": ""
+}

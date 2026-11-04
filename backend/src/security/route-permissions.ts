@@ -21,6 +21,156 @@ export interface RoutePerm {
 }
 
 export const ROUTE_PERMISSIONS: RoutePerm[] = [
+  // ── CRM LEADS & PIPELINE ─────────────────────────────────────────────────
+  {
+    method: 'GET',
+    test: /^\/crm\/leads\/\d+\/conversion-candidates\b/,
+    key: 'subscribers.read',
+  },
+  {
+    method: 'POST',
+    test: /^\/crm\/leads\/\d+\/convert\b/,
+    key: 'crm.leads.convert',
+  },
+  {
+    method: 'POST',
+    test: /^\/crm\/leads\/\d+\/activities\b/,
+    key: 'crm.leads.activity',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/crm\/leads\/\d+\/assignment\b/,
+    key: 'crm.leads.assign',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/crm\/leads\/\d+\/stage\b/,
+    key: 'crm.leads.pipeline',
+  },
+  {
+    method: 'POST',
+    test: /^\/crm\/leads\/\d+\/(archive|restore)\b/,
+    key: 'crm.leads.archive',
+  },
+  {
+    method: 'POST',
+    test: /^\/crm\/leads(\/)?$/,
+    key: 'crm.leads.create',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/crm\/leads\/\d+(\/)?$/,
+    key: 'crm.leads.edit',
+  },
+  {
+    method: 'GET',
+    test: /^\/crm\/leads(\/|$)/,
+    key: 'crm.leads.read',
+  },
+
+  // ── INTERNAL TASKS ──────────────────────────────────────────────────────
+  { method: 'GET', test: /^\/tasks\/summary\b/, key: 'tasks.report' },
+  { method: 'POST', test: /^\/tasks\/\d+\/comments\b/, key: 'tasks.comment' },
+  { method: 'PATCH', test: /^\/tasks\/\d+\/assignment\b/, key: 'tasks.assign' },
+  { method: 'PATCH', test: /^\/tasks\/\d+\/status\b/, key: 'tasks.status' },
+  { method: 'POST', test: /^\/tasks(\/)?$/, key: 'tasks.create' },
+  { method: 'PATCH', test: /^\/tasks\/\d+(\/)?$/, key: 'tasks.edit' },
+  { method: 'GET', test: /^\/tasks(\/|$)/, key: 'tasks.read' },
+
+  // ── HR LEAVE ──────────────────────────────────────────────────────────────
+  {
+    method: 'GET',
+    test: /^\/hr\/leave\/requests\/\d+\/history\b/,
+    key: 'hr.leave.read',
+  },
+  {
+    method: 'GET',
+    test: /^\/hr\/leave\/access\b/,
+    key: 'hr.leave.read',
+  },
+  {
+    method: 'POST',
+    test: /^\/hr\/leave\/requests\/\d+\/(approve|reject)\b/,
+    key: 'hr.leave.approve',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/hr\/leave\/requests\/\d+\/cancel\b/,
+    key: 'hr.leave.write',
+  },
+  {
+    method: 'POST',
+    test: /^\/hr\/leave\/requests(\/)?$/,
+    key: 'hr.leave.write',
+  },
+  {
+    method: 'GET',
+    test: /^\/hr\/leave\/requests(\/|$)/,
+    key: 'hr.leave.read',
+  },
+  {
+    method: 'GET',
+    test: /^\/hr\/leave\/types(\/|$)/,
+    key: 'hr.leave.read',
+  },
+  {
+    method: 'POST',
+    test: /^\/hr\/leave\/types(\/)?$/,
+    key: 'hr.leave.manage_types',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/hr\/leave\/types\/\d+\b/,
+    key: 'hr.leave.manage_types',
+  },
+  {
+    method: 'GET',
+    test: /^\/hr\/leave\/balances(\/|$)/,
+    key: 'hr.leave.read',
+  },
+  {
+    method: 'POST',
+    test: /^\/hr\/leave\/balances\/allocate\b/,
+    key: 'hr.leave.manage_balances',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/hr\/leave\/balances\/\d+\/adjust\b/,
+    key: 'hr.leave.manage_balances',
+  },
+
+  // ── HR ATTENDANCE ─────────────────────────────────────────────────────────
+  {
+    method: 'GET',
+    test: /^\/hr\/attendance\/[^/]+\/history\b/,
+    key: 'hr.attendance.read',
+  },
+  {
+    method: 'GET',
+    test: /^\/hr\/attendance\/employees\/\d+\b/,
+    key: 'hr.attendance.read',
+  },
+  {
+    method: 'GET',
+    test: /^\/hr\/attendance(\/|$)/,
+    key: 'hr.attendance.read',
+  },
+  {
+    method: 'POST',
+    test: /^\/hr\/attendance\/employees\/\d+\/check-in\b/,
+    key: 'hr.attendance.write',
+  },
+  {
+    method: 'POST',
+    test: /^\/hr\/attendance\/employees\/\d+\/check-out\b/,
+    key: 'hr.attendance.write',
+  },
+  {
+    method: 'PATCH',
+    test: /^\/hr\/attendance\/\d+\/correction\b/,
+    key: 'hr.attendance.correct',
+  },
+
   // ── SUBSCRIBERS — every granular action a parent can grant/deny ───────────
   { method: 'DELETE', test: /^\/subscribers\/bulk-delete\b/,             key: 'subscribers.massDelete' },
   { method: 'PATCH',  test: /^\/subscribers\/bulk-service-settings\b/,   key: 'subscribers.massSettings' },
@@ -204,9 +354,30 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'PUT',    test: /^\/fiber\/subscribers\/\d+$/,             key: 'fiber.write' },
 
   // ── FIELD JOBS ────────────────────────────────────────────────────────────
+  { method: 'GET',    test: /^\/field-jobs\/schedules\b/,               key: 'field-jobs.read' },
+  { method: 'POST',   test: /^\/field-jobs\/schedules(\/)?$/,           key: 'field-jobs.schedules' },
+  { method: 'PATCH',  test: /^\/field-jobs\/schedules\/\d+$/,           key: 'field-jobs.schedules' },
+  { method: 'PATCH',  test: /^\/field-jobs\/schedules\/\d+\/status\b/,  key: 'field-jobs.schedules' },
+  { method: 'POST',   test: /^\/field-jobs\/\d+\/attachments\b/,        key: 'field-jobs.evidence' },
+  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/location\/(check-in|check-out)\b/, key: 'field-jobs.location' },
+  { method: 'GET',    test: /^\/field-jobs\/(stats|performance)\b/,      key: 'field-jobs.report' },
+  { method: 'GET',    test: /^\/field-jobs\/reports\/sla\/jobs\b/,      key: 'field-jobs.report' },
+  { method: 'GET',    test: /^\/field-jobs\/reports\/(summary|jobs)\b/,   key: 'field-jobs.report' },
+  { method: 'GET',    test: /^\/field-jobs\/dispatch$/,                  key: 'field-jobs.dispatch' },
+  { method: 'GET',    test: /^\/field-jobs\/\d+\/dispatch\/history$/,    key: 'field-jobs.dispatch' },
+  { method: 'GET',    test: /^\/field-jobs\/\d+\/dispatch$/,              key: 'field-jobs.dispatch' },
+  { method: 'GET',    test: /^\/field-jobs\/(options|\d+\/materials)\b/, key: 'field-jobs.read' },
+  { method: 'GET',    test: /^\/field-jobs\/mine\b/,                    key: 'field-jobs.read' },
+  { method: 'POST',   test: /^\/field-jobs\/\d+\/materials\/(reserve|unreserve|issue|consume|return|damaged|lost)\b/, key: 'field-jobs.materials' },
   { method: 'POST',   test: /^\/field-jobs\/from-ticket\//,            key: 'field-jobs.write' },
+  { method: 'POST',   test: /^\/field-jobs(\/)?$/,                      key: 'field-jobs.write' },
+  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/review\b/,             key: 'field-jobs.review' },
+  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/(checklist|arrive|start|complete)\b/, key: 'field-jobs.technician' },
+  { method: 'POST',   test: /^\/field-jobs\/\d+\/assistance\b/,         key: 'field-jobs.technician' },
+  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/assign\//,             key: 'field-jobs.dispatch' },
+  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/unassign\b/,           key: 'field-jobs.dispatch' },
+  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/cancel\b/,             key: 'field-jobs.dispatch' },
   { method: 'PUT',    test: /^\/field-jobs\/\d+$/,                     key: 'field-jobs.write' },
-  { method: 'PATCH',  test: /^\/field-jobs\/\d+\/(assign|start|complete|cancel)\b/, key: 'field-jobs.write' },
   { method: 'DELETE', test: /^\/field-jobs\/\d+$/,                     key: 'field-jobs.delete' },
 
   // ── GROUPS (access / sharing) ─────────────────────────────────────────────
@@ -227,6 +398,8 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'DELETE', test: /^\/integrations\/api-keys\//,             key: 'integrations.apiKeys' },
 
   // ── INVENTORY ─────────────────────────────────────────────────────────────
+  { method: 'GET',    test: /^\/inventory\/legacy-unowned\b/,           key: 'inventory.reconcile' },
+  { method: 'POST',   test: /^\/inventory\/reconcile-ownership\b/,      key: 'inventory.reconcile' },
   { method: 'POST',   test: /^\/inventory\/bulk\b/,                    key: 'inventory.write' },
   { method: 'PUT',    test: /^\/inventory\/\d+$/,                      key: 'inventory.write' },
   { method: 'PATCH',  test: /^\/inventory\/\d+\/(assign|install|return)\b/, key: 'inventory.assign' },
@@ -265,6 +438,8 @@ export const ROUTE_PERMISSIONS: RoutePerm[] = [
   { method: 'PUT',    test: /^\/tickets\/\d+(\/)?$/,                   key: 'tickets.write' },
   { method: 'POST',   test: /^\/tickets\/\d+\/message\b/,              key: 'tickets.write' },
   { method: 'DELETE', test: /^\/tickets\/\d+(\/)?$/,                   key: 'tickets.delete' },
+  { method: 'GET',    test: /^\/tickets\/sla\/(report|records|policies)\b/, key: 'tickets.sla' },
+  { method: 'POST',   test: /^\/tickets\/sla\/policies(?:\/[^/]+\/versions)?\b/, key: 'tickets.sla.manage' },
   { method: 'GET',    test: /^\/tickets\/sla\/report\b/,               key: 'tickets.sla' },
   { method: 'POST',   test: /^\/tickets\/sla\/backfill\b/,             key: 'tickets.sla' },
 

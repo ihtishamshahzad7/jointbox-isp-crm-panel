@@ -76,6 +76,9 @@ interface PriceTier {
   maxSubscribers: number | null;
   maxNas: number | null;
   maxAccounts: number | null;
+  aiAssistantMonthlyRequestLimit: number | null;
+  aiAssistantMonthlyTokenLimit: number | null;
+  features: string[];
   isActive: boolean;
 }
 
@@ -113,9 +116,17 @@ interface Plan {
   maxSubscribers: number | null;
   maxNas: number | null;
   maxAccounts: number | null;
+  features: string[];
+  aiAssistantMonthlyRequestLimit: number | null;
+  aiAssistantMonthlyTokenLimit: number | null;
   expiresAt: string | null;
   note: string | null;
 }
+
+const PRODUCT_FEATURE_LABELS: Record<string, string> = {
+  "ai-assistant": "AI Assistant",
+  "crm-advanced": "Advanced CRM",
+};
 
 const accountsOf = (c: Company) => c.franchises + c.dealers + c.retailers + c.staff;
 const planEnded = (p?: Plan | null) => !!p?.expiresAt && new Date(p.expiresAt).getTime() < Date.now();
@@ -466,6 +477,9 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
   const str = (v: number | null | undefined) => (v == null ? "" : String(v));
   const [f, setF] = React.useState({
     maxSubscribers: str(p?.maxSubscribers), maxNas: str(p?.maxNas), maxAccounts: str(p?.maxAccounts),
+    aiAssistantMonthlyRequestLimit: str(p?.aiAssistantMonthlyRequestLimit),
+    aiAssistantMonthlyTokenLimit: str(p?.aiAssistantMonthlyTokenLimit),
+    features: (p?.features ?? []).filter((feature) => Object.prototype.hasOwnProperty.call(PRODUCT_FEATURE_LABELS, feature)),
     expiresAt: p?.expiresAt ? new Date(p.expiresAt).toISOString().slice(0, 10) : "", note: p?.note || "",
   });
   const [busy, setBusy] = React.useState(false);
@@ -476,10 +490,19 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
     setTierId(id);
     const t = tiers.find((x) => String(x.id) === id);
     // Choosing a plan fills its limits in; they can still be changed before saving.
-    if (t) setF((cur) => ({ ...cur, maxSubscribers: str(t.maxSubscribers), maxNas: str(t.maxNas), maxAccounts: str(t.maxAccounts) }));
+    if (t) setF((cur) => ({
+      ...cur,
+      maxSubscribers: str(t.maxSubscribers),
+      maxNas: str(t.maxNas),
+      maxAccounts: str(t.maxAccounts),
+      aiAssistantMonthlyRequestLimit: str(t.aiAssistantMonthlyRequestLimit),
+      aiAssistantMonthlyTokenLimit: str(t.aiAssistantMonthlyTokenLimit),
+      features: t.features.filter((feature) => Object.prototype.hasOwnProperty.call(PRODUCT_FEATURE_LABELS, feature)),
+    }));
   };
   const bad = (v: string) => v.trim() !== "" && !/^\d+$/.test(v.trim());
-  const ready = !bad(f.maxSubscribers) && !bad(f.maxNas) && !bad(f.maxAccounts);
+  const ready = !bad(f.maxSubscribers) && !bad(f.maxNas) && !bad(f.maxAccounts) &&
+    !bad(f.aiAssistantMonthlyRequestLimit) && !bad(f.aiAssistantMonthlyTokenLimit);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -494,6 +517,9 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
         body: JSON.stringify({
           planId: tierId ? Number(tierId) : null,
           maxSubscribers: num(f.maxSubscribers), maxNas: num(f.maxNas), maxAccounts: num(f.maxAccounts),
+          features: f.features,
+          aiAssistantMonthlyRequestLimit: num(f.aiAssistantMonthlyRequestLimit),
+          aiAssistantMonthlyTokenLimit: num(f.aiAssistantMonthlyTokenLimit),
           // End of the chosen day, local time.
           expiresAt: f.expiresAt ? new Date(`${f.expiresAt}T23:59:59`).toISOString() : null,
           note: f.note.trim() || null,
@@ -521,9 +547,34 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
         <F label={`Subscribers (now ${company.subscribers.toLocaleString()})`} v={f.maxSubscribers} on={set("maxSubscribers")} hint="Maximum customers" />
         <F label={`Routers (now ${company.nas})`} v={f.maxNas} on={set("maxNas")} hint="Maximum NAS / routers" />
         <F label={`Sub-accounts (now ${accountsOf(company)})`} v={f.maxAccounts} on={set("maxAccounts")} hint="Franchises, dealers, retailers and staff" />
+        <F label="AI Assistant monthly requests" v={f.aiAssistantMonthlyRequestLimit} on={set("aiAssistantMonthlyRequestLimit")} hint="Empty = no limit" />
+        <F label="AI Assistant monthly tokens" v={f.aiAssistantMonthlyTokenLimit} on={set("aiAssistantMonthlyTokenLimit")} hint="Empty = no limit" />
         <F label="Plan ends" v={f.expiresAt} on={set("expiresAt")} type="date" hint="Empty = never" />
         <F label="Note (only you see it)" v={f.note} on={set("note")} hint="e.g. Gold plan, paid to Dec" />
       </div>
+      <fieldset style={{ border: 0, padding: 0, margin: "12px 0 0" }}>
+        <legend style={LBL}>Company product entitlements</legend>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          {Object.entries(PRODUCT_FEATURE_LABELS).map(([feature, label]) => (
+            <label key={feature} style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center", color: "var(--text)" }}>
+              <input
+                type="checkbox"
+                checked={f.features.includes(feature)}
+                onChange={(e) => setF((cur) => ({
+                  ...cur,
+                  features: e.target.checked
+                    ? [...cur.features, feature]
+                    : cur.features.filter((item) => item !== feature),
+                }))}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 4 }}>
+          A product is usable only when its platform switch and this company plan both allow it.
+        </div>
+      </fieldset>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
           {busy ? "Saving…" : "Save limits"}

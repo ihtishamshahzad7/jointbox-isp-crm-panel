@@ -1624,7 +1624,7 @@ export class SubscribersService implements OnModuleInit {
     if (data.idempotencyKey) {
       const existing = await this.prisma.subscriber.findUnique({ where: { idempotencyKey: String(data.idempotencyKey) } });
       if (existing) {
-        this.logger.log(`Idempotent create: key ${data.idempotencyKey} already produced subscriber #${existing.id} — returning it.`);
+        this.logger.log(`Idempotent create returned existing subscriber #${existing.id}.`);
         return existing;
       }
     }
@@ -2001,8 +2001,11 @@ if (!unpaid && data.username && data.password) {
 
       console.log('========================================');
 
-      // Phase 2: welcome message (uses WELCOME template if one is active)
-      void this.notifications.fireEvent('WELCOME', subscriber);
+      // Register-only CRM conversion creates a prospect record, not a customer
+      // service activation; do not send a welcome message before operator review.
+      if (data.suppressWelcomeMessage !== true) {
+        void this.notifications.fireEvent('WELCOME', subscriber);
+      }
 
       // NOTE: the first invoice is now raised inside the activation gate above
       // (package → invoice → wallet charge → RADIUS), so it is intentionally NOT

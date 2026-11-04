@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const fields=Object.fromEntries(['issued_against','customer_id'].map(name=>[name,{value:'',dispatchEvent(){this.changed=true;}}]));
+const nodes={form:{elements:{namedItem:name=>fields[name]}},'form-title':{},save:{},fields:{prepend(node){this.context=node;}}};
+const calls=[];const context={canCreate:()=>true,navigate:section=>calls.push(section),openEditor:()=>calls.push('editor'),$:id=>nodes[id],el:()=>({append(...children){this.children=children;}}),Event:class{}};
+vm.createContext(context);vm.runInContext(fs.readFileSync(require.resolve('../web/customer-profile.js'),'utf8'),context);
+const customer={id:21,name:'Demo customer',payment_id:'123456789',username:'demo'};
+context.issueForProfile(customer);
+assert.deepEqual(calls,['Stock issues','editor']);assert.equal(fields.customer_id.value,'21');assert.equal(fields.issued_against.value,'Customer');assert.equal(fields.customer_id.disabled,true);assert.equal(fields.issued_against.disabled,true);assert.equal(vm.runInContext('stockIssueCustomer.id',context),21);assert.equal(nodes.save.textContent,'Issue and deduct stock');
+context.openCustomerProfile=c=>calls.push(c.id);context.returnToStockCustomer(customer);assert.equal(vm.runInContext('profileTab',context),'Hardware details');
+context.canCreate=()=>false;const count=calls.length;context.issueForProfile(customer);assert.equal(calls.length,count);
+console.log('PASS: customer-specific stock form, pinned customer/destination, return to hardware and role checks.');

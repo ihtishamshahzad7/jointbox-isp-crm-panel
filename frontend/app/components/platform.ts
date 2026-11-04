@@ -10,6 +10,7 @@
 export const PLATFORM_PATHS = [
   "/companies",
   "/platform-plans",
+  "/ai-agent-admin",
   "/licence",
   "/communication",
   "/settings",
@@ -25,7 +26,7 @@ export const PLATFORM_PATHS = [
 export const PLATFORM_HOME = "/companies";
 
 /** Screens only the platform account has; a company is sent to its dashboard. */
-export const PLATFORM_ONLY_PATHS = ["/companies", "/platform-plans", "/licence", "/console", "/radius-admin", "/jobs"];
+export const PLATFORM_ONLY_PATHS = ["/companies", "/platform-plans", "/ai-agent-admin", "/licence", "/console", "/radius-admin", "/jobs"];
 
 export function isPlatformOnlyPath(path: string): boolean {
   const p = (path || "").split("?")[0];

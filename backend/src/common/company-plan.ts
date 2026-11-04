@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { ScopeService, Actor } from './scope.service';
+import { PRODUCT_FEATURES } from './product-entitlement.service';
 
 /**
  * WHAT THE PLATFORM ALLOWS ONE COMPANY.
@@ -23,6 +24,10 @@ export interface PlanRow {
   maxSubscribers: number | null;
   maxNas: number | null;
   maxAccounts: number | null;
+  planId?: number | null;
+  features?: string[];
+  aiAssistantMonthlyRequestLimit?: number | null;
+  aiAssistantMonthlyTokenLimit?: number | null;
   expiresAt: Date | null;
   note: string | null;
   updatedAt?: Date;
@@ -211,11 +216,13 @@ export async function savePlan(
     maxSubscribers: number | null;
     maxNas: number | null;
     maxAccounts: number | null;
+    aiAssistantMonthlyRequestLimit: number | null;
+    aiAssistantMonthlyTokenLimit: number | null;
   };
-  type Tier = Caps & { id: number; name: string; isActive: boolean };
   const req = (body ?? {}) as Record<string, unknown>;
   let planId: number | null | undefined = undefined;
-  let fromPlan: Caps | null = null;
+  type Tier = Caps & { id: number; name: string; isActive: boolean; features: string[] };
+  let fromPlan: Tier | null = null;
   if ('planId' in req) {
     if (req.planId === null || req.planId === '') planId = null;
     else {
@@ -235,15 +242,41 @@ export async function savePlan(
       fromPlan = tier;
     }
   }
-  const cap = (key: keyof Caps, label: string) =>
-    req[key] === undefined && fromPlan
-      ? fromPlan[key]
-      : capOrNull(req[key], label);
+  const cap = (key: keyof Caps, label: string): number | null | undefined => {
+    if (req[key] !== undefined) return capOrNull(req[key], label);
+    if (fromPlan) return fromPlan[key];
+    return capOrNull(undefined, label);
+  };
+  let features: string[] | undefined;
+  if (req.features !== undefined) {
+    if (!Array.isArray(req.features)) throw new BadRequestException('Features must be a list.');
+    const values = [...new Set(req.features.map((feature) => String(feature)))];
+    const invalid = values.filter((feature) => !(PRODUCT_FEATURES as readonly string[]).includes(feature));
+    if (invalid.length) throw new BadRequestException(`Unknown product feature: ${invalid.join(', ')}`);
+    features = values;
+  } else if (planId !== undefined) {
+    features = (fromPlan?.features ?? []).filter((feature) =>
+      (PRODUCT_FEATURES as readonly string[]).includes(feature),
+    );
+  }
   const data = {
-    maxSubscribers: cap('maxSubscribers', 'Subscribers'),
-    maxNas: cap('maxNas', 'Routers'),
-    maxAccounts: cap('maxAccounts', 'Sub-accounts'),
+    ...(cap('maxSubscribers', 'Subscribers') !== undefined
+      ? { maxSubscribers: cap('maxSubscribers', 'Subscribers') }
+      : {}),
+    ...(cap('maxNas', 'Routers') !== undefined
+      ? { maxNas: cap('maxNas', 'Routers') }
+      : {}),
+    ...(cap('maxAccounts', 'Sub-accounts') !== undefined
+      ? { maxAccounts: cap('maxAccounts', 'Sub-accounts') }
+      : {}),
+    ...(cap('aiAssistantMonthlyRequestLimit', 'AI Agent monthly requests') !== undefined
+      ? { aiAssistantMonthlyRequestLimit: cap('aiAssistantMonthlyRequestLimit', 'AI Agent monthly requests') }
+      : {}),
+    ...(cap('aiAssistantMonthlyTokenLimit', 'AI Agent monthly tokens') !== undefined
+      ? { aiAssistantMonthlyTokenLimit: cap('aiAssistantMonthlyTokenLimit', 'AI Agent monthly tokens') }
+      : {}),
     ...(planId !== undefined ? { planId } : {}),
+    ...(features !== undefined ? { features } : {}),
     expiresAt,
     note: body?.note ? String(body.note).slice(0, 300) : null,
     updatedById: actorId || null,

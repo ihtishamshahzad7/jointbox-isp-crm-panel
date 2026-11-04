@@ -1,0 +1,15 @@
+﻿'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const app=fs.readFileSync(require.resolve('../web/app.js'),'utf8'),customer=fs.readFileSync(require.resolve('../web/customer.js'),'utf8');
+const nodes={form:{},save:{disabled:false},editor:{open:true,close(){this.open=false;}},notice:{hidden:true}};
+let payload,loads=0,buildSection;
+const context={current:'Customers',editorSection:null,editing:null,issueRequestKey:'test-payment-key',stockIssueCustomer:null,$:id=>nodes[id],can:(action,section)=>action==='write'&&section==='Payments',buildEditor(){buildSection=context.current;},customerFormDocuments(){throw Error('Customer document upload must not run for recharge.');},mutate:async value=>{payload=value;return {recharge:{message:'Customer activated.'}};},load:async()=>loads++,showError:error=>{throw error;},FormData:class{*[Symbol.iterator](){yield ['customer_id','21'];yield ['amount','2000'];}}};
+vm.createContext(context);
+vm.runInContext(app.slice(app.indexOf('function openEditor('),app.indexOf('function buildEditor(')),context);
+context.openEditor(null,'Payments');assert.equal(buildSection,'Payments');assert.equal(context.current,'Customers');assert.equal(context.editorSection,'Payments');
+const submit=app.slice(app.indexOf("$('form').onsubmit=async event=>"),app.indexOf('\nasync function deleteRecord'));
+vm.runInContext(submit,context);
+(async()=>{await nodes.form.onsubmit({preventDefault(){}});assert.equal(payload.section,'Payments');assert.equal(payload.fields.customer_id,'21');assert.equal(context.current,'Customers');assert.equal(loads,1);assert.equal(nodes.editor.open,false);assert.equal(nodes.notice.textContent,'Customer activated.');assert.equal(nodes.save.disabled,false);
+ // Payment forms opened from Customers, including installation, must never navigate.
+ const calls=[],fields={};for(const name of ['customer_id','billing_month','amount','revenue_type','otc_type','reference']){let value='';fields[name]={get value(){return value;},set value(v){value=String(v);},dispatchEvent(){},addEventListener(){},focus(){}};}
+ const ctx={state:{records:{Payments:[],Customers:[{id:21,name:'Customer',monthly_fee:2000,username:'demo',payment_id:'123456789'}]}},canCreate:()=>true,today:()=> '2026-10-20',money:String,openEditor:(row,section)=>calls.push(section),navigate:()=>{throw Error('Recharge must stay on its customer page.');},$:id=>id==='form'?{elements:{namedItem:name=>fields[name]}}:id==='fields'?{prepend(){}}:{},el:()=>({append(){},replaceChildren(){}}),Event:class{}};vm.createContext(ctx);vm.runInContext(customer,ctx);ctx.rechargeCustomer(ctx.state.records.Customers[0]);assert.deepEqual(calls,['Payments']);assert.equal(fields.customer_id.value,'21');ctx.recordInstallationPayment(ctx.state.records.Customers[0]);assert.deepEqual(calls,['Payments','Payments']);console.log('PASS: customer recharge and installation stay on customer page; save uses Payments permission/schema and refreshes in place.');})().catch(error=>{console.error(error);process.exitCode=1;});

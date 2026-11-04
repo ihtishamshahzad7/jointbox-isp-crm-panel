@@ -14,6 +14,8 @@ import { SseAuthGuard } from './sse-auth.guard';
 import { SecretsService } from './secrets.service';
 import { CronGuardService } from './cron-guard.service';
 import { CurrencyService } from './currency.service';
+import { ProductEntitlementService } from './product-entitlement.service';
+import { ProductEntitlementGuard } from './product-entitlement.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -30,7 +32,9 @@ import { PrismaModule } from '../prisma/prisma.module';
     // tokens without dragging the whole auth graph (and its circular-import
     // risk) into global scope. Same secret, same signature.
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-super-secret-key-change-this-in-production',
+      secret:
+        process.env.JWT_SECRET ||
+        'your-super-secret-key-change-this-in-production',
     }),
   ],
   controllers: [EventsController, BackupController],
@@ -46,11 +50,24 @@ import { PrismaModule } from '../prisma/prisma.module';
     // The single authority on what currency money is in. Global, so every
     // money-writing service can stamp without a module import.
     CurrencyService,
+    ProductEntitlementService,
+    ProductEntitlementGuard,
     // Runs at bootstrap on every process: strips scheduled jobs from non-primary
     // instances so an unguarded @Cron cannot duplicate itself across the cluster.
     CronGuardService,
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
   ],
-  exports: [CacheService, QueueService, ScopeService, DatabaseSetupService, BackupService, EventsService, SecretsService, CurrencyService],
+  exports: [
+    CacheService,
+    QueueService,
+    ScopeService,
+    DatabaseSetupService,
+    BackupService,
+    EventsService,
+    SecretsService,
+    CurrencyService,
+    ProductEntitlementService,
+    ProductEntitlementGuard,
+  ],
 })
 export class CommonModule {}

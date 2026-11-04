@@ -53,6 +53,9 @@ import { DemoModule } from './demo/demo.module';
 import { AiModule } from './ai/ai.module';
 import { FiberModule } from './fiber/fiber.module';
 import { GroupsModule } from './groups/groups.module';
+import { HrModule } from './hr/hr.module';
+import { CrmLeadsModule } from './crm/crm-leads.module';
+import { TasksModule } from './tasks/tasks.module';
 
 @Module({
   imports: [
@@ -107,6 +110,9 @@ import { GroupsModule } from './groups/groups.module';
     AiModule,
     FiberModule,
     GroupsModule,
+    HrModule,
+    CrmLeadsModule,
+    TasksModule,
   ],
   controllers: [AppController],
   providers: [

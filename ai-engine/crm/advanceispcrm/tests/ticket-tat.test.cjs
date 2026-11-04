@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict');
+const {ticketTiming}=require('../web/ticket-tat.js');
+const t={status:'Open',created_at:'2026-10-19T08:00:00Z',due_at:'2026-10-19T10:00:00Z'};
+assert.equal(ticketTiming(t,Date.parse('2026-10-19T09:30:00Z')).label,'0h 30m remaining');
+assert.equal(ticketTiming(t,Date.parse('2026-10-19T10:15:00Z')).label,'Overdue by 0h 15m');
+assert.equal(ticketTiming({...t,status:'Resolved',resolved_at:'2026-10-19T09:45:00Z'}).label,'Resolved within TAT');
+assert.equal(ticketTiming({...t,status:'Closed',resolved_at:'2026-10-19T11:00:00Z'}).label,'TAT breached by 1h 0m');
+assert.equal(ticketTiming({...t,status:'Resolved',resolved_at:'2026-10-19T10:00:00Z'}).tone,'good');
+assert.equal(ticketTiming(t,Date.parse('2026-10-19T10:15:00Z')).elapsed,'2h 15m');
+console.log('PASS: TAT remaining, overdue, resolution deadline boundaries and elapsed time.');

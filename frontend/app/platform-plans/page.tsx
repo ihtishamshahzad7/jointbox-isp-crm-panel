@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import useSWR from "swr";
 import API from "../components/api";
 
 /**
@@ -22,6 +23,8 @@ interface Plan {
   maxSubscribers: number | null;
   maxNas: number | null;
   maxAccounts: number | null;
+  aiAssistantMonthlyRequestLimit: number | null;
+  aiAssistantMonthlyTokenLimit: number | null;
   features: string[];
   description: string | null;
   sortOrder: number;
@@ -29,12 +32,14 @@ interface Plan {
   companies: number;
 }
 
-type Draft = Omit<Plan, "id" | "companies" | "maxSubscribers" | "maxNas" | "maxAccounts" | "price" | "sortOrder"> & {
+type Draft = Omit<Plan, "id" | "companies" | "maxSubscribers" | "maxNas" | "maxAccounts" | "aiAssistantMonthlyRequestLimit" | "aiAssistantMonthlyTokenLimit" | "price" | "sortOrder"> & {
   price: string;
   sortOrder: string;
   maxSubscribers: string;
   maxNas: string;
   maxAccounts: string;
+  aiAssistantMonthlyRequestLimit: string;
+  aiAssistantMonthlyTokenLimit: string;
 };
 
 const FEATURE_LABEL: Record<string, string> = {
@@ -46,6 +51,8 @@ const FEATURE_LABEL: Record<string, string> = {
   hotspot: "Hotspot",
   api: "API access",
   "white-label": "White-label",
+  "ai-assistant": "AI Assistant",
+  "crm-advanced": "Advanced CRM",
 };
 
 function token(): string {
@@ -78,6 +85,8 @@ const toDraft = (p?: Plan): Draft => ({
   maxSubscribers: str(p?.maxSubscribers),
   maxNas: str(p?.maxNas),
   maxAccounts: str(p?.maxAccounts),
+  aiAssistantMonthlyRequestLimit: str(p?.aiAssistantMonthlyRequestLimit),
+  aiAssistantMonthlyTokenLimit: str(p?.aiAssistantMonthlyTokenLimit),
   features: p?.features ?? ["subscribers", "billing"],
   description: p?.description ?? "",
   sortOrder: p ? String(p.sortOrder) : "10",
@@ -88,41 +97,64 @@ const money = (p: Plan) =>
   `${p.currency} ${p.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} / ${p.billingPeriod === "YEARLY" ? "year" : "month"}`;
 
 export default function PlatformPlans() {
-  const [plans, setPlans] = React.useState<Plan[] | null>(null);
-  const [features, setFeatures] = React.useState<string[]>([]);
+  const {
+    data,
+    error: loadError,
+    mutate,
+  } = useSWR<{
+    plans: Plan[];
+    features: string[];
+    productFeatures: Array<{ key: string; enabled: boolean }>;
+  }, Error>("/platform/plans", async () => {
+    const [planData, productFeatures] = await Promise.all([
+      api<{ plans: Plan[]; features: string[] }>("/platform/plans"),
+      api<Array<{ key: string; enabled: boolean }>>("/platform/features"),
+    ]);
+    return {
+      plans: planData.plans,
+      features: planData.features,
+      productFeatures,
+    };
+  });
+  const plans = data?.plans ?? (loadError ? [] : null);
+  const features = data?.features ?? [];
+  const productFeatures = data?.productFeatures ?? [];
+  const [savingFeature, setSavingFeature] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
   const [notice, setNotice] = React.useState("");
   const [editing, setEditing] = React.useState<Plan | "new" | null>(null);
 
   const load = React.useCallback(async () => {
+    await mutate();
+  }, [mutate]);
+
+  async function toggleProductFeature(key: string, enabled: boolean) {
+    setSavingFeature(key);
     try {
-      const r = await api<{ plans: Plan[]; features: string[] }>("/platform/plans");
-      setPlans(r.plans);
-      setFeatures(r.features);
+      await api(`/platform/features/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+      await mutate(
+        (current) =>
+          current
+            ? {
+                ...current,
+                productFeatures: current.productFeatures.map((feature) =>
+                  feature.key === key ? { ...feature, enabled } : feature,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
       setError("");
+      setNotice(`${FEATURE_LABEL[key] ?? key} ${enabled ? "enabled" : "disabled"} platform-wide.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setPlans([]);
+    } finally {
+      setSavingFeature(null);
     }
-  }, []);
-
-  React.useEffect(() => {
-    let alive = true;
-    api<{ plans: Plan[]; features: string[] }>("/platform/plans")
-      .then((r) => {
-        if (!alive) return;
-        setPlans(r.plans);
-        setFeatures(r.features);
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setError(e instanceof Error ? e.message : String(e));
-        setPlans([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+  }
 
   async function remove(p: Plan) {
     if (!window.confirm(`Delete the ${p.name} plan?`)) return;
@@ -166,8 +198,34 @@ export default function PlatformPlans() {
         </button>
         <button onClick={load} style={GHOST}>Refresh</button>
       </div>
-      {error && <div style={ERR} role="alert">{error}</div>}
+      {(error || loadError) && (
+        <div style={ERR} role="alert">
+          {error || loadError?.message}
+        </div>
+      )}
       {notice && <div style={OK} role="status">{notice}</div>}
+
+      <section style={{ ...CARD, marginBottom: 14 }}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 14, color: "var(--text)" }}>Independent platform product switches</h2>
+        <p style={{ margin: "0 0 10px", fontSize: 11.5, color: "var(--muted)" }}>
+          These backend-enforced switches operate independently from each company&apos;s assigned plan.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+          {productFeatures.map((feature) => (
+            <label key={feature.key} style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center", color: "var(--text)" }}>
+              <input
+                type="checkbox"
+                checked={feature.enabled}
+                disabled={savingFeature === feature.key}
+                onChange={(e) => void toggleProductFeature(feature.key, e.target.checked)}
+              />
+              {FEATURE_LABEL[feature.key] ?? feature.key}
+              {savingFeature === feature.key && " (saving…)"}
+            </label>
+          ))}
+          {!productFeatures.length && <span style={{ fontSize: 12, color: "var(--muted)" }}>Loading product switches…</span>}
+        </div>
+      </section>
 
       {editing && (
         <PlanForm
@@ -246,7 +304,8 @@ function PlanForm({
     setF({ ...f, [k]: e.target.value });
   const badNum = (v: string) => v.trim() !== "" && !/^\d+$/.test(v.trim());
   const ready =
-    f.name.trim() && /^\d+(\.\d{1,2})?$/.test(f.price.trim()) && !badNum(f.maxSubscribers) && !badNum(f.maxNas) && !badNum(f.maxAccounts);
+    f.name.trim() && /^\d+(\.\d{1,2})?$/.test(f.price.trim()) && !badNum(f.maxSubscribers) && !badNum(f.maxNas) && !badNum(f.maxAccounts) &&
+    !badNum(f.aiAssistantMonthlyRequestLimit) && !badNum(f.aiAssistantMonthlyTokenLimit);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -261,6 +320,8 @@ function PlanForm({
       maxSubscribers: num(f.maxSubscribers),
       maxNas: num(f.maxNas),
       maxAccounts: num(f.maxAccounts),
+      aiAssistantMonthlyRequestLimit: num(f.aiAssistantMonthlyRequestLimit),
+      aiAssistantMonthlyTokenLimit: num(f.aiAssistantMonthlyTokenLimit),
       features: f.features,
       description: f.description,
       sortOrder: Number(f.sortOrder) || 0,
@@ -296,6 +357,8 @@ function PlanForm({
         <Field id="pl-subs" label="Max subscribers" value={f.maxSubscribers} onChange={set("maxSubscribers")} hint="Empty = no limit" />
         <Field id="pl-nas" label="Max routers (NAS)" value={f.maxNas} onChange={set("maxNas")} hint="Empty = no limit" />
         <Field id="pl-acc" label="Max sub-accounts" value={f.maxAccounts} onChange={set("maxAccounts")} hint="Franchises, dealers, retailers, staff" />
+        <Field id="pl-ai-requests" label="AI Assistant monthly requests" value={f.aiAssistantMonthlyRequestLimit} onChange={set("aiAssistantMonthlyRequestLimit")} hint="Empty = no limit" />
+        <Field id="pl-ai-tokens" label="AI Assistant monthly tokens" value={f.aiAssistantMonthlyTokenLimit} onChange={set("aiAssistantMonthlyTokenLimit")} hint="Empty = no limit" />
         <Field id="pl-order" label="Order in list" value={f.sortOrder} onChange={set("sortOrder")} />
         <Field id="pl-desc" label="Short description" value={f.description ?? ""} onChange={set("description")} />
       </div>
