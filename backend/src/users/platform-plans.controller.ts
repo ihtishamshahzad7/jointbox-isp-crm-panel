@@ -64,4 +64,19 @@ export class PlatformPlansController {
   ) {
     return this.plans.saveProfile(req.user, +id, body);
   }
+
+  /** AI Assistant / Advanced CRM for one company. */
+  @Get('companies/:id/features')
+  getFeatures(@Param('id') id: string, @Req() req: AuthedReq) {
+    return this.plans.getCompanyFeatures(req.user, +id);
+  }
+
+  @Put('companies/:id/features')
+  setFeatures(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Req() req: AuthedReq,
+  ) {
+    return this.plans.setCompanyFeatures(req.user, +id, body);
+  }
 }

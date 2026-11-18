@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { money, currencySymbol } from "../components/currency";
 import { ComparisonBars, DivergingBars, DualBars, StackedBar, Delta } from "../components/charts";
 import API_BASE from "../components/api";
+import { CrmReports, useCrmAdvanced } from "./crm-reports";
 
 const API =
   API_BASE;
@@ -29,6 +30,7 @@ const GRAINS = [
 ];
 
 export default function ReportsPage() {
+  const crmAdvanced = useCrmAdvanced();
   const router = useRouter();
   const [grain, setGrain] = useState("day");
   const [data, setData] = useState<any>(null);
@@ -303,6 +305,7 @@ export default function ReportsPage() {
           </div>
         </section>
       )}
+      {crmAdvanced && <CrmReports />}
     </div>
   );
 }

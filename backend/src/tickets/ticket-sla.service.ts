@@ -5,6 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isPrimaryInstance } from '../common/cluster-util';
 import { ScopeService, Actor } from '../common/scope.service';
+import { companyOfUser } from '../common/company-plan';
+import { companyFeatures } from '../common/features';
 
 /**
  * TicketSlaService — response/resolution targets and escalation.
@@ -52,6 +54,38 @@ export class TicketSlaService {
       responseDueAt:   new Date(from.getTime() + t.response   * 60_000),
       resolutionDueAt: new Date(from.getTime() + t.resolution * 60_000),
     };
+  }
+
+  /** The installation default targets, in minutes (for screens that show them). */
+  defaultTargets(priority: string): { response: number; resolution: number } {
+    return this.targets(priority);
+  }
+
+  /**
+   * Deadlines for a new ticket on this customer. A company holding
+   * `crm-advanced` may set its own targets per category and priority
+   * (crm_tat_setting); otherwise — or on any lookup failure — the
+   * installation defaults apply, so ticket creation never fails here.
+   */
+  async dueDatesFor(subscriberId: number, category: string | undefined, priority: string, from = new Date()) {
+    try {
+      const sub = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { userId: true } });
+      const company = sub?.userId ? await companyOfUser(this.prisma, sub.userId) : null;
+      if (company && category && (await companyFeatures(this.prisma, company)).has('crm-advanced')) {
+        const row = await (this.prisma as any).crmTatSetting.findUnique({
+          where: { companyId_category_priority: { companyId: company, category: String(category), priority } },
+        });
+        if (row) {
+          return {
+            responseDueAt: new Date(from.getTime() + row.responseMinutes * 60_000),
+            resolutionDueAt: new Date(from.getTime() + row.resolutionMinutes * 60_000),
+          };
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(`Company TAT lookup failed, using defaults: ${e?.message ?? e}`);
+    }
+    return this.computeDueDates(priority, from);
   }
 
   /** Stamp the first staff reply — stops the response clock. */

@@ -113,7 +113,9 @@ export class TicketsService {
     // SLA deadlines are stamped at creation from the priority, so the ticket
     // carries its own clock and history stays honest if policy changes later.
     const priority = data.priority || 'MEDIUM';
-    const due = this.sla.computeDueDates(priority);
+    // A company on Advanced CRM may have its own targets per category/priority;
+    // everyone else gets the installation defaults, exactly as before.
+    const due = await this.sla.dueDatesFor(Number(data.subscriberId), data.category, priority);
 
     return this.prisma.ticket.create({
       data: {

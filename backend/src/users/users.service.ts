@@ -11,6 +11,7 @@ import * as bcrypt from 'bcrypt';
 import { validatePassword } from '../security/security.service';
 import { ScopeService, Actor } from '../common/scope.service';
 import { assertCompanyCanAdd, planFor, savePlan, usageFor } from '../common/company-plan';
+import { actorFeatures } from '../common/features';
 
 /**
  * Ceiling on the un-paginated user list. Large enough that no realistic
@@ -854,6 +855,10 @@ export class UsersService {
   }
 
   /** The caller's own company plan — for the company's top level only. */
+  async myFeatures(actor: Actor) {
+    return { features: await actorFeatures(this.prisma, this.scope, actor) };
+  }
+
   async myCompanyPlan(actor: Actor) {
     const company = await this.scope.companyRootId(this.scope.actorId(actor));
     if (company == null || (await this.scope.rootId(actor)) !== company) return { plan: null, usage: null };

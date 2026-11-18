@@ -642,11 +642,11 @@ export class AccountingService {
   }
 
   /** The Cash↔Expense posting, shared by direct create and approval. */
-  private async postExpenseEntries(expense: { id: number; amount: number; category: string }, userId?: number) {
+  private async postExpenseEntries(expense: { id: number; amount: number; category: string }, userId?: number, client: any = this.prisma) {
     await this.post([
       { account: 'EXPENSE', debit: expense.amount, refType: 'EXPENSE', refId: expense.id, description: `${expense.category}`, createdBy: userId },
       { account: 'CASH', credit: expense.amount, refType: 'EXPENSE', refId: expense.id, description: `${expense.category}`, createdBy: userId },
-    ]);
+    ], client);
   }
 
   /** Expenses waiting on ISP sign-off. */
@@ -667,8 +667,21 @@ export class AccountingService {
     if ((e as any).status !== 'PENDING') throw new BadRequestException(`Expense is already ${(e as any).status?.toLowerCase?.() ?? 'processed'}`);
     // Approval posts to the ledger — refuse if the expense's period has closed since it was raised.
     await this.assertPeriodOpen(e.expenseDate, { userId: (e as any).createdBy ?? actorId ?? null });
-    await this.prisma.expense.update({ where: { id }, data: { status: 'APPROVED', approvedById: actorId ?? null, approvedAt: new Date() } as any });
-    await this.postExpenseEntries(e, actorId);
+    /**
+     * Claim and post in ONE transaction. The status is changed only where it
+     * is still PENDING, so two approvers clicking at once (or an approve racing
+     * a reject) cannot both win — previously both passed the check above and
+     * the expense was posted to the ledger twice. If the posting fails, the
+     * claim rolls back and the expense stays PENDING.
+     */
+    await this.prisma.$transaction(async (tx: any) => {
+      const claimed = await tx.expense.updateMany({
+        where: { id, status: 'PENDING' },
+        data: { status: 'APPROVED', approvedById: actorId ?? null, approvedAt: new Date() },
+      });
+      if (claimed.count !== 1) throw new BadRequestException('Expense was already processed by someone else.');
+      await this.postExpenseEntries(e, actorId, tx);
+    });
     return { approved: true };
   }
 
@@ -677,7 +690,12 @@ export class AccountingService {
     const e = await this.prisma.expense.findUnique({ where: { id } });
     if (!e) throw new NotFoundException('Expense not found');
     if ((e as any).status !== 'PENDING') throw new BadRequestException(`Expense is already ${(e as any).status?.toLowerCase?.() ?? 'processed'}`);
-    await this.prisma.expense.update({ where: { id }, data: { status: 'REJECTED', approvedById: actorId ?? null, approvedAt: new Date() } as any });
+    // Conditional, like approve: a reject can't overwrite an approval that just posted.
+    const r = await this.prisma.expense.updateMany({
+      where: { id, status: 'PENDING' } as any,
+      data: { status: 'REJECTED', approvedById: actorId ?? null, approvedAt: new Date() } as any,
+    });
+    if (r.count !== 1) throw new BadRequestException('Expense was already processed by someone else.');
     return { rejected: true };
   }
 

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { ScopeService, Actor } from './scope.service';
+import { parseFeatureList } from './features';
 
 /**
  * WHAT THE PLATFORM ALLOWS ONE COMPANY.
@@ -25,6 +26,8 @@ export interface PlanRow {
   maxAccounts: number | null;
   expiresAt: Date | null;
   note: string | null;
+  /** Entitlements (see features.ts). Copied from the price-list plan; the platform may override per company. */
+  features?: string[];
   updatedAt?: Date;
 }
 
@@ -212,7 +215,7 @@ export async function savePlan(
     maxNas: number | null;
     maxAccounts: number | null;
   };
-  type Tier = Caps & { id: number; name: string; isActive: boolean };
+  type Tier = Caps & { id: number; name: string; isActive: boolean; features?: string[] };
   const req = (body ?? {}) as Record<string, unknown>;
   let planId: number | null | undefined = undefined;
   let fromPlan: Caps | null = null;
@@ -239,7 +242,23 @@ export async function savePlan(
     req[key] === undefined && fromPlan
       ? fromPlan[key]
       : capOrNull(req[key], label);
+  /**
+   * Entitlements follow the same rule as the caps: an explicit list wins,
+   * otherwise a newly chosen plan's features are copied in, otherwise the
+   * company keeps what it has.
+   */
+  let features: string[] | undefined;
+  if (req.features !== undefined) features = parseFeatureList(req.features);
+  else if (fromPlan) {
+    // Only when the plan CHANGES. Re-saving limits on the same plan must not
+    // undo add-ons the platform switched on/off for this company.
+    const current = await prisma.companyPlan.findUnique({ where: { companyId: Number(companyId) }, select: { planId: true } });
+    if (current?.planId !== planId) {
+      features = Array.isArray((fromPlan as Tier).features) ? [...((fromPlan as Tier).features as string[])] : [];
+    }
+  }
   const data = {
+    ...(features !== undefined ? { features } : {}),
     maxSubscribers: cap('maxSubscribers', 'Subscribers'),
     maxNas: cap('maxNas', 'Routers'),
     maxAccounts: cap('maxAccounts', 'Sub-accounts'),

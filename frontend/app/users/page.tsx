@@ -12,6 +12,7 @@ import API_BASE from "../components/api";
 import { money, currencySymbol } from "../components/currency";
 import Portal from "../components/portal";
 import { mustOk } from "../../lib/http";
+import { StaffPanel, useCrmAdvanced } from "./staff-panel";
 
 const API = API_BASE;
 
@@ -28,6 +29,7 @@ const Icons = { ...SIcons };
 
 // ✅ Complete 14 menu items (matching dashboard)
 export default function UsersPage() {
+  const crmAdvanced = useCrmAdvanced();
   const router = useRouter();
   const [darkMode, setDarkMode] = useState(true);
   const [user, setUser] = useState<any>(null);
@@ -440,6 +442,8 @@ export default function UsersPage() {
               + Add {childRole ? `${childLabel} / Staff` : "Staff"}
             </button>
           </div>
+
+          {crmAdvanced && <StaffPanel />}
 
           {/* Grouping / classification panel */}
           <GroupPanel

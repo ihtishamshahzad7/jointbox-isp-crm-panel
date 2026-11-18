@@ -11,10 +11,12 @@ import { useSubscriberDetail } from "./context";
 import { Panel, Btn, StatusChip, EmptyState } from "./ui";
 import { fmtDateTime, show } from "./lib";
 import { money } from "../../components/currency";
+import { CostPanel, EquipmentPanel, ReceiptButton, StatementPanel, TerminatePanel, useCompanyFeatures } from "./crm-panels";
 
 export function BillingTab() {
   const { sub, invoices, payments, tickets } = useSubscriberDetail();
   const router = useRouter();
+  const crm = useCompanyFeatures().has("crm-advanced");
 
   const totals = useMemo(() => {
     const billed = invoices.reduce((a, i) => a + Number(i.total ?? 0), 0);
@@ -76,8 +78,13 @@ export function BillingTab() {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn size="sm" variant="primary" onClick={() => router.push("/invoices")}>Open Invoices</Btn>
         <Btn size="sm" variant="default" onClick={() => router.push("/payments")}>Open Payments</Btn>
-        <Btn size="sm" variant="ghost" onClick={exportStatement} title="Invoices (debit) + payments (credit) with running balance, as CSV">⤓ Export statement</Btn>
+        {!crm && <Btn size="sm" variant="ghost" onClick={exportStatement} title="Invoices (debit) + payments (credit) with running balance, as CSV">⤓ Export statement</Btn>}
       </div>
+
+      {crm && <StatementPanel subscriberId={sub.id} />}
+      {crm && <EquipmentPanel subscriberId={sub.id} />}
+      {crm && <CostPanel subscriberId={sub.id} />}
+      {crm && <TerminatePanel subscriberId={sub.id} status={sub.status} />}
 
       {/* Invoices */}
       <Panel title={`Invoices (${invoices.length})`}
@@ -115,7 +122,7 @@ export function BillingTab() {
           <div className="sd-table-wrap">
             <table className="sd-table">
               <thead>
-                <tr><th>Payment</th><th>Method</th><th className="r">Amount</th><th>Reference</th><th>Date</th></tr>
+                <tr><th>Payment</th><th>Method</th><th className="r">Amount</th><th>Reference</th><th>Date</th>{crm && <th />}</tr>
               </thead>
               <tbody>
                 {payments.map((pay) => (
@@ -125,6 +132,7 @@ export function BillingTab() {
                     <td className="r" style={{ color: "#219653", fontWeight: 700 }}>{money(pay.amount)}</td>
                     <td>{show(pay.referenceNo)}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{fmtDateTime(pay.createdAt)}</td>
+                    {crm && <td className="r"><ReceiptButton paymentId={Number(pay.id)} /></td>}
                   </tr>
                 ))}
               </tbody>

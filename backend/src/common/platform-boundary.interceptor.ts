@@ -58,6 +58,7 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['*', 'platform/plans/:id'],
   ['POST', 'platform/plans/:id/apply'],
   ['*', 'platform/companies/:id/profile'],
+  ['*', 'platform/companies/:id/features'],
 
   // ── the installation ──
   ['*', 'licence/*'],

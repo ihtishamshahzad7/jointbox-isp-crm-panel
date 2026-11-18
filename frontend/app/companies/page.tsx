@@ -459,6 +459,65 @@ function EditCompany({ company, onDone, onCancel, onError }: {
  * company and everyone under it are signed out until it is moved (their
  * customers stay online — FreeRADIUS does not ask the panel).
  */
+type ProductRow = { key: "ai-assistant" | "crm-advanced"; label: string; enabled: boolean; fromPlan: boolean };
+const PRODUCT_HINT: Record<ProductRow["key"], string> = {
+  "ai-assistant": "Answers questions from the company's own records (collections, dues, tickets, stock…).",
+  "crm-advanced": "Advanced CRM modules: ledger, receipts, warehouses, recoveries, TAT and more.",
+};
+
+/**
+ * The separately sold products for one company. Each switch saves at once —
+ * the server applies it in one statement and enforces it on every request;
+ * this screen only reflects what the server holds.
+ */
+function ProductSwitches({ companyId, onError }: { companyId: number; onError: (m: string) => void }) {
+  const [rows, setRows] = React.useState<ProductRow[] | null>(null);
+  const [busy, setBusy] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    api(`/platform/companies/${companyId}/features`)
+      .then((d) => { if (live) setRows(d?.features ?? []); })
+      .catch((e) => { if (live) { setRows([]); onError(e instanceof Error ? e.message : String(e)); } });
+    return () => { live = false; };
+  }, [companyId, onError]);
+  async function flip(r: ProductRow) {
+    setBusy(r.key);
+    try {
+      const d = await api(`/platform/companies/${companyId}/features`, {
+        method: "PUT", body: JSON.stringify({ [r.key]: !r.enabled }),
+      });
+      setRows(d?.features ?? rows);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(null); }
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontWeight: 700, color: "var(--text)", fontSize: 13, marginBottom: 6 }}>Add-on products</div>
+      {rows === null ? (
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div style={GRID}>
+          {rows.map((r) => (
+            <label key={r.key} htmlFor={`feat-${companyId}-${r.key}`} style={{
+              display: "flex", gap: 10, alignItems: "flex-start", border: "1px solid var(--border)",
+              borderRadius: 10, padding: "9px 11px", cursor: busy ? "wait" : "pointer",
+            }}>
+              <input id={`feat-${companyId}-${r.key}`} type="checkbox" checked={r.enabled}
+                disabled={busy !== null} onChange={() => flip(r)} style={{ marginTop: 3 }} />
+              <span>
+                <span style={{ fontWeight: 700, fontSize: 13, color: "var(--text)" }}>{r.label}</span>
+                {r.fromPlan && <span style={{ ...PILL, marginLeft: 6 }}>in plan</span>}
+                <span style={{ display: "block", fontSize: 11.5, color: "var(--muted)", lineHeight: 1.5 }}>{PRODUCT_HINT[r.key]}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlanEditor({ company, onDone, onCancel, onError }: {
   company: Company; onDone: () => void; onCancel: () => void; onError: (m: string) => void;
 }) {
@@ -524,6 +583,7 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
         <F label="Plan ends" v={f.expiresAt} on={set("expiresAt")} type="date" hint="Empty = never" />
         <F label="Note (only you see it)" v={f.note} on={set("note")} hint="e.g. Gold plan, paid to Dec" />
       </div>
+      <ProductSwitches companyId={company.id} onError={onError} />
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button type="submit" disabled={!ready || busy} style={{ ...PRIMARY, opacity: !ready || busy ? 0.55 : 1 }}>
           {busy ? "Saving…" : "Save limits"}

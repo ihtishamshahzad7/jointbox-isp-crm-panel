@@ -77,6 +77,8 @@ function make() {
         Promise.resolve(where.planId === 1 ? 2 : 0),
       ),
       updateMany: jest.fn(() => Promise.resolve({ count: 2 })),
+      // No row yet: assigning a plan is a plan change.
+      findUnique: jest.fn(() => Promise.resolve(null)),
       upsert: jest.fn(({ create }: { create: Record<string, unknown> }) => {
         companyPlans.push(create);
         return Promise.resolve(create);
@@ -187,7 +189,8 @@ describe('Plans & Pricing', () => {
     });
     expect(prisma.companyPlan.updateMany).toHaveBeenCalledWith({
       where: { planId: 1 },
-      data: { maxSubscribers: 300, maxNas: 2, maxAccounts: 5 },
+      // Entitlements travel with the limits (a plan with no features → []).
+      data: { maxSubscribers: 300, maxNas: 2, maxAccounts: 5, features: [] },
     });
   });
 

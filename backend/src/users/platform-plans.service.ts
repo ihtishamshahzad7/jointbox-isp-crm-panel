@@ -6,7 +6,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertIsCompany, capOrNull } from '../common/company-plan';
+import { assertIsCompany, capOrNull, invalidateCompanyPlan } from '../common/company-plan';
+import {
+  FEATURE_LABEL,
+  GATED_FEATURES,
+  PLAN_FEATURES,
+  parseFeatureList,
+} from '../common/features';
 import type { Actor } from '../common/scope.service';
 
 /**
@@ -21,16 +27,8 @@ import type { Actor } from '../common/scope.service';
  * companies" does that explicitly.
  */
 
-export const PLAN_FEATURES = [
-  'subscribers',
-  'billing',
-  'accounting',
-  'monitoring',
-  'fiber',
-  'hotspot',
-  'api',
-  'white-label',
-] as const;
+/** The full list lives with the entitlement code (common/features.ts). */
+export { PLAN_FEATURES };
 
 const PERIODS = ['MONTHLY', 'YEARLY'] as const;
 
@@ -127,14 +125,7 @@ export class PlatformPlansService {
       if (body[key] !== undefined) out[key] = capOrNull(body[key], label);
     }
     if (body.features !== undefined) {
-      if (!Array.isArray(body.features))
-        throw new BadRequestException('Features must be a list.');
-      const allowed = new Set<string>(PLAN_FEATURES);
-      const feats = [...new Set(body.features.map((f) => String(f)))];
-      const unknown = feats.filter((f) => !allowed.has(f));
-      if (unknown.length)
-        throw new BadRequestException(`Unknown feature: ${unknown.join(', ')}`);
-      out.features = feats;
+      out.features = parseFeatureList(body.features);
     }
     if (body.description !== undefined) {
       out.description = body.description
@@ -221,8 +212,10 @@ export class PlatformPlansService {
         maxSubscribers: plan.maxSubscribers,
         maxNas: plan.maxNas,
         maxAccounts: plan.maxAccounts,
+        features: plan.features ?? [],
       },
     });
+    invalidateCompanyPlan();
     return { updated: r.count };
   }
 
@@ -283,5 +276,91 @@ export class PlatformPlansService {
       update: data,
       create: { companyId, ...data },
     });
+  }
+
+  /**
+   * One company's sold-separately products (AI Assistant, Advanced CRM).
+   * `fromPlan` is what its price-list plan carries, for the screen to show
+   * when the company has been switched away from its plan's default.
+   */
+  async getCompanyFeatures(actor: Actor, companyId: number) {
+    this.platformOnly(actor);
+    await assertIsCompany(this.prisma, companyId);
+    const row = await this.prisma.companyPlan.findUnique({
+      where: { companyId },
+      select: { features: true, planId: true },
+    });
+    const tier = row?.planId
+      ? await this.prisma.platformPlan.findUnique({
+          where: { id: row.planId },
+          select: { features: true },
+        })
+      : null;
+    const have = new Set<string>(row?.features ?? []);
+    const plan = new Set<string>(tier?.features ?? []);
+    return {
+      companyId,
+      features: GATED_FEATURES.map((key) => ({
+        key,
+        label: FEATURE_LABEL[key],
+        enabled: have.has(key),
+        fromPlan: plan.has(key),
+      })),
+    };
+  }
+
+  /**
+   * Switch gated features on/off for one company: body `{ "ai-assistant": true }`.
+   *
+   * One UPDATE with array arithmetic in SQL, so two platform admins saving at
+   * once cannot lose each other's change (a read-modify-write in JS would).
+   * Descriptive features already on the row are left alone.
+   */
+  async setCompanyFeatures(
+    actor: Actor,
+    companyId: number,
+    body: Record<string, unknown>,
+  ) {
+    this.platformOnly(actor);
+    await assertIsCompany(this.prisma, companyId);
+    const on: string[] = [];
+    const off: string[] = [];
+    for (const [key, value] of Object.entries(body ?? {})) {
+      if (!(GATED_FEATURES as readonly string[]).includes(key))
+        throw new BadRequestException(`Unknown feature: ${key}`);
+      if (typeof value !== 'boolean')
+        throw new BadRequestException(`${key} must be true or false.`);
+      (value ? on : off).push(key);
+    }
+    if (!on.length && !off.length)
+      throw new BadRequestException('Nothing to change.');
+    await this.prisma.$executeRaw`
+      INSERT INTO "company_plan" ("companyId", "features", "updatedById", "updatedAt")
+      VALUES (${companyId}, ${on}::text[], ${this.actorIdOf(actor)}, NOW())
+      ON CONFLICT ("companyId") DO UPDATE SET
+        "features" = ARRAY(
+          SELECT DISTINCT f FROM unnest("company_plan"."features" || ${on}::text[]) AS f
+          WHERE f <> ALL(${off}::text[])
+        ),
+        "updatedById" = EXCLUDED."updatedById",
+        "updatedAt" = NOW()`;
+    invalidateCompanyPlan(companyId);
+    await this.prisma.activityLog
+      .create({
+        data: {
+          userId: this.actorIdOf(actor),
+          action: 'COMPANY_FEATURES',
+          entity: 'User',
+          entityId: companyId,
+          details: `Enabled: ${on.join(', ') || '—'}; disabled: ${off.join(', ') || '—'}`,
+        } as never,
+      })
+      .catch(() => undefined);
+    return this.getCompanyFeatures(actor, companyId);
+  }
+
+  private actorIdOf(actor: Actor): number | null {
+    const id = Number(actor?.sub ?? actor?.id);
+    return Number.isFinite(id) && id > 0 ? id : null;
   }
 }

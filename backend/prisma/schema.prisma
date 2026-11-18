@@ -1252,10 +1252,16 @@ model InventoryItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+
+  /// Advanced CRM: the warehouse this unit sits in, and its printed QR label.
+  warehouseId Int?
+  qrCode      String? @unique @db.VarChar(40)
+
   @@index([status])
   @@index([ownerId])
   @@index([subscriberId])
   @@index([type])
+  @@index([warehouseId])
 }
 
 /// Immutable audit of every hand-off: warehouse → dealer → customer → back.
@@ -2757,6 +2763,10 @@ model CompanyPlan {
   /// The price-list plan this company is on (Plans & Pricing). The caps above
   /// are copied from it when it is assigned and may then be overridden.
   planId         Int?
+  /// What the company is entitled to use (see src/common/features.ts). Copied
+  /// from the plan when it is assigned; the platform may switch the gated ones
+  /// (ai-assistant, crm-advanced) on or off per company. Empty = nothing gated.
+  features       String[]  @default([])
   updatedById    Int?
   updatedAt      DateTime  @updatedAt
 
@@ -4292,4 +4302,193 @@ model UploadedFile {
 
   @@index([ownerId])
   @@map("uploaded_file")
+}
+
+/// A payment receipt as it was first issued (Advanced CRM). Frozen on first
+/// print so a reprint always matches the paper the customer holds, even after
+/// a refund, a rename or a package change. No foreign key to Payment on
+/// purpose: the receipt must outlive a deleted payment.
+model CrmPaymentReceipt {
+  paymentId      Int      @id
+  receiptNo      String   @unique @db.VarChar(40)
+  subscriberId   Int?
+  customerName   String   @db.VarChar(200)
+  username       String?  @db.VarChar(120)
+  packageName    String?  @db.VarChar(200)
+  amount         Float
+  currency       String   @db.VarChar(3)
+  method         String   @db.VarChar(40)
+  referenceNo    String?  @db.VarChar(120)
+  paymentDate    DateTime
+  invoiceNo      String?  @db.VarChar(60)
+  invoiceTotal   Float?
+  dueAfter       Float?
+  receivedBy     String?  @db.VarChar(200)
+  issuedById     Int?
+  issuedAt       DateTime @default(now())
+
+  @@index([subscriberId])
+  @@map("crm_payment_receipt")
+}
+
+/// Advanced CRM: a place stock is kept. Owned by the account that created it;
+/// visible to that account and the accounts above it.
+model CrmWarehouse {
+  id        Int      @id @default(autoincrement())
+  ownerId   Int
+  name      String   @db.VarChar(80)
+  address   String?  @db.VarChar(300)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([ownerId, name])
+  @@map("crm_warehouse")
+}
+
+/// Advanced CRM: a QR count of one warehouse. Expected lines are frozen when
+/// it opens; scans mark them found or add unexpected units. One OPEN count per
+/// warehouse (partial unique index in the migration).
+model CrmStocktake {
+  id          Int       @id @default(autoincrement())
+  warehouseId Int
+  ownerId     Int
+  status      String    @default("OPEN") @db.VarChar(10)
+  createdById Int?
+  createdAt   DateTime  @default(now())
+  closedAt    DateTime?
+
+  @@index([warehouseId])
+  @@map("crm_stocktake")
+}
+
+model CrmStocktakeLine {
+  stocktakeId Int
+  itemId      Int
+  expected    Boolean
+  scannedAt   DateTime?
+  scannedById Int?
+
+  @@id([stocktakeId, itemId])
+  @@map("crm_stocktake_line")
+}
+
+/// Advanced CRM: one unit handed to a customer, and what happened after.
+/// The unit itself is the existing InventoryItem (status INSTALLED); this row
+/// adds the price charged, the invoice raised through the normal invoice
+/// service, and the recovery when it comes back. One open issue per unit
+/// (partial unique index in the migration); `requestKey` makes a retried
+/// "Issue" click a no-op.
+model CrmStockIssue {
+  id            Int       @id @default(autoincrement())
+  itemId        Int
+  subscriberId  Int
+  ownerId       Int?
+  warehouseId   Int?
+  requestKey    String    @unique @db.VarChar(64)
+  /// ISSUED → RECOVERED (or LOST)
+  status        String    @default("ISSUED") @db.VarChar(12)
+  charge        Float     @default(0)
+  /// NONE (free) · PENDING · BILLING (claimed) · BILLED
+  billing       String    @default("NONE") @db.VarChar(10)
+  invoiceId     Int?
+  notes         String?   @db.VarChar(300)
+  issuedById    Int?
+  issuedAt      DateTime  @default(now())
+  recoveredAt   DateTime?
+  recoveredById Int?
+  condition     String?   @db.VarChar(12)
+
+  @@index([subscriberId])
+  @@index([itemId])
+  @@map("crm_stock_issue")
+}
+
+/// Advanced CRM: why and when a customer was terminated, the monthly revenue
+/// lost, and whether their equipment has come back. The disconnect itself is
+/// Uplinko's own deactivation (RADIUS, session, static IP); this row is the
+/// audit and the recovery follow-up. One open recovery per customer (partial
+/// unique index in the migration).
+model CrmTermination {
+  id                 Int       @id @default(autoincrement())
+  subscriberId       Int
+  reason             String    @db.VarChar(2000)
+  terminatedById     Int?
+  monthlyRevenueLoss Float     @default(0)
+  /// RECOVERY_PENDING · NO_EQUIPMENT · RECOVERED
+  status             String    @db.VarChar(20)
+  ticketId           Int?
+  terminatedAt       DateTime  @default(now())
+  recoveredAt        DateTime?
+
+  @@index([subscriberId])
+  @@map("crm_termination")
+}
+
+/// Advanced CRM: a company's own ticket turnaround targets per category and
+/// priority. Used at ticket creation instead of the installation-wide .env
+/// defaults (TicketSlaService) — only for companies holding `crm-advanced`.
+model CrmTatSetting {
+  id                Int      @id @default(autoincrement())
+  companyId         Int
+  category          String   @db.VarChar(20)
+  priority          String   @db.VarChar(10)
+  responseMinutes   Int
+  resolutionMinutes Int
+  updatedById       Int?
+  updatedAt         DateTime @default(now())
+
+  @@unique([companyId, category, priority])
+  @@map("crm_tat_setting")
+}
+
+/// Advanced CRM: job titles a company gives its people (HR only — never access).
+model CrmDesignation {
+  id        Int      @id @default(autoincrement())
+  companyId Int
+  name      String   @db.VarChar(150)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, name])
+  @@map("crm_designation")
+}
+
+/// Advanced CRM: the HR side of an existing Uplinko login — employee code,
+/// title, department, reporting manager and availability. Access stays with
+/// the user's role and permissions; nothing here grants or removes any.
+model CrmEmployeeProfile {
+  userId          Int      @id
+  companyId       Int
+  employeeCode    String   @db.VarChar(20)
+  designationId   Int?
+  department      String?  @db.VarChar(100)
+  reportsToUserId Int?
+  /// AVAILABLE · ON_DUTY · ON_LEAVE
+  availability    String   @default("AVAILABLE") @db.VarChar(10)
+  updatedAt       DateTime @default(now())
+
+  @@unique([companyId, employeeCode])
+  @@index([reportsToUserId])
+  @@map("crm_employee_profile")
+}
+
+/// Per-company employee-code counter (row-locked UPDATE … RETURNING).
+model CrmEmployeeCounter {
+  companyId Int @id
+  next      Int @default(1)
+
+  @@map("crm_employee_counter")
+}
+
+/// Advanced CRM: an expense spent on one customer (a site visit, a cable run),
+/// so the customer's cost to serve can be shown. The expense itself, its
+/// approval and its ledger posting stay in Accounting, unchanged.
+model CrmExpenseLink {
+  expenseId    Int      @id
+  subscriberId Int
+  linkedById   Int?
+  linkedAt     DateTime @default(now())
+
+  @@index([subscriberId])
+  @@map("crm_expense_link")
 }

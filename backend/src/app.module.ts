@@ -51,6 +51,7 @@ import { RadiusAdminModule } from './radius-admin/radius-admin.module';
 import { BoostModule } from './boost/boost.module';
 import { DemoModule } from './demo/demo.module';
 import { AiModule } from './ai/ai.module';
+import { CrmModule } from './crm/crm.module';
 import { FiberModule } from './fiber/fiber.module';
 import { GroupsModule } from './groups/groups.module';
 
@@ -105,6 +106,7 @@ import { GroupsModule } from './groups/groups.module';
     BoostModule,
     DemoModule,
     AiModule,
+    CrmModule,
     FiberModule,
     GroupsModule,
   ],

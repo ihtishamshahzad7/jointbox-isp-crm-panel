@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import API_BASE from "../components/api";
+import { WarehousesPanel, useCrmAdvanced } from "./warehouses-panel";
 
 const API =
   API_BASE;
@@ -26,6 +27,7 @@ const TYPES = ["ONU", "ROUTER", "SWITCH", "OLT", "CABLE", "SPLITTER", "ANTENNA",
 
 export default function InventoryPage() {
   const router = useRouter();
+  const crmAdvanced = useCrmAdvanced();
   const [items, setItems] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
@@ -131,6 +133,8 @@ export default function InventoryPage() {
           </div>
         ))}
       </div>
+
+      {crmAdvanced && <WarehousesPanel items={items} onChanged={() => { void load(); }} />}
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>

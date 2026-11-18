@@ -7,6 +7,7 @@ import { Icons as SIcons } from "../components/icons";
 import API_BASE from "../components/api";
 import Portal from "../components/portal";
 import { mustOk } from "../../lib/http";
+import { TatPanel, TicketTat, useCrmAdvanced, useMyRole } from "./tat-panel";
 
 interface Ticket {
   id: number;
@@ -75,6 +76,8 @@ export default function ComplaintsPage() {
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const crmAdvanced = useCrmAdvanced();
+  const myRole = useMyRole();
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [newMessage, setNewMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -372,6 +375,8 @@ export default function ComplaintsPage() {
 
         {/* ── CONTENT ── */}
         <div style={{ flex: 1, padding: "16px 20px", overflowY: "auto" }}>
+
+          {crmAdvanced && <TatPanel canEdit={myRole === "ADMIN"} />}
 
           {/* Error Message */}
           {error && (
@@ -689,6 +694,10 @@ export default function ComplaintsPage() {
                 </button>
               </div>
             </div>
+
+            {crmAdvanced && myRole !== "SALES" && selectedTicket.status !== "RESOLVED" && selectedTicket.status !== "CLOSED" && (
+              <TicketTat ticketId={selectedTicket.id} />
+            )}
 
             {/* Status Update */}
             <div style={{ display: "flex", gap: 10 }}>

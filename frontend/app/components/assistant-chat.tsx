@@ -14,7 +14,9 @@ import { BRAND } from "../../lib/brand";
  * messages, sending, and the wrapping that keeps long replies readable.
  */
 
-export type Msg = { role: "user" | "assistant"; content: string };
+/** Server-built figures for a data answer (AI Assistant). Never produced by a model. */
+export type Tile = { key: string; label: string; value: number; kind: "count" | "money"; currency?: string };
+export type Msg = { role: "user" | "assistant"; content: string; tiles?: Tile[] };
 
 export const GREETING: Msg = {
   role: "assistant",
@@ -104,7 +106,11 @@ function AssistantChatInner({ big = false }: { big?: boolean }) {
         body: JSON.stringify({ messages: next, route: scope === "page" ? route : undefined }),
       });
       const d = await r.json();
-      setMsgs((m) => [...m, { role: "assistant", content: d?.reply || "Sorry, something went wrong." }]);
+      setMsgs((m) => [...m, {
+        role: "assistant",
+        content: d?.reply || "Sorry, something went wrong.",
+        tiles: (d?.mode === "data" || d?.mode === "data+model") && Array.isArray(d?.data?.tiles) ? d.data.tiles : undefined,
+      }]);
     } catch {
       setMsgs((m) => [...m, { role: "assistant", content: "Could not reach the assistant. Try again in a moment." }]);
     } finally { setBusy(false); }
@@ -145,6 +151,7 @@ function AssistantChatInner({ big = false }: { big?: boolean }) {
             display: "block", width: "100%", boxSizing: "border-box",
             textAlign: m.role === "user" ? "right" : "left", marginBottom: big ? 14 : 10,
           }}>
+            {m.tiles && m.tiles.length > 0 && <Tiles tiles={m.tiles} />}
             <div style={bubble(m.role === "user")}>{m.content}</div>
           </div>
         ))}
@@ -280,5 +287,26 @@ function AssistantChatInner({ big = false }: { big?: boolean }) {
           }}>Ask</button>
       </div>
     </>
+  );
+}
+
+/** KPI tiles above a data answer: the figures come straight from the server. */
+function Tiles({ tiles }: { tiles: Tile[] }) {
+  const fmt = (t: Tile) =>
+    t.kind === "money"
+      ? `${t.currency ? t.currency + " " : ""}${t.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      : t.value.toLocaleString();
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 6, marginBottom: 6 }}>
+      {tiles.map((t, i) => (
+        <div key={`${t.key}-${t.currency ?? ""}-${i}`} style={{
+          background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 10,
+          padding: "7px 10px", textAlign: "left", minWidth: 0,
+        }}>
+          <div style={{ fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, overflowWrap: "anywhere" }}>{t.label}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "var(--text)", fontVariantNumeric: "tabular-nums", overflowWrap: "anywhere" }}>{fmt(t)}</div>
+        </div>
+      ))}
+    </div>
   );
 }

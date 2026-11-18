@@ -50,6 +50,12 @@ export class UsersController {
     return this.usersService.myCompanyPlan(req.user);
   }
 
+  /** Sold-separately products this operator's company holds (the backend enforces them too). */
+  @Get('me/features')
+  myFeatures(@Req() req: any) {
+    return this.usersService.myFeatures(req.user);
+  }
+
   /** Platform account: one company's caps and end date (Companies → Plan & limits). */
   @Put('companies/:id/plan')
   setCompanyPlan(@Param('id') id: string, @Body() body: any, @Req() req: any) {
@@ -154,4 +160,4 @@ export class UsersController {
       confirm: body?.confirm,
     });
   }
-}
+}
