@@ -11,11 +11,11 @@ async function main() {
   // live server silently reopened the owner account with the published
   // default. Creating is fine; overwriting someone's chosen password is not.
   const admin = await prisma.user.upsert({
-    where: { email: 'admin@jointbox.com' },
+    where: { email: 'admin@uplinko.com' },
     update: {},
     create: {
       name: 'Super Admin',
-      email: 'admin@jointbox.com',
+      email: 'admin@uplinko.com',
       password: hashedPassword,
       role: 'SUPER_ADMIN',
       isActive: true,
@@ -30,4 +30,4 @@ main()
   .catch(e => console.error(e))
   .finally(async () => {
     await prisma.$disconnect();
-  });
+  });

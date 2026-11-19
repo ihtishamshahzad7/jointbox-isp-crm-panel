@@ -29,7 +29,7 @@ import { resolveBootstrapPassword } from './bootstrap-credentials';
  * one-time secret, and the panel refuses to be used until the first sign-in
  * chooses a new password (mustChangePassword). See bootstrap-credentials.ts.
  */
-export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@jointbox.com').trim().toLowerCase();
+export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@uplinko.com').trim().toLowerCase();
 /** Resolve the platform bootstrap password (env, reused, or newly generated). */
 const platformBootstrap = () => resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
 
@@ -76,12 +76,12 @@ export async function runsBusiness(prisma: any, id: number): Promise<boolean> {
   return orphanSubs + orphanNas > 0;
 }
 
-/** superadmin@jointbox.com, else superadmin@<same domain>, else a numbered variant. */
+/** superadmin@uplinko.com, else superadmin@<same domain>, else a numbered variant. */
 export async function platformEmailFor(
   prisma: any,
   from: Acct,
 ): Promise<string> {
-  const domain = String(from.email || '').split('@')[1] || 'jointbox.local';
+  const domain = String(from.email || '').split('@')[1] || 'uplinko.local';
   const candidates = [
     PLATFORM_DEFAULT_EMAIL,
     `superadmin@${domain}`,
@@ -321,10 +321,10 @@ async function splitInside(
 }
 
 /**
- * THE PLATFORM LOGIN IS superadmin@jointbox.com. ITS PASSWORD IS NEVER TOUCHED
+ * THE PLATFORM LOGIN IS superadmin@uplinko.com. ITS PASSWORD IS NEVER TOUCHED
  * HERE (S3).
  *
- *  • Email: the platform account always signs in as superadmin@jointbox.com
+ *  • Email: the platform account always signs in as superadmin@uplinko.com
  *    (PLATFORM_ADMIN_EMAIL), whenever that address is free. Changing it does
  *    not sign anyone out — the session belongs to the account, not the email.
  *  • Password: left exactly as createPlatformAccount (or the operator) set it.

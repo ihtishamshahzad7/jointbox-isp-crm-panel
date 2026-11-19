@@ -62,8 +62,8 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
     if (userCount === 0) {
       /**
        * A new installation gets TWO logins, exactly as an upgraded one has:
-       *   superadmin@jointbox.com — the platform (companies, licence, server)
-       *   ADMIN_EMAIL (admin@jointbox.com) — the first ISP company, which runs
+       *   superadmin@uplinko.com — the platform (companies, licence, server)
+       *   ADMIN_EMAIL (admin@uplinko.com) — the first ISP company, which runs
        *     subscribers, routers, franchises, packages and accounting as before.
        * Both passwords must be changed at the first sign-in: every route except
        * change-password answers 403 until then. Generated credentials are
@@ -72,7 +72,7 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
       // No hardcoded default: operator-set, or a generated one-time secret
       // written to the 0600 bootstrap credentials file. Both accounts must
       // change their password at the first sign-in (mustChangePassword).
-      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+      const email = (process.env.ADMIN_EMAIL || 'admin@uplinko.com').trim().toLowerCase();
       const platformBoot = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
       const companyBoot = email !== PLATFORM_DEFAULT_EMAIL
         ? resolveBootstrapPassword('company', 'ADMIN_PASSWORD')
@@ -118,8 +118,8 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
      * See common/platform-account.ts.
      */
     await ensurePlatformAccount(prisma, console);
-    // The platform login is superadmin@jointbox.com / admin123 until its owner
-    // picks their own password (see platform-account.ts).
+    // The platform login is superadmin@uplinko.com (PLATFORM_ADMIN_EMAIL); its
+    // password is never reset here (see platform-account.ts).
     await ensurePlatformLogin(prisma, console);
     // The money currency is the platform's setting, not the first company's.
     await ensureInstallationCurrency(prisma, console);

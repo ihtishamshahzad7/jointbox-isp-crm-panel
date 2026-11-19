@@ -8,11 +8,11 @@
  *       Lists the platform account(s): email, active, must-change flag.
  *       Nothing is changed and no password is shown.
  *
- *   node scripts/reset-platform-password.js --email superadmin@yourdomain
+ *   node scripts/reset-platform-password.js --email superadmin@uplinko.com
  *       Asks for a new password twice (typing is hidden), saves it, unlocks
  *       the account and signs out every open session. The password you type
  *       is final: the panel will not ask for another one, and the boot-time
- *       default (superadmin@jointbox.com / admin123) never overwrites it.
+ *       first-boot password never overwrites it.
  *
  * The password is never printed, never logged and never taken from the
  * command line (that would leave it in the shell history and in `ps`).

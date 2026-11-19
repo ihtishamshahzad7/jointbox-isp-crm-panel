@@ -326,10 +326,10 @@ SECRETS_KEY="$SECRETS_KEY_VAL"
 # Two web logins are created on first boot; both passwords must be changed at
 # the first sign-in. (The backend refuses to start without ADMIN_PASSWORD set.)
 #   super admin (platform: companies, licence, server)
-PLATFORM_ADMIN_EMAIL=superadmin@jointbox.com
+PLATFORM_ADMIN_EMAIL=superadmin@uplinko.com
 PLATFORM_ADMIN_PASSWORD=$PLATFORM_ADMIN_PW_VAL
 #   the first ISP company (subscribers, routers, franchises, billing)
-ADMIN_EMAIL=admin@jointbox.com
+ADMIN_EMAIL=admin@uplinko.com
 ADMIN_PASSWORD=$ADMIN_PW_VAL
 # Sessions re-authenticate against the panel on this interval (see docs).
 RADIUS_SESSION_TIMEOUT=86400
@@ -652,8 +652,8 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
 
   Panel      http://$SERVER_IP:$WEB_PORT
   API        http://$SERVER_IP:$API_PORT
-  Super admin  superadmin@jointbox.com   ${Y}← companies, licence, server${N}
-  Company      admin@jointbox.com        ${Y}← subscribers, routers, billing${N}
+  Super admin  superadmin@uplinko.com    ${Y}← companies, licence, server${N}
+  Company      admin@uplinko.com         ${Y}← subscribers, routers, billing${N}
                ${Y}Passwords are random per install — see PLATFORM_ADMIN_PASSWORD${N}
                ${Y}and ADMIN_PASSWORD in $APP_DIR/backend/.env. Both ask for a${N}
                ${Y}new password at the first sign-in.${N}
