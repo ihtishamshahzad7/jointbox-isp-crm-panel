@@ -175,6 +175,30 @@ if [[ -f "$ENV_FILE" ]] && ! grep -qE '^[[:space:]]*SECRETS_KEY=' "$ENV_FILE" &&
   fi
 fi
 
+# Servers installed before the scale profile was saved in backend/.env only
+# had it as install-time shell exports, so a reload from this script's shell
+# could fall back to 1 backend and no worker. Save the same profile install.sh
+# uses, once, if it is missing (an operator's own values are never changed).
+if [[ -f backend/.env ]] && ! grep -q '^BACKEND_INSTANCES=' backend/.env; then
+  CORES="$(nproc 2>/dev/null || echo 1)"
+  if [[ "$CORES" -ge 4 ]]; then
+    printf 'BACKEND_INSTANCES=%s\nWORKER_INSTANCES=1\nFRONTEND_INSTANCES=2\n' "$(( CORES - 1 ))" >> backend/.env
+    log "Saved scale profile in backend/.env: $(( CORES - 1 )) web workers + 1 background worker"
+  fi
+fi
+
+# Same for the real PostgreSQL limit: installs before this fix raised
+# max_connections to 300 but never told the backend, which then assumed 100
+# and refused to start once clustered. Read it from the server, once.
+if [[ -f backend/.env ]] && ! grep -q '^POSTGRES_MAX_CONNECTIONS=' backend/.env; then
+  _DBURL="$(sed -n -E 's/^DATABASE_URL="?([^"?]*).*/\1/p' backend/.env | head -1)"
+  _MAXC="$(psql "$_DBURL" -tAc 'SHOW max_connections' 2>/dev/null | tr -dc '0-9')"
+  if [[ -n "$_MAXC" ]]; then
+    echo "POSTGRES_MAX_CONNECTIONS=${_MAXC}" >> backend/.env
+    log "Saved POSTGRES_MAX_CONNECTIONS=${_MAXC} in backend/.env"
+  fi
+fi
+
 if command -v pm2 >/dev/null 2>&1; then
   if [[ -f ecosystem.config.js ]]; then
     log "Reloading Jointbox PM2 applications..."

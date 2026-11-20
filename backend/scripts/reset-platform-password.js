@@ -12,7 +12,7 @@
  *       Asks for a new password twice (typing is hidden), saves it, unlocks
  *       the account and signs out every open session. The password you type
  *       is final: the panel will not ask for another one, and the boot-time
- *       default (superadmin@jointbox.com / admin123) never overwrites it.
+ *       default (superadmin@uplinko.com / admin123) never overwrites it.
  *
  * The password is never printed, never logged and never taken from the
  * command line (that would leave it in the shell history and in `ps`).

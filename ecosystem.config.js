@@ -27,6 +27,30 @@
  * opens its own pool. See SCALING.md.
  */
 const path = require('path');
+const fs = require('fs');
+
+/**
+ * The scale profile is SAVED in backend/.env (the installer writes it), so a
+ * plain `pm2 start ecosystem.config.js` after `pm2 delete all`, a reboot or an
+ * update brings back the same process counts. Before, the counts only existed
+ * as shell exports at install time: starting from a new shell silently fell
+ * back to 1 backend and no worker. A value exported in the shell still wins.
+ */
+function savedScale() {
+  try {
+    const out = {};
+    const text = fs.readFileSync(path.join(__dirname, 'backend', '.env'), 'utf8');
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*(BACKEND_INSTANCES|FRONTEND_INSTANCES|WORKER_INSTANCES|FRONTEND_PORT)\s*=\s*"?([^"#\s]+)"?/);
+      if (m) out[m[1]] = m[2];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+const saved = savedScale();
+for (const k of Object.keys(saved)) if (!process.env[k]) process.env[k] = saved[k];
 
 const backendInstances = process.env.BACKEND_INSTANCES || 1;   // set to 'max' or a number to cluster
 const frontendInstances = process.env.FRONTEND_INSTANCES || 1;
@@ -43,6 +67,11 @@ const modeFor = (v) => (v === 'max' || Number(v) > 1 ? 'cluster' : 'fork');
 // then serve HTTP only. Default (0) = monolith: the web process also does the
 // background work on worker 0. Requires REDIS_URL so jobs are shared.
 const splitWorker = Number(workerInstances) > 0;
+
+/** Every backend process is told the topology, so its DB pool check counts all of them. */
+function scaleEnv() {
+  return { BACKEND_INSTANCES: String(backendInstances), WORKER_INSTANCES: String(workerInstances) };
+}
 const backend = path.join(__dirname, 'backend', 'dist', 'main.js');
 const backendCwd = path.join(__dirname, 'backend');
 
@@ -85,7 +114,7 @@ const workerApp = {
   // Let in-flight queue jobs, SNMP sweeps and archival batches finish.
   kill_timeout: KILL_TIMEOUT_MS,
   // JOINTBOX_ROLE=worker → runs background services, binds NO HTTP port.
-  env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', JOINTBOX_ROLE: 'worker' },
+  env: { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', JOINTBOX_ROLE: 'worker', ...scaleEnv() },
 };
 
 module.exports = {
@@ -107,7 +136,7 @@ module.exports = {
       // runs sooner. 512MB is plenty for the API; raise if you cluster heavily.
       // When a dedicated worker is running, the web nodes serve HTTP ONLY.
       env: Object.assign(
-        { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512' },
+        { NODE_ENV: 'production', NODE_OPTIONS: '--max-old-space-size=512', ...scaleEnv() },
         splitWorker ? { JOINTBOX_ROLE: 'web' } : {},
       ),
     },

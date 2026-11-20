@@ -107,7 +107,16 @@ export interface LicenceUsage {
 const SOCKET_PATH =
   process.env.JBX_LICENCE_SOCKET || '/run/jointbox/licensed.sock';
 const RUN_DIR = process.env.JBX_RUN_DIR || '/run/jointbox';
-const REFRESH_MS = Number(process.env.JBX_LICENCE_REFRESH_MS || 15 * 60 * 1000);
+/**
+ * How often EACH backend process asks the agent. One minute, not fifteen: in
+ * cluster mode every PM2 worker keeps its own copy of the entitlement, and the
+ * panel's "Re-check now" refreshes only the worker that served the click. With
+ * a 15-minute interval a newly activated key left the other workers showing the
+ * old (expired) state for up to 15 minutes — the panel looked unlicensed right
+ * after a successful activation. The call is a local unix-socket round trip
+ * plus one signature check, so once a minute per process costs nothing.
+ */
+const REFRESH_MS = Number(process.env.JBX_LICENCE_REFRESH_MS || 60 * 1000);
 /**
  * How long a panel may run with no working licence — agent missing, stopped,
  * or installed but never activated — before writes stop. Counted from the

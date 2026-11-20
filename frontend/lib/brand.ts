@@ -21,7 +21,7 @@ export const BRAND = {
   /** Short descriptor below the logo mark. */
   subtitle: process.env.NEXT_PUBLIC_BRAND_SUBTITLE || "ISP CRM & Network Monitoring",
   /** Fallback support inbox for "Need help?" links. */
-  supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "ehtisham@jointbox.net",
+  supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@uplinko.com",
   /** Hero headline for the public landing page. */
   tagline: process.env.NEXT_PUBLIC_PRODUCT_TAGLINE || "",
 } as const;

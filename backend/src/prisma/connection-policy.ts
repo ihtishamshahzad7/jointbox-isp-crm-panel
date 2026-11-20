@@ -226,3 +226,41 @@ export function evaluateAgainstServer(
       `subscribers drop, not just the panel. Add PgBouncer or lower connection_limit.`,
   };
 }
+
+/**
+ * SELF-CORRECT INSTEAD OF CRASH-LOOPING.
+ *
+ * The refusal above used to be the end of the story: a box whose installer
+ * wrote connection_limit=20 and then clustered 7 web workers + 1 worker
+ * (8 × 20 = 160 against ~75 available) never started, PM2 restarted it
+ * forever, and every sign-in on the panel failed with "invalid email or
+ * password" while the cause sat in the error log. That cost a client install
+ * days.
+ *
+ * The safe size is plain arithmetic, so the backend now applies it itself:
+ * when the projected total does not fit, `connection_limit` is lowered for
+ * this process to floor(available / processes) and a warning says so. Only
+ * when even a pool of 2 per process cannot fit is it still refused — then no
+ * per-process setting can help and the operator must reduce processes, raise
+ * max_connections or add PgBouncer.
+ */
+export const MIN_SAFE_POOL = 2;
+
+export function safeDatabaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  cpuCount = os.cpus().length,
+): { url: string | undefined; adjusted: { from: number; to: number } | null } {
+  const url = env.DATABASE_URL;
+  const verdict = evaluateConnectionPolicy(env, cpuCount);
+  if (!url || !verdict.error) return { url, adjusted: null };
+  const { available } = connectionBudget(env);
+  const to = Math.floor(available / verdict.instances);
+  if (to < MIN_SAFE_POOL) return { url, adjusted: null };
+  try {
+    const u = new URL(url);
+    u.searchParams.set('connection_limit', String(to));
+    return { url: u.toString(), adjusted: { from: verdict.perWorker, to } };
+  } catch {
+    return { url, adjusted: null };
+  }
+}
