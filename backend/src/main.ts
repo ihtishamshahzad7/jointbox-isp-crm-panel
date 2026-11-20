@@ -41,8 +41,8 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
     if (userCount === 0) {
       /**
        * A new installation gets TWO logins, exactly as an upgraded one has:
-       *   superadmin@jointbox.com — the platform (companies, licence, server)
-       *   ADMIN_EMAIL (admin@jointbox.com) — the first ISP company, which runs
+       *   superadmin@uplinko.com — the platform (companies, licence, server)
+       *   ADMIN_EMAIL (admin@uplinko.com) — the first ISP company, which runs
        *     subscribers, routers, franchises, packages and accounting as before.
        * Both passwords are installer defaults, so both must be changed at the
        * first sign-in: every route except change-password answers 403 until
@@ -60,7 +60,7 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
         },
         select: { id: true },
       });
-      const email = (process.env.ADMIN_EMAIL || 'admin@jointbox.com').trim().toLowerCase();
+      const email = (process.env.ADMIN_EMAIL || 'admin@uplinko.com').trim().toLowerCase();
       if (email !== PLATFORM_DEFAULT_EMAIL) {
         await prisma.user.create({
           data: {
@@ -92,7 +92,7 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
      * See common/platform-account.ts.
      */
     await ensurePlatformAccount(prisma, console);
-    // The platform login is superadmin@jointbox.com / admin123 until its owner
+    // The platform login is superadmin@uplinko.com / admin123 until its owner
     // picks their own password (see platform-account.ts).
     await ensurePlatformLogin(prisma, console);
     // The money currency is the platform's setting, not the first company's.
@@ -125,7 +125,6 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
 function validateEnv() {
   const required: [string, string][] = [
     ['JWT_SECRET', 'JWT_SECRET'],
-    ['ADMIN_PASSWORD', 'ADMIN_PASSWORD'],
   ];
   for (const [key, desc] of required) {
     if (!process.env[key] || process.env[key] === 'your-super-secret-key-change-this-in-production') {

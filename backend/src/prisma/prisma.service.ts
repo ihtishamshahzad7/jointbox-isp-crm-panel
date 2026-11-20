@@ -1,12 +1,33 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
-import { evaluateAgainstServer, evaluateConnectionPolicy } from './connection-policy';
+import { evaluateAgainstServer, evaluateConnectionPolicy, safeDatabaseUrl } from './connection-policy';
+
+/**
+ * Resolve the pool size BEFORE the client is built: if the configured
+ * connection_limit would exhaust Postgres for this many processes, lower it
+ * for this process (and in process.env, so every later check agrees) instead
+ * of refusing to start. See safeDatabaseUrl().
+ */
+function resolveDatabaseUrl(): string | undefined {
+  const { url, adjusted } = safeDatabaseUrl();
+  if (adjusted && url) {
+    process.env.DATABASE_URL = url;
+    console.warn(
+      `⚠️ DB pool lowered automatically: connection_limit ${adjusted.from} → ${adjusted.to} per process, ` +
+        `so all backend processes fit in the connections PostgreSQL leaves for the panel. ` +
+        `Set connection_limit=${adjusted.to} in DATABASE_URL to make this permanent and silence this message.`,
+    );
+  }
+  return url;
+}
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
+    const url = resolveDatabaseUrl();
     super({
       log: ['error', 'warn'],
+      ...(url ? { datasources: { db: { url } } } : {}),
     });
   }
 
@@ -102,4 +123,4 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     await this.$disconnect();
     console.log('🔴 Database disconnected');
   }
-}
+}

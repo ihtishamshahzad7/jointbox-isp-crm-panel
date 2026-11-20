@@ -27,7 +27,7 @@ import * as bcrypt from 'bcrypt';
  * installer default — which is why the panel refuses to be used on it: the
  * first sign-in must choose a new password (mustChangePassword).
  */
-export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@jointbox.com').trim().toLowerCase();
+export const PLATFORM_DEFAULT_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@uplinko.com').trim().toLowerCase();
 const PLATFORM_DEFAULT_PASSWORD = () => process.env.PLATFORM_ADMIN_PASSWORD || 'admin123';
 
 const DOWNLINE_ROLES = [
@@ -73,7 +73,7 @@ export async function runsBusiness(prisma: any, id: number): Promise<boolean> {
   return orphanSubs + orphanNas > 0;
 }
 
-/** superadmin@jointbox.com, else superadmin@<same domain>, else a numbered variant. */
+/** superadmin@uplinko.com, else superadmin@<same domain>, else a numbered variant. */
 export async function platformEmailFor(
   prisma: any,
   from: Acct,
@@ -282,10 +282,10 @@ async function splitInside(
 }
 
 /**
- * THE PLATFORM LOGIN IS superadmin@jointbox.com — AND admin123 UNTIL ITS OWNER
+ * THE PLATFORM LOGIN IS superadmin@uplinko.com — AND admin123 UNTIL ITS OWNER
  * CHOOSES THEIR OWN PASSWORD.
  *
- *  • Email: the platform account always signs in as superadmin@jointbox.com
+ *  • Email: the platform account always signs in as superadmin@uplinko.com
  *    (PLATFORM_ADMIN_EMAIL), whenever that address is free. Changing it does
  *    not sign anyone out — the session belongs to the account, not the email.
  *  • Password: only a platform account still waiting for its first password
