@@ -38,17 +38,9 @@ import { SecurityService } from './security/security.service';
  * printing the password. Runs once, at account creation.
  */
 function announceFirstBootPassword(label: string, email: string, boot: BootstrapResolution) {
-  if (boot.source === 'env') {
-    console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email} (password from its environment variable; must be changed at first login).`);
-    return;
-  }
-  if (boot.persisted) {
-    console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email}. Generated password written to ${boot.file} — read it there, then change it at first login.`);
-    return;
-  }
-  throw new Error(
-    `Could not persist the generated ${label.toLowerCase()} bootstrap credential to ${boot.file}. Set its environment password or fix the state-directory permissions.`,
-  );
+  // The password itself is never logged.
+  const from = boot.source === 'env' ? 'password from its environment variable' : 'default password admin123';
+  console.log(`👑 First-boot: ${label.toLowerCase()} login → ${email} (${from}; must be changed at first login).`);
 }
 
 // First-boot bootstrap: create the default super-admin if the DB has no users.
@@ -65,13 +57,11 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
        *   superadmin@uplinko.com — the platform (companies, licence, server)
        *   ADMIN_EMAIL (admin@uplinko.com) — the first ISP company, which runs
        *     subscribers, routers, franchises, packages and accounting as before.
-       * Both passwords must be changed at the first sign-in: every route except
-       * change-password answers 403 until then. Generated credentials are
-       * persisted to the restricted bootstrap file, never printed.
+       * Both passwords (default admin123) must be changed at the first sign-in:
+       * every route except change-password answers 403 until then.
        */
-      // No hardcoded default: operator-set, or a generated one-time secret
-      // written to the 0600 bootstrap credentials file. Both accounts must
-      // change their password at the first sign-in (mustChangePassword).
+      // Password: the operator's value from the environment, else admin123.
+      // Both accounts must change it at the first sign-in (mustChangePassword).
       const email = (process.env.ADMIN_EMAIL || 'admin@uplinko.com').trim().toLowerCase();
       const platformBoot = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
       const companyBoot = email !== PLATFORM_DEFAULT_EMAIL

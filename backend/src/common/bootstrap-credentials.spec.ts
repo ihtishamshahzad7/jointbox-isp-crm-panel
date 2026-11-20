@@ -1,21 +1,18 @@
 /**
  * S3 — secure first-boot admin credentials.
  *
- * Proves there is no hardcoded default: an operator value is used as-is, a
- * legacy "admin123" is refused, an unset value yields a cryptographically
- * random one-time secret written 0600, the secret is REUSED on later boots
- * (not regenerated → no reset-on-restart), and clearing it after the first
- * password change makes it one-time.
+ * First-boot password: the operator's value as-is, otherwise admin123. The
+ * accounts are created with mustChangePassword (see main.ts), so the default
+ * only ever opens the change-password screen.
  */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
 import {
   resolveBootstrapPassword,
   clearBootstrapPassword,
   generatePassword,
-  INSECURE_DEFAULTS,
+  DEFAULT_FIRST_BOOT_PASSWORD,
   bootstrapCredFile,
 } from './bootstrap-credentials';
 
@@ -42,56 +39,21 @@ describe('bootstrap credentials (S3)', () => {
     expect(fs.existsSync(bootstrapCredFile())).toBe(false);
   });
 
-  it('treats a legacy insecure default as unset and generates instead', () => {
-    expect(INSECURE_DEFAULTS.has('admin123')).toBe(true);
+  it('accepts admin123 from the environment (it must still be changed at first sign-in)', () => {
     process.env.PLATFORM_ADMIN_PASSWORD = 'admin123';
-    const r = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
-    expect(r.source).toBe('generated');
-    expect(r.password).not.toBe('admin123');
-    expect(r.password.length).toBeGreaterThanOrEqual(20);
+    expect(resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD')).toMatchObject({ password: 'admin123', source: 'env' });
   });
 
-  it('generates a random secret, persists it 0600, and reuses it next boot', () => {
-    const first = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
-    expect(first.source).toBe('generated');
-    expect(first.persisted).toBe(true);
-    if (process.platform === 'win32') {
-      const acl = execFileSync(
-        path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe'),
-        [bootstrapCredFile()],
-        { encoding: 'utf8', windowsHide: true },
-      );
-      expect(acl).toContain(process.env.USERNAME);
-      expect(acl).not.toMatch(/BUILTIN\\Users|Everyone/);
-    } else {
-      const mode = fs.statSync(bootstrapCredFile()).mode & 0o777;
-      expect(mode).toBe(0o600);
-    }
-    // A second resolve (next boot) REUSES the same value — no new secret, no reset.
-    const second = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
-    expect(second.source).toBe('file');
-    expect(second.password).toBe(first.password);
+  it('defaults to admin123 when nothing is set, and writes no file', () => {
+    expect(DEFAULT_FIRST_BOOT_PASSWORD).toBe('admin123');
+    expect(resolveBootstrapPassword('company', 'ADMIN_PASSWORD')).toMatchObject({ password: 'admin123', source: 'default' });
+    expect(fs.existsSync(bootstrapCredFile())).toBe(false);
   });
 
-  it('fails before account creation can proceed if the generated secret cannot be persisted', () => {
-    process.env.BOOTSTRAP_CRED_FILE = tmpDir;
-    expect(() => resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD'))
-      .toThrow(/Could not persist the generated platform bootstrap credential/);
-    expect(fs.readdirSync(tmpDir)).toEqual([]);
-  });
 
-  it('keeps separate secrets per scope', () => {
-    const p = resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
-    const c = resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
-    expect(p.password).not.toBe(c.password);
-    // Both persisted in the one file.
-    const store = JSON.parse(fs.readFileSync(bootstrapCredFile(), 'utf8'));
-    expect(Object.keys(store).sort()).toEqual(['company', 'platform']);
-  });
 
-  it('clears a secret after first password change (one-time use)', () => {
-    resolveBootstrapPassword('platform', 'PLATFORM_ADMIN_PASSWORD');
-    resolveBootstrapPassword('company', 'ADMIN_PASSWORD');
+  it('still clears a legacy generated secret after the first password change', () => {
+    fs.writeFileSync(bootstrapCredFile(), JSON.stringify({ platform: 'x'.repeat(24), company: 'y'.repeat(24) }), { mode: 0o600 });
     clearBootstrapPassword('platform');
     const store = JSON.parse(fs.readFileSync(bootstrapCredFile(), 'utf8'));
     expect('platform' in store).toBe(false);

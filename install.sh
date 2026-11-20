@@ -301,16 +301,12 @@ if [ -f .env ]; then
   [ -z "$KEEP_SK" ] && KEEP_SK="$KEEP_JWT"
   [ -n "$KEEP_JWT" ] && ok "Existing JWT_SECRET / SECRETS_KEY kept (encrypted secrets stay readable)"
 fi
-# A legacy .env may carry the old published default — never keep that; mint a
-# fresh random one instead, so an upgrade stops shipping admin123.
-[ "$KEEP_PLATFORM_PW" = "admin123" ] && KEEP_PLATFORM_PW=""
-[ "$KEEP_ADMIN_PW" = "admin123" ] && KEEP_ADMIN_PW=""
 JWT_SECRET_VAL="${KEEP_JWT:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
 SECRETS_KEY_VAL="${KEEP_SK:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
-# First-boot login passwords: random per install, never a hardcoded default.
-# Both must still be changed at the first sign-in (mustChangePassword).
-PLATFORM_ADMIN_PW_VAL="${KEEP_PLATFORM_PW:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
-ADMIN_PW_VAL="${KEEP_ADMIN_PW:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)}"
+# First-boot login password: admin123 for both logins. Both must be changed
+# at the first sign-in (mustChangePassword) before anything else opens.
+PLATFORM_ADMIN_PW_VAL="${KEEP_PLATFORM_PW:-admin123}"
+ADMIN_PW_VAL="${KEEP_ADMIN_PW:-admin123}"
 cat > .env <<EOF
 # connection_limit is PER PROCESS. With pm2 cluster + a worker you may have many
 # processes; keep each modest so the total stays under Postgres max_connections
@@ -654,9 +650,7 @@ ${B}${G}════════════════ INSTALL COMPLETE ══
   API        http://$SERVER_IP:$API_PORT
   Super admin  superadmin@uplinko.com    ${Y}← companies, licence, server${N}
   Company      admin@uplinko.com         ${Y}← subscribers, routers, billing${N}
-               ${Y}Passwords are random per install — see PLATFORM_ADMIN_PASSWORD${N}
-               ${Y}and ADMIN_PASSWORD in $APP_DIR/backend/.env. Both ask for a${N}
-               ${Y}new password at the first sign-in.${N}
+               ${Y}Password for both: admin123 — you must change it at the first sign-in.${N}
 
   Database   $DB_NAME
   DB user    $DB_USER

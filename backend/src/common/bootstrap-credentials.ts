@@ -1,33 +1,24 @@
 /**
- * FIRST-BOOT ADMIN CREDENTIALS — NO HARDCODED DEFAULT (S3).
+ * FIRST-BOOT ADMIN CREDENTIALS.
  *
- * The platform (SUPER_ADMIN) and the first company (ADMIN) need a password the
- * very first time the database comes up with no users. Shipping a known default
- * (`admin123`) meant every fresh install was briefly reachable by anyone who
- * read the README — and the privileged platform account had no env requirement
- * at all, so it stayed on the default indefinitely.
+ * A new installation creates two logins — superadmin@uplinko.com (platform)
+ * and admin@uplinko.com (first company) — with the operator's password from
+ * the environment, or the published default `admin123`. Both are created with
+ * `mustChangePassword`: every route except change-password answers 403 until
+ * the owner sets their own password at the first sign-in.
  *
- * Instead:
- *   • If the operator set a password in the environment, that is used.
- *   • Otherwise a cryptographically random password is GENERATED ONCE and
- *     written to a 0600 credentials file (dir 0700). The operator reads it from
- *     that file; it is never printed to the application log on every restart.
- *   • The same resolved value is reused on later boots (read back from the
- *     file), so the account is NOT reset — and no NEW secret is minted — each
- *     time the process restarts.
- *   • `mustChangePassword` forces a change at first sign-in, and once that
- *     happens the entry is cleared from the file (`clearBootstrapPassword`), so
- *     the bootstrap secret is strictly one-time.
- *
- * The password value lives only in the file and the (hashed) user row — never
- * in logs, never in an API response.
+ * The file helpers below remain for installs that were bootstrapped with a
+ * generated one-time secret (clearBootstrapPassword still removes it).
  */
 import * as crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** A known legacy default we must never mint a new account on. */
+/** The published first-boot password (must be changed at the first sign-in). */
+export const DEFAULT_FIRST_BOOT_PASSWORD = 'admin123';
+
+/** Passwords that are only acceptable as a one-time first-boot value. */
 export const INSECURE_DEFAULTS = new Set(['admin123', 'password', 'changeme', '']);
 
 /** Where the generated bootstrap secrets are kept (0600). */
@@ -85,8 +76,8 @@ export function generatePassword(): string {
 
 export type BootstrapResolution = {
   password: string;
-  /** 'env' = operator-provided; 'file' = reused generated; 'generated' = new this boot. */
-  source: 'env' | 'file' | 'generated';
+  /** 'env' = operator-provided; 'default' = admin123; 'file' / 'generated' = legacy generated secret. */
+  source: 'env' | 'default' | 'file' | 'generated';
   /** When generated: whether it was persisted to the file (false = could not write). */
   persisted?: boolean;
   /** The file it was (or should have been) written to. */
@@ -101,21 +92,13 @@ export type BootstrapResolution = {
  * so a legacy `.env` carrying `admin123` still produces a secure account.
  */
 export function resolveBootstrapPassword(scope: string, envVar: string): BootstrapResolution {
+  // First-boot password: the operator's value, else the published default
+  // `admin123`. Either way the account is created with mustChangePassword, so
+  // nothing but the change-password screen is reachable until the owner picks
+  // their own password at the first sign-in.
   const env = (process.env[envVar] || '').trim();
-  if (env && !INSECURE_DEFAULTS.has(env)) return { password: env, source: 'env' };
-
-  const store = readStore();
-  if (store[scope]) return { password: store[scope], source: 'file', persisted: true, file: bootstrapCredFile() };
-
-  const password = generatePassword();
-  store[scope] = password;
-  const persisted = writeStore(store);
-  if (!persisted) {
-    throw new Error(
-      `Could not persist the generated ${scope} bootstrap credential to ${bootstrapCredFile()}. Set ${envVar} or fix the state-directory permissions.`,
-    );
-  }
-  return { password, source: 'generated', persisted, file: bootstrapCredFile() };
+  if (env) return { password: env, source: 'env' };
+  return { password: DEFAULT_FIRST_BOOT_PASSWORD, source: 'default' };
 }
 
 /**
