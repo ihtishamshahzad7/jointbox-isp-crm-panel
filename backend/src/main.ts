@@ -139,10 +139,11 @@ async function ensureDefaultAdmin(app: NestExpressApplication) {
 }
 
 function validateEnv() {
-  const required: [string, string][] = [
-    ['JWT_SECRET', 'JWT_SECRET'],
-    ['ADMIN_PASSWORD', 'ADMIN_PASSWORD'],
-  ];
+  // ADMIN_PASSWORD / PLATFORM_ADMIN_PASSWORD are optional: they only set the
+  // first-boot password on an empty database (default admin123, which must be
+  // changed at the first sign-in). Requiring them stopped a running server
+  // from starting once they were removed after setup.
+  const required: [string, string][] = [['JWT_SECRET', 'JWT_SECRET']];
   for (const [key, desc] of required) {
     if (!process.env[key] || process.env[key] === 'your-super-secret-key-change-this-in-production') {
       console.error(`❌ CRITICAL: ${desc} environment variable is not set or is using the default value.`);

@@ -306,12 +306,19 @@ SECRETS_KEY_VAL="${KEEP_SK:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)}"
 # First-boot login password: admin123 for both logins. Both must be changed
 # at the first sign-in (mustChangePassword) before anything else opens.
 PLATFORM_ADMIN_PW_VAL="${KEEP_PLATFORM_PW:-admin123}"
+# Per-process DB pool sized to the scale profile chosen below (cores-1 web
+# workers + 1 worker on 4+ cores): the backend refuses to start if
+# processes x connection_limit exceeds the ~75 connections PostgreSQL leaves
+# for the panel (max_connections=100, 25 kept for FreeRADIUS and admin).
+_CORES="$(nproc 2>/dev/null || echo 1)"
+if [ "$_CORES" -ge 4 ]; then _PROCS=$(( ${BACKEND_INSTANCES:-$(( _CORES - 1 ))} + ${WORKER_INSTANCES:-1} )); else _PROCS=1; fi
+DB_CONN_LIMIT=$(( 75 / _PROCS )); [ "$DB_CONN_LIMIT" -gt 20 ] && DB_CONN_LIMIT=20; [ "$DB_CONN_LIMIT" -lt 3 ] && DB_CONN_LIMIT=3
 ADMIN_PW_VAL="${KEEP_ADMIN_PW:-admin123}"
 cat > .env <<EOF
 # connection_limit is PER PROCESS. With pm2 cluster + a worker you may have many
 # processes; keep each modest so the total stays under Postgres max_connections
 # (300, set above). e.g. 8 web + 1 worker × 20 = 180.
-DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME?connection_limit=20&pool_timeout=30"
+DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME?connection_limit=${DB_CONN_LIMIT}&pool_timeout=30"
 RADIUS_DATABASE_URL="postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
 PORT=$API_PORT
 JWT_SECRET="$JWT_SECRET_VAL"
