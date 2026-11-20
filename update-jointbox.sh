@@ -140,7 +140,10 @@ else
 fi
 
 log "Building frontend..."
-(cd frontend && npm run build)
+# CI=1 + no stdin: Next.js shows an interactive "upgrade" menu after a build
+# run from a terminal, and fails the build if its online check can't finish.
+# An update must never stop on a prompt, so run the build non-interactively.
+(cd frontend && CI=1 NEXT_TELEMETRY_DISABLED=1 npm run build </dev/null)
 
 cat > "$FRONTEND_VERSION_FILE" <<JSON
 {

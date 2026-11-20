@@ -474,7 +474,7 @@ if [ -d "$APP_DIR/frontend" ]; then
     err "Deployment stopped: the panel cannot be built without its dependencies."
     exit 1
   fi
-  if npm run build >>"$FE_LOG" 2>&1 && [ -d .next ]; then
+  if CI=1 NEXT_TELEMETRY_DISABLED=1 npm run build </dev/null >>"$FE_LOG" 2>&1 && [ -d .next ]; then
     ok "Frontend built"
   else
     err "FRONTEND BUILD FAILED — the panel will not load. Full log: $FE_LOG"
