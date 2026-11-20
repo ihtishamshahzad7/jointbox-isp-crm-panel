@@ -55,6 +55,15 @@ export class NasL2tpConfigService {
     return raw == null ? null : Number(raw);
   }
 
+  /**
+   * The single NAS-VPN access rule (tenant scope + NAS owner or platform
+   * owner), shared with the management-VPN client service so the rule exists
+   * in exactly one place.
+   */
+  async assertNasAccess(nasId: number, actor: any): Promise<any> {
+    return this.ensureAccess(nasId, actor);
+  }
+
   private async ensureAccess(nasId: number, actor: any): Promise<any> {
     await this.scope.assertNas(actor, nasId);
     const nas = await this.prisma.nas.findUnique({

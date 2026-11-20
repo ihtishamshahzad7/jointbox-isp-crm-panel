@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit, BadGatewayException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit, BadGatewayException, Optional } from '@nestjs/common';
+import { NasL2tpClientService } from './nas-l2tp-client.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService } from '../common/scope.service';
 import { NasType } from '@prisma/client';
@@ -27,6 +28,10 @@ export class NasService implements OnModuleInit {
     // Writes the FreeRADIUS clients file from the encrypted secrets. It was
     // called below but never injected, so the backend did not compile.
     private radiusVault: RadiusClientVaultService,
+    // NAS management VPN: host tunnel cleanup on delete. Optional only so the
+    // existing unit tests that construct NasService by hand keep working; in
+    // the application it is always provided by NasModule.
+    @Optional() private l2tpClient?: NasL2tpClientService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -711,6 +716,10 @@ export class NasService implements OnModuleInit {
         throw new NotFoundException(`NAS with ID ${id} not found`);
       }
 
+      // Management VPN: stop and remove THIS NAS's host tunnel first. If that
+      // cannot be verified the NAS is not deleted (no silent orphans).
+      const mgmtVpn = this.l2tpClient ? await this.l2tpClient.cleanupForNasDeletion(id) : null;
+
       this.logger.log(`Deleting NAS "${nas.nasname}" (ID: ${id})`);
       this.logger.log(`  - ${nas._count.networkLogs} network logs to delete`);
       this.logger.log(`  - ${nas._count.pppoeSessions} PPPoE sessions to delete`);
@@ -776,10 +785,17 @@ export class NasService implements OnModuleInit {
 
       // The router leaves FreeRADIUS's client list too.
       const radiusSync = await this.radiusVault.apply('nas-delete');
-      return { ...sanitizeNas(result), radiusSync };
+      return {
+        ...sanitizeNas(result),
+        radiusSync,
+        ...(mgmtVpn?.routerSideApplied
+          ? { warning: 'The Uplinko management VPN settings (PPP secret and firewall guard marked "uplinko-mgmt-vpn") remain on the router; remove them there if the router is still in use.' }
+          : {}),
+      };
 
     } catch (error) {
-      if (error instanceof NotFoundException) {
+      // ConflictException: the management-VPN cleanup refused (message kept for the user).
+      if (error instanceof NotFoundException || error instanceof ConflictException) {
         throw error;
       }
       

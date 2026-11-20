@@ -662,6 +662,49 @@ model NasL2tpConfig {
   ipsecEnabled         Boolean @default(true)
   ipsecPskEnc          String? @db.VarChar(512)
   pppProfile           String? @db.VarChar(64)
+
+  // ── NAS management VPN: Uplinko host = L2TP/IPsec CLIENT, NAS = server ──
+  // Kept apart from the legacy L2TP/RADIUS draft fields above (publicHost,
+  // ipsecPskEnc, state): the old VPN screen and this feature never write each
+  // other's columns. Secrets are encrypted at rest and never returned.
+  /// NAS public IPv4 the Uplinko host dials (one management VPN per address).
+  mgmtPublicHost       String?   @unique @db.VarChar(45)
+  mgmtIpsecPskEnc      String?   @db.VarChar(512)
+  pppUsername          String?   @db.VarChar(64)
+  pppPasswordEnc       String?   @db.VarChar(512)
+  /// Uplinko host address inside the tunnel (RouterOS secret remote-address).
+  localAddress         String?   @unique @db.VarChar(45)
+  /// NAS address inside the tunnel (RouterOS secret local-address).
+  remoteAddress        String?   @unique @db.VarChar(45)
+  connectTimeoutSec    Int       @default(30)
+  retryCount           Int       @default(1)
+  retryDelaySec        Int       @default(5)
+  /// Live lifecycle, written only from host evidence:
+  /// disconnected | connecting | connected | disconnecting | error
+  clientState          String    @default("disconnected") @db.VarChar(24)
+  /// Per-NAS operation lease (PM2 cluster). Owner token + expiry, renewed by
+  /// a heartbeat while the operation runs; an expired lease may be taken over.
+  clientLockOwner      String?   @db.VarChar(64)
+  clientLockUntil      DateTime?
+  clientOpId           String?   @db.VarChar(64)
+  clientOpKind         String?   @db.VarChar(24)
+  clientOpStartedAt    DateTime?
+  clientCancelRequested Boolean  @default(false)
+  tunnelInterface      String?   @db.VarChar(15)
+  lastDialAt           DateTime?
+  lastConnectedAt      DateTime?
+  lastDisconnectedAt   DateTime?
+  lastClientErrorCode  String?   @db.VarChar(40)
+  lastClientError      String?   @db.VarChar(512)
+  /// NAS-side state: none | applying | applied | apply_failed_restored |
+  /// apply_failed_unrestored | rollback_failed
+  mgmtApplyState       String    @default("none") @db.VarChar(32)
+  mgmtApplyDetail      String?   @db.VarChar(512)
+  nasAppliedAt         DateTime?
+  /// Encrypted JSON: NAS settings before Uplinko first changed them.
+  mgmtSnapshotEnc      String?   @db.Text
+  /// Encrypted JSON: what Uplinko applied (to detect later admin changes).
+  mgmtDesiredEnc       String?   @db.Text
   clientPool           String? @db.VarChar(64)
   dnsServers           String[] @default([])
   mtu                  Int?
