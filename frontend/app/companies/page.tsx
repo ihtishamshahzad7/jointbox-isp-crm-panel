@@ -572,7 +572,7 @@ function PlanEditor({ company, onDone, onCancel, onError }: {
           ))}
         </div>
         <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 4 }}>
-          A product is usable only when its platform switch and this company plan both allow it.
+          Tick a product and save to give it to this company. It also needs its platform switch on under Plans &amp; Pricing → Independent platform product switches (on by default).
         </div>
       </fieldset>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
