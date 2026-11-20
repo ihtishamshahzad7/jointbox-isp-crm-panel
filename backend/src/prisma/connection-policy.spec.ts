@@ -350,3 +350,34 @@ describe('connection policy', () => {
     });
   });
 });
+
+describe('safeDatabaseUrl — self-correct instead of crash-looping', () => {
+  const { safeDatabaseUrl } = require('./connection-policy');
+  const base = 'postgresql://u:p@localhost:5432/db?connection_limit=20&pool_timeout=30';
+  const prod = (extra: Record<string, string> = {}) => ({ NODE_ENV: 'production', DATABASE_URL: base, ...extra }) as any;
+
+  it('THE INCIDENT: 7 web + 1 worker at connection_limit=20 is lowered to 9, keeping other params', () => {
+    const r = safeDatabaseUrl(prod({ BACKEND_INSTANCES: '7', WORKER_INSTANCES: '1' }), 8);
+    expect(r.adjusted).toEqual({ from: 20, to: 9 });
+    const u = new URL(r.url);
+    expect(u.searchParams.get('connection_limit')).toBe('9');
+    expect(u.searchParams.get('pool_timeout')).toBe('30');
+    // and the adjusted URL now passes the policy
+    const { evaluateConnectionPolicy } = require('./connection-policy');
+    expect(evaluateConnectionPolicy({ ...prod({ BACKEND_INSTANCES: '7', WORKER_INSTANCES: '1' }), DATABASE_URL: r.url }, 8).error).toBeUndefined();
+  });
+
+  it('leaves a configuration that already fits untouched', () => {
+    expect(safeDatabaseUrl(prod({ BACKEND_INSTANCES: '3' }), 4)).toEqual({ url: base, adjusted: null });
+    expect(safeDatabaseUrl(prod(), 8)).toEqual({ url: base, adjusted: null }); // single process
+  });
+
+  it('still refuses (no adjustment) when even 2 per process cannot fit', () => {
+    expect(safeDatabaseUrl(prod({ BACKEND_INSTANCES: '60' }), 64).adjusted).toBeNull();
+  });
+
+  it('never touches a PgBouncer URL', () => {
+    const pooled = 'postgresql://u:p@localhost:6432/db?pgbouncer=true&connection_limit=20';
+    expect(safeDatabaseUrl({ NODE_ENV: 'production', DATABASE_URL: pooled, BACKEND_INSTANCES: '16' } as any, 16).adjusted).toBeNull();
+  });
+});

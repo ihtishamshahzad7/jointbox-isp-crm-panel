@@ -524,6 +524,14 @@ if [ "$CORES" -ge 4 ]; then
 else
   ok "Small box (cores=$CORES) — single-process mode"
 fi
+# Save the profile in backend/.env: ecosystem.config.js reads it, so any later
+# `pm2 start ecosystem.config.js` (after a reboot, `pm2 delete all` or an
+# update from a fresh shell) restores the same process counts.
+for _k in BACKEND_INSTANCES FRONTEND_INSTANCES WORKER_INSTANCES; do
+  sed -i "/^${_k}=/d" "$APP_DIR/backend/.env"
+  _v="${!_k:-}"
+  [ -n "$_v" ] && echo "${_k}=${_v}" >> "$APP_DIR/backend/.env"
+done
 pm2 startOrReload ecosystem.config.js --update-env >/dev/null 2>&1
 ok "Backend + frontend running via ecosystem.config.js"
 
@@ -604,8 +612,8 @@ ss -ulnp 2>/dev/null | grep -q ':1813' && ok "Listening on 1813 (accounting)" ||
 
 # Wait for the API to actually answer /health, not merely for pm2 to report the
 # process as "online" — a process can be up while the app is still booting or
-# crash-looping. Poll for up to ~90s. The backend refuses to start without
-# ADMIN_PASSWORD, so a persistent failure here is a real, reportable problem.
+# crash-looping. Poll for up to ~90s; a persistent failure here is a real,
+# reportable problem (uplinko-doctor.sh shows why).
 API_HEALTHY=0
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 5 "http://localhost:$API_PORT/health" >/dev/null 2>&1 \
@@ -631,6 +639,31 @@ for _ in $(seq 1 20); do
 done
 [ "$FE_HEALTHY" = "1" ] && ok "Panel responding on port $WEB_PORT" \
   || warn "Panel not responding yet on port $WEB_PORT — check: pm2 logs"
+
+# Prove the two first-boot logins work BEFORE handing the server to a client.
+# A wrong password, a crash-looping backend or a missing account all show up
+# on the panel as the same "Invalid email or password", which once took days
+# to trace; here each case gets its own message and a command to run.
+LOGIN_OK=1
+if [ "$API_HEALTHY" = "1" ]; then
+  _pe="$(sed -n 's/^PLATFORM_ADMIN_EMAIL=//p' "$APP_DIR/backend/.env" | head -1)"; _pe="${_pe:-superadmin@uplinko.com}"
+  _ce="$(sed -n 's/^ADMIN_EMAIL=//p' "$APP_DIR/backend/.env" | head -1)"; _ce="${_ce:-admin@uplinko.com}"
+  for _pair in "$_pe|$PLATFORM_ADMIN_PW_VAL" "$_ce|$ADMIN_PW_VAL"; do
+    _em="${_pair%%|*}"; _pw="${_pair#*|}"
+    _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "http://localhost:$API_PORT/auth/login" \
+      -H 'Content-Type: application/json' \
+      --data "$(printf '{"email":"%s","password":"%s"}' "$_em" "$_pw")")"
+    case "$_code" in
+      200|201) ok "Login works: $_em" ;;
+      401|403) LOGIN_OK=0; err "Login refused for $_em — reset it: cd $APP_DIR/backend && node scripts/reset-platform-password.js --email $_em" ;;
+      429)     LOGIN_OK=0; warn "Login for $_em is rate-limited — run: pm2 restart all, then retry" ;;
+      *)       LOGIN_OK=0; err "Login check for $_em got HTTP $_code — run: bash $APP_DIR/scripts/uplinko-doctor.sh" ;;
+    esac
+  done
+else
+  LOGIN_OK=0
+  err "Skipping the login check: the API is not healthy. Run: bash $APP_DIR/scripts/uplinko-doctor.sh"
+fi
 
 # -----------------------------------------------------------------------------
 step "10/10  Licence activation"
