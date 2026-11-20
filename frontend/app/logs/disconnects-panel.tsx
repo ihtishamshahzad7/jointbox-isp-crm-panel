@@ -369,7 +369,6 @@ export default function DisconnectsPanel({
           aria-label="Breakdown for this window"
         >
           <div className={s.breakdownInner}>
-            <div className={s.subHead} role="heading" aria-level={3}>Breakdown for this window</div>
             {(sel || selCat) && (
               <section className={s.focus} style={catVar(sel ? sel.category : selCat!.id)} aria-live="polite">
                 <div className={s.focusHead}>
@@ -423,6 +422,30 @@ export default function DisconnectsPanel({
                 </ul>
               </section>
             )}
+      <section className={s.panel}>
+        <div className={s.panelHead}>
+          <h3>All 18 termination causes</h3>
+          <span>RFC 2866 · routers send the number or the name · click one to filter the log</span>
+        </div>
+        <div className={s.causeGrid}>
+          {standard.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={(k) => pickCause(k, true)} />)}
+        </div>
+        {extra.length > 0 && (
+          <>
+            <div className={s.subHead}>Panel and non-standard causes</div>
+            <div className={s.causeGrid}>
+              {extra.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={(k) => pickCause(k, true)} />)}
+            </div>
+          </>
+        )}
+        <div className={s.legendRow} aria-label="Severity legend" style={{ marginTop: 12 }}>
+          {(Object.keys(SEVERITY_META) as CauseSeverity[]).map((k) => (
+            <span key={k} title={SEVERITY_META[k].about}><SeverityTag severity={k} /> {SEVERITY_META[k].about}</span>
+          ))}
+        </div>
+      </section>
+            <details className={s.panel} style={{ padding: 0, border: 0, background: "transparent" }}>
+              <summary className={s.linkBtn} style={{ cursor: "pointer", margin: "4px 0 10px" }}>More breakdown — who ended them, by NAS / router, customers who disconnected most</summary>
             <div className={s.twoCol}>
         <section className={s.panel}>
           <div className={s.panelHead}>
@@ -522,29 +545,7 @@ export default function DisconnectsPanel({
           </div>
         )}
       </section>
-
-      <section className={s.panel}>
-        <div className={s.panelHead}>
-          <h3>All 18 termination causes</h3>
-          <span>RFC 2866 · routers send the number or the name · click one to filter the log</span>
-        </div>
-        <div className={s.causeGrid}>
-          {standard.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={(k) => pickCause(k, true)} />)}
-        </div>
-        {extra.length > 0 && (
-          <>
-            <div className={s.subHead}>Panel and non-standard causes</div>
-            <div className={s.causeGrid}>
-              {extra.map((c) => <CauseCard key={c.key} c={c} max={maxCause} active={cause === c.key} onPick={(k) => pickCause(k, true)} />)}
-            </div>
-          </>
-        )}
-        <div className={s.legendRow} aria-label="Severity legend" style={{ marginTop: 12 }}>
-          {(Object.keys(SEVERITY_META) as CauseSeverity[]).map((k) => (
-            <span key={k} title={SEVERITY_META[k].about}><SeverityTag severity={k} /> {SEVERITY_META[k].about}</span>
-          ))}
-        </div>
-      </section>
+            </details>
 
           </div>
         </div>
