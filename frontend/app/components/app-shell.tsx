@@ -956,7 +956,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   className={`nav-item ${item.id === activeMenu ? 'active' : ''}`}
                   onClick={() => go(item)}
                   title={rail ? t(item.label) : ''}
-                  style={child === 'inline' ? { paddingLeft: 38, fontSize: 12.5 } : child === 'fly' ? { fontSize: 12.5 } : undefined}
+                  style={child === 'inline' ? { paddingLeft: 38, fontSize: 12.5 } : child === 'fly' ? { fontSize: 12.5, padding: '6px 12px', whiteSpace: 'nowrap' } : undefined}
                 >
                   {!child && <span className="nav-icon"><Icon /></span>}
                   {(!rail || child) && <span>{t(item.label)}</span>}
@@ -1013,7 +1013,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   {inline && kids.map((k) => leaf(k, 'inline'))}
                   {showFly && (
                     <div role="menu" onMouseEnter={keep} onMouseLeave={hideSoon}
-                      style={{ position: 'fixed', top: flyout!.top, left: flyout!.left, minWidth: 200, zIndex: 1000, padding: 6,
+                      style={{ position: 'fixed', top: flyout!.top, left: flyout!.left, width: 'max-content', maxWidth: 260, zIndex: 1000, padding: 4,
                         background: flyout!.bg, border: '1px solid rgba(138,153,175,.25)', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,.35)' }}>
                       <div className="nav-label" style={{ padding: '4px 10px 6px' }}>{t(node.label)}</div>
                       {kids.map((k) => leaf(k, 'fly'))}
