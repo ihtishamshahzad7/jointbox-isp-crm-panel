@@ -76,6 +76,15 @@ fi
 # --- forward-only application migrations -------------------------------------
 # Never use `prisma db push` here and never auto-resolve failed migrations as
 # applied. A real migration error must stop deployment with a nonzero exit.
+# Known-bad migration from an earlier release: it failed on every server
+# (PostgreSQL rolled the whole file back, so nothing of it is in the DB). It is
+# now split in two; clear the failed record so the fixed version can apply.
+# Only this exact migration, and only when it is recorded as failed.
+FAILED_LEAVE="$(psql "${DATABASE_URL%%\?*}" -tAc "SELECT 1 FROM _prisma_migrations WHERE migration_name='20261102140000_crm_advanced_leave' AND finished_at IS NULL AND rolled_back_at IS NULL LIMIT 1" 2>/dev/null || true)"
+if [ "$FAILED_LEAVE" = "1" ]; then
+  echo "Clearing the earlier failed 20261102140000_crm_advanced_leave record (fixed in this release)"
+  npx prisma migrate resolve --rolled-back 20261102140000_crm_advanced_leave
+fi
 npx prisma migrate deploy
 
 # Fresh install: the baseline migration just created the legacy RADIUS tables

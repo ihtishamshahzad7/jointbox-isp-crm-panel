@@ -1,5 +1,3 @@
-ALTER TYPE "AttendanceStatus" ADD VALUE 'CANCELLED_LEAVE';
-
 CREATE TYPE "EmployeeLeaveStatus" AS ENUM (
   'PENDING',
   'APPROVED',
