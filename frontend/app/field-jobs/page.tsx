@@ -372,15 +372,7 @@ export default function FieldJobsPage() {
           setMediaToken(media.token);
         } catch (reason) {
           setError(`Evidence preview: ${messageOf(reason)}`);
-        }, [mediaToken, selected?.id, token]);
-
-        useEffect(() => {
-          if (!token) return;
-          const jobId = Number(new URLSearchParams(window.location.search).get("jobId"));
-          if (!Number.isSafeInteger(jobId) || jobId < 1) return;
-          router.replace("/field-jobs");
-          void loadDetail(jobId);
-        }, [loadDetail, router, token]);
+        }
       }
       setTechnicianId(String(job.assignedTo ?? ""));
       setReassignmentReason("");
@@ -395,7 +387,15 @@ export default function FieldJobsPage() {
     } catch (reason) {
       setError(messageOf(reason));
     }
-  }
+  }, [mediaToken, selected?.id, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const jobId = Number(new URLSearchParams(window.location.search).get("jobId"));
+    if (!Number.isSafeInteger(jobId) || jobId < 1) return;
+    router.replace("/field-jobs");
+    void loadDetail(jobId);
+  }, [loadDetail, router, token]);
 
   function startCreate() {
     setSelected(null);
@@ -817,7 +817,7 @@ export default function FieldJobsPage() {
           ["Overdue", stats.overdue],
           ["Today", stats.scheduledToday],
           ["Unassigned", stats.unassigned],
-        ].map(([label, value]) => <div key={label} style={card}><div style={{ color: "var(--muted)", fontSize: 12 }}>{label}</div><strong style={{ display: "block", fontSize: 23, marginTop: 4 }}>{value ?? 0}</strong></div>)}
+        ].map(([label, value]) => <div key={String(label)} style={card}><div style={{ color: "var(--muted)", fontSize: 12 }}>{String(label)}</div><strong style={{ display: "block", fontSize: 23, marginTop: 4 }}>{String(value ?? 0)}</strong></div>)}
       </section>}
 
       {options?.canSchedules && <section style={{ ...card, marginBottom: 14, display: "grid", gap: 12 }}>

@@ -136,13 +136,13 @@ export default function TasksPage() {
       setItems(list.items as Task[]);
       setTotal(Number(list.total));
       setEmployees(options.employees as Employee[]);
-      setCanManage(options.canManage === true);
-      setCanCreate(options.canCreate === true);
-      setCanEdit(options.canEdit === true);
-      setCanComment(options.canComment === true);
-      setCanStatus(options.canStatus === true);
-      setCanReport(options.canReport === true);
-      if (options.canReport === true) {
+      setCanManage((options as Record<string, unknown>).canManage === true);
+      setCanCreate((options as Record<string, unknown>).canCreate === true);
+      setCanEdit((options as Record<string, unknown>).canEdit === true);
+      setCanComment((options as Record<string, unknown>).canComment === true);
+      setCanStatus((options as Record<string, unknown>).canStatus === true);
+      setCanReport((options as Record<string, unknown>).canReport === true);
+      if ((options as Record<string, unknown>).canReport === true) {
         try {
           const count = await request("/tasks/summary", token);
           if (!count || typeof count !== "object") throw new Error("The task summary response is invalid.");
