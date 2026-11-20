@@ -137,6 +137,44 @@ const platformMenuGroups = [
     { id: 'docs', label: 'Documentation', href: '/docs', Icon: navIcons.Support },
   ]},
 ];
+/**
+ * WinBox-style sidebar layout. Only the arrangement lives here — the items
+ * themselves (labels, routes, role rules) stay in menuGroups /
+ * platformMenuGroups above, which title lookup and active-menu detection keep
+ * using. A string is a top-level item; an object is a parent row with a ›
+ * that opens its children (hover = flyout, click = expand in place). A parent
+ * whose children are all hidden for this role disappears; with one child left
+ * it shows as that plain item.
+ */
+type NavNode = string | { key: string; label: string; icon: keyof typeof navIcons; children: string[] };
+const NAV_TREE: NavNode[] = [
+  'dashboard',
+  'my-work',
+  'subscribers',
+  { key: 'g-crm', label: 'CRM', icon: 'Users', children: ['crm-leads', 'tasks'] },
+  { key: 'g-support', label: 'Support', icon: 'Support', children: ['support', 'sla', 'trace'] },
+  { key: 'g-network', label: 'Network', icon: 'Network', children: ['network', 'monitoring', 'logs'] },
+  'catalog',
+  'billing',
+  { key: 'g-reports', label: 'Reports', icon: 'Reports', children: ['insights', 'compliance'] },
+  { key: 'g-hr', label: 'HR', icon: 'Users', children: ['hr-employees', 'hr-attendance', 'hr-leave'] },
+  'ai-agent',
+  { key: 'g-system', label: 'System', icon: 'Settings', children: ['admin', 'setup', 'licence', 'jobs', 'console', 'radius-admin', 'docs'] },
+];
+const PLATFORM_NAV_TREE: NavNode[] = [
+  'companies',
+  'plans',
+  'licence',
+  'p-templates',
+  { key: 'g-server', label: 'Server', icon: 'Settings', children: ['p-settings', 'p-security', 'jobs', 'console', 'radius-admin', 'docs'] },
+];
+const Chevron = ({ open }: { open: boolean }) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+    aria-hidden="true" style={{ marginLeft: 'auto', flexShrink: 0, opacity: .7, transition: 'transform .15s ease', transform: open ? 'rotate(90deg)' : 'none' }}>
+    <path d="M9 6l6 6-6 6" />
+  </svg>
+);
+
 const PLATFORM_ROUTE_TO_MENU: Array<[string, string]> = [
   ['/companies', 'companies'], ['/platform-plans', 'plans'], ['/licence', 'licence'], ['/communication', 'p-templates'],
   ['/settings', 'p-settings'], ['/security', 'p-security'], ['/jobs', 'jobs'], ['/console', 'console'],
@@ -251,6 +289,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [date, setDate] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  // WinBox-style menu: which parent is expanded in place, and which one's
+  // flyout is showing (hover) with where to draw it.
+  const [openParent, setOpenParent] = useState<string | null>(null);
+  const [flyout, setFlyout] = useState<{ key: string; top: number; left: number; bg: string } | null>(null);
+  const flyoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * After a deploy, Next rebuilds with new hashed chunk filenames. A tab still
@@ -891,42 +934,95 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <nav className="nav-section">
           {/* Nothing until the role is known: the business menu must never
               flash up for the super admin while the page loads. */}
-          {roleReady && (myRole === 'SUPER_ADMIN' ? platformMenuGroups : menuGroups).map((group) => {
-            // ISP-only items (Server Console) are hidden for everyone else.
-            const items = group.items.filter((it: any) => !it.ispOnly || myRole === 'SUPER_ADMIN');
-            if (items.length === 0) return null;
-            return (
-            <div key={group.label}>
-              {!rail && <div className="nav-label">{t(group.label)}</div>}
-              {items.map((item) => {
-                const isActive = item.id === activeMenu;
-                const Icon = item.Icon;
-                return (
+          {roleReady && (() => {
+            const isPlatform = myRole === 'SUPER_ADMIN';
+            // Same visibility rule as before: ISP-only rows only for the owner.
+            const byId = new Map<string, any>();
+            for (const g of (isPlatform ? platformMenuGroups : menuGroups)) {
+              for (const it of g.items as any[]) if (!it.ispOnly || isPlatform) byId.set(it.id, it);
+            }
+            const go = (item: any) => {
+              setMobileOpen(false); // close the drawer after navigating on mobile
+              setFlyout(null);
+              if (item.href === '#assistant') window.dispatchEvent(new Event('open-assistant'));
+              else router.push(item.href);
+            };
+            const leaf = (item: any, child: false | 'inline' | 'fly' = false) => {
+              const Icon = item.Icon;
+              return (
+                <button
+                  key={item.href}
+                  type="button"
+                  className={`nav-item ${item.id === activeMenu ? 'active' : ''}`}
+                  onClick={() => go(item)}
+                  title={rail ? t(item.label) : ''}
+                  style={child === 'inline' ? { paddingLeft: 38, fontSize: 12.5 } : child === 'fly' ? { fontSize: 12.5 } : undefined}
+                >
+                  {!child && <span className="nav-icon"><Icon /></span>}
+                  {(!rail || child) && <span>{t(item.label)}</span>}
+                  {item.id === 'billing' && pendingApprovals > 0 && (
+                    <span title={`${pendingApprovals} awaiting your approval`}
+                      style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
+                      {pendingApprovals}
+                    </span>
+                  )}
+                </button>
+              );
+            };
+            const hideSoon = () => {
+              if (flyoutTimer.current) clearTimeout(flyoutTimer.current);
+              flyoutTimer.current = setTimeout(() => setFlyout(null), 180);
+            };
+            const keep = () => { if (flyoutTimer.current) clearTimeout(flyoutTimer.current); };
+            return (isPlatform ? PLATFORM_NAV_TREE : NAV_TREE).map((node) => {
+              if (typeof node === 'string') {
+                const item = byId.get(node);
+                return item ? leaf(item) : null;
+              }
+              const kids = node.children.map((id) => byId.get(id)).filter(Boolean) as any[];
+              if (kids.length === 0) return null;
+              if (kids.length === 1) return leaf(kids[0]);
+              const hasActive = kids.some((k) => k.id === activeMenu);
+              // The group holding the current page starts open; a click overrides.
+              const inline = !rail && (openParent === null ? hasActive : openParent === node.key);
+              const Icon = navIcons[node.icon];
+              const showFly = flyout?.key === node.key && !inline;
+              return (
+                <div key={node.key}
+                  onMouseEnter={(e) => {
+                    if (isMobileView() || inline) return;
+                    keep();
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const sb = (e.currentTarget as HTMLElement).closest('.sidebar') as HTMLElement | null;
+                    const bg = sb ? getComputedStyle(sb).backgroundColor : '#1C2434';
+                    setFlyout({ key: node.key, top: Math.min(r.top, window.innerHeight - 44 * kids.length - 24), left: r.right + 4, bg });
+                  }}
+                  onMouseLeave={hideSoon}
+                >
                   <button
-                    key={item.href}
                     type="button"
-                    className={`nav-item ${isActive ? 'active' : ''}`}
-                    onClick={() => {
-                      setMobileOpen(false); // close the drawer after navigating on mobile
-                      if (item.href === '#assistant') window.dispatchEvent(new Event('open-assistant'));
-                      else router.push(item.href);
-                    }}
-                    title={rail ? item.label : ''}
+                    className={`nav-item ${hasActive && !inline ? 'active' : ''}`}
+                    aria-expanded={inline}
+                    onClick={() => { setFlyout(null); if (!rail) setOpenParent(inline ? '' : node.key); }}
+                    title={rail ? t(node.label) : ''}
                   >
                     <span className="nav-icon"><Icon /></span>
-                    {!rail && <span>{t(item.label)}</span>}
-                    {item.id === 'billing' && pendingApprovals > 0 && (
-                      <span title={`${pendingApprovals} awaiting your approval`}
-                        style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 999, fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
-                        {pendingApprovals}
-                      </span>
-                    )}
+                    {!rail && <span>{t(node.label)}</span>}
+                    {!rail && <Chevron open={inline} />}
                   </button>
-                );
-              })}
-            </div>
-            );
-          })}
+                  {inline && kids.map((k) => leaf(k, 'inline'))}
+                  {showFly && (
+                    <div role="menu" onMouseEnter={keep} onMouseLeave={hideSoon}
+                      style={{ position: 'fixed', top: flyout!.top, left: flyout!.left, minWidth: 200, zIndex: 1000, padding: 6,
+                        background: flyout!.bg, border: '1px solid rgba(138,153,175,.25)', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,.35)' }}>
+                      <div className="nav-label" style={{ padding: '4px 10px 6px' }}>{t(node.label)}</div>
+                      {kids.map((k) => leaf(k, 'fly'))}
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
         </nav>
 
         {/* Smart-sidebar footer: pin keeps the hover-expanded rail open, or
