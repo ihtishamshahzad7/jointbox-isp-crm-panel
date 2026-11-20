@@ -128,6 +128,9 @@ log "Applying database migrations (safe, forward-only via db:deploy)..."
 log "Building backend..."
 (cd backend && npm run build)
 
+log "Checking backend wiring (no restart yet)..."
+if [[ "${SKIP_WIRING_CHECK:-0}" != "1" ]]; then (cd backend && node scripts/check-di.js); fi
+
 if [[ -f frontend/package-lock.json ]]; then
   log "Installing frontend dependencies with npm ci..."
   (cd frontend && npm ci --include=dev)
