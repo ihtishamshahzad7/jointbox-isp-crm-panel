@@ -1,12 +1,14 @@
-import {
+import { Optional,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleDestroy,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { PlatformVpnSettingsService } from './platform-vpn-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../common/secrets.service';
 import { NasL2tpConfigService } from './nas-l2tp-config.service';
@@ -102,7 +104,11 @@ export class NasL2tpClientService implements OnModuleDestroy {
     private readonly secrets: SecretsService,
     private readonly config: NasL2tpConfigService,
     private readonly dialer: L2tpClientDialer,
+    @Optional() private readonly settings?: PlatformVpnSettingsService,
   ) {}
+
+  /** Effective config for the current call: web settings (DB) over environment. */
+  private cur: NodeJS.ProcessEnv = this.env;
 
   onModuleDestroy() {
     for (const l of this.leases) if (l.timer) clearInterval(l.timer);
@@ -121,11 +127,27 @@ export class NasL2tpClientService implements OnModuleDestroy {
       where: { nasId },
     }) as Promise<any>;
   }
+  /**
+   * The NAS management VPN is OFF unless the platform owner enables it on this
+   * server (L2TP_MGMT_VPN_ENABLED=true). Shipping the code to every client
+   * therefore changes nothing until someone deliberately turns it on.
+   */
+  private async assertEnabled() {
+    this.cur = this.settings
+      ? await this.settings.effectiveEnv(this.env)
+      : this.env;
+    if (this.cur.L2TP_MGMT_VPN_ENABLED !== 'true') {
+      throw new ForbiddenException(
+        'The NAS management VPN is turned off. The platform owner can turn it on in Settings → NAS management VPN.',
+      );
+    }
+  }
+
   private policy(): PolicyConfig {
-    const p = loadPolicy(this.env);
+    const p = loadPolicy(this.cur);
     if ('error' in p)
       throw new BadRequestException(
-        `Management VPN address policy is misconfigured on this server: ${p.error}`,
+        `Management VPN address settings are invalid (Settings → NAS management VPN): ${p.error}`,
       );
     return p;
   }
@@ -333,11 +355,13 @@ export class NasL2tpClientService implements OnModuleDestroy {
   // ── view / save ──────────────────────────────────────────────────────────
   async getView(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     return this.view(nasId, await this.row(nasId));
   }
 
   async save(nasId: number, actor: any, body: ClientSaveInput) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const input = body && typeof body === 'object' ? body : {};
     const current = await this.row(nasId);
     if (
@@ -476,7 +500,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
   }
 
   private hostPublicIp(policy: PolicyConfig): string {
-    const ip = String(this.env.UPLINKO_PUBLIC_IP || '').trim();
+    const ip = String(this.cur.UPLINKO_PUBLIC_IP || '').trim();
     const errs = checkAddressing(
       { endpoint: ip },
       policy,
@@ -485,7 +509,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
     );
     if (!isIpv4(ip) || errs.length) {
       throw new BadRequestException(
-        "UPLINKO_PUBLIC_IP (this server's public IPv4 as routers see it) must be configured by the platform owner before the NAS firewall guard can be installed. Nothing was changed.",
+        "This server's public IP must be set by the platform owner in Settings → NAS management VPN before the NAS firewall guard can be installed. Nothing was changed.",
       );
     }
     return ip;
@@ -547,6 +571,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
 
   async previewNas(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const { row, psk, apiUser } = await this.applyInputs(nasId);
     const hostPublicIp = this.hostPublicIp(this.policy());
     const applier = new RouterOsMgmtApplier(await this.rosConnect(nasId));
@@ -619,6 +644,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
     body: { confirmServerChange?: boolean } = {},
   ) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const inputs = await this.applyInputs(nasId);
     const hostPublicIp = this.hostPublicIp(this.policy());
     const lease = await this.acquire(nasId, 'nas-apply');
@@ -761,6 +787,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
 
   async rollbackNas(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const row = await this.row(nasId);
     const snap = this.readJson<Snapshot>(row?.mgmtSnapshotEnc);
     const desired = this.readJson<Desired>(row?.mgmtDesiredEnc);
@@ -830,6 +857,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
    */
   async recoverNas(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const row = await this.row(nasId);
     const snap = this.readJson<Snapshot>(row?.mgmtSnapshotEnc);
     const desired = this.readJson<Desired>(row?.mgmtDesiredEnc);
@@ -1045,6 +1073,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
 
   async connect(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const params = await this.dialInputs(nasId);
     const lease = await this.acquire(nasId, 'connect', {
       clientState: 'connecting',
@@ -1070,6 +1099,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
 
   async reconnect(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const params = await this.dialInputs(nasId);
     const lease = await this.acquire(nasId, 'reconnect', {
       clientState: 'connecting',
@@ -1097,6 +1127,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
   /** Ask a running operation to stop. Never touches the lease itself. */
   async cancel(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const res = (await this.prisma.nasL2tpConfig.updateMany({
       where: { nasId, clientLockUntil: { gt: new Date() } },
       data: { clientCancelRequested: true },
@@ -1107,6 +1138,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
 
   async disconnect(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const lease = await this.acquire(nasId, 'disconnect', {
       clientState: 'disconnecting',
     });
@@ -1140,6 +1172,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
   /** Live host status; the stored state is corrected from it when no operation runs. */
   async status(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     const row = await this.row(nasId);
     const tooling = await this.dialer.tooling();
     const busy = this.busy(row);
@@ -1220,6 +1253,7 @@ export class NasL2tpClientService implements OnModuleDestroy {
   /** Remove this NAS's host tunnel and files, verified. */
   async purgeHost(nasId: number, actor: any) {
     await this.config.assertNasAccess(nasId, actor);
+    await this.assertEnabled();
     return this.purgeInternal(nasId);
   }
 
@@ -1280,6 +1314,21 @@ export class NasL2tpClientService implements OnModuleDestroy {
     nasId: number,
   ): Promise<{ hadConfig: boolean; routerSideApplied: boolean }> {
     const row = await this.row(nasId);
+    // Servers / NAS that never used the management VPN: nothing to clean, and
+    // no host command is run (works without strongSwan or xl2tpd installed).
+    const usedVpn =
+      !!row &&
+      (!!row.mgmtPublicHost ||
+        !!row.tunnelInterface ||
+        !!row.nasAppliedAt ||
+        (row.clientState && row.clientState !== 'disconnected') ||
+        this.busy(row));
+    if (
+      !usedVpn &&
+      !(await this.dialer.hasHostFootprint(nasId).catch(() => true))
+    ) {
+      return { hadConfig: false, routerSideApplied: false };
+    }
     if (row && this.busy(row)) {
       await this.prisma.nasL2tpConfig.updateMany({
         where: { nasId },

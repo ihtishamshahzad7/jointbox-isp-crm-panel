@@ -158,7 +158,7 @@ export function checkAddressing(
     host.addresses.some((a) => inCidr(a, policy.pool))
   ) {
     errs.push(
-      `The management pool ${policy.pool.text} overlaps a network on this server. The platform owner must change L2TP_MGMT_POOL.`,
+      `The management pool ${policy.pool.text} overlaps a network on this server. Choose a different management pool in Settings → NAS management VPN.`,
     );
     return errs;
   }

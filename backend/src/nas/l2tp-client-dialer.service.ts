@@ -680,6 +680,18 @@ export class L2tpClientDialer {
   }
 
   /** Tear down and delete this NAS's host files (used when the config is removed). */
+  /** True when this server holds any management-VPN file or lock for the NAS. */
+  async hasHostFootprint(nasId: number): Promise<boolean> {
+    for (const f of [
+      this.swanFile(nasId),
+      this.pppFile(nasId),
+      path.join(this.lockDir(nasId), 'owner.json'),
+    ]) {
+      if ((await this.files.read(f)) !== null) return true;
+    }
+    return false;
+  }
+
   async purge(nasId: number): Promise<{ clean: boolean; remaining: string[] }> {
     await this.teardown(nasId);
     await this.files.remove(this.swanFile(nasId));
@@ -690,9 +702,19 @@ export class L2tpClientDialer {
     const name = this.connName(nasId);
     const iface = this.ifName(nasId);
     const remaining: string[] = [];
-    const sa = await this.run('swanctl', ['--list-sas', '--ike', name], 10_000);
-    if (sa.code !== 0) remaining.push('IPsec state unknown (swanctl failed)');
-    else if (sa.stdout.includes(`${name}:`)) remaining.push(`IPsec SA ${name}`);
+    // No strongSwan on this server → no IPsec SA can exist (e.g. servers that
+    // never used the management VPN). If it is installed, its answer must be read.
+    const hasSwanctl = (await this.run('which', ['swanctl'], 5000)).code === 0;
+    if (hasSwanctl) {
+      const sa = await this.run(
+        'swanctl',
+        ['--list-sas', '--ike', name],
+        10_000,
+      );
+      if (sa.code !== 0) remaining.push('IPsec state unknown (swanctl failed)');
+      else if (sa.stdout.includes(`${name}:`))
+        remaining.push(`IPsec SA ${name}`);
+    }
     const link = await this.run(
       'ip',
       ['-o', 'link', 'show', 'dev', iface],

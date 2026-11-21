@@ -13,6 +13,8 @@ import { NasL2tpConfigService } from './nas-l2tp-config.service';
 import { NasL2tpClientController } from './nas-l2tp-client.controller';
 import { NasL2tpClientService } from './nas-l2tp-client.service';
 import { L2tpClientDialer } from './l2tp-client-dialer.service';
+import { PlatformVpnSettingsService } from './platform-vpn-settings.service';
+import { PlatformVpnSettingsController } from './platform-vpn-settings.controller';
 import { VpnModule } from '../vpn/vpn.module';
 
 @Module({
@@ -24,13 +26,15 @@ import { VpnModule } from '../vpn/vpn.module';
   // findOne(NaN) — a 404 that reads like a missing feature rather than a
   // routing mistake. TunnelController's literal paths go ahead of it, for the
   // same reason NasController's own comment puts 'stats' before ':id'.
-  controllers: [TunnelController, NasController, NasL2tpConfigController, NasL2tpClientController],
+  controllers: [TunnelController, NasController, NasL2tpConfigController, NasL2tpClientController, PlatformVpnSettingsController],
   providers: [
     NasService,
     NasL2tpConfigService,
     // NAS management VPN: Uplinko host = L2TP/IPsec client (strongSwan + xl2tpd + pppd).
     NasL2tpClientService,
     L2tpClientDialer,
+    // Web settings for the management VPN (Settings → NAS management VPN).
+    PlatformVpnSettingsService,
     RadiusSyncService,
     RadiusClientVaultService,
     MikrotikSyncService,

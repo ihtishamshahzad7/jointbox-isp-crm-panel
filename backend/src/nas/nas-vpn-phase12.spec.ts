@@ -427,6 +427,7 @@ describe('5. MEDIUM — restart and interrupted-apply recovery (simulation)', ()
       status: jest.fn(async () => ({ state: 'disconnected' })),
       tooling: async () => ({ ok: true, detail: 'ok' }),
       purge: jest.fn(async () => ({ clean: true, remaining: [] })),
+      hasHostFootprint: async () => false,
       acquireHostLock: locks.acquireHostLock,
       releaseHostLock: locks.releaseHostLock,
     };
@@ -436,7 +437,7 @@ describe('5. MEDIUM — restart and interrupted-apply recovery (simulation)', ()
       { assertNasAccess: async () => ({ id: 7 }) } as any,
       dialer,
     );
-    svc.env = { UPLINKO_PUBLIC_IP: HOST_IP };
+    svc.env = { UPLINKO_PUBLIC_IP: HOST_IP, L2TP_MGMT_VPN_ENABLED: 'true' };
     svc.rosConnect = async () => r.connect;
     return svc;
   }
@@ -565,5 +566,41 @@ describe('5. MEDIUM — restart and interrupted-apply recovery (simulation)', ()
     };
     await expect(w1.applyNas(7, ACTOR)).rejects.toThrow();
     expect(r.mutations()).toHaveLength(0);
+  });
+});
+
+describe('server without strongSwan/xl2tpd (unit)', () => {
+  it('purge of a NAS that never used the VPN reports clean (no false "IPsec state unknown")', async () => {
+    const d = new L2tpClientDialer();
+    d.run = async (cmd) => ({
+      code: cmd === 'ip' ? 1 : 127,
+      stdout: '',
+      stderr: 'not found',
+    });
+    d.files = {
+      writeSecret: async () => undefined,
+      read: async () => null,
+      remove: async () => undefined,
+      lockCreate: async () => 'ok',
+      lockRemove: async () => undefined,
+    };
+    expect(await d.purge(7)).toEqual({ clean: true, remaining: [] });
+    expect(await d.hasHostFootprint(7)).toBe(false);
+  });
+  it('with strongSwan installed but not answering, purge is NOT reported clean', async () => {
+    const d = new L2tpClientDialer();
+    d.run = async (cmd) => ({
+      code: cmd === 'which' ? 0 : 1,
+      stdout: '',
+      stderr: '',
+    });
+    d.files = {
+      writeSecret: async () => undefined,
+      read: async () => null,
+      remove: async () => undefined,
+      lockCreate: async () => 'ok',
+      lockRemove: async () => undefined,
+    };
+    expect((await d.purge(7)).clean).toBe(false);
   });
 });

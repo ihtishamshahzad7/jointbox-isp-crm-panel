@@ -120,6 +120,149 @@ const CHECKS = [
   },
 ];
 
+
+type VpnSettings = {
+  mgmtEnabled: boolean;
+  publicIp: string | null;
+  mgmtPool: string;
+  protectedCidrs: string;
+  allowPrivateEndpoints: boolean;
+  source: "panel" | "environment";
+  server: { tooling: { ok: boolean; detail: string }; addresses: string[] };
+  hardwareVerified: boolean;
+};
+
+/**
+ * NAS management VPN — switched on and configured here, never from a shell.
+ * Saved in the database; the backend reads it on every VPN action, so there is
+ * no .env edit and no restart.
+ */
+function MgmtVpnPanel() {
+  const [v, setV] = useState<VpnSettings | null>(null);
+  const [err, setErr] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [ip, setIp] = useState("");
+  const [pool, setPool] = useState("");
+  const [cidrs, setCidrs] = useState("");
+  const [allowPriv, setAllowPriv] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: Tone; text: string } | null>(null);
+
+  const fill = (b: VpnSettings) => {
+    setV(b);
+    setEnabled(b.mgmtEnabled);
+    setIp(b.publicIp || "");
+    setPool(b.mgmtPool || "");
+    setCidrs(b.protectedCidrs || "");
+    setAllowPriv(b.allowPrivateEndpoints);
+  };
+
+  useEffect(() => {
+    getJson("/platform/vpn-settings").then(({ ok, body }) => {
+      if (ok && body) fill(body);
+      else setErr(body?.message || "Could not load the VPN settings.");
+    });
+  }, []);
+
+  const save = async () => {
+    setMsg(null);
+    if (enabled && !ip.trim()) { setMsg({ tone: "bad", text: "Enter this server's public IP before turning the VPN on." }); return; }
+    if (enabled && !v?.mgmtEnabled &&
+        !window.confirm("Turn on the NAS management VPN for this server? Companies can then connect their routers over L2TP/IPsec. It has not been tested on real routers yet.")) return;
+    setBusy(true);
+    const { ok, body } = await getJson("/platform/vpn-settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        mgmtEnabled: enabled,
+        publicIp: ip.trim() || null,
+        mgmtPool: pool.trim() || null,
+        protectedCidrs: cidrs.trim() || null,
+        allowPrivateEndpoints: allowPriv,
+      }),
+    });
+    setBusy(false);
+    if (!ok) {
+      const m = body?.message;
+      setMsg({ tone: "bad", text: Array.isArray(m) ? m.join(" ") : m || "Could not save." });
+      return;
+    }
+    fill(body);
+    setMsg({ tone: "ok", text: body.mgmtEnabled ? "Saved — the NAS management VPN is on. No restart needed." : "Saved — the NAS management VPN is off." });
+  };
+
+  return (
+    <div className={`${s.panel} ${s.wide}`}>
+      <div className={s.head}>
+        <div>
+          <div className={s.eyebrow}>Installation</div>
+          <h3>NAS management VPN</h3>
+        </div>
+        {v && (
+          <span className={`${s.faint} ${v.mgmtEnabled ? s.okText : ""}`}>
+            {v.mgmtEnabled ? "On" : "Off"}{v.source === "environment" ? " · from server .env until saved here" : ""}
+          </span>
+        )}
+      </div>
+      <p className={s.lede}>
+        Lets this server reach company routers over an L2TP/IPsec tunnel. Turn it on and set the server&apos;s public IP
+        here; it takes effect immediately, with no shell commands and no restart.
+      </p>
+      {err ? (
+        <p className={`${s.note} ${s.badText}`}>{err}</p>
+      ) : !v ? (
+        <p className={s.faint}>Loading…</p>
+      ) : (
+        <>
+          <div className={s.form}>
+            <label className={s.field} htmlFor="ps-vpn-on">
+              <span className={s.fieldLabel}>Enabled</span>
+              <input id="ps-vpn-on" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            </label>
+            <label className={s.field} htmlFor="ps-vpn-ip">
+              <span className={s.fieldLabel}>Server public IP</span>
+              <input id="ps-vpn-ip" className={s.input} value={ip} maxLength={15} placeholder="e.g. 45.67.89.10"
+                list="ps-vpn-ip-hints" onChange={(e) => setIp(e.target.value)} />
+              <datalist id="ps-vpn-ip-hints">
+                {v.server.addresses.map((a) => <option key={a} value={a} />)}
+              </datalist>
+            </label>
+            <label className={s.field} htmlFor="ps-vpn-pool">
+              <span className={s.fieldLabel}>Tunnel address pool</span>
+              <input id="ps-vpn-pool" className={s.input} value={pool} maxLength={18} placeholder="10.255.0.0/16"
+                onChange={(e) => setPool(e.target.value)} />
+            </label>
+            <label className={s.field} htmlFor="ps-vpn-cidrs">
+              <span className={s.fieldLabel}>Protected networks (comma-separated)</span>
+              <input id="ps-vpn-cidrs" className={s.input} value={cidrs} maxLength={1000} placeholder="optional"
+                onChange={(e) => setCidrs(e.target.value)} />
+            </label>
+            <label className={s.field} htmlFor="ps-vpn-priv">
+              <span className={s.fieldLabel}>Allow routers on private IPs</span>
+              <input id="ps-vpn-priv" type="checkbox" checked={allowPriv} onChange={(e) => setAllowPriv(e.target.checked)} />
+            </label>
+            <button type="button" className={`${s.action} ${s.primary}`} onClick={() => void save()} disabled={busy}>
+              {busy ? "Saving…" : "Save VPN settings"}
+            </button>
+          </div>
+          <p className={s.note}>
+            Addresses on this server: {v.server.addresses.length ? v.server.addresses.join(", ") : "none found"}. Use the
+            one routers reach from the internet.
+          </p>
+          <p className={`${s.note} ${v.server.tooling.ok ? s.okText : s.warnText}`}>
+            VPN client tools: {v.server.tooling.ok ? "installed" : v.server.tooling.detail}
+          </p>
+          {!v.hardwareVerified && (
+            <p className={`${s.note} ${s.warnText}`}>
+              Not yet tested on real routers. Turn it on for a test server first.
+            </p>
+          )}
+          {msg && <p className={`${s.note} ${msg.tone === "bad" ? s.badText : msg.tone === "warn" ? s.warnText : s.okText}`}>{msg.text}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function PlatformServer() {
   const [health, setHealth] = useState<Health | null>(null);
   const [loading, setLoading] = useState(false);
@@ -295,6 +438,8 @@ export default function PlatformServer() {
           })}
         </div>
       </div>
+
+      <MgmtVpnPanel />
 
       <div className={s.wide}>
         <RadiusRouters platform />

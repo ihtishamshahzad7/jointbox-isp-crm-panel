@@ -4960,3 +4960,21 @@ model UploadedFile {
   @@index([ownerId])
   @@map("uploaded_file")
 }
+
+/// Installation-wide settings of the NAS management VPN (one row, id = 1).
+/// Edited by the platform owner in Settings; overrides the environment.
+model PlatformVpnSettings {
+  id                    Int      @id @default(1)
+  mgmtEnabled           Boolean  @default(false)
+  /// This server's public IPv4 as routers see it (firewall guard source).
+  publicIp              String?  @db.VarChar(45)
+  /// Management tunnel pool (CIDR). Null = default 10.255.0.0/16.
+  mgmtPool              String?  @db.VarChar(18)
+  /// Comma-separated protected IPs/CIDRs.
+  protectedCidrs        String?  @db.VarChar(1000)
+  allowPrivateEndpoints Boolean  @default(false)
+  updatedById           Int?
+  updatedAt             DateTime @updatedAt
+
+  @@map("platform_vpn_settings")
+}

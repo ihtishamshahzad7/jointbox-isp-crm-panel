@@ -36,6 +36,7 @@ const FULL = {
 };
 const ENV = {
   UPLINKO_PUBLIC_IP: '198.199.0.10',
+  L2TP_MGMT_VPN_ENABLED: 'true',
   L2TP_PROTECTED_CIDRS: '10.255.200.0/24',
 } as any;
 
@@ -66,6 +67,7 @@ function makeDialer(locks: ReturnType<typeof hostLocks>) {
     })),
     tooling: jest.fn(async () => ({ ok: true, detail: 'ok' })),
     purge: jest.fn(async () => ({ clean: true, remaining: [] as string[] })),
+    hasHostFootprint: jest.fn(async () => false),
   };
 }
 
@@ -343,7 +345,7 @@ describe('NasL2tpClientService (simulation)', () => {
       const { svc, router } = setup();
       svc.env = { ...ENV, UPLINKO_PUBLIC_IP: '' };
       await svc.save(7, ACTOR, FULL);
-      await expect(svc.applyNas(7, ACTOR)).rejects.toThrow(/UPLINKO_PUBLIC_IP/);
+      await expect(svc.applyNas(7, ACTOR)).rejects.toThrow(/public IP/);
       expect(router.log).toHaveLength(0);
     });
 
@@ -656,6 +658,72 @@ describe('NasL2tpClientService (simulation)', () => {
       );
       expect(db.rows.get(7)!.clientCancelRequested).toBe(true);
       expect(dialer.purge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('feature flag and safe deletion on servers that never used the VPN', () => {
+    it.each([
+      'getView',
+      'save',
+      'status',
+      'connect',
+      'reconnect',
+      'cancel',
+      'disconnect',
+      'previewNas',
+      'applyNas',
+      'rollbackNas',
+      'recoverNas',
+      'purgeHost',
+    ])(
+      '%s is refused when L2TP_MGMT_VPN_ENABLED is not "true", with no side effects',
+      async (m) => {
+        const { svc, db, dialer, router } = setup();
+        svc.env = { ...ENV, L2TP_MGMT_VPN_ENABLED: undefined };
+        const spy = jest.spyOn(db.nasL2tpConfig, 'updateMany');
+        await expect((svc as any)[m](7, ACTOR, FULL)).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        expect(spy).not.toHaveBeenCalled();
+        expect(db.rows.size).toBe(0);
+        expect(dialer.dial).not.toHaveBeenCalled();
+        expect(dialer.purge).not.toHaveBeenCalled();
+        expect(router.log).toHaveLength(0);
+      },
+    );
+
+    it('NAS deletion on a server without the VPN (no row, no files): succeeds, runs no host command', async () => {
+      const { svc, dialer } = setup();
+      svc.env = { ...ENV, L2TP_MGMT_VPN_ENABLED: undefined };
+      await expect(svc.cleanupForNasDeletion(7)).resolves.toEqual({
+        hadConfig: false,
+        routerSideApplied: false,
+      });
+      expect(dialer.purge).not.toHaveBeenCalled();
+      expect(dialer.acquireHostLock).not.toHaveBeenCalled();
+    });
+
+    it('NAS deletion with only a legacy (old VPN screen) row: no host command', async () => {
+      const { svc, db, dialer } = setup();
+      db.rows.set(7, {
+        nasId: 7,
+        state: 'approved',
+        publicHost: 'legacy.example',
+        clientState: 'disconnected',
+        mgmtApplyState: 'none',
+      });
+      await expect(svc.cleanupForNasDeletion(7)).resolves.toEqual({
+        hadConfig: false,
+        routerSideApplied: false,
+      });
+      expect(dialer.purge).not.toHaveBeenCalled();
+    });
+
+    it('NAS deletion still cleans up when host files exist even without a row', async () => {
+      const { svc, dialer } = setup();
+      dialer.hasHostFootprint.mockResolvedValueOnce(true);
+      await svc.cleanupForNasDeletion(7);
+      expect(dialer.purge).toHaveBeenCalledWith(7);
     });
   });
 });

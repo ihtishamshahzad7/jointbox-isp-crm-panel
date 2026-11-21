@@ -55,6 +55,8 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['PUT', 'users/companies/:id/plan'],
   // Plans & Pricing and company details (the service checks the role too)
   ['*', 'platform/plans'],
+  // NAS management VPN switch + server public IP (the service checks the role too)
+  ['*', 'platform/vpn-settings'],
   ['*', 'platform/plans/:id'],
   ['POST', 'platform/plans/:id/apply'],
   ['*', 'platform/companies/:id/profile'],
