@@ -73,6 +73,7 @@ describe('ProductEntitlementService', () => {
     await expect(service.listGlobal(PLATFORM)).resolves.toEqual([
       { key: 'ai-assistant', enabled: true },
       { key: 'crm-advanced', enabled: false },
+      { key: 'router-vpn', enabled: false },
     ]);
     await expect(
       service.setGlobal(PLATFORM, 'crm-advanced', true),

@@ -3,7 +3,7 @@
  * no xl2tpd). A remote router dials INTO Uplinko; it is registered with its
  * TUNNEL address as its NAS IP and gets one paste-able MikroTik script.
  */
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { NasService } from './nas.service';
 import { L2tpHubService } from './l2tp-hub.service';
 
@@ -29,17 +29,21 @@ function makeHub(opts: { nasIps?: string[]; hubRows?: any[]; running?: boolean; 
   const vpn: any = { getConfig: () => ({ endpointHost: opts.endpoint ?? '45.67.89.10' }) };
   const hub = new L2tpHubService(prisma, secrets, vpn);
   const files: Record<string, string> = { '/etc/ppp/chap-secrets': '# existing line\nalice * pw *\n' };
-  if (opts.running !== false) files[hub.swanConfPath] = 'conf';
   hub.readFile = async (f: string) => files[f] ?? null;
   hub.writeFileAtomic = async (f: string, d: string) => { files[f] = d; };
-  hub.run = jest.fn(async (cmd: string) => ({ code: cmd === 'systemctl' && opts.running === false ? 3 : 0, stdout: '[]', stderr: '' }));
+  // running:false = xl2tpd/strongSwan not installed on the server
+  hub.run = jest.fn(async (cmd: string) => ({ code: cmd === 'which' && opts.running === false ? 1 : 0, stdout: '[]', stderr: '' }));
   return { hub, prisma, files, rows };
 }
 
-function makeNas(hub: any) {
+function makeNas(hub: any, allowed = true) {
   const prisma: any = { nas: { delete: jest.fn().mockResolvedValue({}) } };
   const vault: any = { apply: jest.fn().mockResolvedValue({ ok: true }) };
-  const svc = new NasService(prisma, {} as any, {} as any, { actorId: () => 5 } as any, {} as any, {} as any, vault, undefined, undefined, hub);
+  const entitlements: any = {
+    assertEnabled: jest.fn(async () => { if (!allowed) throw new ForbiddenException('The router-vpn product is not enabled for this company.'); }),
+    companyState: jest.fn(async () => ({ enabled: allowed })),
+  };
+  const svc = new NasService(prisma, {} as any, {} as any, { actorId: () => 5 } as any, {} as any, {} as any, vault, undefined, undefined, hub, entitlements);
   const create = jest
     .spyOn(svc, 'create')
     .mockImplementation(async (d: any) => ({ id: 9, shortname: d.nasName, nasIp: d.nasIp, apiPort: 8728, incomingPort: 3799 }) as any);
@@ -65,13 +69,41 @@ describe('Add router via VPN (L2TP/IPsec into Uplinko)', () => {
     expect(files['/etc/ppp/chap-secrets']).toMatch(/"uplinko-nas9" \* "[A-Za-z0-9_-]+" 10\.68\.0\.2/);
   });
 
-  it('refuses — and gives no script — while the L2TP server is not set up or the address is missing', async () => {
-    const a = makeHub({ running: false });
-    const n = makeNas(a.hub);
-    await expect(n.svc.createViaVpn({ nasName: 'x' })).rejects.toThrow(/Router VPN/);
+  it('only for companies the platform allowed Router VPN (Plans & Pricing)', async () => {
+    const n = makeNas(makeHub().hub, false);
+    await expect(n.svc.createViaVpn({ nasName: 'x' })).rejects.toBeInstanceOf(ForbiddenException);
     expect(n.create).not.toHaveBeenCalled();
-    const b = makeHub({ endpoint: '' });
-    await expect(makeNas(b.hub).svc.createViaVpn({ nasName: 'x' })).rejects.toThrow(/public IP/);
+    expect(await n.svc.vpnAvailability({})).toMatchObject({ enabled: false });
+  });
+
+  it('refuses — and gives no script — while the server software is missing', async () => {
+    const n = makeNas(makeHub({ running: false }).hub);
+    await expect(n.svc.createViaVpn({ nasName: 'x' })).rejects.toThrow(/update-jointbox\.sh/);
+    expect(n.create).not.toHaveBeenCalled();
+  });
+
+  it('the router dials what the company typed, else the address it opened Uplinko on', async () => {
+    const { hub } = makeHub({ endpoint: '' });
+    const n = makeNas(hub);
+    await expect(n.svc.createViaVpn({ nasName: 'x' })).rejects.toThrow(/public IP or hostname/);
+    const r: any = await n.svc.createViaVpn({ nasName: 'x' }, {}, '192.168.1.167');
+    expect(r.script).toContain('connect-to=192.168.1.167 ');
+    const { hub: h2 } = makeHub({ endpoint: '' });
+    const r2: any = await makeNas(h2).svc.createViaVpn({ nasName: 'y', endpointHost: 'vpn.isp.pk' }, {}, '192.168.1.167');
+    expect(r2.script).toContain('connect-to=vpn.isp.pk ');
+  });
+
+  it('the panel configures the L2TP/IPsec server itself (no platform setup step)', async () => {
+    const { hub, files } = makeHub();
+    await hub.ensureServer();
+    const psk = (await hub.psk()) as string;
+    expect(files[hub.swanConfPath]).toContain(`secret = 0s${Buffer.from(psk).toString('base64')}`);
+    expect(files[hub.xl2tpdConfPath]).toContain('local ip = 10.68.0.1');
+    expect(files[hub.pppOptionsPath]).toContain('require-mschap-v2');
+    expect(hub.run).toHaveBeenCalledWith('swanctl', ['--load-all'], 15000);
+    (hub.run as jest.Mock).mockClear();
+    expect(await hub.ensureServer()).toEqual({ changed: false }); // idempotent: no reload
+    expect(hub.run).not.toHaveBeenCalled();
   });
 
   it('removes the router again when its login cannot be created', async () => {
@@ -108,15 +140,6 @@ describe('Add router via VPN (L2TP/IPsec into Uplinko)', () => {
     await hub.provision(9, '10.68.0.2');
     hub.run = jest.fn(async () => ({ code: 0, stderr: '', stdout: JSON.stringify([{ ifname: 'ppp0', addr_info: [{ local: '10.68.0.1', address: '10.68.0.2' }] }]) }));
     expect(await hub.status(9)).toMatchObject({ online: true, tunnelIp: '10.68.0.2' });
-  });
-
-  it('the server setup carries the same PSK and server address as the router script', async () => {
-    const { hub } = makeHub();
-    const psk = (await hub.psk()) as string;
-    const s = await hub.installScript();
-    expect(s).toContain(`secret = 0s${Buffer.from(psk).toString('base64')}`);
-    expect(s).toContain('local ip = 10.68.0.1');
-    expect(s).toContain('require-mschap-v2');
   });
 
   it('escapes values that would break the RouterOS command line', () => {

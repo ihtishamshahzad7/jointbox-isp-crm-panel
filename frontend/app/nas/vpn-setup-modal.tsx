@@ -79,7 +79,7 @@ export function VpnSetupModal({ setup, headers, onClose }: {
 
           {setup.warning && (
             <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: "#FEF2F2", color: "#991B1B", fontSize: 12, lineHeight: 1.5 }}>
-              {setup.warning} The platform owner can fix this in Settings → Router VPN.
+              {setup.warning}
             </div>
           )}
 

@@ -152,6 +152,15 @@ systemctl restart postgresql
 ok "PostgreSQL ready, LAN-reachable, tuned (max_connections=300, shared_buffers=${SHARED_MB}MB)"
 
 # -----------------------------------------------------------------------------
+# Router VPN (Add router → Via VPN): remote routers dial L2TP/IPsec into this
+# server. Install the server software once; the panel writes and loads its
+# configuration itself. Never fatal — without it only that feature is off.
+if ! command -v xl2tpd >/dev/null 2>&1 || ! command -v swanctl >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xl2tpd ppp strongswan-swanctl charon-systemd >/dev/null 2>&1 \
+    || echo "WARNING: xl2tpd/strongSwan could not be installed - Add router via VPN stays unavailable."
+fi
+if command -v ufw >/dev/null 2>&1; then ufw allow 500,4500,1701/udp >/dev/null 2>&1 || true; fi
+
 step "4/10  FreeRADIUS"
 apt-get install -y -qq freeradius freeradius-postgresql freeradius-utils >/dev/null
 RAD=/etc/freeradius/3.0

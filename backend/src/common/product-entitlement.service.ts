@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService, type Actor } from './scope.service';
 
-export const PRODUCT_FEATURES = ['ai-assistant', 'crm-advanced'] as const;
+export const PRODUCT_FEATURES = ['ai-assistant', 'crm-advanced', 'router-vpn'] as const;
 export type ProductFeatureKey = (typeof PRODUCT_FEATURES)[number];
 export const isProductFeatureKey = (
   value: string,

@@ -18,14 +18,4 @@ export class PlatformVpnSettingsController {
   update(@Body() body: any, @Req() req: any) {
     return this.service.update(req.user, body);
   }
-
-  @Get('router-vpn')
-  getRouterVpn(@Req() req: any) {
-    return this.service.getRouterVpn(req.user);
-  }
-
-  @Put('router-vpn')
-  updateRouterVpn(@Body() body: any, @Req() req: any) {
-    return this.service.updateRouterVpn(req.user, body);
-  }
 }

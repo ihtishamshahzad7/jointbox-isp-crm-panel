@@ -126,6 +126,7 @@ interface Plan {
 const PRODUCT_FEATURE_LABELS: Record<string, string> = {
   "ai-assistant": "AI Assistant",
   "crm-advanced": "Advanced CRM",
+  "router-vpn": "Router VPN (L2TP)",
 };
 
 const accountsOf = (c: Company) => c.franchises + c.dealers + c.retailers + c.staff;

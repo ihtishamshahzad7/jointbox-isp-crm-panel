@@ -53,6 +53,7 @@ const FEATURE_LABEL: Record<string, string> = {
   "white-label": "White-label",
   "ai-assistant": "AI Assistant",
   "crm-advanced": "Advanced CRM",
+  "router-vpn": "Router VPN (L2TP)",
 };
 
 function token(): string {

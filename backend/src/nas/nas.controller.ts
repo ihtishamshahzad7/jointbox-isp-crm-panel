@@ -24,6 +24,10 @@ export class NasController {
    * Server state, counts and router ids only — no secret, no address book.
    * Platform account only.
    */
+  /** Can this company add routers via VPN (product allowed + server ready)? */
+  @Get('vpn/available')
+  vpnAvailable(@Req() req: any) { return this.nasService.vpnAvailability(req.user); }
+
   @Get('radius/vault')
   vaultStatus(@Req() req: { user: Actor }) {
     this.scope.assertPlatformOwner(req.user);
@@ -143,7 +147,10 @@ export class NasController {
 
   /** Add a router on a private/remote network: Uplinko issues the VPN first. */
   @Post('via-vpn')
-  createViaVpn(@Body() body: any, @Req() req: any) { return this.nasService.createViaVpn(body, req.user); }
+  createViaVpn(@Body() body: any, @Req() req: any) {
+    const host = String(req.headers?.['x-forwarded-host'] || req.hostname || '').split(',')[0].split(':')[0].trim();
+    return this.nasService.createViaVpn(body, req.user, host);
+  }
 
   @Get(':id/vpn-status')
   vpnStatus(@Param('id') id: string, @Req() req: any) { return this.nasService.vpnStatus(+id, req.user); }

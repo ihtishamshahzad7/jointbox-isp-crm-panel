@@ -232,6 +232,8 @@ export default function NasPage() {
   const [showRadiusSecret, setShowRadiusSecret] = useState(false);
   // Shown once, right after a router is added via VPN (holds the setup script).
   const [vpnSetup, setVpnSetup] = useState<VpnSetup | null>(null);
+  // Is "Add router → Via VPN" allowed for this company (Plans) and ready on the server?
+  const [vpnAvail, setVpnAvail] = useState<{ enabled: boolean; ready: boolean; reasons: string[] } | null>(null);
   const [showApiPassword, setShowApiPassword] = useState(false);
 
   // reachMap: keyed by NAS id, holds real-time status from /reachability
@@ -255,7 +257,7 @@ export default function NasPage() {
   const sessionPollRef  = useRef<NodeJS.Timeout|null>(null);
 
   const [form, setForm] = useState({
-    connection:'direct' as 'direct'|'vpn', nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
+    connection:'direct' as 'direct'|'vpn', endpointHost:'', nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
     // Link-tracing collectors (each optional, independent per NAS)
     deviceType:'MIKROTIK',
@@ -602,6 +604,21 @@ export default function NasPage() {
   };
 
   // ── Save NAS ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!showForm || editItem) return;
+    let live = true;
+    fetch(`${API}/nas/vpn/available`, { headers })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        if (!live) return;
+        setVpnAvail(b ? { enabled: !!b.enabled, ready: !!b.ready, reasons: b.reasons || [] } : null);
+        // Default the dial address to the address this company opens Uplinko on.
+        setForm((p) => (p.endpointHost ? p : { ...p, endpointHost: window.location.hostname }));
+      })
+      .catch(() => { if (live) setVpnAvail(null); });
+    return () => { live = false; };
+  }, [showForm, editItem, headers]);
+
   const saveNas = async () => {
     if (!form.nasName.trim()) { addLog('error', 'NAS Name is required'); return; }
     if (!editItem && form.connection === 'vpn') return saveNasViaVpn();
@@ -658,6 +675,7 @@ export default function NasPage() {
   // router's NAS IP becomes its tunnel address, and a setup script comes back.
   const saveNasViaVpn = async () => {
     const body = {
+      endpointHost: form.endpointHost.trim() || undefined,
       nasName: form.nasName.trim(),
       shortname: (form.shortname.trim() || form.nasName.trim()),
       secret: form.radiusSecret.trim() || undefined,
@@ -752,7 +770,7 @@ export default function NasPage() {
   };
 
   const resetForm = () => setForm({
-    connection:'direct' as 'direct'|'vpn', nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
+    connection:'direct' as 'direct'|'vpn', endpointHost:'', nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
     deviceType:'MIKROTIK', apiEnabled:true,
     snmpEnabled:false, snmpPort:161, snmpCommunity:'public', snmpVersion:'V2C', snmpPollSec:30,
@@ -762,6 +780,7 @@ export default function NasPage() {
   const openEdit = (nas: NasEntry) => {
     setForm({
       connection:  'direct',
+      endpointHost: '',
       nasName:     nas.nasname,
       shortname:   nas.shortname || nas.nasname,
       nasIp:       nas.nasIp       || '',
@@ -1733,7 +1752,10 @@ export default function NasPage() {
                     title: 'Identify',
                     hint: 'Where the router is on your network, and what to call it here.',
                     validate: () => {
-                      if (form.connection === 'vpn') return form.nasName.trim() ? null : 'Give the router a name so you can recognise it later.';
+                      if (form.connection === 'vpn') {
+                        if (!form.endpointHost.trim()) return 'Enter the Uplinko address the router will dial.';
+                        return form.nasName.trim() ? null : 'Give the router a name so you can recognise it later.';
+                      }
                       if (!form.nasIp.trim()) return 'NAS IP is required — RADIUS matches requests by this address.';
                       if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(form.nasIp.trim())) return 'That does not look like an IPv4 address (e.g. 192.168.1.127).';
                       if (!form.nasName.trim()) return 'Give the router a name so you can recognise it later.';
@@ -1742,6 +1764,7 @@ export default function NasPage() {
                     summary: () => [
                       ['Connection', form.connection === 'vpn' ? 'Via VPN (private / remote router)' : 'Direct (public IP)'],
                       ['NAS IP', form.connection === 'vpn' ? 'Assigned by Uplinko (tunnel address)' : form.nasIp],
+                      ...(form.connection === 'vpn' ? [['Router dials', form.endpointHost] as [string, string]] : []),
                       ['Name', form.nasName],
                       ['Shortname', form.shortname || form.nasName],
                       ['Type', form.nasType],
@@ -1753,19 +1776,36 @@ export default function NasPage() {
                             {([
                               ['direct', 'Direct (public IP)', 'Uplinko can reach the router at its IP. Users authenticate directly — no VPN.'],
                               ['vpn', 'Via VPN (private / remote router)', 'The router is behind NAT or on a remote private network. No IP needed — Uplinko gives you a script, the router dials an L2TP/IPsec tunnel to Uplinko, and users authenticate through it.'],
-                            ] as const).map(([v, label, help]) => (
-                              <label key={v} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'8px 10px', borderRadius:8, cursor:'pointer',
+                            ] as const).map(([v, label, help]) => {
+                              const off = v === 'vpn' && !vpnAvail?.enabled;
+                              return (
+                              <label key={v} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'8px 10px', borderRadius:8, cursor: off ? 'not-allowed' : 'pointer', opacity: off ? .55 : 1,
                                 border:`1px solid ${form.connection === v ? '#0B76A8' : t.cardBorder}`, background: form.connection === v ? 'rgba(11,118,168,.06)' : 'transparent' }}>
-                                <input type="radio" name="nas-connection" checked={form.connection === v} style={{ marginTop:3 }}
+                                <input type="radio" name="nas-connection" checked={form.connection === v} style={{ marginTop:3 }} disabled={off}
                                   onChange={() => setForm(p => ({ ...p, connection: v }))} />
                                 <span>
                                   <b style={{ fontSize:13 }}>{label}</b>
-                                  <span style={{ display:'block', fontSize:11.5, color:t.textMuted, lineHeight:1.5 }}>{help}</span>
+                                  <span style={{ display:'block', fontSize:11.5, color:t.textMuted, lineHeight:1.5 }}>
+                                    {off ? 'Not enabled for your company — ask your Uplinko provider to turn on Router VPN.' : help}
+                                  </span>
                                 </span>
                               </label>
-                            ))}
+                              );
+                            })}
                           </div>
                         </Field>
+                        {form.connection === 'vpn' && (
+                          <>
+                            <Field label="Uplinko address the router dials" required
+                              hint="The public IP or domain of this Uplinko server, as the router's site reaches it. Filled in with the address you opened Uplinko on.">
+                              <input value={form.endpointHost} placeholder="vpn.yourisp.com"
+                                onChange={e => setForm(p => ({ ...p, endpointHost: e.target.value }))} />
+                            </Field>
+                            {vpnAvail && !vpnAvail.ready && vpnAvail.reasons.map((r) => (
+                              <div key={r} style={{ fontSize:12, color:'#B45309', lineHeight:1.5 }}>{r}</div>
+                            ))}
+                          </>
+                        )}
                         {form.connection === 'direct' && (
                           <Field label="NAS IP" required hint="The router's address, with no subnet suffix.">
                             <input value={form.nasIp} placeholder="192.168.1.127"

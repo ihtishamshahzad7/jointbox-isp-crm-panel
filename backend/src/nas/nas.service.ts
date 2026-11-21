@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit, BadGatewayException, Optional } from '@nestjs/common';
 import { TunnelService } from './tunnel.service';
 import { L2tpHubService } from './l2tp-hub.service';
+import { ProductEntitlementService } from '../common/product-entitlement.service';
 import { NasL2tpClientService } from './nas-l2tp-client.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService } from '../common/scope.service';
@@ -38,6 +39,8 @@ export class NasService implements OnModuleInit {
     @Optional() private tunnels?: TunnelService,
     // "Add router via VPN": remote routers dial L2TP/IPsec into Uplinko.
     @Optional() private hub?: L2tpHubService,
+    // Router VPN is a product the platform allows per company (Plans & Pricing).
+    @Optional() private entitlements?: ProductEntitlementService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -614,8 +617,25 @@ export class NasService implements OnModuleInit {
    * The script carries the router's private key, RADIUS secret and API
    * password. It is returned ONCE and never stored in plain text.
    */
-  async createViaVpn(data: any, actor?: any) {
+  /** May this company add routers via VPN, and can the server take them? */
+  async vpnAvailability(actor?: any) {
+    const state = this.entitlements ? await this.entitlements.companyState(actor, 'router-vpn').catch(() => null) : null;
+    const enabled = !!state?.enabled;
+    if (!enabled || !this.hub)
+      return { enabled: false, ready: false, reasons: ['Router VPN is not enabled for your company. Ask your Uplinko provider to turn it on.'] };
+    const r = await this.hub.readiness();
+    return { enabled: true, ready: r.ok, reasons: r.reasons, serverIp: await this.hub.serverIp() };
+  }
+
+  async createViaVpn(data: any, actor?: any, requestHost?: string) {
     if (!this.hub) throw new BadRequestException('Router VPN is not available on this server.');
+    // Allowed per company by the platform (Plans & Pricing → Router VPN).
+    if (this.entitlements) await this.entitlements.assertEnabled(actor, 'router-vpn');
+    // The address the router dials: what the company typed, else the address
+    // it uses to open Uplinko. Routers must be able to reach this from their site.
+    const endpoint = String(data?.endpointHost ?? '').trim() || this.hub.endpointHost() || String(requestHost ?? '').trim();
+    if (!endpoint || !/^[A-Za-z0-9.-]{1,253}$/.test(endpoint))
+      throw new BadRequestException('Enter the public IP or hostname of Uplinko that the router will dial.');
     const gen = () => randomBytes(18).toString('base64url');
     const name = String(data?.nasName ?? '').trim();
     if (!name) throw new BadRequestException('Give the router a name.');
@@ -651,7 +671,7 @@ export class NasService implements OnModuleInit {
       password: login.password,
       tunnelIp,
       serverIp,
-      endpoint: this.hub.endpointHost(),
+      endpoint,
       psk: psk as string,
       radiusSecret: secret,
       apiUsername,
@@ -663,7 +683,7 @@ export class NasService implements OnModuleInit {
     return {
       ...nas,
       connection: 'vpn',
-      tunnel: { type: 'l2tp', overlayIp: tunnelIp, serverIp, applied: login.applied, warning: login.warning },
+      tunnel: { type: 'l2tp', overlayIp: tunnelIp, serverIp, endpoint, applied: login.applied, warning: login.warning },
       script,
     };
   }

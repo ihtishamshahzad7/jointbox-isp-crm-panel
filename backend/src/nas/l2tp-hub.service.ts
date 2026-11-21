@@ -56,6 +56,8 @@ export class L2tpHubService implements OnApplicationBootstrap {
   // ── overridable for tests ────────────────────────────────────────────────
   chapSecretsPath = process.env.PPP_CHAP_SECRETS || '/etc/ppp/chap-secrets';
   swanConfPath = '/etc/swanctl/conf.d/uplinko-l2tp-server.conf';
+  xl2tpdConfPath = '/etc/xl2tpd/xl2tpd.conf';
+  pppOptionsPath = '/etc/ppp/options.uplinko-l2tp';
   run = (cmd: string, args: string[], timeoutMs = 8000): Promise<CmdResult> =>
     new Promise((resolve) =>
       execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) =>
@@ -80,7 +82,11 @@ export class L2tpHubService implements OnApplicationBootstrap {
     // pppd reads chap-secrets per connection, so restoring the managed block
     // after a server rebuild is all that is needed — no daemon restart.
     setTimeout(() => {
-      this.writeSecrets().catch((e) => this.logger.warn(`L2TP hub logins not written: ${e?.message || e}`));
+      this.ensureServer()
+        .catch((e) => this.logger.warn(`L2TP server not configured: ${e?.message || e}`))
+        .finally(() =>
+          this.writeSecrets().catch((e) => this.logger.warn(`L2TP hub logins not written: ${e?.message || e}`)),
+        );
     }, 5_000).unref?.();
   }
 
@@ -180,19 +186,125 @@ export class L2tpHubService implements OnApplicationBootstrap {
   }
 
   // ── readiness ────────────────────────────────────────────────────────────
-  /** Can a router connect right now? Never hand out a script that cannot. */
+  /**
+   * Can a router connect right now? Never hand out a script that cannot.
+   * No platform step is needed: update-jointbox.sh installs the packages, and
+   * the panel writes and loads the server configuration itself.
+   */
   async readiness(): Promise<{ ok: boolean; running: boolean; reasons: string[] }> {
     const reasons: string[] = [];
-    const [xl2tpd, swan] = await Promise.all([
-      this.run('systemctl', ['is-active', '--quiet', 'xl2tpd']),
-      this.readFile(this.swanConfPath),
-    ]);
-    const running = xl2tpd.code === 0 && swan !== null;
-    if (!running)
-      reasons.push('The L2TP/IPsec server is not set up on this server yet — run the one-time setup in Settings → Router VPN.');
-    if (!this.endpointHost())
-      reasons.push("The address routers dial is not set — enter this server's public IP in Settings → Router VPN.");
-    return { ok: reasons.length === 0, running, reasons };
+    const [x, w] = await Promise.all([this.run('which', ['xl2tpd']), this.run('which', ['swanctl'])]);
+    if (x.code !== 0 || w.code !== 0) {
+      reasons.push('The VPN server software (xl2tpd + strongSwan) is not installed on this Uplinko server yet. The server administrator needs to run update-jointbox.sh once — it installs it.');
+      return { ok: false, running: false, reasons };
+    }
+    await this.ensureServer().catch((e) => reasons.push(`The VPN server could not be configured: ${e?.message || e}`));
+    const active = await this.run('systemctl', ['is-active', '--quiet', 'xl2tpd']);
+    const running = active.code === 0 && reasons.length === 0;
+    if (!running && !reasons.length) reasons.push('The VPN server (xl2tpd) is not running on this Uplinko server.');
+    return { ok: running, running, reasons };
+  }
+
+  /**
+   * Write the L2TP/IPsec server configuration and load it. Idempotent: files
+   * are only rewritten when their content changes, and services are only
+   * reloaded then.
+   */
+  async ensureServer(): Promise<{ changed: boolean }> {
+    const files = await this.serverFiles();
+    let swanChanged = false;
+    let l2tpChanged = false;
+    for (const f of files) {
+      if ((await this.readFile(f.path)) === f.content) continue;
+      await this.writeFileAtomic(f.path, f.content);
+      if (f.path === this.swanConfPath) swanChanged = true;
+      else l2tpChanged = true;
+    }
+    if (swanChanged) {
+      await this.run('systemctl', ['enable', '--now', 'strongswan']);
+      const r = await this.run('swanctl', ['--load-all'], 15_000);
+      if (r.code !== 0) throw new Error(`swanctl --load-all failed: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
+    }
+    if (l2tpChanged) {
+      await this.run('systemctl', ['enable', 'xl2tpd']);
+      const r = await this.run('systemctl', ['restart', 'xl2tpd'], 15_000);
+      if (r.code !== 0) throw new Error(`xl2tpd did not start: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
+    }
+    if (swanChanged || l2tpChanged) this.logger.log('L2TP/IPsec server configuration written and loaded');
+    return { changed: swanChanged || l2tpChanged };
+  }
+
+  private async serverFiles(): Promise<Array<{ path: string; content: string }>> {
+    const psk = (await this.psk()) as string;
+    const serverIp = await this.serverIp();
+    const pskB64 = Buffer.from(psk).toString('base64');
+    return [
+      {
+        path: this.swanConfPath,
+        content: [
+          '# Uplinko — L2TP/IPsec server for remote routers (managed by Uplinko)',
+          'connections {',
+          '  uplinko-l2tp-server {',
+          '    version = 1',
+          '    proposals = aes256-sha256-modp2048,aes256-sha1-modp2048,aes128-sha1-modp2048,aes256-sha1-modp1024,aes128-sha1-modp1024,3des-sha1-modp1024',
+          '    local { auth = psk }',
+          '    remote { auth = psk }',
+          '    children {',
+          '      l2tp {',
+          '        mode = transport',
+          '        local_ts = dynamic[udp/1701]',
+          '        remote_ts = dynamic[udp]',
+          '        esp_proposals = aes256-sha1,aes128-sha1,aes256-sha256,3des-sha1',
+          '      }',
+          '    }',
+          '  }',
+          '}',
+          'secrets {',
+          '  ike-uplinko-l2tp-server {',
+          `    secret = 0s${pskB64}`,
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: this.pppOptionsPath,
+        content: [
+          '# Uplinko — options for routers dialling in (managed by Uplinko)',
+          'require-mschap-v2',
+          'refuse-pap',
+          'refuse-chap',
+          'refuse-mschap',
+          'noccp',
+          'nodefaultroute',
+          'noproxyarp',
+          'mtu 1400',
+          'mru 1400',
+          'lcp-echo-interval 20',
+          'lcp-echo-failure 4',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: this.xl2tpdConfPath,
+        content: [
+          '; Uplinko — L2TP server for remote routers (managed by Uplinko)',
+          '[global]',
+          'port = 1701',
+          '',
+          '[lns default]',
+          `local ip = ${serverIp}`,
+          'assign ip = no',
+          'require chap = yes',
+          'refuse pap = yes',
+          'require authentication = yes',
+          'name = uplinko',
+          `pppoptfile = ${this.pppOptionsPath}`,
+          'length bit = yes',
+          '',
+        ].join('\n'),
+      },
+    ];
   }
 
   // ── per-router logins ────────────────────────────────────────────────────
@@ -263,78 +375,6 @@ export class L2tpHubService implements OnApplicationBootstrap {
   }
 
   // ── generated text ───────────────────────────────────────────────────────
-  /** One-time server setup (root). Shown to the platform owner in Settings. */
-  async installScript(): Promise<string> {
-    const psk = (await this.psk()) as string;
-    const serverIp = await this.serverIp();
-    const pskB64 = Buffer.from(psk).toString('base64');
-    return [
-      '#!/usr/bin/env bash',
-      '# Uplinko — L2TP/IPsec server for remote routers. Run once, as root.',
-      'set -e',
-      'apt-get update -y && apt-get install -y xl2tpd ppp strongswan-swanctl charon-systemd',
-      'install -d -m 0700 /etc/swanctl/conf.d',
-      `cat > ${this.swanConfPath} <<'EOF'`,
-      'connections {',
-      '  uplinko-l2tp-server {',
-      '    version = 1',
-      '    proposals = aes256-sha256-modp2048,aes256-sha1-modp2048,aes128-sha1-modp2048,aes256-sha1-modp1024,aes128-sha1-modp1024,3des-sha1-modp1024',
-      '    local { auth = psk }',
-      '    remote { auth = psk }',
-      '    children {',
-      '      l2tp {',
-      '        mode = transport',
-      '        local_ts = dynamic[udp/1701]',
-      '        remote_ts = dynamic[udp]',
-      '        esp_proposals = aes256-sha1,aes128-sha1,aes256-sha256,3des-sha1',
-      '      }',
-      '    }',
-      '  }',
-      '}',
-      'secrets {',
-      '  ike-uplinko-l2tp-server {',
-      `    secret = 0s${pskB64}`,
-      '  }',
-      '}',
-      'EOF',
-      `chmod 600 ${this.swanConfPath}`,
-      "cat > /etc/ppp/options.uplinko-l2tp <<'EOF'",
-      'require-mschap-v2',
-      'refuse-pap',
-      'refuse-chap',
-      'refuse-mschap',
-      'noccp',
-      'nodefaultroute',
-      'noproxyarp',
-      'mtu 1400',
-      'mru 1400',
-      'lcp-echo-interval 20',
-      'lcp-echo-failure 4',
-      'EOF',
-      "cat > /etc/xl2tpd/xl2tpd.conf <<'EOF'",
-      '[global]',
-      'port = 1701',
-      '',
-      '[lns default]',
-      `local ip = ${serverIp}`,
-      'assign ip = no',
-      'require chap = yes',
-      'refuse pap = yes',
-      'require authentication = yes',
-      'name = uplinko',
-      'pppoptfile = /etc/ppp/options.uplinko-l2tp',
-      'length bit = yes',
-      'EOF',
-      'touch /etc/ppp/chap-secrets && chmod 600 /etc/ppp/chap-secrets',
-      'systemctl enable --now strongswan || systemctl enable --now strongswan-swanctl',
-      'swanctl --load-all',
-      'systemctl enable xl2tpd && systemctl restart xl2tpd',
-      'ufw allow 500,4500/udp 2>/dev/null || true; ufw allow 1701/udp 2>/dev/null || true',
-      'echo "L2TP/IPsec server ready. Go back to Settings → Router VPN and click Check again."',
-      '',
-    ].join('\n');
-  }
-
   /** Everything the router needs, in one paste (RouterOS 6.4x or 7). */
   routerScript(o: {
     name: string;
