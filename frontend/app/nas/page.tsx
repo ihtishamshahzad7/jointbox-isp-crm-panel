@@ -56,6 +56,7 @@ const NAS_TOOLBAR_CSS = `
 import { NasTraffic } from "./nas-traffic";
 import { SkeletonTable } from "../components/skeleton";
 import { NasAccordion } from "./nas-accordion";
+import { VpnSetupModal, type VpnSetup } from "./vpn-setup-modal";
 import { RecordNotes } from "../components/record-notes";
 import { silent } from "../components/silent";
 
@@ -229,6 +230,8 @@ export default function NasPage() {
   const [showGroups, setShowGroups] = useState(false);
   const [groupOptions, setGroupOptions] = useState<Array<{ id: number; name: string; color: string | null }>>([]);
   const [showRadiusSecret, setShowRadiusSecret] = useState(false);
+  // Shown once, right after a router is added via VPN (holds the setup script).
+  const [vpnSetup, setVpnSetup] = useState<VpnSetup | null>(null);
   const [showApiPassword, setShowApiPassword] = useState(false);
 
   // reachMap: keyed by NAS id, holds real-time status from /reachability
@@ -252,7 +255,7 @@ export default function NasPage() {
   const sessionPollRef  = useRef<NodeJS.Timeout|null>(null);
 
   const [form, setForm] = useState({
-    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
+    connection:'direct' as 'direct'|'vpn', nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
     // Link-tracing collectors (each optional, independent per NAS)
     deviceType:'MIKROTIK',
@@ -601,6 +604,7 @@ export default function NasPage() {
   // ── Save NAS ───────────────────────────────────────────────────────
   const saveNas = async () => {
     if (!form.nasName.trim()) { addLog('error', 'NAS Name is required'); return; }
+    if (!editItem && form.connection === 'vpn') return saveNasViaVpn();
     if (!form.nasIp.trim())   { addLog('error', 'NAS IP is required'); return; }
     if (!form.radiusSecret.trim()) { addLog('error', 'RADIUS Secret is required'); return; }
     const ipOk = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(form.nasIp.trim());
@@ -648,6 +652,48 @@ export default function NasPage() {
       addLog('error', `Network error: ${e.message}`);
       throw e;
     }
+  };
+
+  // Router on a private/remote network: Uplinko issues the VPN first, the
+  // router's NAS IP becomes its tunnel address, and a setup script comes back.
+  const saveNasViaVpn = async () => {
+    const body = {
+      nasName: form.nasName.trim(),
+      shortname: (form.shortname.trim() || form.nasName.trim()),
+      secret: form.radiusSecret.trim() || undefined,
+      nasType: form.nasType,
+      apiPort: Number(form.apiPort),
+      incomingPort: Number(form.incomingPort),
+      nasIdentifier: form.nasIdentifier.trim(),
+      apiUsername: form.apiUsername.trim() || undefined,
+      apiPassword: form.apiPassword.trim() || undefined,
+      description: form.description.trim() || undefined,
+      isActive: form.isActive,
+      deviceType: form.deviceType,
+      apiEnabled: form.apiEnabled,
+      snmpEnabled: form.snmpEnabled,
+      snmpPort: Number(form.snmpPort),
+      snmpCommunity: form.snmpCommunity.trim() || 'public',
+      snmpVersion: form.snmpVersion,
+      snmpPollSec: Number(form.snmpPollSec),
+    };
+    const res = await fetch(`${API}/nas/via-vpn`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      const msg = Array.isArray(data?.message) ? data.message.join(' ') : data?.message;
+      addLog('error', `Add via VPN failed: ${msg || 'Unknown error'}`);
+      throw new Error(msg || `Add via VPN failed (HTTP ${res.status})`);
+    }
+    addLog('info', `NAS "${body.nasName}" added via VPN on ${data?.tunnel?.overlayIp}`);
+    reportRadiusSync(data?.radiusSync, body.nasName);
+    setVpnSetup({
+      nasId: data.id,
+      name: body.nasName,
+      overlayIp: data.tunnel?.overlayIp,
+      script: data.script,
+      warning: data.tunnel?.warning,
+    });
+    setShowForm(false); setEditItem(null); resetForm(); await loadData();
   };
 
   const deleteNas = async (id: number) => {
@@ -706,7 +752,7 @@ export default function NasPage() {
   };
 
   const resetForm = () => setForm({
-    nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
+    connection:'direct' as 'direct'|'vpn', nasName:'', shortname:'', nasIp:'', radiusSecret:'', nasType:'MIKROTIK', nasIdentifier:'',
     apiPort:8728, incomingPort:3799, apiUsername:'', apiPassword:'', description:'', isActive:true,
     deviceType:'MIKROTIK', apiEnabled:true,
     snmpEnabled:false, snmpPort:161, snmpCommunity:'public', snmpVersion:'V2C', snmpPollSec:30,
@@ -715,6 +761,7 @@ export default function NasPage() {
   // FIX: populate form with actual stored ports from the NAS record
   const openEdit = (nas: NasEntry) => {
     setForm({
+      connection:  'direct',
       nasName:     nas.nasname,
       shortname:   nas.shortname || nas.nasname,
       nasIp:       nas.nasIp       || '',
@@ -1650,6 +1697,10 @@ export default function NasPage() {
         </div></Portal>
       )}
 
+      {vpnSetup && (
+        <VpnSetupModal setup={vpnSetup} headers={headers} onClose={() => setVpnSetup(null)} />
+      )}
+
       {showForm && (
         <Portal><div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setShowForm(false)}>
@@ -1674,7 +1725,7 @@ export default function NasPage() {
               <Wizard
                 busy={false}
                 onCancel={() => setShowForm(false)}
-                finishLabel="Add router"
+                finishLabel={form.connection === 'vpn' ? 'Add router & get VPN script' : 'Add router'}
                 onFinish={saveNas}
                 steps={[
                   {
@@ -1682,23 +1733,45 @@ export default function NasPage() {
                     title: 'Identify',
                     hint: 'Where the router is on your network, and what to call it here.',
                     validate: () => {
+                      if (form.connection === 'vpn') return form.nasName.trim() ? null : 'Give the router a name so you can recognise it later.';
                       if (!form.nasIp.trim()) return 'NAS IP is required — RADIUS matches requests by this address.';
                       if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(form.nasIp.trim())) return 'That does not look like an IPv4 address (e.g. 192.168.1.127).';
                       if (!form.nasName.trim()) return 'Give the router a name so you can recognise it later.';
                       return null;
                     },
                     summary: () => [
-                      ['NAS IP', form.nasIp],
+                      ['Connection', form.connection === 'vpn' ? 'Via VPN (private / remote router)' : 'Direct (public IP)'],
+                      ['NAS IP', form.connection === 'vpn' ? 'Assigned by Uplinko (tunnel address)' : form.nasIp],
                       ['Name', form.nasName],
                       ['Shortname', form.shortname || form.nasName],
                       ['Type', form.nasType],
                     ],
                     render: () => (
                       <>
-                        <Field label="NAS IP" required hint="The router's address, with no subnet suffix.">
-                          <input value={form.nasIp} placeholder="192.168.1.127"
-                            onChange={e => setForm(p => ({ ...p, nasIp: e.target.value }))} />
+                        <Field label="How does Uplinko reach this router?" required>
+                          <div style={{ display:'grid', gap:8 }}>
+                            {([
+                              ['direct', 'Direct (public IP)', 'Uplinko can reach the router at its IP. Users authenticate directly — no VPN.'],
+                              ['vpn', 'Via VPN (private / remote router)', 'The router is behind NAT or on a remote private network. No IP needed — Uplinko gives you a script, the router dials in, and users authenticate through the tunnel.'],
+                            ] as const).map(([v, label, help]) => (
+                              <label key={v} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'8px 10px', borderRadius:8, cursor:'pointer',
+                                border:`1px solid ${form.connection === v ? '#0B76A8' : t.cardBorder}`, background: form.connection === v ? 'rgba(11,118,168,.06)' : 'transparent' }}>
+                                <input type="radio" name="nas-connection" checked={form.connection === v} style={{ marginTop:3 }}
+                                  onChange={() => setForm(p => ({ ...p, connection: v }))} />
+                                <span>
+                                  <b style={{ fontSize:13 }}>{label}</b>
+                                  <span style={{ display:'block', fontSize:11.5, color:t.textMuted, lineHeight:1.5 }}>{help}</span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
                         </Field>
+                        {form.connection === 'direct' && (
+                          <Field label="NAS IP" required hint="The router's address, with no subnet suffix.">
+                            <input value={form.nasIp} placeholder="192.168.1.127"
+                              onChange={e => setForm(p => ({ ...p, nasIp: e.target.value }))} />
+                          </Field>
+                        )}
                         <Field label="Name" required hint="Shown throughout the panel.">
                           <input value={form.nasName} placeholder="Main-MikroTik"
                             onChange={e => setForm(p => ({ ...p, nasName: e.target.value }))} />
@@ -1720,6 +1793,7 @@ export default function NasPage() {
                     title: 'RADIUS',
                     hint: 'The shared secret is the single most common cause of authentication failing. It must match the router exactly.',
                     validate: () => {
+                      if (form.connection === 'vpn' && !form.radiusSecret) return null; // generated and put in the setup script
                       if (!form.radiusSecret.trim()) return 'The RADIUS secret is required — without it every login is rejected.';
                       if (form.radiusSecret !== form.radiusSecret.trim()) return 'The secret has leading or trailing spaces. Those are invisible here and break authentication on the router.';
                       return null;
@@ -1730,8 +1804,8 @@ export default function NasPage() {
                     ],
                     render: () => (
                       <>
-                        <Field label="RADIUS secret" required
-                          hint="Must be identical to the secret configured on the router.">
+                        <Field label="RADIUS secret" required={form.connection !== 'vpn'}
+                          hint={form.connection === 'vpn' ? 'Leave blank to generate one — the setup script configures it on the router for you.' : 'Must be identical to the secret configured on the router.'}>
                           <input type={showRadiusSecret ? 'text' : 'password'} value={form.radiusSecret}
                             onChange={e => setForm(p => ({ ...p, radiusSecret: e.target.value }))} />
                         </Field>
@@ -1765,11 +1839,11 @@ export default function NasPage() {
                           <input type="number" value={form.apiPort}
                             onChange={e => setForm(p => ({ ...p, apiPort: +e.target.value }))} />
                         </Field>
-                        <Field label="API username" hint="Needs read access, plus write to disconnect sessions.">
+                        <Field label="API username" hint={form.connection === 'vpn' ? 'Leave blank for "uplinko" — the setup script creates this user on the router.' : 'Needs read access, plus write to disconnect sessions.'}>
                           <input value={form.apiUsername} placeholder="admin"
                             onChange={e => setForm(p => ({ ...p, apiUsername: e.target.value }))} />
                         </Field>
-                        <Field label="API password">
+                        <Field label="API password" hint={form.connection === 'vpn' ? 'Leave blank to generate one.' : undefined}>
                           <input type={showApiPassword ? 'text' : 'password'} value={form.apiPassword}
                             onChange={e => setForm(p => ({ ...p, apiPassword: e.target.value }))} />
                         </Field>

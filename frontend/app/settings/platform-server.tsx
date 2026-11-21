@@ -121,6 +121,132 @@ const CHECKS = [
 ];
 
 
+type RouterVpn = {
+  endpointHost: string;
+  port: number;
+  subnet: string;
+  serverIp: string | null;
+  running: boolean;
+  ready: boolean;
+  routers: number;
+  install: string;
+};
+
+/**
+ * Router VPN — the WireGuard hub that remote routers ("Add router → Via VPN")
+ * dial into. Where they dial and the tunnel network are set here; no .env.
+ */
+function RouterVpnPanel() {
+  const [v, setV] = useState<RouterVpn | null>(null);
+  const [err, setErr] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("51820");
+  const [subnet, setSubnet] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
+  const [msg, setMsg] = useState<{ tone: Tone; text: string } | null>(null);
+
+  const fill = (b: RouterVpn) => {
+    setV(b);
+    setHost(b.endpointHost || "");
+    setPort(String(b.port || 51820));
+    setSubnet(b.subnet || "");
+  };
+
+  useEffect(() => {
+    getJson("/platform/router-vpn").then(({ ok, body }) => {
+      if (ok && body) fill(body);
+      else setErr(body?.message || "Could not load the router VPN settings.");
+    });
+  }, []);
+
+  const save = async () => {
+    setMsg(null);
+    setBusy(true);
+    const { ok, body } = await getJson("/platform/router-vpn", {
+      method: "PUT",
+      body: JSON.stringify({ endpointHost: host.trim(), port: Number(port), subnet: subnet.trim() }),
+    });
+    setBusy(false);
+    if (!ok) {
+      const m = body?.message;
+      setMsg({ tone: "bad", text: Array.isArray(m) ? m.join(" ") : m || "Could not save." });
+      return;
+    }
+    fill(body);
+    setMsg({ tone: body.ready ? "ok" : "warn", text: body.ready ? "Saved — routers can connect." : "Saved. The VPN hub is not running yet on this server — see the one-time setup below." });
+  };
+
+  const tone = !v ? "" : v.ready ? s.okText : s.warnText;
+  return (
+    <div className={`${s.panel} ${s.wide}`}>
+      <div className={s.head}>
+        <div>
+          <div className={s.eyebrow}>Installation</div>
+          <h3>Router VPN (remote routers)</h3>
+        </div>
+        {v && (
+          <span className={`${s.faint} ${tone}`}>
+            {v.ready ? "Ready" : v.running ? "Running · address needed" : "Not running"} · {v.routers} router{v.routers === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      <p className={s.lede}>
+        Routers on a private or remote network are added with <b>Add router → Via VPN</b>. They dial in to this server,
+        and their users authenticate through the tunnel. Set the address routers dial here.
+      </p>
+      {err ? (
+        <p className={`${s.note} ${s.badText}`}>{err}</p>
+      ) : !v ? (
+        <p className={s.faint}>Loading…</p>
+      ) : (
+        <>
+          <div className={s.form}>
+            <label className={s.field} htmlFor="ps-rvpn-host">
+              <span className={s.fieldLabel}>Address routers dial (public IP or hostname)</span>
+              <input id="ps-rvpn-host" className={s.input} value={host} maxLength={253} placeholder="vpn.yourdomain.com"
+                onChange={(e) => setHost(e.target.value)} />
+            </label>
+            <label className={s.field} htmlFor="ps-rvpn-port">
+              <span className={s.fieldLabel}>UDP port</span>
+              <input id="ps-rvpn-port" className={s.input} value={port} maxLength={5} inputMode="numeric"
+                onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} />
+            </label>
+            <label className={s.field} htmlFor="ps-rvpn-subnet">
+              <span className={s.fieldLabel}>Tunnel network</span>
+              <input id="ps-rvpn-subnet" className={s.input} value={subnet} maxLength={18} placeholder="10.66.0.0/24"
+                disabled={v.routers > 0} onChange={(e) => setSubnet(e.target.value)} />
+            </label>
+            <button type="button" className={`${s.action} ${s.primary}`} onClick={() => void save()} disabled={busy}>
+              {busy ? "Saving…" : "Save router VPN"}
+            </button>
+          </div>
+          {v.routers > 0 && (
+            <p className={s.note}>The tunnel network is locked while routers use it ({v.serverIp} is this server inside the tunnel).</p>
+          )}
+          {!v.running && (
+            <>
+              <p className={`${s.note} ${s.warnText}`}>
+                The VPN hub (WireGuard) is not running on this server yet. This is a one-time setup that needs root on the
+                server.{" "}
+                <button type="button" className={s.action} onClick={() => setShowInstall((x) => !x)}>
+                  {showInstall ? "Hide setup" : "Show one-time setup"}
+                </button>
+              </p>
+              {showInstall && (
+                <pre className={s.note} style={{ background: "#0F172A", color: "#E2E8F0", padding: 12, borderRadius: 8, overflowX: "auto", whiteSpace: "pre" }}>
+                  {v.install}
+                </pre>
+              )}
+            </>
+          )}
+          {msg && <p className={`${s.note} ${msg.tone === "bad" ? s.badText : msg.tone === "warn" ? s.warnText : s.okText}`}>{msg.text}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 type VpnSettings = {
   mgmtEnabled: boolean;
   publicIp: string | null;
@@ -438,6 +564,8 @@ export default function PlatformServer() {
           })}
         </div>
       </div>
+
+      <RouterVpnPanel />
 
       <MgmtVpnPanel />
 

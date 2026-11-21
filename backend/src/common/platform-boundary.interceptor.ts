@@ -57,6 +57,8 @@ export const PLATFORM_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ['*', 'platform/plans'],
   // NAS management VPN switch + server public IP (the service checks the role too)
   ['*', 'platform/vpn-settings'],
+  // Router VPN hub: where remote routers dial in (the service checks the role too)
+  ['*', 'platform/router-vpn'],
   ['*', 'platform/plans/:id'],
   ['POST', 'platform/plans/:id/apply'],
   ['*', 'platform/companies/:id/profile'],

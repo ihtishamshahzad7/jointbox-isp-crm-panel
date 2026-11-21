@@ -81,3 +81,30 @@ describe('PlatformVpnSettingsService (web settings for the NAS management VPN)',
     expect(isPlatformRoute('PUT', 'platform/vpn-settings')).toBe(true);
   });
 });
+
+describe('Router VPN settings (where remote routers dial in)', () => {
+  function mk(tunnels: number) {
+    const prisma: any = { nasTunnel: { count: jest.fn(async () => tunnels) }, platformVpnSettings: { findUnique: jest.fn(async () => null) } };
+    let cfg: any = { endpointHost: '', wireguard: { port: 51820, subnet: '10.66.0.0/24' } };
+    const vpn: any = {
+      getConfig: () => cfg,
+      setConfig: jest.fn((b: any) => { cfg = { ...cfg, ...b, wireguard: { ...cfg.wireguard, ...(b.wireguard || {}) } }; return cfg; }),
+      overview: async () => ({ endpointHost: cfg.endpointHost, servers: [{ type: 'wireguard', listenPort: cfg.wireguard.port, subnet: cfg.wireguard.subnet, serverIp: '10.66.0.1', running: true, ready: !!cfg.endpointHost, install: 'x' }] }),
+    };
+    return { svc: new PlatformVpnSettingsService(prisma, {} as any, vpn), vpn };
+  }
+  it('platform account only', async () => {
+    await expect(mk(0).svc.getRouterVpn({ role: 'ADMIN' })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+  it('saves the dial-in address from the web panel', async () => {
+    const { svc } = mk(0);
+    const r = await svc.updateRouterVpn(SA, { endpointHost: 'vpn.example.net', port: 51820 });
+    expect(r).toMatchObject({ endpointHost: 'vpn.example.net', ready: true });
+  });
+  it('locks the tunnel network while routers use it', async () => {
+    await expect(mk(2).svc.updateRouterVpn(SA, { subnet: '10.77.0.0/24' })).rejects.toThrow(/locked/);
+  });
+  it('the route passes the platform-account boundary', () => {
+    expect(isPlatformRoute('PUT', routeTemplate('platform', 'router-vpn'))).toBe(true);
+  });
+});

@@ -1,4 +1,6 @@
+import { randomBytes } from 'crypto';
 import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit, BadGatewayException, Optional } from '@nestjs/common';
+import { TunnelService } from './tunnel.service';
 import { NasL2tpClientService } from './nas-l2tp-client.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService } from '../common/scope.service';
@@ -32,6 +34,8 @@ export class NasService implements OnModuleInit {
     // existing unit tests that construct NasService by hand keep working; in
     // the application it is always provided by NasModule.
     @Optional() private l2tpClient?: NasL2tpClientService,
+    // "Add router via VPN": allocates the router's tunnel address and keys.
+    @Optional() private tunnels?: TunnelService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -594,6 +598,67 @@ export class NasService implements OnModuleInit {
     return { ...sanitizeNas(nas), radiusSync };
   }
 
+  /**
+   * ADD ROUTER VIA VPN — for a router on a private/remote network that Uplinko
+   * cannot reach directly.
+   *
+   * No IP is asked for: Uplinko gives the router a tunnel address, registers
+   * the router with THAT address as its NAS IP (so FreeRADIUS matches requests
+   * that arrive through the tunnel, and API/CoA go back through it), issues
+   * WireGuard keys, and returns one script to paste into the router. If the
+   * tunnel cannot be issued, the router is removed again — nothing half-made
+   * is left behind.
+   *
+   * The script carries the router's private key, RADIUS secret and API
+   * password. It is returned ONCE and never stored in plain text.
+   */
+  async createViaVpn(data: any, actor?: any) {
+    if (!this.tunnels) throw new BadRequestException('Router VPN is not available on this server.');
+    const gen = () => randomBytes(18).toString('base64url');
+    const name = String(data?.nasName ?? '').trim();
+    if (!name) throw new BadRequestException('Give the router a name.');
+    const secret = String(data?.secret ?? '').trim() || gen();
+    const apiUsername = String(data?.apiUsername ?? '').trim() || 'uplinko';
+    if (!/^[A-Za-z0-9_.-]{1,32}$/.test(apiUsername))
+      throw new BadRequestException('API username may use letters, numbers, dot, dash and underscore (max 32).');
+    const apiPassword = String(data?.apiPassword ?? '').trim() || gen();
+    if (/["\\?$]/.test(apiPassword))
+      throw new BadRequestException('API password cannot contain quotes, backslash, $ or ?. Leave it blank to generate one.');
+
+    const overlayIp = await this.tunnels.nextOverlayIp();
+    const nas: any = await this.create(
+      { ...data, nasName: name, nasIp: overlayIp, secret, apiUsername, apiPassword, apiEnabled: data?.apiEnabled ?? true },
+      actor,
+    );
+    let tunnel;
+    try {
+      tunnel = await this.tunnels.provision(nas.id, { createdBy: actor ? this.scope.actorId(actor) : null, overlayIp });
+    } catch (e) {
+      await this.prisma.nas.delete({ where: { id: nas.id } }).catch(() => null);
+      await this.radiusVault.apply('nas-delete').catch(() => null);
+      throw e;
+    }
+    const script = this.tunnels.routerSetupScript({
+      name: nas.shortname || name,
+      privateKey: tunnel.privateKey,
+      overlayIp,
+      serverPub: tunnel.serverPublicKey || null,
+      endpoint: tunnel.serverEndpoint,
+      radiusSecret: secret,
+      apiUsername,
+      apiPassword,
+      apiPort: nas.apiPort ?? 8728,
+      coaPort: nas.incomingPort ?? 3799,
+    });
+    this.logger.log(`NAS "${name}" added via VPN on ${overlayIp}`);
+    return {
+      ...nas,
+      connection: 'vpn',
+      tunnel: { overlayIp, serverEndpoint: tunnel.serverEndpoint, applied: tunnel.applied, warning: tunnel.warning },
+      script,
+    };
+  }
+
   async update(id: number, data: {
     nasIp?: string; nasName?: string; secret?: string;
     shortname?: string;
@@ -719,6 +784,9 @@ export class NasService implements OnModuleInit {
       // Management VPN: stop and remove THIS NAS's host tunnel first. If that
       // cannot be verified the NAS is not deleted (no silent orphans).
       const mgmtVpn = this.l2tpClient ? await this.l2tpClient.cleanupForNasDeletion(id) : null;
+      // Router VPN (WireGuard): drop the peer from the server, so a deleted
+      // router's keys stop working at once (the row itself cascades).
+      if (this.tunnels) await this.tunnels.revoke(id).catch((e) => this.logger.warn(`Tunnel revoke for NAS #${id}: ${e?.message || e}`));
 
       this.logger.log(`Deleting NAS "${nas.nasname}" (ID: ${id})`);
       this.logger.log(`  - ${nas._count.networkLogs} network logs to delete`);

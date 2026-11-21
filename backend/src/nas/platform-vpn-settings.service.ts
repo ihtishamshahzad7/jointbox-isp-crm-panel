@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
+import { VpnService } from '../vpn/vpn.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { checkAddressing, isIpv4, loadPolicy } from './l2tp-address-policy';
 import { L2tpClientDialer } from './l2tp-client-dialer.service';
@@ -22,7 +23,50 @@ export class PlatformVpnSettingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly dialer: L2tpClientDialer,
+    @Optional() private readonly vpn?: VpnService,
   ) {}
+
+  // ── Router VPN (WireGuard hub that remote routers dial into) ─────────────
+  /** Settings → Router VPN: where routers dial, and whether the hub is up. */
+  async getRouterVpn(actor: any) {
+    this.platformOnly(actor);
+    if (!this.vpn) throw new BadRequestException('Router VPN is not available on this server.');
+    const o = await this.vpn.overview();
+    const wg: any = o.servers.find((x: any) => x.type === 'wireguard');
+    const routers = await (this.prisma as any).nasTunnel?.count?.().catch(() => 0) ?? 0;
+    return {
+      endpointHost: o.endpointHost || '',
+      port: wg?.listenPort ?? 51820,
+      subnet: wg?.subnet ?? '10.66.0.0/24',
+      serverIp: wg?.serverIp ?? null,
+      running: !!wg?.running,
+      ready: !!wg?.ready,
+      routers,
+      install: wg?.install ?? '',
+    };
+  }
+
+  async updateRouterVpn(actor: any, body: { endpointHost?: string; port?: number; subnet?: string }) {
+    this.platformOnly(actor);
+    if (!this.vpn) throw new BadRequestException('Router VPN is not available on this server.');
+    const b = body && typeof body === 'object' ? body : {};
+    const cur = this.vpn.getConfig();
+    if (b.subnet !== undefined && String(b.subnet).trim() !== cur.wireguard.subnet) {
+      const n = await (this.prisma as any).nasTunnel.count();
+      if (n > 0)
+        throw new BadRequestException(
+          `${n} router(s) already use addresses in ${cur.wireguard.subnet}. Changing the tunnel network would cut them off, so it is locked while routers are connected.`,
+        );
+    }
+    const wireguard: Record<string, unknown> = {};
+    if (b.port !== undefined) wireguard.port = b.port;
+    if (b.subnet !== undefined) wireguard.subnet = String(b.subnet).trim();
+    this.vpn.setConfig({
+      ...(b.endpointHost !== undefined ? { endpointHost: b.endpointHost } : {}),
+      ...(Object.keys(wireguard).length ? { wireguard } : {}),
+    });
+    return this.getRouterVpn(actor);
+  }
 
   private platformOnly(actor: any) {
     if (actor?.role !== 'SUPER_ADMIN') {

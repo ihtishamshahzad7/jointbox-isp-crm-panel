@@ -1,5 +1,7 @@
 import {
   Injectable,
+  OnApplicationBootstrap,
+  Optional,
   Logger,
   NotFoundException,
   BadRequestException,
@@ -8,6 +10,7 @@ import {
 import { execFile } from 'child_process';
 import { createPrivateKey, createPublicKey, generateKeyPairSync } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { VpnService } from '../vpn/vpn.service';
 
 /**
  * WIREGUARD MANAGEMENT TUNNELS — reaching a router that has no public address.
@@ -92,24 +95,51 @@ export type TunnelConfig = {
 };
 
 @Injectable()
-export class TunnelService {
+export class TunnelService implements OnApplicationBootstrap {
   private readonly logger = new Logger(TunnelService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // Web settings (Settings → Router VPN). Optional so hand-built test
+    // instances keep working; without it the environment is used.
+    @Optional() private vpn?: VpnService,
+  ) {}
 
-  // ── configuration ────────────────────────────────────────────
+  /**
+   * After a reboot the kernel has no peers, so every tunnel would stay down
+   * until someone pressed Reconcile. Re-apply them once at start-up, from one
+   * PM2 worker only (wg set is idempotent, but there is no need to run it 7×).
+   */
+  onApplicationBootstrap() {
+    const inst = process.env.NODE_APP_INSTANCE;
+    if (process.env.NODE_ENV === 'test' || (inst !== undefined && inst !== '0')) return;
+    setTimeout(() => {
+      this.reconcile().catch((e) =>
+        this.logger.warn(`Start-up tunnel reconcile failed: ${e?.message || e}`),
+      );
+    }, 5_000).unref?.();
+  }
+
+  // ── configuration (web settings first, environment as fallback) ─────────
+  private webCfg() {
+    try {
+      return this.vpn?.getConfig() ?? null;
+    } catch {
+      return null;
+    }
+  }
   private get iface() {
     return process.env.WG_INTERFACE || 'wg0';
   }
   /** The /24 the overlay lives in. .1 is the panel itself. */
   private get subnet() {
-    return process.env.WG_SUBNET || '10.66.0.0/24';
+    return this.webCfg()?.wireguard?.subnet || process.env.WG_SUBNET || '10.66.0.0/24';
   }
   private get listenPort() {
-    return Number(process.env.WG_LISTEN_PORT || 51820);
+    return Number(this.webCfg()?.wireguard?.port || process.env.WG_LISTEN_PORT || 51820);
   }
   private get endpointHost() {
-    return process.env.WG_ENDPOINT_HOST || '';
+    return this.webCfg()?.endpointHost || process.env.WG_ENDPOINT_HOST || '';
   }
   private get keepalive() {
     return Number(process.env.WG_KEEPALIVE || 25);
@@ -183,7 +213,7 @@ export class TunnelService {
    * Reusing the lowest free host also keeps the range readable for an operator
    * looking at a routing table.
    */
-  private async nextOverlayIp(): Promise<string> {
+  async nextOverlayIp(): Promise<string> {
     const [base, bitsRaw] = this.subnet.split('/');
     const bits = Number(bitsRaw || 24);
     this.assertIp(base);
@@ -202,6 +232,11 @@ export class TunnelService {
         (t) => t.overlayIp,
       ),
     );
+    // A router added "via VPN" holds its overlay address as its NAS IP before
+    // the tunnel row exists — never hand that address to a second router.
+    const nasRows: Array<{ nasIp: string | null }> =
+      ((await (this.prisma as any).nas?.findMany?.({ select: { nasIp: true } })) as any) ?? [];
+    for (const n of nasRows) if (n?.nasIp) taken.add(n.nasIp);
 
     // Host 1 is the panel itself; the last address is broadcast.
     for (let host = 2; host < size - 1; host++) {
@@ -262,7 +297,7 @@ export class TunnelService {
    */
   async provision(
     nasId: number,
-    opts: { createdBy?: number | null; rotate?: boolean } = {},
+    opts: { createdBy?: number | null; rotate?: boolean; overlayIp?: string } = {},
   ): Promise<TunnelConfig> {
     const nas = await this.prisma.nas.findUnique({
       where: { id: nasId },
@@ -311,7 +346,7 @@ export class TunnelService {
           serverEndpoint: endpoint,
           serverPublicKey: serverPub || '',
           createdBy: opts.createdBy ?? null,
-        });
+        }, opts.overlayIp);
 
     // The old peer must go BEFORE the new one is added, or the router could
     // briefly authenticate with a key we have just revoked on paper.
@@ -376,7 +411,19 @@ export class TunnelService {
     serverEndpoint: string;
     serverPublicKey: string;
     createdBy: number | null;
-  }) {
+  }, preferredIp?: string) {
+    if (preferredIp) {
+      // "Add router via VPN": the NAS already uses this address as its NAS IP,
+      // so the tunnel MUST get exactly it — no silent fallback to another one.
+      this.assertIp(preferredIp);
+      try {
+        return await this.prisma.nasTunnel.create({ data: { ...data, overlayIp: preferredIp } });
+      } catch (e: any) {
+        if (e?.code === 'P2002')
+          throw new ConflictException(`Tunnel address ${preferredIp} was just taken by another router. Try again.`);
+        throw e;
+      }
+    }
     let lastErr: any;
     for (let attempt = 0; attempt < 6; attempt++) {
       const overlayIp = await this.nextOverlayIp();
@@ -482,7 +529,15 @@ export class TunnelService {
   }
 
   /** Tunnel state for one router, with the health verdict already computed. */
+  private lastRefresh = 0;
   async status(nasId: number) {
+    // The add-router screen polls this while it waits for the router to dial
+    // in, so liveness must come from the kernel, not from a stale row. At most
+    // one `wg show` every 10 s per worker.
+    if (Date.now() - this.lastRefresh > 10_000) {
+      this.lastRefresh = Date.now();
+      await this.refreshStatus().catch(() => null);
+    }
     const t = await this.prisma.nasTunnel.findUnique({ where: { nasId } });
     if (!t) return null;
     const ageMs = t.lastHandshake ? Date.now() - t.lastHandshake.getTime() : null;
@@ -552,6 +607,49 @@ export class TunnelService {
       `# Allow the panel in, and nothing else through the tunnel:`,
       `/ip/firewall/filter`,
       `add chain=input src-address=${panelIp} action=accept comment="Jointbox panel" place-before=0`,
+    ].join('\n');
+  }
+
+  /**
+   * Everything a router added "via VPN" needs, in one paste (RouterOS 7):
+   * the WireGuard tunnel, RADIUS pointed at the panel INSIDE the tunnel, CoA
+   * accepted from it, and an API user the panel can use — reachable only from
+   * the panel's tunnel address.
+   */
+  routerSetupScript(o: {
+    name: string;
+    privateKey: string;
+    overlayIp: string;
+    serverPub: string | null;
+    endpoint: string;
+    radiusSecret: string;
+    apiUsername: string;
+    apiPassword: string;
+    apiPort: number;
+    coaPort: number;
+  }): string {
+    const q = (v: string) => v.replace(/[\\"$?]/g, (c) => '\\' + c);
+    const safe = o.name.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 24) || 'uplinko';
+    const [host, port] = o.endpoint.split(':');
+    const panelIp = this.panelOverlayIp();
+    const ifc = `wg-uplinko`;
+    return [
+      `# Uplinko — connect "${safe}" over VPN. Paste into the RouterOS 7 terminal.`,
+      `# 1) VPN tunnel to Uplinko (the router dials out; works behind NAT/CGNAT)`,
+      `/interface wireguard add name=${ifc} private-key="${q(o.privateKey)}" listen-port=13231 comment="Uplinko VPN"`,
+      `/ip address add address=${o.overlayIp}/32 interface=${ifc} comment="Uplinko VPN"`,
+      `/interface wireguard peers add interface=${ifc} public-key="${o.serverPub ?? '<panel-public-key>'}" endpoint-address=${host || '<panel-host>'} endpoint-port=${port || this.listenPort} allowed-address=${panelIp}/32 persistent-keepalive=${this.keepalive}s comment="Uplinko"`,
+      `/ip route add dst-address=${panelIp}/32 gateway=${ifc} comment="Uplinko VPN"`,
+      // place-before=0 errors on an empty filter list (a fresh router), so only use it when rules exist.
+      `:if ([:len [/ip firewall filter find]] > 0) do={ /ip firewall filter add chain=input in-interface=${ifc} src-address=${panelIp} action=accept comment="Uplinko VPN" place-before=0 } else={ /ip firewall filter add chain=input in-interface=${ifc} src-address=${panelIp} action=accept comment="Uplinko VPN" }`,
+      `# 2) RADIUS — users authenticate with Uplinko through the tunnel`,
+      `/radius add address=${panelIp} secret="${q(o.radiusSecret)}" service=ppp,hotspot src-address=${o.overlayIp} authentication-port=1812 accounting-port=1813 timeout=3s comment="Uplinko"`,
+      `/radius incoming set accept=yes port=${o.coaPort}`,
+      `/ppp aaa set use-radius=yes accounting=yes interim-update=5m`,
+      `# 3) API user for Uplinko (only reachable from Uplinko's tunnel address)`,
+      `/user group add name=uplinko policy=read,write,api,test comment="Uplinko"`,
+      `/user add name="${q(o.apiUsername)}" password="${q(o.apiPassword)}" group=uplinko address=${panelIp}/32 comment="Uplinko"`,
+      `/ip service set api disabled=no port=${o.apiPort}`,
     ].join('\n');
   }
 

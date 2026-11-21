@@ -141,6 +141,10 @@ export class NasController {
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) { return this.nasService.findOne(+id, req.user); }
 
+  /** Add a router on a private/remote network: Uplinko issues the VPN first. */
+  @Post('via-vpn')
+  createViaVpn(@Body() body: any, @Req() req: any) { return this.nasService.createViaVpn(body, req.user); }
+
   @Post()
   create(@Body() body: any, @Req() req: any) { return this.nasService.create(body, req.user); }
 
