@@ -20,7 +20,7 @@ function bps(v: number) {
 }
 
 export function NasAccordion({
-  rows, me, onView, onEdit, onShare, onCheck, onDelete, onVpn, onGroup, checkingIds, reachOf, healthOf,
+  rows, me, onView, onEdit, onShare, onCheck, onDelete, onGroup, checkingIds, reachOf, healthOf,
 }: {
   rows: Row[];
   me?: any;
@@ -29,7 +29,6 @@ export function NasAccordion({
   onShare: (r: Row) => void;
   onCheck: (id: number) => void;
   onDelete: (r: Row) => void;
-  onVpn?: (r: Row) => void;
   onGroup?: (r: Row) => void;
   checkingIds?: Set<number>;
   reachOf?: (id: number) => { apiPortOpen?: boolean; activeSessionCount?: number; identity?: string } | undefined;
@@ -104,7 +103,6 @@ export function NasAccordion({
                 <div className="nacc-actions">
                   <button className="pri" onClick={() => onView(n)}>Open</button>
                   <button onClick={() => onCheck(n.id)} disabled={rowChecking}>{rowChecking ? "Checking…" : "Check"}</button>
-                  {mine && onVpn && <button onClick={() => onVpn(n)} title="Configure the VPN tunnel for this router">VPN</button>}
                   {mine && onGroup && <button onClick={() => onGroup(n)}>Group</button>}
                   {mine && <button onClick={() => onShare(n)}>Share</button>}
                   {mine && <button onClick={() => onEdit(n)}>Edit</button>}

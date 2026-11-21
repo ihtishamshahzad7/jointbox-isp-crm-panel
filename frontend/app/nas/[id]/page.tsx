@@ -48,7 +48,6 @@ const PermissionPanel = lazy(() => import("./permissions").then((m) => ({ defaul
 const AlertRules = lazy(() => import("./alert-rules").then((m) => ({ default: m.AlertRules })));
 // Lazy like the rest: a tunnel is provisioned once and then rarely looked at,
 // so its panel should not be in the bundle every other tab pays for.
-const NasVpnPanel = lazy(() => import("../nas-vpn-panel").then((m) => ({ default: m.NasVpnPanel })));
 
 const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "overview", label: "Overview", group: "Device" },
@@ -65,7 +64,6 @@ const TABS: Array<{ id: string; label: string; group: string }> = [
   { id: "audit", label: "Audit", group: "History" },
   { id: "diagnostics", label: "Diagnostics", group: "Device" },
   { id: "configuration", label: "Configuration", group: "Device" },
-  { id: "vpn", label: "VPN", group: "Services" },
 ];
 
 const TAB_ICONS: Record<string, (props: React.SVGProps<SVGSVGElement>) => React.ReactNode> = {
@@ -164,13 +162,14 @@ function DevicePage() {
     } catch {
       /* SSR / no window */
     }
-    if (fromUrl && (TABS.some((t) => t.id === fromUrl) || fromUrl === "tunnel")) {
-      setTab(fromUrl === "tunnel" ? "vpn" : fromUrl);
+    // VPN is chosen when the router is added (Add router → Via VPN), so the
+    // old per-router VPN tab is gone; old ?tab=vpn/tunnel links fall through.
+    if (fromUrl && TABS.some((t) => t.id === fromUrl)) {
+      setTab(fromUrl);
       return;
     }
     const saved = sessionStorage.getItem(`nb-nas-tab-${nasId}`);
-    if (saved === "tunnel") setTab("vpn");
-    else if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
+    if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nasId]);
 
@@ -250,7 +249,6 @@ function DevicePage() {
               <button onClick={() => { setMenuOpen(false); void runAllTests(); goTab("diagnostics"); }}>⚡ Run all tests</button>
               <button onClick={() => { setMenuOpen(false); clearTests(); }}>✕ Clear test results</button>
               <div className="nd-menu-sep" />
-              <button onClick={() => { setMenuOpen(false); goTab("vpn"); }}>🛰️ VPN</button>
               <button onClick={() => { setMenuOpen(false); goTab("configuration"); }}>⚙ Edit configuration</button>
               <button className="danger" onClick={() => { setMenuOpen(false); goTab("logs"); }}>📄 Device logs</button>
             </div>
@@ -309,7 +307,6 @@ function DevicePage() {
               </div>
             )}
             {tab === "configuration" && <ConfigTab />}
-            {tab === "vpn" && <NasVpnPanel nasId={nasId} nasName={nas?.shortname || nas?.nasname} />}
           </Suspense>
         </div>
       </div>

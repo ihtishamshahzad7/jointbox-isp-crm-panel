@@ -63,6 +63,8 @@ import { silent } from "../components/silent";
 // ─── Types ─────────────────────────────────────────────────────────
 interface NasEntry {
   id: number; nasname: string; shortname?: string | null; nasIp: string | null; secret: string | null;
+  /** 'vpn' = added via VPN: its NAS IP is the tunnel address and stays fixed. */
+  connection?: 'vpn' | 'direct';
   type: string; apiPort: number; incomingPort: number;
   apiUsername: string | null; apiPassword: string | null;
   isActive: boolean; description: string | null;
@@ -1150,7 +1152,6 @@ export default function NasPage() {
                 onEdit={openEdit}
                 onShare={openShare}
                 onCheck={checkNas}
-                onVpn={(nas) => { router.push(`/nas/${nas.id}?tab=vpn`); }}
                 onGroup={moveToGroup}
                 onDelete={(nas) => setDeleteConfirm(nas.id)}
                 checkingIds={checkingIds}
@@ -1964,9 +1965,15 @@ export default function NasPage() {
                       {(f as any).opts?.map((o: string) => <option key={o} value={o}>{o}</option>)}
                     </select>
                   ) : (
+                    <>
                     <input type={f.type} placeholder={f.ph} value={(form as any)[f.key]}
+                      readOnly={f.key === 'nasIp' && editItem?.connection === 'vpn'}
                       onChange={e => setForm(p => ({ ...p, [f.key]: f.type==='number' ? +e.target.value : e.target.value }))}
-                      style={inputSt} />
+                      style={f.key === 'nasIp' && editItem?.connection === 'vpn' ? { ...inputSt, opacity:.6, cursor:'not-allowed' } : inputSt} />
+                    {f.key === 'nasIp' && editItem?.connection === 'vpn' && (
+                      <div style={{ fontSize:10, color:t.textMuted, marginTop:4 }}>Connected via VPN — this is the router&apos;s tunnel address and cannot be changed.</div>
+                    )}
+                    </>
                   )}
                 </div>
               ))}

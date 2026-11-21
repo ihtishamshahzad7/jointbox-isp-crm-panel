@@ -157,6 +157,15 @@ export class NasService implements OnModuleInit {
       }
     }
 
+    // "Via VPN" routers: the UI keeps their NAS IP (= tunnel address) fixed.
+    try {
+      const vpnIds = new Set<number>(
+        ((await (this.prisma as any).nasL2tpHub?.findMany?.({ where: { nasId: { in: rows.map((r: any) => r.id) } }, select: { nasId: true } })) ?? [])
+          .map((h: any) => h.nasId),
+      );
+      for (const r of rows as any[]) r.connection = vpnIds.has(r.id) ? 'vpn' : 'direct';
+    } catch { /* table not migrated yet */ }
+
     // Credentials never leave the server — the list returns masks plus a
     // has<Field> flag so the UI can show "configured" and a Change button.
     return sanitizeNasList(rows);
@@ -686,9 +695,14 @@ export class NasService implements OnModuleInit {
     const ready = await this.hub.readiness();
     if (!ready.ok) throw new BadRequestException(ready.reasons.join(' '));
 
+    // SNMP: the script prepares a read-only community reachable only from
+    // Uplinko's tunnel address, so turning SNMP on later (Edit) just works.
+    const rawCommunity = String(data?.snmpCommunity ?? '').trim();
+    const snmpCommunity = rawCommunity && rawCommunity !== 'public' && /^[A-Za-z0-9_.-]{1,32}$/.test(rawCommunity) ? rawCommunity : `uplinko-${gen().slice(0, 12)}`;
+
     const tunnelIp = await this.hub.nextTunnelIp();
     const nas: any = await this.create(
-      { ...data, nasName: name, nasIp: tunnelIp, secret, apiUsername, apiPassword, apiEnabled: data?.apiEnabled ?? true },
+      { ...data, nasName: name, nasIp: tunnelIp, secret, apiUsername, apiPassword, snmpCommunity, apiEnabled: data?.apiEnabled ?? true },
       actor,
     );
     let login;
@@ -713,6 +727,7 @@ export class NasService implements OnModuleInit {
       apiPassword,
       apiPort: nas.apiPort ?? 8728,
       coaPort: nas.incomingPort ?? 3799,
+      snmpCommunity,
     });
     this.logger.log(`NAS "${name}" added via L2TP VPN on ${tunnelIp}`);
     return {
@@ -754,6 +769,10 @@ export class NasService implements OnModuleInit {
       // Two routers on one address: FreeRADIUS can only know one of them, so
       // this one would silently stop authenticating.
       if (updateData.nasIp !== existingNas.nasIp) {
+        // A router added via VPN must keep its tunnel address as NAS IP.
+        const hubRow = await (this.prisma as any).nasL2tpHub?.findUnique?.({ where: { nasId: id } }).catch?.(() => null);
+        if (hubRow)
+          throw new BadRequestException(`This router is connected via VPN; its NAS IP is its tunnel address (${hubRow.tunnelIp}) and cannot be changed.`);
         const clash = await this.prisma.nas.findFirst({
           where: { nasIp: updateData.nasIp, NOT: { id } },
           select: { id: true, shortname: true, nasname: true },

@@ -64,6 +64,10 @@ describe('Add router via VPN (L2TP/IPsec into Uplinko)', () => {
     expect(r.script).toContain(`/radius add address=10.68.0.1 secret="${secret}"`);
     expect(r.script).toContain('src-address=10.68.0.2');
     expect(r.script).not.toMatch(/wireguard|<panel/);
+    // SNMP prepared (read-only, only from Uplinko) so it can be turned on later in Edit
+    const community = (create.mock.calls[0][0] as any).snmpCommunity;
+    expect(community).toMatch(/^uplinko-/);
+    expect(r.script).toContain(`/snmp community add name="${community}" addresses=10.68.0.1/32 read-access=yes write-access=no`);
     // the router's login with its fixed address, other lines kept
     expect(files['/etc/ppp/chap-secrets']).toContain('alice * pw *');
     expect(files['/etc/ppp/chap-secrets']).toMatch(/"uplinko-nas9" \* "[A-Za-z0-9_-]+" 10\.68\.0\.2/);

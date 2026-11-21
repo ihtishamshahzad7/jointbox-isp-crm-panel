@@ -390,6 +390,7 @@ export class L2tpHubService implements OnApplicationBootstrap {
     apiPassword: string;
     apiPort: number;
     coaPort: number;
+    snmpCommunity?: string;
   }): string {
     const q = (v: string) => v.replace(/[\\"$?]/g, (c) => '\\' + c);
     const safe = o.name.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 24) || 'uplinko';
@@ -414,6 +415,14 @@ export class L2tpHubService implements OnApplicationBootstrap {
       `/user group add name=uplinko policy=read,write,api,test comment="Uplinko"`,
       `/user add name="${q(o.apiUsername)}" password="${q(o.apiPassword)}" group=uplinko address=${o.serverIp}/32 comment="Uplinko"`,
       `/ip service set api disabled=no port=${o.apiPort}`,
+      ...(o.snmpCommunity && /^[A-Za-z0-9_.-]{1,32}$/.test(o.snmpCommunity)
+        ? [
+            `# 4) SNMP (read-only, only from Uplinko) — used when SNMP is turned on for this router in Uplinko`,
+            `/snmp community remove [find comment="Uplinko"]`,
+            `/snmp community add name="${o.snmpCommunity}" addresses=${o.serverIp}/32 read-access=yes write-access=no comment="Uplinko"`,
+            `/snmp set enabled=yes`,
+          ]
+        : []),
     ].join('\n');
   }
 }
