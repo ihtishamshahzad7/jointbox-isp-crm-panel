@@ -5,10 +5,10 @@
  *
  * The router is on a network Uplinko cannot reach, so nothing works until the
  * router dials in. This screen gives the one script to paste into the MikroTik
- * terminal (VPN + RADIUS + API user), then watches the tunnel and turns
- * "Connected" the moment the router's first handshake arrives.
+ * terminal (L2TP/IPsec VPN + RADIUS + API user), then watches the tunnel and turns
+ * "Connected" the moment the router's L2TP tunnel comes up.
  *
- * The script holds the router's private key, RADIUS secret and API password.
+ * The script holds the router's VPN login, RADIUS secret and API password.
  * It is shown once only and is never stored in the browser.
  */
 import { useEffect, useState } from "react";
@@ -37,7 +37,7 @@ export function VpnSetupModal({ setup, headers, onClose }: {
     let stop = false;
     const poll = async () => {
       try {
-        const r = await fetch(`${API_BASE}/nas/${setup.nasId}/tunnel`, { headers });
+        const r = await fetch(`${API_BASE}/nas/${setup.nasId}/vpn-status`, { headers });
         const b = r.ok ? await r.json().catch(() => null) : null;
         if (!stop && b) setStatus({ online: !!b.online, lastHandshake: b.lastHandshake ?? null });
       } catch { /* keep waiting */ }
@@ -84,8 +84,8 @@ export function VpnSetupModal({ setup, headers, onClose }: {
           )}
 
           <ol style={{ fontSize: 13, lineHeight: 1.7, margin: "14px 0 10px", paddingLeft: 20 }}>
-            <li>Open the MikroTik terminal (WinBox → New Terminal). RouterOS 7 is required.</li>
-            <li>Copy the script below and paste it in. It sets up the VPN, RADIUS and the API user.</li>
+            <li>Open the MikroTik terminal (WinBox → New Terminal).</li>
+            <li>Copy the script below and paste it in. It sets up the L2TP/IPsec VPN to Uplinko, RADIUS and the API user.</li>
             <li>Keep this window open — it turns <b>Connected</b> as soon as the router dials in.</li>
           </ol>
 
@@ -100,8 +100,8 @@ export function VpnSetupModal({ setup, headers, onClose }: {
           </div>
 
           <p style={{ fontSize: 12, color: "#B45309", marginTop: 10 }}>
-            This script contains the router&apos;s VPN key, RADIUS secret and API password. It is shown only once —
-            copy it now. If it is lost, use the router&apos;s VPN tab to issue new keys.
+            This script contains the router&apos;s VPN login, RADIUS secret and API password. It is shown only once —
+            copy it now. If it is lost, delete the router and add it again.
           </p>
 
           {connected && (

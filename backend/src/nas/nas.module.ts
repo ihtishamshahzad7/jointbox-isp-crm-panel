@@ -15,6 +15,7 @@ import { NasL2tpClientService } from './nas-l2tp-client.service';
 import { L2tpClientDialer } from './l2tp-client-dialer.service';
 import { PlatformVpnSettingsService } from './platform-vpn-settings.service';
 import { PlatformVpnSettingsController } from './platform-vpn-settings.controller';
+import { L2tpHubService } from './l2tp-hub.service';
 import { VpnModule } from '../vpn/vpn.module';
 
 @Module({
@@ -35,6 +36,8 @@ import { VpnModule } from '../vpn/vpn.module';
     L2tpClientDialer,
     // Web settings for the management VPN (Settings → NAS management VPN).
     PlatformVpnSettingsService,
+    // "Add router via VPN": routers dial L2TP/IPsec into Uplinko.
+    L2tpHubService,
     RadiusSyncService,
     RadiusClientVaultService,
     MikrotikSyncService,

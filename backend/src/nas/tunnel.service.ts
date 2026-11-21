@@ -616,6 +616,20 @@ export class TunnelService implements OnApplicationBootstrap {
    * accepted from it, and an API user the panel can use — reachable only from
    * the panel's tunnel address.
    */
+  /**
+   * Can a router dial in right now? Both the hub's public key (WireGuard is
+   * running here) and the address routers dial must be known — a script with
+   * placeholders in it can never connect, so none is handed out.
+   */
+  async hubReadiness(): Promise<{ ok: boolean; reason?: string }> {
+    const key = await this.serverPublicKey();
+    if (!key)
+      return { ok: false, reason: 'The VPN hub (WireGuard) is not running on this server yet. The platform owner must finish the one-time setup in Settings → Router VPN, then add the router again.' };
+    if (!this.endpointHost)
+      return { ok: false, reason: 'The address routers dial is not set. The platform owner must enter this server\'s public IP in Settings → Router VPN, then add the router again.' };
+    return { ok: true };
+  }
+
   routerSetupScript(o: {
     name: string;
     privateKey: string;
@@ -635,6 +649,15 @@ export class TunnelService implements OnApplicationBootstrap {
     const ifc = `wg-uplinko`;
     return [
       `# Uplinko — connect "${safe}" over VPN. Paste into the RouterOS 7 terminal.`,
+      `# 0) Remove anything left from an earlier paste, so this can be run again`,
+      `/interface wireguard peers remove [find comment="Uplinko"]`,
+      `/ip firewall filter remove [find comment="Uplinko VPN"]`,
+      `/ip route remove [find comment="Uplinko VPN"]`,
+      `/ip address remove [find comment="Uplinko VPN"]`,
+      `/interface wireguard remove [find name=${ifc}]`,
+      `/radius remove [find comment="Uplinko"]`,
+      `/user remove [find comment="Uplinko"]`,
+      `/user group remove [find name=uplinko]`,
       `# 1) VPN tunnel to Uplinko (the router dials out; works behind NAT/CGNAT)`,
       `/interface wireguard add name=${ifc} private-key="${q(o.privateKey)}" listen-port=13231 comment="Uplinko VPN"`,
       `/ip address add address=${o.overlayIp}/32 interface=${ifc} comment="Uplinko VPN"`,

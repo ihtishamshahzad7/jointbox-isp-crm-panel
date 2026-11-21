@@ -145,6 +145,9 @@ export class NasController {
   @Post('via-vpn')
   createViaVpn(@Body() body: any, @Req() req: any) { return this.nasService.createViaVpn(body, req.user); }
 
+  @Get(':id/vpn-status')
+  vpnStatus(@Param('id') id: string, @Req() req: any) { return this.nasService.vpnStatus(+id, req.user); }
+
   @Post()
   create(@Body() body: any, @Req() req: any) { return this.nasService.create(body, req.user); }
 

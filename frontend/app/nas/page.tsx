@@ -1752,7 +1752,7 @@ export default function NasPage() {
                           <div style={{ display:'grid', gap:8 }}>
                             {([
                               ['direct', 'Direct (public IP)', 'Uplinko can reach the router at its IP. Users authenticate directly — no VPN.'],
-                              ['vpn', 'Via VPN (private / remote router)', 'The router is behind NAT or on a remote private network. No IP needed — Uplinko gives you a script, the router dials in, and users authenticate through the tunnel.'],
+                              ['vpn', 'Via VPN (private / remote router)', 'The router is behind NAT or on a remote private network. No IP needed — Uplinko gives you a script, the router dials an L2TP/IPsec tunnel to Uplinko, and users authenticate through it.'],
                             ] as const).map(([v, label, help]) => (
                               <label key={v} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'8px 10px', borderRadius:8, cursor:'pointer',
                                 border:`1px solid ${form.connection === v ? '#0B76A8' : t.cardBorder}`, background: form.connection === v ? 'rgba(11,118,168,.06)' : 'transparent' }}>

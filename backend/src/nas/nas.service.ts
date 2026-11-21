@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import { Injectable, NotFoundException, Logger, ConflictException, InternalServerErrorException, BadRequestException, ForbiddenException, OnModuleInit, BadGatewayException, Optional } from '@nestjs/common';
 import { TunnelService } from './tunnel.service';
+import { L2tpHubService } from './l2tp-hub.service';
 import { NasL2tpClientService } from './nas-l2tp-client.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopeService } from '../common/scope.service';
@@ -34,8 +35,9 @@ export class NasService implements OnModuleInit {
     // existing unit tests that construct NasService by hand keep working; in
     // the application it is always provided by NasModule.
     @Optional() private l2tpClient?: NasL2tpClientService,
-    // "Add router via VPN": allocates the router's tunnel address and keys.
     @Optional() private tunnels?: TunnelService,
+    // "Add router via VPN": remote routers dial L2TP/IPsec into Uplinko.
+    @Optional() private hub?: L2tpHubService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────
@@ -613,7 +615,7 @@ export class NasService implements OnModuleInit {
    * password. It is returned ONCE and never stored in plain text.
    */
   async createViaVpn(data: any, actor?: any) {
-    if (!this.tunnels) throw new BadRequestException('Router VPN is not available on this server.');
+    if (!this.hub) throw new BadRequestException('Router VPN is not available on this server.');
     const gen = () => randomBytes(18).toString('base64url');
     const name = String(data?.nasName ?? '').trim();
     if (!name) throw new BadRequestException('Give the router a name.');
@@ -625,38 +627,51 @@ export class NasService implements OnModuleInit {
     if (/["\\?$]/.test(apiPassword))
       throw new BadRequestException('API password cannot contain quotes, backslash, $ or ?. Leave it blank to generate one.');
 
-    const overlayIp = await this.tunnels.nextOverlayIp();
+    // Never hand out a script that cannot connect.
+    const ready = await this.hub.readiness();
+    if (!ready.ok) throw new BadRequestException(ready.reasons.join(' '));
+
+    const tunnelIp = await this.hub.nextTunnelIp();
     const nas: any = await this.create(
-      { ...data, nasName: name, nasIp: overlayIp, secret, apiUsername, apiPassword, apiEnabled: data?.apiEnabled ?? true },
+      { ...data, nasName: name, nasIp: tunnelIp, secret, apiUsername, apiPassword, apiEnabled: data?.apiEnabled ?? true },
       actor,
     );
-    let tunnel;
+    let login;
     try {
-      tunnel = await this.tunnels.provision(nas.id, { createdBy: actor ? this.scope.actorId(actor) : null, overlayIp });
+      login = await this.hub.provision(nas.id, tunnelIp);
     } catch (e) {
       await this.prisma.nas.delete({ where: { id: nas.id } }).catch(() => null);
       await this.radiusVault.apply('nas-delete').catch(() => null);
       throw e;
     }
-    const script = this.tunnels.routerSetupScript({
+    const [serverIp, psk] = await Promise.all([this.hub.serverIp(), this.hub.psk()]);
+    const script = this.hub.routerScript({
       name: nas.shortname || name,
-      privateKey: tunnel.privateKey,
-      overlayIp,
-      serverPub: tunnel.serverPublicKey || null,
-      endpoint: tunnel.serverEndpoint,
+      username: login.username,
+      password: login.password,
+      tunnelIp,
+      serverIp,
+      endpoint: this.hub.endpointHost(),
+      psk: psk as string,
       radiusSecret: secret,
       apiUsername,
       apiPassword,
       apiPort: nas.apiPort ?? 8728,
       coaPort: nas.incomingPort ?? 3799,
     });
-    this.logger.log(`NAS "${name}" added via VPN on ${overlayIp}`);
+    this.logger.log(`NAS "${name}" added via L2TP VPN on ${tunnelIp}`);
     return {
       ...nas,
       connection: 'vpn',
-      tunnel: { overlayIp, serverEndpoint: tunnel.serverEndpoint, applied: tunnel.applied, warning: tunnel.warning },
+      tunnel: { type: 'l2tp', overlayIp: tunnelIp, serverIp, applied: login.applied, warning: login.warning },
       script,
     };
+  }
+
+  /** "Via VPN" router: is its L2TP tunnel up? */
+  async vpnStatus(id: number, actor?: any) {
+    await this.findOne(id, actor);
+    return this.hub ? this.hub.status(id) : null;
   }
 
   async update(id: number, data: {
@@ -786,6 +801,7 @@ export class NasService implements OnModuleInit {
       const mgmtVpn = this.l2tpClient ? await this.l2tpClient.cleanupForNasDeletion(id) : null;
       // Router VPN (WireGuard): drop the peer from the server, so a deleted
       // router's keys stop working at once (the row itself cascades).
+      if (this.hub) await this.hub.revoke(id).catch((e) => this.logger.warn(`L2TP login revoke for NAS #${id}: ${e?.message || e}`));
       if (this.tunnels) await this.tunnels.revoke(id).catch((e) => this.logger.warn(`Tunnel revoke for NAS #${id}: ${e?.message || e}`));
 
       this.logger.log(`Deleting NAS "${nas.nasname}" (ID: ${id})`);

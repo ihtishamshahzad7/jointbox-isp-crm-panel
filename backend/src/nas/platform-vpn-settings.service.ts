@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { VpnService } from '../vpn/vpn.service';
+import { L2tpHubService } from './l2tp-hub.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { checkAddressing, isIpv4, loadPolicy } from './l2tp-address-policy';
 import { L2tpClientDialer } from './l2tp-client-dialer.service';
@@ -24,47 +25,39 @@ export class PlatformVpnSettingsService {
     private readonly prisma: PrismaService,
     private readonly dialer: L2tpClientDialer,
     @Optional() private readonly vpn?: VpnService,
+    @Optional() private readonly hub?: L2tpHubService,
   ) {}
 
-  // ── Router VPN (WireGuard hub that remote routers dial into) ─────────────
-  /** Settings → Router VPN: where routers dial, and whether the hub is up. */
+  // ── Router VPN (L2TP/IPsec server that remote routers dial into) ───────
   async getRouterVpn(actor: any) {
     this.platformOnly(actor);
-    if (!this.vpn) throw new BadRequestException('Router VPN is not available on this server.');
-    const o = await this.vpn.overview();
-    const wg: any = o.servers.find((x: any) => x.type === 'wireguard');
-    const routers = await (this.prisma as any).nasTunnel?.count?.().catch(() => 0) ?? 0;
+    if (!this.hub) throw new BadRequestException('Router VPN is not available on this server.');
+    const [ready, subnet, serverIp, install, routers] = await Promise.all([
+      this.hub.readiness(),
+      this.hub.subnet(),
+      this.hub.serverIp(),
+      this.hub.installScript(),
+      (this.prisma as any).nasL2tpHub.count().catch(() => 0),
+    ]);
     return {
-      endpointHost: o.endpointHost || '',
-      port: wg?.listenPort ?? 51820,
-      subnet: wg?.subnet ?? '10.66.0.0/24',
-      serverIp: wg?.serverIp ?? null,
-      running: !!wg?.running,
-      ready: !!wg?.ready,
+      type: 'l2tp',
+      endpointHost: this.hub.endpointHost(),
+      subnet,
+      serverIp,
+      running: ready.running,
+      ready: ready.ok,
+      reasons: ready.reasons,
       routers,
-      install: wg?.install ?? '',
+      install,
     };
   }
 
-  async updateRouterVpn(actor: any, body: { endpointHost?: string; port?: number; subnet?: string }) {
+  async updateRouterVpn(actor: any, body: { endpointHost?: string; subnet?: string }) {
     this.platformOnly(actor);
-    if (!this.vpn) throw new BadRequestException('Router VPN is not available on this server.');
+    if (!this.hub || !this.vpn) throw new BadRequestException('Router VPN is not available on this server.');
     const b = body && typeof body === 'object' ? body : {};
-    const cur = this.vpn.getConfig();
-    if (b.subnet !== undefined && String(b.subnet).trim() !== cur.wireguard.subnet) {
-      const n = await (this.prisma as any).nasTunnel.count();
-      if (n > 0)
-        throw new BadRequestException(
-          `${n} router(s) already use addresses in ${cur.wireguard.subnet}. Changing the tunnel network would cut them off, so it is locked while routers are connected.`,
-        );
-    }
-    const wireguard: Record<string, unknown> = {};
-    if (b.port !== undefined) wireguard.port = b.port;
-    if (b.subnet !== undefined) wireguard.subnet = String(b.subnet).trim();
-    this.vpn.setConfig({
-      ...(b.endpointHost !== undefined ? { endpointHost: b.endpointHost } : {}),
-      ...(Object.keys(wireguard).length ? { wireguard } : {}),
-    });
+    if (b.subnet !== undefined) await this.hub.setSubnet(String(b.subnet));
+    if (b.endpointHost !== undefined) this.vpn.setConfig({ endpointHost: b.endpointHost });
     return this.getRouterVpn(actor);
   }
 

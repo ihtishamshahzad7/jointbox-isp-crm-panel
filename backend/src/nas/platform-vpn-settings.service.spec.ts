@@ -82,24 +82,31 @@ describe('PlatformVpnSettingsService (web settings for the NAS management VPN)',
   });
 });
 
-describe('Router VPN settings (where remote routers dial in)', () => {
-  function mk(tunnels: number) {
-    const prisma: any = { nasTunnel: { count: jest.fn(async () => tunnels) }, platformVpnSettings: { findUnique: jest.fn(async () => null) } };
-    let cfg: any = { endpointHost: '', wireguard: { port: 51820, subnet: '10.66.0.0/24' } };
-    const vpn: any = {
-      getConfig: () => cfg,
-      setConfig: jest.fn((b: any) => { cfg = { ...cfg, ...b, wireguard: { ...cfg.wireguard, ...(b.wireguard || {}) } }; return cfg; }),
-      overview: async () => ({ endpointHost: cfg.endpointHost, servers: [{ type: 'wireguard', listenPort: cfg.wireguard.port, subnet: cfg.wireguard.subnet, serverIp: '10.66.0.1', running: true, ready: !!cfg.endpointHost, install: 'x' }] }),
+describe('Router VPN settings (L2TP/IPsec server remote routers dial into)', () => {
+  function mk(routers: number) {
+    let endpoint = '';
+    let subnet = '10.68.0.0/24';
+    const prisma: any = { nasL2tpHub: { count: jest.fn(async () => routers) } };
+    const vpn: any = { getConfig: () => ({ endpointHost: endpoint }), setConfig: jest.fn((b: any) => { endpoint = b.endpointHost; }) };
+    const hub: any = {
+      readiness: async () => ({ ok: !!endpoint, running: true, reasons: endpoint ? [] : ['set address'] }),
+      subnet: async () => subnet,
+      serverIp: async () => '10.68.0.1',
+      installScript: async () => 'script',
+      endpointHost: () => endpoint,
+      setSubnet: jest.fn(async (v: string) => {
+        if (routers > 0 && v !== subnet) throw new BadRequestException('locked while routers use it');
+        subnet = v;
+      }),
     };
-    return { svc: new PlatformVpnSettingsService(prisma, {} as any, vpn), vpn };
+    return { svc: new PlatformVpnSettingsService(prisma, {} as any, vpn, hub) };
   }
   it('platform account only', async () => {
     await expect(mk(0).svc.getRouterVpn({ role: 'ADMIN' })).rejects.toBeInstanceOf(ForbiddenException);
   });
   it('saves the dial-in address from the web panel', async () => {
-    const { svc } = mk(0);
-    const r = await svc.updateRouterVpn(SA, { endpointHost: 'vpn.example.net', port: 51820 });
-    expect(r).toMatchObject({ endpointHost: 'vpn.example.net', ready: true });
+    const r = await mk(0).svc.updateRouterVpn(SA, { endpointHost: 'vpn.example.net' });
+    expect(r).toMatchObject({ type: 'l2tp', endpointHost: 'vpn.example.net', ready: true, serverIp: '10.68.0.1' });
   });
   it('locks the tunnel network while routers use it', async () => {
     await expect(mk(2).svc.updateRouterVpn(SA, { subnet: '10.77.0.0/24' })).rejects.toThrow(/locked/);
