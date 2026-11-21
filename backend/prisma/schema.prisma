@@ -579,6 +579,8 @@ model Nas {
   tunnel NasTunnel? @relation("NasTunnel")
   /// "Add router via VPN": this router dials L2TP/IPsec INTO Uplinko.
   l2tpHub NasL2tpHub? @relation("NasL2tpHub")
+  /// Every router is pinged on Network Monitoring automatically.
+  monitor MonitorTarget? @relation("NasMonitor")
 
   /// L2TP/IPsec configuration and lifecycle for this NAS.
   l2tpConfig NasL2tpConfig? @relation("NasL2tpConfig")
@@ -4191,6 +4193,10 @@ model MonitorTarget {
 
   owner   User?           @relation("UserMonitorTargets", fields: [ownerId], references: [id], onDelete: Cascade)
   samples MonitorSample[]
+  /// Set when this monitor was created for a router (NAS): it follows the
+  /// router's IP and name, and is removed with the router.
+  nasId   Int?            @unique
+  nas     Nas?            @relation("NasMonitor", fields: [nasId], references: [id], onDelete: Cascade)
 
   @@index([ownerId])
   @@index([enabled])

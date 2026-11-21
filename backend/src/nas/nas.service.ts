@@ -597,6 +597,8 @@ export class NasService implements OnModuleInit {
     // appear twice; it is gone.)
     // Tell the screen whether FreeRADIUS actually took the router — a saved
     // router that FreeRADIUS does not know is exactly a "RADIUS timeout".
+    // Every router is pinged on Network Monitoring automatically.
+    await this.syncMonitor(nas);
     if (opts.deferRadiusSync) return sanitizeNas(nas);
     const radiusSync = await this.radiusVault.apply('nas-create');
     if (radiusSync.ok) this.logger.log(`✅ NAS "${data.nasName}" (${data.nasIp}) registered with FreeRADIUS`);
@@ -617,6 +619,39 @@ export class NasService implements OnModuleInit {
    * The script carries the router's private key, RADIUS secret and API
    * password. It is returned ONCE and never stored in plain text.
    */
+  /**
+   * NETWORK MONITORING FOLLOWS THE ROUTER LIST.
+   *
+   * Each router gets one ICMP monitor (group "Routers"), owned like the router,
+   * linked by nasId: it follows the router's IP and name, and is removed with
+   * the router (FK cascade). If the owner already monitors that IP, that
+   * monitor is linked instead of adding a second. Never blocks saving the
+   * router — a monitoring problem is logged, not thrown.
+   */
+  private async syncMonitor(nas: any) {
+    try {
+      const mt = (this.prisma as any).monitorTarget;
+      if (!mt || !nas?.id) return;
+      const host = nas.nasIp ? String(nas.nasIp).split('/')[0] : '';
+      const name = String(nas.shortname || nas.nasname || host).slice(0, 120);
+      const linked = await mt.findUnique({ where: { nasId: nas.id } });
+      if (!host) return;
+      if (linked) {
+        if (linked.host !== host || linked.name !== name)
+          await mt.update({ where: { id: linked.id }, data: { host, name } });
+        return;
+      }
+      const same = await mt.findFirst({ where: { host, ownerId: nas.ownerId ?? null, nasId: null } });
+      if (same) {
+        await mt.update({ where: { id: same.id }, data: { nasId: nas.id } });
+        return;
+      }
+      await mt.create({ data: { name, host, groupName: 'Routers', ownerId: nas.ownerId ?? null, nasId: nas.id } });
+    } catch (e: any) {
+      this.logger.warn(`Monitor for NAS #${nas?.id} not synced: ${e?.message || e}`);
+    }
+  }
+
   /** May this company add routers via VPN, and can the server take them? */
   async vpnAvailability(actor?: any) {
     const state = this.entitlements ? await this.entitlements.companyState(actor, 'router-vpn').catch(() => null) : null;
@@ -773,6 +808,8 @@ export class NasService implements OnModuleInit {
     if (data.syslogPort !== undefined)    updateData.syslogPort    = data.syslogPort;
 
     const updatedNas = await this.prisma.nas.update({ where: { id }, data: updateData });
+    // Keep the router's monitor on its current IP and name.
+    await this.syncMonitor(updatedNas);
 
     const ipChanged     = data.nasIp   && data.nasIp.trim() !== existingNas.nasIp;
     const secretChanged = data.secret !== undefined && !isMask(data.secret);
