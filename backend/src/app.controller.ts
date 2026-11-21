@@ -494,6 +494,26 @@ export class AppController {
     const ramTotal = os.totalmem();
     const ramUsed = ramTotal - os.freemem();
 
+    // Disk of the filesystem holding the panel (database, logs, backups live
+    // on the same server). statfs is a cheap kernel call; null if unsupported.
+    let disk: { totalGb: number; usedGb: number; freeGb: number; pct: number } | null = null;
+    try {
+      const st: any = await (fs as any).statfs(process.env.JBX_DISK_PATH || '/');
+      const total = Number(st.blocks) * Number(st.bsize);
+      const free = Number(st.bavail) * Number(st.bsize); // what non-root writers can still use
+      if (total > 0) {
+        disk = {
+          totalGb: +(total / 1024 ** 3).toFixed(2),
+          freeGb: +(free / 1024 ** 3).toFixed(2),
+          usedGb: +((total - free) / 1024 ** 3).toFixed(2),
+          pct: +(((total - free) / total) * 100).toFixed(2),
+        };
+      }
+    } catch {
+      disk = null;
+    }
+    const [load1, load5, load15] = os.loadavg();
+
     return {
       visible: true,
       cpu: Math.min(100, Math.max(0, cpu)),
@@ -501,6 +521,16 @@ export class AppController {
       ramUsedGb: +(ramUsed / 1024 ** 3).toFixed(1),
       ramTotalGb: +(ramTotal / 1024 ** 3).toFixed(1),
       uptimeSecs: os.uptime(),
+      cores: os.cpus().length,
+      load: [+load1.toFixed(2), +load5.toFixed(2), +load15.toFixed(2)],
+      disk,
+      // One verdict the UI can show as a banner: what needs attention now.
+      alerts: [
+        ...(disk && disk.pct >= 90 ? [{ level: 'critical', key: 'disk', text: `Low disk space: only ${(100 - disk.pct).toFixed(2)}% (${disk.freeGb} GB) free.` }]
+          : disk && disk.pct >= 80 ? [{ level: 'warning', key: 'disk', text: `Disk is ${disk.pct.toFixed(0)}% full (${disk.freeGb} GB free).` }] : []),
+        ...(ramTotal > 0 && ramUsed / ramTotal >= 0.92 ? [{ level: 'critical', key: 'ram', text: `Memory is ${Math.round((ramUsed / ramTotal) * 100)}% used.` }] : []),
+        ...(cpu >= 90 ? [{ level: 'warning', key: 'cpu', text: `CPU is at ${cpu}%.` }] : []),
+      ],
     };
   }
 

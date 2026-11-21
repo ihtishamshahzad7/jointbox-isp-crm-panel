@@ -21,6 +21,7 @@ import { LicenceProvider, LicenceBanner } from './licence';
 import { ensureMediaToken, hasFreshMediaToken, clearMediaToken } from './image-upload';
 import { PLATFORM_HOME, isPlatformPath, isPlatformOnlyPath } from './platform';
 import FeatureGuide from './feature-guide';
+import ServerHealthBanner from './server-health-banner';
 
 const API = API_BASE;
 
@@ -1407,6 +1408,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="app-shell-page-inner">
             {/* Renders nothing unless there are static IP charges to chase. */}
             {roleReady && myRole !== 'SUPER_ADMIN' && <StaticIpBanner />}
+            {/* Server health (disk / memory / CPU) — platform account only. */}
+            {roleReady && myRole === 'SUPER_ADMIN' && <ServerHealthBanner />}
             {platformHint?.platformEmail && !hintHidden && (
               <div className="platform-note" role="note">
                 <span className="platform-note-icon" aria-hidden>👑</span>

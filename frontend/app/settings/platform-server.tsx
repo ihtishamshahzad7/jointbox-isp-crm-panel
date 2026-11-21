@@ -24,6 +24,9 @@ type Health = {
   ramUsedGb?: number;
   ramTotalGb?: number;
   uptimeSecs?: number;
+  cores?: number;
+  load?: number[];
+  disk?: { totalGb: number; usedGb: number; freeGb: number; pct: number } | null;
   queueMode?: string;
   waiting?: number;
   failed?: number;
@@ -295,13 +298,22 @@ export default function PlatformServer() {
       ramUsedGb: stats.body?.ramUsedGb,
       ramTotalGb: stats.body?.ramTotalGb,
       uptimeSecs: stats.body?.uptimeSecs,
+      cores: stats.body?.cores,
+      load: stats.body?.load,
+      disk: stats.body?.disk ?? null,
       queueMode: queues.body?.mode,
       waiting: q.reduce((n, x) => n + (Number(x.waiting) || 0), 0),
       failed: q.reduce((n, x) => n + (Number(x.failed) || 0), 0),
     });
-    setChecked(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    setChecked(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     setLoading(false);
   }, []);
+
+  // Real time: re-check the server every 15 s while this page is open.
+  useEffect(() => {
+    const id = setInterval(() => void load(), 15_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   useEffect(() => {
     void load();
@@ -340,6 +352,8 @@ export default function PlatformServer() {
   const hh = health;
   const cpuTone: Tone = hh?.cpu == null ? "idle" : hh.cpu >= 90 ? "bad" : hh.cpu >= 70 ? "warn" : "ok";
   const ramTone: Tone = hh?.ramPct == null ? "idle" : hh.ramPct >= 92 ? "bad" : hh.ramPct >= 80 ? "warn" : "ok";
+  const diskTone: Tone = !hh?.disk ? "idle" : hh.disk.pct >= 90 ? "bad" : hh.disk.pct >= 80 ? "warn" : "ok";
+  const loadTone: Tone = !hh?.load || !hh.cores ? "idle" : hh.load[0] >= hh.cores * 1.5 ? "bad" : hh.load[0] >= hh.cores ? "warn" : "ok";
   const redisTone: Tone = !hh?.redis ? "idle" : hh.redis.ready ? "ok" : hh.redis.required ? "bad" : "idle";
   const queueTone: Tone = hh?.queueMode === "inline" ? "idle" : (hh?.failed || 0) > 0 || (hh?.waiting || 0) > 500 ? "warn" : "ok";
 
@@ -352,7 +366,7 @@ export default function PlatformServer() {
             <h3>Server health</h3>
           </div>
           <div className={s.headSide}>
-            {checked && <span className={s.faint}>Checked {checked}</span>}
+            {checked && <span className={s.faint}>Live · checked {checked}</span>}
             <button type="button" className={s.action} onClick={() => void load()} disabled={loading}>
               {loading ? "Checking…" : "Check again"}
             </button>
@@ -370,6 +384,9 @@ export default function PlatformServer() {
             <Row label="Redis" value={!hh.redis ? "—" : hh.redis.ready ? "Connected" : hh.redis.required ? "Required but down" : "Not used (single server)"} tone={redisTone} />
             <Row label="CPU" value={hh.cpu == null ? "—" : `${hh.cpu}%`} tone={cpuTone} />
             <Row label="Memory" value={hh.ramPct == null ? "—" : `${hh.ramPct}% · ${hh.ramUsedGb} of ${hh.ramTotalGb} GB`} tone={ramTone} />
+            <Row label="Disk" value={!hh.disk ? "—" : `${hh.disk.pct.toFixed(1)}% used · ${hh.disk.freeGb} GB free of ${hh.disk.totalGb} GB`} tone={diskTone}
+              note={diskTone === "bad" ? "Almost full — clear old logs/backups or expand the disk before the database stops writing." : undefined} />
+            <Row label="Load" value={!hh.load ? "—" : `${hh.load.join(" · ")}${hh.cores ? ` (${hh.cores} cores)` : ""}`} tone={loadTone} />
             <Row label="Uptime" value={uptime(hh.uptimeSecs)} tone="ok" />
             <Row label="Background queue"
               value={hh.queueMode === "inline" ? "Runs inline (no Redis)" : `${hh.waiting ?? 0} waiting · ${hh.failed ?? 0} failed`}
